@@ -37,6 +37,8 @@ pub fn queue() -> (Sender, Writer) {
     )
 }
 impl Sender {
+    pub fn is_idle(&self) -> bool { self.budget.available_permits() == QUEUED_BYTES }
+
     pub async fn send(&self, value: impl WireMessage) -> Result<(), String> {
         if value.control() {
             return self.try_send(value);
@@ -158,6 +160,15 @@ impl Writer {
 mod tests {
     use super::*;
     use crate::{messages::Request, wire};
+    #[tokio::test]
+    async fn queued_upload_holds_the_idle_budget_until_the_writer_releases_it() {
+        let (sender, writer) = queue();
+        assert!(sender.is_idle());
+        sender.send(Request::Text { id: "file".into(), data: "x".repeat(FRAGMENT_BYTES * 3) }).await.unwrap();
+        assert!(!sender.is_idle());
+        drop(writer);
+        assert!(sender.is_idle());
+    }
     #[tokio::test]
     async fn busy_small_streams_do_not_starve_bulk_or_reorder_its_following_enter() {
         let (sender, writer) = queue();

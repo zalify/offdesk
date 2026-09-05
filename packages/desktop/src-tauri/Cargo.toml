@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 [workspace]
 
 [dependencies]
+futures = "0.3"
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"

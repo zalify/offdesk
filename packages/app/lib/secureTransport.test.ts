@@ -14,6 +14,52 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("encrypted native transport", () => {
+  it("does not restore a forgotten Hub from a delayed discovery response", async () => {
+    let resolveDiscovery: (value: unknown) => void = () => {};
+    mock.invoke.mockImplementation(command => command === "secure_status" ? Promise.resolve(paired) : command === "secure_routes" ? new Promise(resolve => { resolveDiscovery = resolve; }) : Promise.resolve());
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    const pending = transport.refreshConnectionRoutes();
+    await tick();
+    await transport.forgetSecureConnection();
+    resolveDiscovery({ status: paired, routes: [], discovery_available: true });
+    await expect(pending).rejects.toThrow("paired Hub changed");
+    expect(transport.secureConnectionStatus()).toBeNull();
+    expect(transport.isSecureConnection()).toBe(false);
+  });
+  it("switches routes without re-pairing and accepts reconnect callbacks with the original URL", async () => {
+    const remote = { ...paired, endpoint: { ...paired.endpoint, hub_url: "http://192.168.1.2:4317" } };
+    mock.invoke.mockImplementation(async command => command === "secure_status" ? paired : command === "secure_switch_route" ? remote : undefined);
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    await transport.switchConnectionRoute(remote.endpoint.hub_url);
+    expect(transport.secureConnectionStatus()?.device_id).toBe("phone");
+    transport.openSocket("wss://paired.example/ws/events");
+    await tick();
+    expect(mock.invoke.mock.calls.some(([c]) => c === "secure_socket_open")).toBe(true);
+    expect(mock.invoke.mock.calls.some(([c]) => c === "secure_pair" || c === "secure_forget")).toBe(false);
+    expect(WebSocket).not.toHaveBeenCalled();
+    mock.invoke.mockRejectedValue(new Error("Hub identity changed"));
+    await expect(transport.switchConnectionRoute("https://wrong.example")).rejects.toThrow("identity changed");
+    expect(transport.secureConnectionStatus()).toEqual(remote);
+  });
+
+  it("blocks a switch while a paste is waiting to cross native IPC", async () => {
+    let release: () => void = () => {};
+    mock.invoke.mockImplementation(command => command === "secure_status" ? Promise.resolve(paired) : command === "secure_socket_send" ? new Promise<void>(resolve => { release = resolve; }) : Promise.resolve());
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    const socket = transport.openSocket("wss://paired.example/ws/events");
+    await tick();
+    const id = mock.invoke.mock.calls.find(([c]) => c === "secure_socket_open")![1].id;
+    mock.channels[0].onmessage({ type: "opened", id });
+    socket.send("a long paste");
+    await tick();
+    await expect(transport.switchConnectionRoute("http://192.168.1.2:4317")).rejects.toThrow("Finish sending");
+    expect(mock.invoke.mock.calls.some(([c]) => c === "secure_switch_route")).toBe(false);
+    release(); await tick();
+    expect(socket.bufferedAmount).toBe(0);
+  });
   it("sends API bodies only through native IPC and never downgrades on failure", async () => {
     mock.invoke.mockImplementation(async (command) => command === "secure_status" ? paired : { type: "http", id: "request", status: 200, body: '{"ok":true}' });
     const transport = await import("./secureTransport");

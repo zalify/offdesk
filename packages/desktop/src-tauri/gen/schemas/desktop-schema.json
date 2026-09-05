@@ -621,6 +621,12 @@
           "markdownDescription": "Enables the secure_request command without any pre-configured scope."
         },
         {
+          "description": "Enables the secure_routes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-routes",
+          "markdownDescription": "Enables the secure_routes command without any pre-configured scope."
+        },
+        {
           "description": "Enables the secure_socket_close command without any pre-configured scope.",
           "type": "string",
           "const": "allow-secure-socket-close",
@@ -643,6 +649,12 @@
           "type": "string",
           "const": "allow-secure-status",
           "markdownDescription": "Enables the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_switch_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-switch-route",
+          "markdownDescription": "Enables the secure_switch_route command without any pre-configured scope."
         },
         {
           "description": "Enables the set_desktop_role command without any pre-configured scope.",
@@ -729,6 +741,12 @@
           "markdownDescription": "Denies the secure_request command without any pre-configured scope."
         },
         {
+          "description": "Denies the secure_routes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-routes",
+          "markdownDescription": "Denies the secure_routes command without any pre-configured scope."
+        },
+        {
           "description": "Denies the secure_socket_close command without any pre-configured scope.",
           "type": "string",
           "const": "deny-secure-socket-close",
@@ -751,6 +769,12 @@
           "type": "string",
           "const": "deny-secure-status",
           "markdownDescription": "Denies the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_switch_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-switch-route",
+          "markdownDescription": "Denies the secure_switch_route command without any pre-configured scope."
         },
         {
           "description": "Denies the set_desktop_role command without any pre-configured scope.",

@@ -470,6 +470,11 @@ pub fn lan_candidates() -> Vec<(String, Ipv4Addr)> {
     order_candidates(interfaces, best)
 }
 
+/// Physical LAN interfaces only; do not advertise VPN/container addresses as LAN.
+pub fn local_network_addresses() -> Vec<Ipv4Addr> {
+    lan_candidates().into_iter().filter(|(name, ip)| ip.is_private() && !is_virtual(name)).map(|(_, ip)| ip).collect()
+}
+
 fn order_candidates(interfaces: Vec<(String, Ipv4Addr)>, best: Option<Ipv4Addr>) -> Vec<(String, Ipv4Addr)> {
     let mut usable: Vec<(String, Ipv4Addr)> = interfaces
         .into_iter()

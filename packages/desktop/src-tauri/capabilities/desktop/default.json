@@ -33,6 +33,8 @@
     "allow-hub-install",
     "allow-hub-uninstall",
     "allow-secure-status",
+    "allow-secure-routes",
+    "allow-secure-switch-route",
     "allow-secure-pair",
     "allow-secure-forget",
     "allow-secure-request",

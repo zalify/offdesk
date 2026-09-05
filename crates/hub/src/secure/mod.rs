@@ -463,7 +463,7 @@ mod tests {
             router: Arc::new(crate::attach_router::HubRouter::new()),
             db: pool.clone(),
             jwt_secret: "isolated-encrypted-test".into(),
-            base_url: "http://localhost".into(),
+            base_url: "https://remote.example".into(),
             dev_mode: false,
             github_client_id: None,
             github_client_secret: None,
@@ -471,6 +471,7 @@ mod tests {
             google_client_secret: None,
         };
         let inner = crate::routes::router()
+            .merge(crate::connections::router("0.0.0.0:4317".into(), None))
             .merge(crate::ws::router())
             .route("/ws/terminal/secure-test-echo", get(|ws: WebSocketUpgrade| async {
                 ws.on_upgrade(|mut socket| async move {
@@ -480,6 +481,8 @@ mod tests {
                 })
             }))
             .with_state(state.clone());
+        let denied = inner.clone().oneshot(HttpRequest::builder().uri("/api/connection-routes").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "LAN metadata is not public");
         let encrypted = router(state, inner, database).unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -585,6 +588,22 @@ mod tests {
             }
             _ => panic!("expected HTTP response"),
         }
+        // The same QR-paired device resumes directly after pairing via relay.
+        // No second code, user, or device is created for the alternate origin.
+        let direct = Endpoint { hub_url: base.clone(), public_key: endpoint.public_key.clone() };
+        let (alternate, alternate_id) = Client::connect(&direct, &phone, Authenticate::Resume).await.unwrap();
+        assert_eq!(alternate_id, device_id);
+        match alternate.request("GET".into(), "/api/connection-routes".into(), None).await.unwrap() {
+            Response::Http { status: 200, body, .. } => {
+                let routes: Vec<offdesk_secure::routes::Route> = serde_json::from_str(&body).unwrap();
+                assert!(routes.iter().any(|r| r.hub_url == "https://remote.example"));
+            }
+            _ => panic!("expected authenticated route discovery"),
+        }
+        assert_eq!(store::list(&pool.get().unwrap(), "secure-owner").unwrap().len(), 1);
+        alternate.close();
+        assert!(Client::connect(&wrong_key, &phone, Authenticate::Resume).await.is_err());
+        // A failed alternate handshake does not close the current route.
         let mut events = client
             .open_socket("events".into(), "/ws/events?device_id=secure-test".into())
             .await

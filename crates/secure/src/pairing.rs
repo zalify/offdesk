@@ -18,18 +18,7 @@ impl Endpoint {
     }
     pub fn validate(&self) -> Result<(), String> {
         self.key()?;
-        let url = Url::parse(&self.hub_url).map_err(|_| "Invalid Hub address")?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host_str().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || !matches!(url.path(), "" | "/")
-        {
-            return Err("Use the Hub's HTTP or HTTPS origin without a path or credentials".into());
-        }
-        Ok(())
+        validate_origin(&self.hub_url)
     }
     pub fn websocket_url(&self) -> Result<String, String> {
         self.validate()?;
@@ -39,6 +28,21 @@ impl Endpoint {
         url.set_path("/ws/secure");
         Ok(url.into())
     }
+}
+
+pub fn validate_origin(raw: &str) -> Result<(), String> {
+    let url = Url::parse(raw).map_err(|_| "Invalid Hub address")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+    {
+        return Err("Use the Hub's HTTP or HTTPS origin without a path or credentials".into());
+    }
+    Ok(())
 }
 
 /// Deliberately not Debug: the one-time code grants access to its owner's Hub.

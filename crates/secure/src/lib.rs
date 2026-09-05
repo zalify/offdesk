@@ -11,6 +11,7 @@ pub mod client;
 pub mod messages;
 pub mod outbound;
 pub mod pairing;
+pub mod routes;
 pub mod wire;
 
 pub const NOISE_PATTERN: &str = "Noise_IK_25519_ChaChaPoly_SHA256";

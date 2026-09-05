@@ -1,9 +1,40 @@
+import { useSyncExternalStore } from "react";
 import { isBundledOrigin, isTauri } from "./platform";
 
 export interface SecureStatus {
   endpoint: { hub_url: string; public_key: string };
   device_id: string | null;
+  routes?: ConnectionRoute[];
 }
+export interface ConnectionRoute { kind: "local" | "remote"; hub_url: string }
+export interface RouteReport { discovery_available: boolean; status: SecureStatus; routes: (ConnectionRoute & { available: boolean })[] }
+let routeReport: RouteReport | null = null;
+let routeRefresh: Promise<RouteReport> | null = null;
+const routeListeners = new Set<() => void>();
+export const subscribeConnectionRoutes = (listener: () => void) => { routeListeners.add(listener); return () => { routeListeners.delete(listener); }; };
+export const connectionRoutesSnapshot = () => routeReport;
+const notifyRoutes = () => routeListeners.forEach(listener => listener());
+// Existing reconnect callbacks may retain a socket URL from before a switch.
+// This logical origin remains scoped to this paired Hub for the life of the UI.
+let socketOrigin: string | null = null;
+export function refreshConnectionRoutes(): Promise<RouteReport> {
+  if (!enabled) return Promise.reject(new Error("Pair this device first"));
+  return routeRefresh ??= invoke<RouteReport>("secure_routes").then(report => {
+    if (!enabled || status?.device_id !== report.status.device_id || status?.endpoint.public_key !== report.status.endpoint.public_key) throw new Error("The paired Hub changed. Check connections again.");
+    status = report.status; routeReport = report; notifyRoutes(); return report;
+  }).finally(() => { routeRefresh = null; });
+}
+export async function switchConnectionRoute(url: string): Promise<void> {
+  if (routeRefresh) await routeRefresh;
+  if ([...sockets].some(socket => socket.bufferedAmount > 0)) throw new Error("Finish sending the current input or file, then try again");
+  const updated = await invoke<SecureStatus>("secure_switch_route", { url });
+  status = updated;
+  initialization = Promise.resolve(updated);
+  lastError = null;
+  if (routeReport) routeReport = { ...routeReport, status: updated };
+  notifyRoutes();
+}
+
 type WireResponse = { type: string; id: string; data?: string; status?: number; body?: string; message?: string };
 let enabled = false;
 let status: SecureStatus | null = null;
@@ -12,6 +43,7 @@ let lastError: string | null = null;
 const detail = (error: unknown) => error instanceof Error ? error.message : String(error);
 export const isSecureConnection = () => enabled;
 export const secureConnectionStatus = () => status;
+export const useSecureConnectionStatus = () => useSyncExternalStore(subscribeConnectionRoutes, secureConnectionStatus, () => null);
 export const secureConnectionError = () => lastError;
 export const isPairingUri = (uri: string) => /^offdesk:\/\/pair(?:\?|\/)/i.test(uri.trim());
 
@@ -24,6 +56,7 @@ export function restoreSecureConnection(): Promise<SecureStatus | null> {
   if (!isTauri() || !isBundledOrigin()) return Promise.resolve(null);
   return initialization ??= invoke<SecureStatus | null>("secure_status").then((saved) => {
     status = saved;
+    socketOrigin = saved?.endpoint.hub_url ?? null;
     enabled = saved !== null;
     return saved;
   }).catch((error) => {
@@ -42,6 +75,8 @@ export async function pairSecureConnection(uri: string): Promise<SecureStatus> {
   });
   enabled = true;
   status = paired;
+  socketOrigin = paired.endpoint.hub_url;
+  routeReport = null;
   lastError = null;
   initialization = Promise.resolve(paired);
   return paired;
@@ -52,6 +87,9 @@ export async function forgetSecureConnection(): Promise<void> {
   localStorage.removeItem("offdesk:server_url");
   enabled = false;
   status = null;
+  socketOrigin = null;
+  routeReport = null;
+  notifyRoutes();
   lastError = null;
   initialization = Promise.resolve(null);
 }
@@ -77,6 +115,7 @@ export async function secureFetch(method: string, path: string, body?: string, s
 
 /** The existing terminal code keeps its WebSocket interface. Encryption and
  * credentials stay in native Rust; IPC channels are private to this caller. */
+const sockets = new Set<SecureSocket>();
 class SecureSocket extends EventTarget {
   readonly url: string;
   readonly protocol = "";
@@ -93,13 +132,16 @@ class SecureSocket extends EventTarget {
   private opened: Promise<void>;
   private sends = Promise.resolve();
   constructor(url: string) {
-    super(); this.url = url;
+    super(); this.url = url; sockets.add(this);
     this.opened = this.open(url).catch((error: unknown) => { this.fail(error); });
   }
   private async open(raw: string) {
     const target = new URL(raw);
-    const origin = new URL(status?.endpoint.hub_url ?? "invalid:");
-    if (target.host !== origin.host || target.protocol !== (origin.protocol === "https:" ? "wss:" : "ws:")) throw new Error("Socket does not belong to the paired Hub");
+    const allowed = [socketOrigin, status?.endpoint.hub_url].filter(Boolean).some(rawOrigin => {
+      const origin = new URL(rawOrigin!);
+      return target.host === origin.host && target.protocol === (origin.protocol === "https:" ? "wss:" : "ws:");
+    });
+    if (!enabled || !status || !allowed) throw new Error("Socket origin does not match the paired Hub");
     target.searchParams.delete("token");
     const { Channel } = await import("@tauri-apps/api/core");
     const events = new Channel<WireResponse>();
@@ -131,7 +173,7 @@ class SecureSocket extends EventTarget {
   }
   private finish(code: number) {
     if (this.readyState === 3) return;
-    this.readyState = 3;
+    this.readyState = 3; sockets.delete(this);
     const event = new CloseEvent("close", { code, wasClean: code === 1000 }); this.dispatchEvent(event); this.onclose?.(event);
   }
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {

@@ -20,6 +20,8 @@
     "barcode-scanner:allow-check-permissions",
     "barcode-scanner:allow-open-app-settings",
     "allow-secure-status",
+    "allow-secure-routes",
+    "allow-secure-switch-route",
     "allow-secure-pair",
     "allow-secure-forget",
     "allow-secure-request",

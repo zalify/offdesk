@@ -1,3 +1,4 @@
+import { ConnectionRoutesPanel } from "../components/ConnectionRoutesPanel";
 import { isPairingUri, pairSecureConnection, isSecureConnection, secureConnectionStatus, secureConnectionError, forgetSecureConnection } from "../lib/secureTransport";
 import { useEffect, useState } from "react";
 import { Platform } from "react-native";
@@ -316,6 +317,10 @@ export default function LoginScreen({
       <Display size={28}>Encrypted connection</Display>
       <Body>{secureConnectionStatus()?.endpoint.hub_url ?? "Your paired Hub"}</Body>
       <Body size={14}>{secureConnectionError() ?? "Could not reconnect. Check that your Hub is running, then try again."}</Body>
+      <ConnectionRoutesPanel onSwitched={() => {
+        const url = secureConnectionStatus()?.endpoint.hub_url;
+        if (url) void loginWithToken(url, "secure-session").catch(error => setHubError(String(error)));
+      }} />
       <Button onClick={() => window.location.reload()}>Try again</Button>
       <Button kind="ghost" disabled={connecting} onClick={() => {
         setConnecting(true);

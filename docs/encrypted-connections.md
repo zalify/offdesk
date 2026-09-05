@@ -36,6 +36,38 @@ candidate key. Once expired, generate a new code. A changed Hub key or unreadabl
 credential offers recovery; the App never silently loads the remote webpage or
 falls back to ordinary HTTP/WebSocket traffic.
 
+### Switch between local and remote connections
+
+After updating both Hub and App, encrypted pairing can save multiple addresses
+for the same Hub. In **Settings → Connection method**, choose **Local network**
+(on the computer's network) or **Remote connection** (mobile data or another
+Wi-Fi). The recovery screen offers the same selector if the selected address is
+unreachable. **Switch hub** still means forgetting this pairing and connecting
+to a different Hub; changing connection method does not.
+
+Configure the running Hub service with `OFFDESK_BASE_URL=https://your-hub.example`
+(or `OFFDESK_SECURE_BASE_URL` for a separate encrypted origin). The Hub advertises
+that remote origin and physical IPv4 LAN addresses matching its normal listener.
+A loopback-only listener does not advertise LAN access. A tunnel must already be
+configured; the selector does not create one. An address used to pair remains
+saved even if it is not in the Hub's advertised list.
+
+Discovery runs through authenticated encryption after pairing and on subsequent
+App startup. Existing encrypted pairings do not need a new QR. Addresses are
+cached so an unavailable current route does not prevent checking the other one;
+a reachable route can refresh LAN addresses after DHCP changes. Older Hubs keep
+working at their saved address and need an update to advertise other routes.
+
+Each availability check resumes using the original pinned Hub key and device
+identity, with an eight-second connection deadline per address. It does not infer
+reachability from Wi-Fi presence or a successful HTTP page load. **Check again**
+refreshes availability; unavailable routes are disabled. Switching verifies again
+before saving the address and reconnecting terminal streams. It preserves device
+credentials, terminal sessions and editor drafts, never replays pending input,
+and declines while outgoing input/files or API requests are in flight. If both
+routes are offline, the pairing and saved addresses remain available for retry.
+Route selection is manual in this version.
+
 ### Check the tunnel before pairing
 
 The Mac phone-code panel checks the selected address against this Hub's local

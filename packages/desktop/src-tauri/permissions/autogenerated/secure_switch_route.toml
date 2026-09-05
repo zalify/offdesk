@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-switch-route"
+description = "Enables the secure_switch_route command without any pre-configured scope."
+commands.allow = ["secure_switch_route"]
+
+[[permission]]
+identifier = "deny-secure-switch-route"
+description = "Denies the secure_switch_route command without any pre-configured scope."
+commands.deny = ["secure_switch_route"]

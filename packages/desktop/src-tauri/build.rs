@@ -13,6 +13,8 @@ fn main() {
         "start_oauth_listener",
         "hub_pair",
         "secure_status",
+        "secure_routes",
+        "secure_switch_route",
         "secure_pair",
         "secure_forget",
         "secure_request",

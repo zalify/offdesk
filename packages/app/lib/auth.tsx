@@ -1,4 +1,4 @@
-import { restoreSecureConnection, isSecureConnection, forgetSecureConnection } from "./secureTransport";
+import { refreshConnectionRoutes, restoreSecureConnection, isSecureConnection, forgetSecureConnection } from "./secureTransport";
 import {
   createContext,
   useCallback,
@@ -203,6 +203,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setServerUrl(secure.endpoint.hub_url);
             configure(secure.endpoint.hub_url, "secure-session");
             const me = await getMe();
+            void refreshConnectionRoutes().catch(() => {});
             if (!cancelled) { setUser(me); setToken("secure-session"); setIsLoading(false); }
             return;
           }

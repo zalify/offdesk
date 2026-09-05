@@ -5,15 +5,16 @@ use offdesk_secure::{
     client::Client,
     messages::{Authenticate, Response},
     pairing::{Endpoint, PairingDescriptor},
+    routes::{normalize, Route},
     Identity,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{ipc::Channel, AppHandle, Manager, Runtime, State};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 #[derive(Default)]
-pub struct SecureState(Mutex<Option<Client>>);
+pub struct SecureState(Mutex<Option<Client>>, RwLock<()>, Mutex<()>);
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 struct Credential {
     #[zeroize(skip)]
@@ -27,6 +28,8 @@ struct Credential {
 pub struct Status {
     pub endpoint: Endpoint,
     pub device_id: Option<String>,
+    #[serde(default)]
+    pub routes: Vec<Route>,
 }
 fn marker<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
     Ok(app
@@ -231,15 +234,7 @@ async fn connected<R: Runtime>(app: &AppHandle<R>, state: &SecureState) -> Resul
         store_read(app, "connection")?.ok_or("Pair this device from your Hub before connecting")?;
     let status =
         read_status(app)?.ok_or("Missing encrypted connection. Pair again from your Hub.")?;
-    if status.endpoint != credential.endpoint {
-        return Err("Encrypted connection identity changed. Pair again from your Hub.".into());
-    }
-    let (client, _) = Client::connect(
-        &credential.endpoint,
-        &identity(&credential)?,
-        Authenticate::Resume,
-    )
-    .await?;
+    let client = resume_at(&status, &credential, &status.endpoint.hub_url).await?;
     *session = Some(client.clone());
     Ok(client)
 }
@@ -254,6 +249,7 @@ pub async fn secure_pair<R: Runtime>(
     uri: String,
     device_name: String,
 ) -> Result<Status, String> {
+    let _gate = state.1.write().await;
     let uri = Zeroizing::new(uri);
     let descriptor = PairingDescriptor::parse(&uri)?;
     let mut session = state.0.lock().await;
@@ -290,9 +286,11 @@ pub async fn secure_pair<R: Runtime>(
     .await?;
     credential.code = None;
     credential.device_id = Some(device_id.clone());
+    let routes = discover(&client).await.unwrap_or_default();
     let status = Status {
         endpoint: credential.endpoint.clone(),
         device_id: Some(device_id),
+        routes: normalize(routes, &credential.endpoint.hub_url),
     };
     // Write the non-secret mode marker first. An interrupted credential-store
     // write leaves a recoverable pairing screen, never a remote-page fallback.
@@ -308,11 +306,170 @@ pub async fn secure_pair<R: Runtime>(
     let _ = store_write(&app, "candidate", None);
     Ok(status)
 }
+// Discovery uses the authenticated connection, never a public HTTP response.
+async fn discover(client: &Client) -> Result<Vec<Route>, String> {
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.request("GET".into(), "/api/connection-routes".into(), None),
+    )
+    .await
+    .map_err(|_| "Connection discovery timed out")??;
+    match response {
+        Response::Http {
+            status: 200, body, ..
+        } if body.len() <= 16_384 => {
+            serde_json::from_str(&body).map_err(|_| "Invalid connection addresses".into())
+        }
+        _ => Err("This Hub does not provide connection addresses yet".into()),
+    }
+}
+
+#[derive(Serialize)]
+pub struct RouteCheck {
+    #[serde(flatten)]
+    route: Route,
+    available: bool,
+}
+#[derive(Serialize)]
+pub struct RouteReport {
+    status: Status,
+    routes: Vec<RouteCheck>,
+    discovery_available: bool,
+}
+
+fn validate_credential(status: &Status, credential: &Credential) -> Result<(), String> {
+    if status.endpoint.public_key != credential.endpoint.public_key
+        || status.device_id != credential.device_id
+    {
+        return Err("Saved Hub identity does not match the device credential".into());
+    }
+    Ok(())
+}
+fn saved_route(status: &Status, url: &str) -> Result<Route, String> {
+    let route = Route::from_url(url)?;
+    if !normalize(status.routes.clone(), &status.endpoint.hub_url).contains(&route) {
+        return Err("This address was not supplied by your paired Hub".into());
+    }
+    Ok(route)
+}
+async fn resume_at(status: &Status, credential: &Credential, url: &str) -> Result<Client, String> {
+    validate_credential(status, credential)?;
+    let endpoint = Endpoint {
+        hub_url: url.into(),
+        public_key: credential.endpoint.public_key.clone(),
+    };
+    let (client, device_id) = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        Client::connect(&endpoint, &identity(credential)?, Authenticate::Resume),
+    )
+    .await
+    .map_err(|_| "This connection is not reachable. Check your network and try again.")??;
+    if Some(&device_id) != credential.device_id.as_ref() {
+        client.close();
+        return Err("The Hub returned a different device identity".into());
+    }
+    Ok(client)
+}
+
+/// Available also on the offline recovery screen. Probe saved routes in parallel
+/// and let any verified route refresh stale LAN addresses (e.g. a DHCP change).
+#[tauri::command]
+pub async fn secure_routes<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SecureState>,
+) -> Result<RouteReport, String> {
+    let _discovery = state.2.lock().await;
+    let _gate = state.1.read().await;
+    let credential = store_read(&app, "connection")?.ok_or("Pair this device first")?;
+    let mut status = read_status(&app)?.ok_or("Pair this device first")?;
+    let saved = normalize(status.routes.clone(), &status.endpoint.hub_url);
+    let results = futures::future::join_all(saved.iter().map(|route| async {
+        let client = resume_at(&status, &credential, &route.hub_url).await;
+        (route.clone(), client.ok())
+    }))
+    .await;
+    let mut advertised = None;
+    for (_, client) in &results {
+        if let Some(client) = client {
+            if let Ok(routes) = discover(client).await {
+                advertised = Some(routes);
+                break;
+            }
+        }
+    }
+    let discovery_available = advertised.is_some();
+    status.routes = normalize(advertised.unwrap_or(saved), &status.endpoint.hub_url);
+    // Newly discovered addresses need their own identity check too.
+    let checks = futures::future::join_all(status.routes.iter().map(|route| async {
+        let available =
+            if let Some((_, client)) = results.iter().find(|(r, _)| r.hub_url == route.hub_url) {
+                client.is_some()
+            } else if let Ok(client) = resume_at(&status, &credential, &route.hub_url).await {
+                client.close();
+                true
+            } else {
+                false
+            };
+        RouteCheck {
+            route: route.clone(),
+            available,
+        }
+    }))
+    .await;
+    for (_, client) in results {
+        if let Some(client) = client {
+            client.close();
+        }
+    }
+    save_status(&app, &status)?;
+    Ok(RouteReport {
+        status,
+        routes: checks,
+        discovery_available,
+    })
+}
+
+/// Verify the new route before committing it. The OS credential never changes;
+/// only the atomic, non-secret route marker does, so a crash cannot split keys
+/// and addresses. Existing requests/uploads finish before a switch is allowed.
+#[tauri::command]
+pub async fn secure_switch_route<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SecureState>,
+    url: String,
+) -> Result<Status, String> {
+    let _gate = state
+        .1
+        .try_write()
+        .map_err(|_| "Finish the current transfer or connection check, then try again")?;
+    let mut session = state.0.lock().await;
+    let credential = store_read(&app, "connection")?.ok_or("Pair this device first")?;
+    let mut status = read_status(&app)?.ok_or("Pair this device first")?;
+    let route = saved_route(&status, &url)?;
+    if session
+        .as_ref()
+        .is_some_and(|client| !client.is_closed() && !client.outgoing_idle())
+    {
+        return Err("Finish sending the current input or file, then try again".into());
+    }
+    let client = resume_at(&status, &credential, &route.hub_url).await?;
+    status.endpoint.hub_url = route.hub_url;
+    if let Err(error) = save_status(&app, &status) {
+        client.close();
+        return Err(error);
+    }
+    if let Some(previous) = session.replace(client) {
+        previous.close();
+    }
+    Ok(status)
+}
+
 #[tauri::command]
 pub async fn secure_forget<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, SecureState>,
 ) -> Result<(), String> {
+    let _gate = state.1.write().await;
     let mut session = state.0.lock().await;
     if let Some(client) = session.take() {
         client.close();
@@ -333,6 +490,7 @@ pub async fn secure_request<R: Runtime>(
     path: String,
     body: Option<String>,
 ) -> Result<Response, String> {
+    let _gate = state.1.read().await;
     connected(&app, &state)
         .await?
         .request(method, path, body)
@@ -346,6 +504,7 @@ pub async fn secure_socket_open<R: Runtime>(
     path: String,
     events: Channel<Response>,
 ) -> Result<(), String> {
+    let _gate = state.1.read().await;
     let client = connected(&app, &state).await?;
     let mut receiver = client.open_socket(id.clone(), path).await?;
     tauri::async_runtime::spawn(async move {
@@ -366,6 +525,7 @@ pub async fn secure_socket_send(
     data: String,
     binary: bool,
 ) -> Result<(), String> {
+    let _gate = state.1.read().await;
     let client = state
         .0
         .lock()
@@ -432,5 +592,53 @@ mod keychain_tests {
                 .get_secret(),
             Err(keyring::Error::NoEntry)
         ));
+    }
+}
+
+#[cfg(test)]
+mod route_tests {
+    use super::*;
+    fn original() -> (Status, Credential) {
+        let status: Status = serde_json::from_str(r#"{"endpoint":{"hub_url":"https://remote.example","public_key":"pinned"},"device_id":"phone"}"#).unwrap();
+        let credential = Credential {
+            endpoint: status.endpoint.clone(),
+            private_key: String::new(),
+            code: None,
+            device_id: status.device_id.clone(),
+        };
+        (status, credential)
+    }
+    #[test]
+    fn existing_pairing_migrates_without_replacing_its_keychain_credential() {
+        let (mut status, credential) = original();
+        assert!(status.routes.is_empty());
+        status.routes = normalize(
+            vec![Route::from_url("http://192.168.1.2:4317").unwrap()],
+            &status.endpoint.hub_url,
+        );
+        status.endpoint.hub_url = saved_route(&status, "http://192.168.1.2:4317/")
+            .unwrap()
+            .hub_url;
+        validate_credential(&status, &credential).unwrap();
+        assert_eq!(credential.endpoint.hub_url, "https://remote.example");
+        assert_eq!(credential.device_id.as_deref(), Some("phone"));
+        assert_eq!(
+            serde_json::from_str::<Status>(&serde_json::to_string(&status).unwrap())
+                .unwrap()
+                .routes
+                .len(),
+            2
+        );
+    }
+    #[test]
+    fn changed_identity_and_unsaved_origins_are_rejected() {
+        let (mut status, credential) = original();
+        assert!(saved_route(&status, "https://other.example").is_err());
+        assert!(saved_route(&status, "https://remote.example/path").is_err());
+        status.endpoint.public_key = "different".into();
+        assert!(validate_credential(&status, &credential).is_err());
+        status.endpoint.public_key = credential.endpoint.public_key.clone();
+        status.device_id = Some("other-device".into());
+        assert!(validate_credential(&status, &credential).is_err());
     }
 }

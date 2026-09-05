@@ -1,6 +1,7 @@
+import { ConnectionRoutesPanel } from "./ConnectionRoutesPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
-import { isSecureConnection, secureConnectionStatus } from "../lib/secureTransport";
+import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTransport";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useMobileHubSwitch } from "@/lib/useMobileHubSwitch";
@@ -286,6 +287,7 @@ function formatTokenDate(ms: number | null): string {
 }
 
 export function SettingsPage({ onClose }: SettingsPageProps) {
+  const secureStatus = useSecureConnectionStatus();
   const { logout } = useAuth();
   const { theme, setTheme } = useTheme();
   // Terminal font settings
@@ -1012,7 +1014,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     overflowWrap: "anywhere",
                   }}
                 >
-                  {secureConnectionStatus()?.endpoint.hub_url ?? (typeof window !== "undefined" ? window.location.origin : "")}
+                  {secureStatus?.endpoint.hub_url ?? (typeof window !== "undefined" ? window.location.origin : "")}
                 </span>
                 <button
                   onClick={() => void handleSwitchHub()}
@@ -1036,6 +1038,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             {switchHubError && <p role="alert" style={{ color: colors.err, fontSize: 13, margin: "8px 0 0" }}>{switchHubError}</p>}
           </section>
         )}
+
+        {isSecureConnection() && <section style={{ marginBottom: 32 }}><ConnectionRoutesPanel /></section>}
 
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Encrypted devices</SectionTitle>

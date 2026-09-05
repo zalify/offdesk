@@ -240,6 +240,8 @@ impl Client {
     pub fn is_closed(&self) -> bool {
         self.inner.closed.load(Ordering::SeqCst)
     }
+    /// Includes queued and partially transmitted upload fragments.
+    pub fn outgoing_idle(&self) -> bool { self.inner.outbound.is_idle() }
     pub fn close(&self) {
         self.inner.closed.store(true, Ordering::SeqCst);
         let _ = self.inner.stop.send(true);
