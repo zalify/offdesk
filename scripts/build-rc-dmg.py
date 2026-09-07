@@ -40,6 +40,8 @@ dmgbuild.build_dmg(str(output), f"Offdesk RC {info['CFBundleShortVersionString']
     'icon_locations': {app.name: (app_pos['x'], app_pos['y']),
                        'Applications': (folder_pos['x'], folder_pos['y'])},
     'default_view': 'icon-view',
+    # Finder rejects persisted icon-view settings with grid spacing >= 100.
+    'grid_spacing': 64,
     'icon_size': 128,
     'text_size': 16,
     'show_status_bar': False,
