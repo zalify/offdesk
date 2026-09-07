@@ -66,6 +66,11 @@ elsif previous['attributes']['usesNonExemptEncryption'] == false
 else
   raise 'Previous encryption classification unavailable; complete compliance in App Store Connect'
 end
-api('post', "/v1/betaGroups/#{group['id']}/relationships/builds", data: [{type: 'builds', id: build['id']}])
+detail = api('get', "/v1/builds/#{build['id']}/buildBetaDetail")['data']['attributes']
+assigned = api('get', "/v1/builds/#{build['id']}/betaGroups")['data']
+puts JSON.generate(internalBuildState: detail['internalBuildState'], assignedGroups: assigned.map { |g| g['attributes']['name'] }, hasAccessToAllBuilds: group['attributes']['hasAccessToAllBuilds'])
+unless assigned.any? { |g| g['id'] == group['id'] } || (group['attributes']['hasAccessToAllBuilds'] && detail['internalBuildState'] == 'IN_BETA_TESTING')
+  api('post', "/v1/betaGroups/#{group['id']}/relationships/builds", data: [{type: 'builds', id: build['id']}])
+end
 detail = api('get', "/v1/builds/#{build['id']}/buildBetaDetail")['data']['attributes']
 puts JSON.generate(build: number, group: 'Zalify Team', internalBuildState: detail['internalBuildState'], externalBuildState: detail['externalBuildState'])
