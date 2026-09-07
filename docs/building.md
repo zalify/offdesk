@@ -95,12 +95,16 @@ draft release, submit App Store review or enable external beta distribution.
 GitHub requires write access to read draft release assets, so the signing job
 has that permission even though it never publishes the draft.
 
-The current internal-distribution script targets the existing **Zalify Team**
-group and reuses this app's 0.6.4 encryption declaration after checking its
-standard third-party cryptography and no-France settings. Changes to the
-cryptography require a new declaration instead of reusing this path. Apple
-processing may take time; upload success alone does not mean testers can
-install the build yet.
+The current internal-distribution script checks the existing **Zalify Team**
+group and reuses this app's completed 0.6.4 encryption classification. It
+accepts an explicit exemption or a matching standard-crypto/no-France
+declaration; a missing declaration alone is not treated as an exemption.
+Changes to the cryptography require classification review instead of reusing
+this path. Apple's public API rejects internal-group build assignment: rely
+on the existing automatic internal distribution, or add the build in App
+Store Connect. The script verifies the internal testing state after Apple
+processing. Use the `existing_build` workflow input to resume this step
+without recompiling, signing or uploading the binary again.
 
 Record the commit, build number and physical-device results for every
 candidate. Validate Chinese IME punctuation/dictation, keyboard show/hide,
