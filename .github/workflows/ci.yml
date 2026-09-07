@@ -12,8 +12,51 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: read
+
 jobs:
+  changes:
+    name: Change Scope
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.scope.outputs.runtime }}
+      site: ${{ steps.scope.outputs.site }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Test CI routing
+        run: node --test scripts/ci/changed-scope.test.mjs
+      - name: Classify changed paths
+        id: scope
+        run: node scripts/ci/changed-scope.mjs
+
+  site-check:
+    name: Site Build and Links
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: site/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - name: Install site dependencies
+        run: pnpm --dir site install --frozen-lockfile
+      - name: Check download redirects and installer
+        run: node --test site/worker.test.mjs site/install.test.mjs
+      - name: Build website
+        run: pnpm --dir site build
+
   rust-check:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     name: Rust Check
     runs-on: ubuntu-latest
     steps:
@@ -27,6 +70,8 @@ jobs:
       - run: cargo test -p offdesk-secure -p offdesk-hub -p offdesk-protocol
 
   native-check:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     name: Native Encryption Check
     runs-on: macos-26
     steps:
@@ -50,6 +95,8 @@ jobs:
       - run: cargo check --manifest-path packages/desktop/src-tauri/Cargo.toml --target aarch64-apple-ios
 
   frontend-build:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     name: Frontend Build
     runs-on: ubuntu-latest
     steps:
@@ -71,6 +118,8 @@ jobs:
       - run: cd packages/app && npx expo export --platform web
 
   e2e:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     name: E2E
     runs-on: ubuntu-latest
     steps:
@@ -88,6 +137,8 @@ jobs:
       - run: pnpm e2e:ci
 
   android-check:
+    needs: changes
+    if: needs.changes.outputs.runtime == 'true'
     name: Android Updater Check
     runs-on: ubuntu-22.04
     steps:
@@ -138,3 +189,31 @@ jobs:
         with:
           name: android-startup-evidence
           path: /tmp/offdesk-android-startup
+
+  ci-result:
+    name: CI Result
+    if: always()
+    needs: [changes, site-check, rust-check, native-check, frontend-build, e2e, android-check]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every applicable check to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          node <<'NODE'
+          const jobs = JSON.parse(process.env.RESULTS);
+          if (jobs.changes.result !== 'success') throw new Error('Change detection failed');
+          for (const key of ['site', 'runtime']) {
+            if (!['true', 'false'].includes(jobs.changes.outputs[key])) throw new Error(`Invalid ${key} scope`);
+          }
+          const expected = {
+            'site-check': jobs.changes.outputs.site === 'true',
+            ...Object.fromEntries(['rust-check', 'native-check', 'frontend-build', 'e2e', 'android-check']
+              .map(name => [name, jobs.changes.outputs.runtime === 'true'])),
+          };
+          for (const [name, required] of Object.entries(expected)) {
+            const wanted = required ? 'success' : 'skipped';
+            if (jobs[name].result !== wanted) throw new Error(`${name}: ${jobs[name].result}, expected ${wanted}`);
+          }
+          console.log('All applicable checks passed.');
+          NODE

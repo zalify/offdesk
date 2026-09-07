@@ -59,6 +59,10 @@ is managed through TestFlight and can lag behind while Apple reviews the build.
 
 ## Install
 
+Start with the illustrated Mac setup guide: [English](https://offdesk.dev/docs/mac) ·
+[简体中文](https://offdesk.dev/zh/docs/mac). It includes real App screenshots,
+phone pairing, first-terminal steps, and the tested RC / stable-version differences.
+
 On the machine that stays on — a Mac, a NAS — which is usually also the first
 machine you want to reach.
 
