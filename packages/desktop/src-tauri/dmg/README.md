@@ -21,3 +21,19 @@ installer verification; it does not replace the container browser E2E commands.
 
 The release workflow enables styling and checks the draft artifact. Local RCs
 use the same settings; RC identity and version belong in the RC config override.
+
+For a Mac Mini accessed only over SSH, Finder automation may be unavailable.
+Build the RC `.app` with `tauri build --ci --bundles app`, then use the headless
+RC-only helper. It reads the same layout and background from `tauri.conf.json`:
+
+```sh
+python3 -m venv /tmp/offdesk-dmg-tools
+/tmp/offdesk-dmg-tools/bin/pip install dmgbuild==1.6.5
+/tmp/offdesk-dmg-tools/bin/python scripts/build-rc-dmg.py \
+  '/path/to/Offdesk RC.app' '/path/to/Offdesk-0.6.4-rc.3-arm64.dmg'
+scripts/verify-dmg-layout.sh '/path/to/Offdesk-0.6.4-rc.3-arm64.dmg'
+```
+
+This copies the RC app unchanged and creates Finder metadata without AppleScript.
+It intentionally rejects production bundle IDs: formal signing/notarization and
+updater publishing remain in the Tauri release workflow.

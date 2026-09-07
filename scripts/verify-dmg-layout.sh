@@ -26,7 +26,9 @@ if not store.is_file() or store.stat().st_size < 32:
 data = store.read_bytes()
 if data[4:8] != b'Bud1' or any(name.encode('utf-16be') not in data for name in [apps[0].name, 'Applications']):
     raise SystemExit('Finder layout does not include both installation icons')
-if not any(p.is_file() and p.stat().st_size for p in (root / '.background').glob('*')):
+# Tauri uses .background/; dmgbuild stores a hidden image at the root.
+backgrounds = [*(root / '.background').glob('*'), *root.glob('.background.*')]
+if not any(p.is_file() and p.stat().st_size for p in backgrounds):
     raise SystemExit('Missing drag-to-install background')
 print('DMG layout present: app, Applications shortcut, Finder metadata and background.')
 PY
