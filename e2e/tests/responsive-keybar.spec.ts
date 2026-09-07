@@ -208,6 +208,7 @@ test("IME dismissal releases retained focus and every command key keeps it close
   await chooseInputMode(page, true);
   const editor = page.getByTestId("composer-input");
   await editor.fill("echo IME_DISMISSED_DRAFT");
+  await editor.dispatchEvent("compositionstart");
   await nativeVisibility(true);
   await nativeVisibility(false);
   await expect(editor).not.toBeFocused();

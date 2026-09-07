@@ -251,7 +251,12 @@ export function LocalTerminalComposer({ machineId, terminalId, title, canSend, o
       <div style={{ position: "relative" }}>
         <textarea ref={input} aria-label="Message to terminal" data-testid="composer-input" value={draft.text} disabled={locked} rows={expanded ? 5 : 1} wrap={expanded ? "soft" : "off"} maxLength={65536}
           placeholder="Write here · Enter to submit"
-          onFocus={() => onKeyboardVisible(true)} onBlur={() => onKeyboardVisible(false)}
+          onFocus={() => onKeyboardVisible(true)} onBlur={() => {
+            // Some IMEs dismiss without delivering compositionend. Once the
+            // editor loses focus, stale composition must not swallow toolbar keys.
+            composing.current = false;
+            onKeyboardVisible(false);
+          }}
           onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
           onKeyDown={event => {
             if (!event.nativeEvent.isComposing && !composing.current && ctrlArmed && event.key.length === 1) {
