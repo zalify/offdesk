@@ -7,7 +7,7 @@ const path = zh ? "/zh/docs/mac" : "/docs/mac";
 const c = zh ? {
   title: "从一台 Mac 开始使用 Offdesk", description: "通过真实 App 截图，完成 Mac 首次安装、打开终端和手机扫码连接。",
   eyebrow: "入门教程 · macOS", lead: "把常开着的 Mac 变成主机，然后用手机连接它的终端。第一次先在同一局域网内完成连接。",
-  preview: "截图版本说明", previewText: "配图来自 Mac Mini 上的 0.6.4-rc.1 实测。当前正式 macOS 下载为 0.6.3，尚不包含图中全部引导改进；本页同时预览即将发布的流程。下面的下载按钮仍提供正式版。",
+  preview: "截图版本说明", previewText: "配图来自 Mac Mini 上的 0.6.4-rc.1 实测。截至 2026 年 9 月 7 日，正式 macOS 下载为 0.6.3，尚不包含图中全部引导改进；本页同时预览即将发布的流程。下面的下载按钮仍提供正式版。",
   download: "下载 Mac 正式版", phone: "下载手机 App", contents: "本页步骤", before: "开始之前",
   needs: ["一台保持开机、联网的 Mac，以及它的登录账户。", "手机和 Mac 位于同一个局域网：例如 Mac 接路由器网线，手机连接同一路由器的 Wi-Fi。", "手机安装 Offdesk：iPhone / iPad 使用 TestFlight，Android 使用官网 APK。"],
   terms: "Hub 是管理连接的主机；Node 让这台机器的终端可用。选择将 Mac 作为 Hub 后，App 会一并安装它们。正常的 App 安装流程不需要额外运行 install.sh，也不需要 Docker。",
@@ -32,7 +32,7 @@ const c = zh ? {
 } : {
   title:"Your first terminal, from a Mac", description:"A screenshot guide to installing Offdesk on a Mac, opening your first terminal, and connecting your phone.",
   eyebrow:"Getting started · macOS", lead:"Make the Mac that stays on your hub. Then open its terminal from your phone. Start with both devices on the same local network.",
-  preview:"About the screenshots", previewText:"These screenshots come from our Mac Mini test of 0.6.4-rc.1. The current stable Mac download is 0.6.3 and does not include all of the guided setup improvements shown here. This page also previews that upcoming flow; the download button still serves the stable release.",
+  preview:"About the screenshots", previewText:"These screenshots come from our Mac Mini test of 0.6.4-rc.1. As of September 7, 2026, the stable Mac download is 0.6.3 and does not include all of the guided setup improvements shown here. This page also previews that upcoming flow; the download button still serves the stable release.",
   download:"Download for Mac", phone:"Get the phone app", contents:"On this page", before:"Before you start",
   needs:["A Mac that can stay powered on and connected, and its macOS login account.", "Your phone and Mac on the same local network. A wired Mac and a phone on the same router’s Wi-Fi work too.", "Offdesk on your phone: TestFlight for iPhone / iPad, or the Android APK from this site."],
   terms:"The Hub manages connections; the Node makes a machine’s terminals available. Choosing this Mac as the Hub installs both. The normal App setup does not need a separate install.sh command or Docker.",
