@@ -288,6 +288,34 @@ function formatTokenDate(ms: number | null): string {
 }
 
 export function SettingsPage({ onClose }: SettingsPageProps) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    let frame = 0;
+    const revealFocusedInput = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const field = document.activeElement;
+        if (!(field instanceof HTMLElement) || !content.contains(field) ||
+            !field.matches("input, textarea, select, [contenteditable=true]")) return;
+        const bounds = content.getBoundingClientRect();
+        const rect = field.getBoundingClientRect();
+        // The keyboard (including its accessory bar) shrinks this scroller
+        // after focus. Scroll only its contents, never the whole app chrome.
+        if (rect.bottom > bounds.bottom - 12) content.scrollTop += rect.bottom - bounds.bottom + 12;
+        else if (rect.top < bounds.top + 12) content.scrollTop += rect.top - bounds.top - 12;
+      });
+    };
+    const observer = new ResizeObserver(revealFocusedInput);
+    observer.observe(content);
+    content.addEventListener("focusin", revealFocusedInput);
+    return () => {
+      observer.disconnect();
+      content.removeEventListener("focusin", revealFocusedInput);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
   const secureStatus = useSecureConnectionStatus();
   const { logout } = useAuth();
   const { theme, setTheme } = useTheme();
@@ -691,6 +719,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
       {/* Content */}
       <div
+        ref={contentRef}
+        data-testid="settings-content"
         style={{
           flex: 1,
           overflow: "auto",

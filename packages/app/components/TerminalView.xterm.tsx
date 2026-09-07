@@ -38,6 +38,7 @@ import { createSelectionAutoCopyController } from "@/lib/selectionAutoCopy";
 import { createTerminalClipboardProvider } from "@/lib/terminalClipboard";
 import { isTauri } from "@/lib/platform";
 import { bulkKeypressText } from "@/lib/terminalBulkKey";
+import { attachIosTerminalInput } from "@/lib/iosTerminalInput";
 import { readClipboardText } from "@/lib/readClipboardText";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { useDisplayMode } from "@/lib/hooks";
@@ -228,7 +229,7 @@ interface XtermCompositionHelper {
 }
 
 type TerminalWithCompositionHelper = Terminal & {
-  _core?: { _compositionHelper?: XtermCompositionHelper };
+  _core?: { _compositionHelper?: XtermCompositionHelper; _keyPressHandled?: boolean; _keyDownHandled?: boolean };
 };
 
 function patchCompositionHelperSendRace(term: Terminal): () => void {
@@ -376,7 +377,24 @@ function patchCompositionHelperSendRace(term: Terminal): () => void {
     }, 0);
   };
 
+  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const core = (term as TerminalWithCompositionHelper)._core;
+  const removeIosInput = ios ? attachIosTerminalInput({
+    textarea: helper._textarea,
+    composing: () => helper._isComposing || helper._isSendingComposition,
+    keyHandled: () => !!core?._keyPressHandled || !!core?._keyDownHandled,
+    disabled: () => !!term.options.screenReaderMode,
+    commit: (text) => {
+      if (helper._textareaChangeTimer !== undefined) window.clearTimeout(helper._textareaChangeTimer);
+      helper._textareaChangeTimer = undefined;
+      helper._dataAlreadySent = "";
+      emittedPrefixLength = helper._textarea.value.length;
+      if (text) helper._coreService.triggerDataEvent(text, true);
+    },
+  }) : () => {};
+
   return () => {
+    removeIosInput();
     helper.compositionstart = originalCompositionStart;
     helper._finalizeComposition = originalFinalize;
     helper._handleAnyTextareaChanges = originalHandleAnyTextareaChanges;
