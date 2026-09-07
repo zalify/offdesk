@@ -11,6 +11,7 @@ import { colors, terminalTheme } from "@/lib/colors";
 import { ctrlLatchTransform } from "@/lib/ctrlLatch";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { useVisualViewportHeight } from "@/lib/hooks";
+import { useTerminalKeyboard } from "@/lib/useTerminalKeyboard";
 import { useKeyBarSlot } from "@/lib/keyBarSlot";
 import { getMobileViewportTerminalAction } from "@/lib/mobileViewportTerminal";
 import { estimateInitialTerminalDimensions } from "@/lib/terminalViewModel";
@@ -85,6 +86,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   const selectOverlayRef = useRef<HTMLPreElement>(null);
   const fitRefRetryTimer = useRef<number | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useTerminalKeyboard(isTouch && isActive, setKeyboardVisible);
   const [selectMode, setSelectMode] = useState(false);
   const [terminalReconnecting, setTerminalReconnecting] = useState(false);
   const [selectSnapshot, setSelectSnapshot] = useState<SelectionSnapshot | null>(null);
