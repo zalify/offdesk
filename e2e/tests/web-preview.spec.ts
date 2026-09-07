@@ -1,5 +1,5 @@
 import { test, expect, devices } from '@playwright/test';
-import { createTerminalViaApi, expandTerminalById, getAuthHeaders, readTerminalBuffer, resetMachineState, takeControlFromHeader } from './helpers';
+import { createTerminalViaApi, expandTerminalById, getAuthHeaders, mobileTakeControl, readTerminalBuffer, resetMachineState, takeControlFromHeader } from './helpers';
 
 test.use({ ignoreHTTPSErrors: true });
 
@@ -119,7 +119,7 @@ test('web preview: compact mobile menu opens and revokes a preview', async ({ pa
   const { openApp } = await import('./helpers');
   await openApp(page);
   await resetMachineState(page);
-  await takeControlFromHeader(page);
+  await mobileTakeControl(page);
   const terminal = await createTerminalViaApi(page);
   await expandTerminalById(page, terminal);
   await page.getByTestId('mobile-title-bar').click();
