@@ -81,6 +81,14 @@ jobs:
           if [ "$version" = "$tag" ]; then version="0.1.0"; fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          # An internal RC may already use the marketing version as its
+          # CFBundleVersion. Give each CI upload (including retries) a new
+          # build number, independently of the public app version.
+          if (( GITHUB_RUN_NUMBER < 1 || GITHUB_RUN_NUMBER > 9999 || GITHUB_RUN_ATTEMPT < 1 || GITHUB_RUN_ATTEMPT > 99 )); then
+            echo "Run identity exceeds Apple's numeric build-number fields" >&2
+            exit 1
+          fi
+          echo "build_number=${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
 
       - name: Check signing secrets
         env:
@@ -129,7 +137,7 @@ jobs:
           IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
         run: |
           cargo tauri ios build --export-method app-store-connect \
-            --config "{\"version\": \"${{ steps.version.outputs.version }}\", \"bundle\": {\"iOS\": {\"developmentTeam\": \"$APPLE_DEVELOPMENT_TEAM\"}}}"
+            --config "{\"version\": \"${{ steps.version.outputs.version }}\", \"bundle\": {\"iOS\": {\"developmentTeam\": \"$APPLE_DEVELOPMENT_TEAM\", \"bundleVersion\": \"${{ steps.version.outputs.build_number }}\"}}}"
 
       # When signing fails, say why in terms a person can act on: what the
       # profile the CLI installed is for, and what the project ended up
