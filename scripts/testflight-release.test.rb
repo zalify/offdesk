@@ -9,8 +9,19 @@ class TestFlightReleaseTest < Minitest::Test
     @french = false
     @attached = false
     @declaration = true
+    @baseline_exemption = true
+    @current_exemption = nil
+    @current_declaration = nil
     @client = lambda do |method, path, payload, query|
       if method != 'get'
+        if method == 'patch' && path == '/v1/builds/new'
+          if payload.dig(:data, :attributes, :usesNonExemptEncryption) == false
+            raise 'Apple rejects resetting an immutable exemption' unless @current_exemption.nil?
+            @current_exemption = false
+          elsif payload.dig(:data, :relationships, :appEncryptionDeclaration)
+            @current_declaration = {id: 'crypto'}
+          end
+        end
         @writes << [method, path, payload]
         @state = 'WAITING_FOR_BETA_REVIEW' if path == '/v1/betaAppReviewSubmissions'
         @attached = true if path.include?('/relationships/builds')
@@ -18,19 +29,21 @@ class TestFlightReleaseTest < Minitest::Test
       end
       data = case path
       when '/v1/builds'
-        query['filter[version]'] == '0.6.4' ? [{id: 'old', attributes: {version: '0.6.4', usesNonExemptEncryption: true}}] : [{id: 'new', attributes: {processingState: 'VALID', expired: false}}]
+        query['filter[version]'] == '0.6.4' ? [{id: 'old', attributes: {version: '0.6.4', usesNonExemptEncryption: @baseline_exemption}}] : [{id: 'new', attributes: {processingState: 'VALID', expired: false, usesNonExemptEncryption: @current_exemption}}]
       when '/v1/builds/new/preReleaseVersion'
         {attributes: {version: @version, platform: 'IOS'}}
       when '/v1/betaGroups'
         [{id: 'testers', attributes: {name: 'Testers', isInternalGroup: false}}]
       when '/v1/builds/old/appEncryptionDeclaration'
         @declaration ? {id: 'crypto', attributes: {containsThirdPartyCryptography: true, containsProprietaryCryptography: false, availableOnFrenchStore: @french}} : nil
+      when '/v1/builds/new/appEncryptionDeclaration'
+        @current_declaration
       when '/v1/builds/new/buildBetaDetail'
         {id: 'detail', attributes: {externalBuildState: @state}}
       when '/v1/builds/new/betaBuildLocalizations'
         [{attributes: {locale: 'en-US'}}]
-      when '/v1/builds/new/betaGroups'
-        @attached ? [{id: 'testers'}] : []
+      when '/v1/betaGroups/testers/relationships/builds'
+        @attached ? [{id: 'new'}] : []
       else
         raise "Unexpected request #{path}"
       end
@@ -68,6 +81,23 @@ class TestFlightReleaseTest < Minitest::Test
     assert_equal 'WAITING_FOR_BETA_REVIEW', run_release[:externalBuildState]
     assert_equal 1, @writes.count { |_, path, _| path == '/v1/betaAppReviewSubmissions' }
     assert_equal 1, @writes.count { |_, path, _| path.include?('/relationships/builds') }
+    assert_equal 1, @writes.count { |method, _, _| method == 'patch' }
+  end
+
+  def test_existing_exemption_is_not_written_again
+    @declaration = false
+    @baseline_exemption = false
+    assert_equal 'WAITING_FOR_BETA_REVIEW', run_release[:externalBuildState]
+    assert_equal 'WAITING_FOR_BETA_REVIEW', run_release[:externalBuildState]
+    assert_equal 1, @writes.count { |method, _, _| method == 'patch' }
+  end
+
+  def test_conflicting_existing_classification_is_preserved
+    @declaration = false
+    @baseline_exemption = false
+    @current_exemption = true
+    assert_raises(RuntimeError) { run_release }
+    assert_empty @writes
   end
 
   def test_rejected_build_needs_attention
