@@ -44,24 +44,28 @@ Questions, setups that did not work, things you want it to do:
 | **Android** | [offdesk.dev/apk](https://offdesk.dev/apk) | `arm64-v8a`; [`/apk/universal`](https://offdesk.dev/apk/universal) if unsure. |
 | **Hub, node, CLI** | `curl -fsSL https://offdesk.dev/install \| sh` | Linux and macOS, x64 and arm64. For a NAS, a VPS, anything without a screen. |
 
-Every link follows the newest release of that kind. Windows and Linux desktop
-apps are clients only: the hub needs tmux, which they do not have.
+Every link follows the newest release of that kind. Windows is a desktop client;
+Linux can also host a Hub with tmux installed separately.
 
 ## September release
 
-Hub/CLI/node [0.20.3](https://github.com/zalify/offdesk/releases/tag/v0.20.3),
-desktop [0.6.3](https://github.com/zalify/offdesk/releases/tag/desktop-v0.6.3),
-and mobile 0.6.5 improve keyboard dismissal, iOS Chinese punctuation and voice
-input, focused-field layout, QR pairing and guided Cloud setup. Local editor
-has been removed; direct input, text paste and photo/file attachments remain.
-Use the download links above for the latest published packages. iOS availability
-is managed through TestFlight and can lag behind while Apple reviews the build.
+Hub/CLI/node [0.20.4](https://github.com/zalify/offdesk/releases/tag/v0.20.4),
+desktop [0.6.4](https://github.com/zalify/offdesk/releases/tag/desktop-v0.6.4),
+and mobile 0.6.6 improve first-time setup, startup reconnection and Android
+system-navigation spacing. The Mac app checks that its Hub and machine are ready
+before phone pairing, recovers incomplete setup and fixes Chinese punctuation
+input. The macOS installer now includes a drag-to-Applications layout.
+
+Direct input, text paste and photo/file attachments remain; local editor was
+removed in the previous release. Use the download links above for the latest
+published packages. iOS availability is managed through TestFlight and can lag
+behind while Apple reviews the build.
 
 ## Install
 
 Start with the illustrated Mac setup guide: [English](https://offdesk.dev/docs/mac) ·
 [简体中文](https://offdesk.dev/zh/docs/mac). It includes real App screenshots,
-phone pairing, first-terminal steps, and the tested RC / stable-version differences.
+phone pairing, first-terminal steps, and the scope of our clean-account testing.
 
 On the machine that stays on — a Mac, a NAS — which is usually also the first
 machine you want to reach.
