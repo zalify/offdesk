@@ -28,14 +28,20 @@ interface IosTextInputOptions {
  * insertText-only handler; leave composition and physical keys with xterm. */
 export function attachIosTerminalInput(options: IosTextInputOptions): () => void {
   const { textarea } = options;
+  // xterm registers a capture listener on the textarea before addons attach.
+  // Capture on its parent so the edit has exactly one owner, even when xterm's
+  // own insertText path would also accept it (no preceding keydown).
+  const inputRoot = textarea.parentElement ?? textarea;
   let before: TextEditSnapshot | null = null;
   const snapshot = (): TextEditSnapshot => ({ value: textarea.value, start: textarea.selectionStart, end: textarea.selectionEnd });
   const supported = (event: InputEvent) => ["insertText", "insertReplacementText", "insertFromDictation", "deleteContentBackward"].includes(event.inputType);
   const onBeforeInput = (event: Event) => {
+    if (event.target !== textarea) return;
     const input = event as InputEvent;
     before = !input.isComposing && supported(input) && !options.composing() ? snapshot() : null;
   };
   const onInput = (event: Event) => {
+    if (event.target !== textarea) return;
     const input = event as InputEvent;
     const previous = before;
     before = null;
@@ -51,12 +57,12 @@ export function attachIosTerminalInput(options: IosTextInputOptions): () => void
     options.commit(text);
   };
   const reset = () => { before = null; };
-  textarea.addEventListener("beforeinput", onBeforeInput, true);
-  textarea.addEventListener("input", onInput, true);
+  inputRoot.addEventListener("beforeinput", onBeforeInput, true);
+  inputRoot.addEventListener("input", onInput, true);
   textarea.addEventListener("blur", reset);
   return () => {
-    textarea.removeEventListener("beforeinput", onBeforeInput, true);
-    textarea.removeEventListener("input", onInput, true);
+    inputRoot.removeEventListener("beforeinput", onBeforeInput, true);
+    inputRoot.removeEventListener("input", onInput, true);
     textarea.removeEventListener("blur", reset);
   };
 }
