@@ -1,0 +1,68 @@
+name: TestFlight Release Distribution
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/testflight-release.yml
+      - scripts/testflight-release.rb
+      - scripts/testflight-release.test.rb
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Uploaded stable iOS release tag (ios-vX.Y.Z)"
+        type: string
+        required: true
+      build_number:
+        description: "Exact numeric build number from the successful iOS upload"
+        type: string
+        required: true
+      apply_distribution:
+        description: "Reuse encryption classification and submit to the existing Testers group"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight-release-distribution
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: ruby scripts/testflight-release.test.rb
+  distribute:
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate uploaded release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^ios-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$BUILD_NUMBER" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]
+          version="${RELEASE_TAG#ios-v}"
+          gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fx "offdesk-${version}.ipa"
+          echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Check or apply TestFlight distribution
+        env:
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          APPLY_DISTRIBUTION: ${{ inputs.apply_distribution }}
+          REPORT_PATH: ${{ runner.temp }}/testflight-release.json
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: ruby scripts/testflight-release.rb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: testflight-release-status
+          path: ${{ runner.temp }}/testflight-release.json
+          retention-days: 30
