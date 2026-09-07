@@ -205,7 +205,7 @@ pub async fn dispatch(State(state): State<AppState>, request: Request, next: Nex
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("");
-    if authority.eq_ignore_ascii_case(&config.control_authority) {
+    if config.allows_control(authority, &crate::first_run::local_network_addresses()) {
         return next.run(request).await;
     }
     let Ok(url) = url::Url::parse(&format!("https://{authority}")) else {

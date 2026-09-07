@@ -9,13 +9,13 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::time::Duration;
 use offdesk_protocol::{
     decode_attach_output_frame, encode_terminal_preview_output_frame, BrowserEventEnvelope,
     BrowserEventsClientMessage, BrowserEventsPong, HubToMachine, MachineToHub,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -45,6 +45,10 @@ fn schedule_device_disconnect_cleanup(
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum ClientMessage {
+    #[serde(rename = "composer")]
+    Composer {
+        message: offdesk_protocol::ComposerMessage,
+    },
     #[serde(rename = "input")]
     Input { data: String },
     #[serde(rename = "command_input")]
@@ -113,7 +117,8 @@ fn client_message_allowed(
         ClientMessage::Input { .. }
         | ClientMessage::CommandInput { .. }
         | ClientMessage::Resize { .. }
-        | ClientMessage::ImagePaste { .. } => is_controller,
+        | ClientMessage::ImagePaste { .. }
+        | ClientMessage::Composer { .. } => is_controller,
     }
 }
 
@@ -167,17 +172,19 @@ async fn terminal_ws_handler(
     let device_id = params.get("device_id").cloned().unwrap_or_default();
     let compress_requested = params.get("compress").map(String::as_str)
         == Some(offdesk_protocol::compression::DEFLATE_RAW_V1);
-    ws.on_upgrade(move |socket| {
-        handle_terminal_ws(
-            socket,
-            machine_id,
-            terminal_id,
-            device_id,
-            user_id,
-            compress_requested,
-            state,
-        )
-    })
+    ws.max_message_size(32 * 1024 * 1024)
+        .max_frame_size(32 * 1024 * 1024)
+        .on_upgrade(move |socket| {
+            handle_terminal_ws(
+                socket,
+                machine_id,
+                terminal_id,
+                device_id,
+                user_id,
+                compress_requested,
+                state,
+            )
+        })
 }
 
 async fn handle_terminal_ws(
@@ -258,6 +265,8 @@ async fn handle_terminal_ws(
         return;
     }
 
+    let (receipt_tx, mut receipt_rx) = mpsc::channel::<String>(8);
+
     // Outbound: forward bytes from out_rx to the WS as binary frames.
     // Chunks that queued up while the socket was busy are merged into one
     // message: a single WS write (and a single onmessage on the browser)
@@ -265,7 +274,13 @@ async fn handle_terminal_ws(
     let mut send_task = tokio::spawn(async move {
         let mut chunks: Vec<Bytes> = Vec::with_capacity(32);
         loop {
-            let received = out_rx.recv_many(&mut chunks, 32).await;
+            let received = tokio::select! {
+                Some(receipt) = receipt_rx.recv() => {
+                    if sender.send(Message::Text(receipt.into())).await.is_err() { break; }
+                    continue;
+                }
+                count = out_rx.recv_many(&mut chunks, 32) => count,
+            };
             if received == 0 {
                 break; // channel closed
             }
@@ -294,6 +309,8 @@ async fn handle_terminal_ws(
     let uid = user_id.clone();
     let aid_for_in = attach_id.clone();
     let router_for_in = state.router.clone();
+    let composer_state = state.clone();
+    let composer_slots = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
@@ -303,6 +320,37 @@ async fn handle_terminal_ws(
                             .as_deref()
                             .map(|user_id| manager.is_controller(user_id, &mid, &did))
                             .unwrap_or(true);
+
+                        if let ClientMessage::Composer { message } = client_msg {
+                            let Ok(permit) = composer_slots.clone().try_acquire_owned() else {
+                                let receipt = offdesk_protocol::ComposerReceipt {
+                                    id: message.id,
+                                    status: offdesk_protocol::ComposerStatus::Unknown,
+                                    detail:
+                                        "A send is still in progress. Check delivery again shortly."
+                                            .into(),
+                                };
+                                let _ = receipt_tx.send(serde_json::json!({"type":"composer_receipt","receipt":receipt}).to_string()).await;
+                                continue;
+                            };
+                            let state = composer_state.clone();
+                            let user = uid.clone().unwrap_or_else(|| "dev".into());
+                            let machine = mid.clone();
+                            let terminal = tid_for_in.clone();
+                            let attach = aid_for_in.clone();
+                            let receipts = receipt_tx.clone();
+                            let allowed = can_control && (uid.is_none() || !did.is_empty());
+                            // Finish/persist the result even if the browser disconnects.
+                            tokio::spawn(async move {
+                                let receipt = crate::composer::submit(
+                                    state, user, machine, terminal, attach, message, allowed,
+                                )
+                                .await;
+                                drop(permit);
+                                let _ = receipts.send(serde_json::json!({"type":"composer_receipt","receipt":receipt}).to_string()).await;
+                            });
+                            continue;
+                        }
 
                         if client_message_claims_control(
                             &client_msg,
@@ -324,6 +372,7 @@ async fn handle_terminal_ws(
                         }
 
                         let to_send = match client_msg {
+                            ClientMessage::Composer { .. } => unreachable!(),
                             ClientMessage::Input { data }
                             | ClientMessage::CommandInput { data }
                             | ClientMessage::TerminalResponse { data } => {
@@ -774,9 +823,7 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
                                 Message::Binary(data) => {
                                     match decode_attach_output_frame(&data) {
                                         Ok((attach_id, payload)) => {
-                                            if let Some(sender) =
-                                                router.lookup_sender(&attach_id)
-                                            {
+                                            if let Some(sender) = router.lookup_sender(&attach_id) {
                                                 // Never let a single slow browser
                                                 // backpressure the entire machine→hub
                                                 // recv loop. Drop on Full; treat
@@ -813,7 +860,8 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
                                                         // Schedule a tmux redraw for this
                                                         // client once the burst settles —
                                                         // dropped bytes can't be replayed.
-                                                        let _ = resync_tx.try_send(attach_id.clone());
+                                                        let _ =
+                                                            resync_tx.try_send(attach_id.clone());
                                                     }
                                                     Err(TrySendError::Closed(_)) => {
                                                         tracing::debug!(

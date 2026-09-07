@@ -1,11 +1,11 @@
 {
   "productName": "offdesk",
-  "version": "0.5.0",
+  "version": "0.6.4",
   "identifier": "dev.offdesk.desktop",
   "build": {
     "frontendDist": "../../app/dist",
     "devUrl": "http://localhost:8081",
-    "beforeBuildCommand": "pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app build",
+    "beforeBuildCommand": "pnpm --filter @offdesk/desktop build:web",
     "beforeDevCommand": "pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app dev:web"
   },
   "app": {
@@ -35,7 +35,24 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "dmg": {
+        "background": "dmg/background.png",
+        "windowSize": {
+          "width": 600,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 150,
+          "y": 180
+        },
+        "applicationFolderPosition": {
+          "x": 450,
+          "y": 180
+        }
+      }
+    }
   },
   "plugins": {
     "updater": {

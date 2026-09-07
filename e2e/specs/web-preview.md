@@ -27,3 +27,10 @@
 ## Related regression checks
 
 The same container run includes touch terminal hyperlinks and desktop Fit sizing. These retain their existing specifications; this spec adds the private-preview flow only.
+
+## Compact phone entry
+
+At 390px width, tap the session title, then the machine name. **Open web preview**
+opens the same dialog inside the compact workspace. A blocked popup retains the
+launcher link. Reopening the dialog lists existing previews, and **Close preview**
+revokes the lease through the API.

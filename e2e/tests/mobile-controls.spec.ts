@@ -61,13 +61,13 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
   await expect(page.getByTitle("Show keyboard")).toBeVisible();
 
   // Engage view-only via the host sheet: this releases control, so the
-  // keyboard toggle disappears and the title-bar create button is disabled.
+  // keyboard toggle stays in place disabled, as does the create button.
   await mobileOpenHostSheet(page);
   await expect(page.getByTestId("mobile-control-toggle")).toHaveText(
     "View only",
   );
   await page.getByTestId("mobile-control-toggle").click();
-  await expect(page.getByTitle("Show keyboard")).toHaveCount(0);
+  await expect(page.getByTitle("Show keyboard")).toBeDisabled();
   await expect(page.getByTestId("mobile-bar-new-terminal")).toBeDisabled();
 
   // Unlock without claiming; the existing Take control flow remains explicit.
@@ -640,10 +640,10 @@ test("mobile Ctrl latch and pinned key-bar keys send bytes directly", async ({
   await createTerminalViaApi(page, { startupCommand: "sleep 600" });
   await expect(getImmersiveTerminal(page)).toBeVisible();
 
-  // Pinned ⇧Tab / ^C send their bytes immediately, unbuffered.
-  await page.getByTestId("extended-keybar-shift-tab").click();
+  // Pinned Tab / Ctrl+C send their bytes immediately, unbuffered.
+  await page.getByTestId("extended-keybar-tab").click();
   await page.getByTestId("extended-keybar-ctrl-c").click();
-  await expect.poll(() => commandFrames).toContain("\x1b[Z");
+  await expect.poll(() => commandFrames).toContain("\t");
   await expect.poll(() => commandFrames).toContain("\x03");
 
   // Latch Ctrl: the next soft-keyboard letter goes out as its control byte,

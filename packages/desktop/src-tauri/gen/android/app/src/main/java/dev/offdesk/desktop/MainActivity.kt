@@ -2,12 +2,21 @@ package dev.offdesk.desktop
 
 import android.graphics.Color
 import android.os.Bundle
+import android.webkit.WebView
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
+  private var terminalWebView: WebView? = null
+  private var keyboardVisible: Boolean? = null
+
+  override fun onWebViewCreate(webView: WebView) {
+    super.onWebViewCreate(webView)
+    terminalWebView = webView
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // The app chrome is always dark regardless of the system theme, so force
     // light (white) system-bar icons; the default auto style picks dark icons
@@ -35,11 +44,27 @@ class MainActivity : TauriActivity() {
     val content = findViewById<android.view.View>(android.R.id.content)
     content.setBackgroundColor(Color.parseColor("#0b0c0f"))
     ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
-      val top = insets.getInsets(
-        WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout()
-      ).top
+      // Android WebView does not reliably publish system navigation insets
+      // to CSS. Reserve them here for both three-button and gesture navigation,
+      // including side-mounted bars/cutouts in landscape and split screen.
+      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      )
       val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-      view.setPadding(view.paddingLeft, top, view.paddingRight, ime)
+      // IME bounds already include the navigation bar. Adding them would leave
+      // a second empty strip above the keyboard.
+      view.setPadding(bars.left, bars.top, bars.right, maxOf(ime, bars.bottom))
+      val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
+      if (keyboardVisible != visible) {
+        keyboardVisible = visible
+        // The IME's own dismiss button does not necessarily blur the DOM
+        // textarea. Tell the bundled/Hub UI the real state, including floating
+        // keyboards and split-screen layouts where viewport heuristics fail.
+        terminalWebView?.evaluateJavascript(
+          "window.dispatchEvent(new CustomEvent('offdesk:keyboard-visibility', {detail: $visible}))",
+          null,
+        )
+      }
       insets
     }
   }

@@ -2,11 +2,53 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useState,
 } from "react";
-import { Platform } from "react-native";
+import { Platform, useColorScheme } from "react-native";
+import { lightColors, darkColors, lightAlpha, darkAlpha } from "./themePalette";
 
-type Theme = "light" | "dark" | "system";
-type ResolvedTheme = "light";
+export type Theme = "light" | "dark" | "system";
+type ResolvedTheme = "light" | "dark";
+const STORAGE_KEY = "offdesk:theme";
+const DARK_MEDIA = "(prefers-color-scheme: dark)";
+function isTheme(value: unknown): value is Theme {
+  return value === "light" || value === "dark" || value === "system";
+}
+
+function readTheme(): Theme {
+  try {
+    const value = localStorage.getItem(STORAGE_KEY);
+    if (isTheme(value)) return value;
+  } catch {
+    // Storage can be unavailable in private browsing or server rendering.
+  }
+  // Preserve the existing appearance until the user chooses another one.
+  return "light";
+}
+
+function applyTheme(theme: ResolvedTheme) {
+  if (Platform.OS !== "web" || typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.classList.toggle("dark", theme === "dark");
+  root.style.colorScheme = theme;
+}
+
+function readSystemTheme(): ResolvedTheme {
+  return typeof window !== "undefined" && window.matchMedia(DARK_MEDIA).matches
+    ? "dark"
+    : "light";
+}
+
+// Apply the saved choice as the app loads, before React mounts its screens.
+if (Platform.OS === "web" && typeof window !== "undefined") {
+  const theme = readTheme();
+  applyTheme(
+    theme === "system"
+      ? readSystemTheme()
+      : theme,
+  );
+}
 
 interface ThemeContextValue {
   theme: Theme;
@@ -14,109 +56,68 @@ interface ThemeContextValue {
   setTheme: (theme: Theme) => void;
 }
 
-// One look, the site's: warm chrome, dark terminal. The context stays in
-// place so existing callers (SettingsPage, xterm theme hooks) keep compiling —
-// but setTheme is a no-op and resolvedTheme is always "light".
-const FORCED: ThemeContextValue = {
+const ThemeContext = createContext<ThemeContextValue>({
   theme: "light",
   resolvedTheme: "light",
-  setTheme: () => { /* one look */ },
-};
-
-const ThemeContext = createContext<ThemeContextValue>(FORCED);
-
-function applyLight() {
-  if (Platform.OS !== "web") return;
-  if (typeof document === "undefined") return;
-  const el = document.documentElement;
-  el.classList.remove("dark");
-  el.style.colorScheme = "light";
-}
+  setTheme: () => {},
+});
+const useBrowserLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const [theme, updateTheme] = useState<Theme>(readTheme);
+  const nativeSystemTheme = useColorScheme();
+  const [webSystemTheme, setWebSystemTheme] = useState(readSystemTheme);
+  const systemTheme = Platform.OS === "web" ? webSystemTheme : nativeSystemTheme;
+  const resolvedTheme: ResolvedTheme = theme === "system"
+    ? (systemTheme === "dark" ? "dark" : "light")
+    : theme;
+
+  useBrowserLayoutEffect(() => applyTheme(resolvedTheme), [resolvedTheme]);
+
   useEffect(() => {
-    applyLight();
+    if (Platform.OS !== "web") return;
+    // NativeWind's class-based color scheme can override Appearance on web.
+    // Read the OS media query directly so our own dark class cannot pin it.
+    const media = window.matchMedia(DARK_MEDIA);
+    const sync = () => setWebSystemTheme(media.matches ? "dark" : "light");
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
   }, []);
-  return <ThemeContext.Provider value={FORCED}>{children}</ThemeContext.Provider>;
+
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const sync = (event: StorageEvent) => {
+      if (event.key === STORAGE_KEY || event.key === null) updateTheme(readTheme());
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
+
+  const setTheme = (value: Theme) => {
+    updateTheme(value);
+    try {
+      localStorage.setItem(STORAGE_KEY, value);
+    } catch {
+      // Keep the in-memory choice when storage is unavailable.
+    }
+  };
+
+  return (
+    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
+      {children}
+    </ThemeContext.Provider>
+  );
 }
 
-export function useTheme(): ThemeContextValue {
+export function useTheme() {
   return useContext(ThemeContext);
 }
 
-// Concrete color values for RN inline styles. RNW silently drops CSS-var
-// strings in <Text>/<View>, so native-side components need literals.
-const lightColors = {
-  // New design tokens — the same values as global.css.
-  bg0: "#fff4e3",
-  bg1: "#fffbf4",
-  bg2: "#fffbf4",
-  bg3: "#ffe9cc",
-  line: "#e6cfae",
-  lineSoft: "#f1dec6",
-  fg0: "#2b2340",
-  fg1: "#4a4160",
-  fg2: "#6e6486",
-  fg3: "#9d95b3",
-  ok: "#1f9e8c",
-  warn: "#d29a12",
-  err: "#e8543f",
-  info: "#1f8fc2",
-  violet: "#7c5cbf",
-  termBg: "#1e1b2e",
-  onAccent: "#fffbf4",
-
-  // Legacy keys.
-  background: "#fff4e3",
-  backgroundSecondary: "#fffbf4",
-  surface: "#fffbf4",
-  surfaceHover: "#ffe9cc",
-  foreground: "#2b2340",
-  foregroundSecondary: "#4a4160",
-  foregroundMuted: "#6e6486",
-  accent: "#ff6b57",
-  accentDim: "#ff6b57",
-  danger: "#e8543f",
-  warning: "#d29a12",
-  success: "#1f9e8c",
-  border: "#e6cfae",
-  borderActive: "#ff6b57",
-} as const;
-
-const lightAlpha = {
-  accentSoft: "rgba(255, 107, 87, 0.14)",
-  accentLine: "rgba(255, 107, 87, 0.35)",
-  dangerSoft: "rgba(232, 84, 63, 0.18)",
-  dangerLine: "rgba(232, 84, 63, 0.5)",
-  overlay: "rgba(43, 35, 64, 0.45)",
-
-  accentSubtle: "rgba(255, 107, 87, 0.08)",
-  accentLight: "rgba(255, 107, 87, 0.1)",
-  accentLight12: "rgba(255, 107, 87, 0.12)",
-  accentMedium15: "rgba(255, 107, 87, 0.15)",
-  accentMedium: "rgba(255, 107, 87, 0.2)",
-  accentBorder: "rgba(255, 107, 87, 0.25)",
-  backgroundDim: "rgba(255, 244, 227, 0.15)",
-  backgroundOverlay: "rgba(255, 244, 227, 0.2)",
-  backgroundShadow: "rgba(43, 35, 64, 0.25)",
-  backgroundOpaque96: "rgba(255, 244, 227, 0.96)",
-  backgroundOpaque98: "rgba(255, 244, 227, 0.98)",
-  backgroundSecondaryOpaque96: "rgba(255, 251, 244, 0.96)",
-  surfaceOpaque94: "rgba(255, 251, 244, 0.94)",
-  foregroundOverlay: "rgba(43, 35, 64, 0.15)",
-  foregroundSubtle: "rgba(43, 35, 64, 0.35)",
-  warningSubtle: "rgba(210, 154, 18, 0.08)",
-  warningLight12: "rgba(210, 154, 18, 0.12)",
-  warningBorder: "rgba(210, 154, 18, 0.2)",
-  warningBorder22: "rgba(210, 154, 18, 0.22)",
-  mutedLight: "rgba(110, 100, 134, 0.15)",
-  mutedMedium: "rgba(110, 100, 134, 0.3)",
-} as const;
-
 export function useColors() {
-  return lightColors;
+  return useTheme().resolvedTheme === "dark" ? darkColors : lightColors;
 }
 
 export function useColorAlpha() {
-  return lightAlpha;
+  return useTheme().resolvedTheme === "dark" ? darkAlpha : lightAlpha;
 }

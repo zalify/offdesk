@@ -17,7 +17,9 @@ export function createTerminalClipboardProvider(
     },
 
     async writeText(selection, text) {
-      if (selection !== SYSTEM_CLIPBOARD) return;
+      // tmux emits OSC 52 with an empty target. Treat that default target
+      // as the system clipboard, just like an explicit "c" target.
+      if (selection !== "" && selection !== SYSTEM_CLIPBOARD) return;
       await clipboard.writeText(text);
     },
   };

@@ -13,7 +13,7 @@ export function ModeIndicator({ isController, onRequestControl, onReleaseControl
       alignItems: 'center',
       gap: 8,
       padding: '6px 12px',
-      background: isController ? colorAlpha.accentMedium15 : 'rgba(255,255,255,0.05)',
+      background: isController ? colorAlpha.accentMedium15 : colors.surface,
       borderRadius: 6,
       border: '1px solid ' + (isController ? colors.accent : colors.border),
       fontSize: 12,

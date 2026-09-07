@@ -1,111 +1,81 @@
 import { useState, useEffect, useCallback } from "react";
-import { isTauri } from "@/lib/platform";
+import { isDesktopShell } from "@/lib/desktopHub";
 import { colors } from "@/lib/colors";
 
-export function UpdateNotification() {
-  const [updateAvailable, setUpdateAvailable] = useState<{
-    version: string;
-    body?: string;
-  } | null>(null);
-  const [installing, setInstalling] = useState(false);
+/** Automatic toast and the always-available check in Settings → About. */
+export function UpdateNotification({ inline = false }: { inline?: boolean }) {
+  const [version, setVersion] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"checking" | "installing" | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    if (!isTauri()) return;
-
-    let cancelled = false;
-
-    const checkForUpdate = async () => {
-      try {
-        const { check } = await import("@tauri-apps/plugin-updater");
-        const update = await check();
-        if (!cancelled && update) {
-          setUpdateAvailable({
-            version: update.version,
-            body: update.body ?? undefined,
-          });
-        }
-      } catch {
-        // Silently ignore update check failures
-      }
-    };
-
-    const timer = setTimeout(checkForUpdate, 5000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, []);
-
-  const handleInstall = useCallback(async () => {
-    setInstalling(true);
+  const checkForUpdate = useCallback(async (silent = false) => {
+    setBusy("checking");
+    setError(null);
+    setMessage(null);
     try {
       const { check } = await import("@tauri-apps/plugin-updater");
       const update = await check();
-      if (update) {
-        await update.downloadAndInstall();
-        const { relaunch } = await import("@tauri-apps/plugin-process");
-        await relaunch();
-      }
-    } catch {
-      setInstalling(false);
+      setVersion(update?.version ?? null);
+      if (!update && !silent) setMessage("You’re up to date.");
+      await update?.close();
+    } catch (e) {
+      if (!silent) setError(`Could not check for updates: ${String(e)}`);
+    } finally {
+      setBusy(null);
     }
   }, []);
 
-  if (!updateAvailable || dismissed) return null;
+  useEffect(() => {
+    if (!isDesktopShell() || inline) return;
+    const timer = setTimeout(() => void checkForUpdate(true), 5000);
+    return () => clearTimeout(timer);
+  }, [inline, checkForUpdate]);
 
-  // Floating toast (Phase 2): mounts bottom-right of the desktop layout.
+  const install = async () => {
+    setBusy("installing");
+    setError(null);
+    setMessage(null);
+    let update;
+    try {
+      const { check } = await import("@tauri-apps/plugin-updater");
+      update = await check();
+      if (!update) {
+        setVersion(null);
+        setMessage("You’re up to date.");
+        return;
+      }
+      await update.downloadAndInstall();
+      const { relaunch } = await import("@tauri-apps/plugin-process");
+      await relaunch();
+    } catch (e) {
+      setError(`Update failed. You can try again: ${String(e)}`);
+    } finally {
+      setBusy(null);
+      await update?.close().catch(() => {});
+    }
+  };
+
+  if (!isDesktopShell() || (!inline && (dismissed || (!version && !message && !error)))) return null;
+  const foreground = inline ? colors.foreground : colors.onAccent;
+  const buttonStyle = {
+    border: `1px solid ${inline ? colors.border : "currentColor"}`,
+    background: "transparent", color: foreground, borderRadius: 6,
+    padding: "6px 10px", fontSize: 12, cursor: busy ? "default" : "pointer",
+  };
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "8px 10px",
-        fontSize: 11,
-        background: colors.accent,
-        borderRadius: 8,
-        boxShadow: "0 12px 32px -12px rgba(0,0,0,0.6)",
-      }}
-    >
-      <span style={{ color: colors.background, opacity: 0.9 }}>
-        {installing
-          ? "Installing update..."
-          : `v${updateAvailable.version} available`}
-      </span>
-      {!installing && (
-        <>
-          <button
-            onClick={handleInstall}
-            style={{
-              background: "rgba(255,255,255,0.2)",
-              border: "none",
-              borderRadius: 3,
-              color: colors.background,
-              cursor: "pointer",
-              fontSize: 10,
-              padding: "1px 6px",
-              fontWeight: 600,
-            }}
-          >
-            Install
-          </button>
-          <button
-            onClick={() => setDismissed(true)}
-            style={{
-              background: "none",
-              border: "none",
-              color: colors.background,
-              cursor: "pointer",
-              fontSize: 10,
-              opacity: 0.7,
-              padding: "1px 4px",
-            }}
-          >
-            &#x2715;
-          </button>
-        </>
-      )}
+    <div data-testid={inline ? "desktop-update-settings" : "desktop-update-toast"}
+      style={{ display: "flex", flexDirection: "column", gap: 8, padding: inline ? "12px 0" : 12,
+        maxWidth: 400, fontSize: 12, background: inline ? "transparent" : colors.accent,
+        color: foreground, borderRadius: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span role="status">{busy === "installing" ? "Installing update…" : busy === "checking" ? "Checking…" : version ? `v${version} available` : message ?? "Desktop app updates"}</span>
+        {version && <button type="button" disabled={!!busy} onClick={() => void install()} style={buttonStyle}>Install update</button>}
+        {inline && <button type="button" disabled={!!busy} onClick={() => void checkForUpdate()} style={buttonStyle}>Check for updates</button>}
+        {!inline && <button type="button" disabled={!!busy} aria-label="Dismiss update" onClick={() => setDismissed(true)} style={buttonStyle}>×</button>}
+      </div>
+      {error && <div role="alert" style={{ overflowWrap: "anywhere" }}>{error}</div>}
     </div>
   );
 }

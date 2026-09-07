@@ -62,7 +62,7 @@ jobs:
       # tauri-action's beforeBuildCommand builds it again, to the same result.
       - name: Build the web UI for the hub sidecar
         if: matrix.platform != 'windows-latest'
-        run: pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app build
+        run: pnpm --filter @offdesk/desktop build:web
 
       - name: Build the offdesk-hub and offdesk-node sidecars
         if: matrix.platform != 'windows-latest'
@@ -122,6 +122,8 @@ jobs:
       - name: Build desktop app
         uses: tauri-apps/tauri-action@v0
         env:
+          # Keep Finder layout even though the release runs in CI mode.
+          TAURI_BUNDLER_DMG_IGNORE_CI: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -133,3 +135,10 @@ jobs:
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      - name: Verify macOS drag-to-install layout
+        if: matrix.platform == 'macos-latest'
+        run: |
+          for dmg in packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg; do
+            scripts/verify-dmg-layout.sh "$dmg"
+          done

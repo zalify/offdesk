@@ -1,6 +1,7 @@
 import "../global.css";
 import "../lib/legacyStorageMigration";
-import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Component, useLayoutEffect, type ErrorInfo, type ReactNode } from "react";
+import { applyUiFontPreferences, subscribeFontPreferences } from "../lib/fontPreferences";
 import { Slot } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
@@ -9,6 +10,7 @@ import { isDesktopShell } from "../lib/desktopHub";
 import { ThemeProvider } from "../lib/theme";
 import LoginScreen from "./login";
 import { DesktopGate } from "../components/DesktopSetup.web";
+import { AndroidUpdateNotification } from "../components/AndroidUpdateNotification";
 
 // Decided once: the shell a page runs in does not change while it is open,
 // and Tauri's bridge is there before any script runs. Reading it per render
@@ -101,12 +103,17 @@ function AuthGate() {
 }
 
 export default function RootLayout() {
+  useLayoutEffect(() => {
+    applyUiFontPreferences();
+    return subscribeFontPreferences(applyUiFontPreferences);
+  }, []);
   return (
     <AppErrorBoundary>
       <SafeAreaProvider>
         <ThemeProvider>
           <AuthProvider>
             <AuthGate />
+            <AndroidUpdateNotification />
           </AuthProvider>
         </ThemeProvider>
       </SafeAreaProvider>

@@ -286,6 +286,7 @@ mod tests {
             workspace_group_id: None,
             cols: 107,
             rows: 59,
+            attention: None,
             reachable: true,
         }
     }

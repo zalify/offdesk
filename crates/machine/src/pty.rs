@@ -82,6 +82,8 @@ pub struct TmuxAttach {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneInfo {
+    /// Root process of this pane, used to bind agent metadata to this pane.
+    pub pid: Option<u32>,
     /// Live pane title; `None` when tmux has no real title (empty or the
     /// untouched hostname default).
     pub title: Option<String>,
@@ -109,6 +111,7 @@ struct PersistedSession {
 /// byte-streaming path: it just creates / destroys tmux sessions, persists
 /// their metadata to disk, and answers metadata queries.
 pub struct PtyManager {
+    codex_titles: crate::codex_title::SessionTitles,
     sessions: Arc<Mutex<HashMap<String, SessionInfo>>>,
 }
 
@@ -126,6 +129,7 @@ impl PtyManager {
         resolve_tmux_naming();
         ensure_tmux_config();
         Self {
+            codex_titles: Default::default(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -344,6 +348,45 @@ impl PtyManager {
         }
     }
 
+    /// Inspect only the visible pane on this machine; never stream inactive
+    /// terminals to the phone just to discover a confirmation prompt.
+    pub fn terminal_attentions(
+        &self,
+        panes: &HashMap<String, PaneInfo>,
+    ) -> HashMap<String, Option<offdesk_protocol::TerminalAttention>> {
+        self.list_terminal_ids()
+            .into_iter()
+            .map(|id| {
+                let command = panes.get(&id).and_then(|p| p.current_command.as_deref());
+                let attention = if matches!(command, Some("claude" | "codex" | "node")) {
+                    let target = format!("{}:0.0", tmux_session_name(&id));
+                    tmux_cmd()
+                        .args([
+                            "-L",
+                            tmux_socket(),
+                            "capture-pane",
+                            "-p",
+                            "-J",
+                            "-t",
+                            &target,
+                        ])
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .and_then(|o| {
+                            crate::terminal_attention::detect(
+                                command,
+                                &String::from_utf8_lossy(&o.stdout),
+                            )
+                        })
+                } else {
+                    None
+                };
+                (id, attention)
+            })
+            .collect()
+    }
+
     pub fn list_terminals(&self) -> Vec<SessionInfo> {
         self.sessions.lock().unwrap().values().cloned().collect()
     }
@@ -362,15 +405,27 @@ impl PtyManager {
                 "list-panes",
                 "-a",
                 "-F",
-                "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}",
+                "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
             ])
             .output();
-        match output {
+        let mut panes = match output {
             Ok(out) if out.status.success() => {
                 parse_pane_info(&String::from_utf8_lossy(&out.stdout), &current_hostname())
             }
             _ => HashMap::new(),
+        };
+        let titles = crate::codex_title::resolve(&panes);
+        for (id, title) in &titles {
+            if let Some(pane) = panes.get_mut(id) {
+                pane.title = Some(title.clone());
+            }
         }
+        self.codex_titles.replace(titles);
+        panes
+    }
+
+    pub fn resolve_osc_title(&self, terminal_id: &str, title: String) -> String {
+        self.codex_titles.for_osc(terminal_id, title)
     }
 
     /// Cheap "is this id still alive on the machine" check used by the
@@ -687,7 +742,7 @@ pub fn tmux_session_name(id: &str) -> String {
 }
 
 /// Parse `tmux list-panes -a -F
-/// '#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}'`
+/// '#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}'`
 /// output into terminal_id -> PaneInfo. tmux initializes an untouched pane
 /// title to the machine hostname, so empty or hostname-equal titles count as
 /// "no title" (the caller falls back to the foreground process name). The
@@ -697,7 +752,7 @@ pub fn tmux_session_name(id: &str) -> String {
 fn parse_pane_info(output: &str, hostname: &str) -> HashMap<String, PaneInfo> {
     let mut panes = HashMap::new();
     for line in output.lines() {
-        let mut parts = line.splitn(4, '\t');
+        let mut parts = line.splitn(5, '\t');
         let Some(session_name) = parts.next() else {
             continue;
         };
@@ -719,12 +774,14 @@ fn parse_pane_info(output: &str, hostname: &str) -> HashMap<String, PaneInfo> {
             .map(str::trim)
             .filter(|cmd| !cmd.is_empty() && !is_shell_name(cmd))
             .map(str::to_string);
+        let pid = parts.next().and_then(|value| value.trim().parse().ok());
         if title.is_none() && cwd.is_none() && current_command.is_none() {
             continue;
         }
         panes.insert(
             terminal_id.to_string(),
             PaneInfo {
+                pid,
                 title,
                 cwd,
                 current_command,
@@ -1103,6 +1160,13 @@ mod tests {
             content.contains(r#"set -as terminal-features "xterm*:hyperlinks""#),
             "tmux must advertise hyperlinks so OSC 8 is re-emitted to xterm.js attach clients"
         );
+    }
+
+    #[test]
+    fn pane_process_identity_is_parsed_without_changing_command() {
+        let panes = parse_pane_info("odk_a\ttradebase\t/same/path\tcodex\t123\n", "dev");
+        assert_eq!(panes["a"].pid, Some(123));
+        assert_eq!(panes["a"].current_command.as_deref(), Some("codex"));
     }
 
     #[test]

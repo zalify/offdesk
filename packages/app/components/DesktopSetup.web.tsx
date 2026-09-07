@@ -1,3 +1,6 @@
+import { CloudConnectionPanel } from "./CloudConnectionPanel";
+import { SecurePairingPanel } from "./SecureConnectionPanel";
+import { isSecureConnection } from "../lib/secureTransport";
 // The desktop app's first run, and the machine that stays on.
 //
 // One question — is this the machine that stays on? — and two answers. "Yes"
@@ -8,18 +11,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import * as QRCode from "qrcode";
+import { QrImage } from "./QrImage";
 
 import { useAuth } from "@/lib/auth";
 import { colors } from "@/lib/colors";
 import {
-  baseUrlFor,
+  hubAddressOptions,
   desktopRole,
   hubInstall,
   hubIsReady,
   hubLink,
   hubStatus,
   hubUninstall,
-  portOf,
   setDesktopRole,
   tokenFromLink,
   type DesktopRole,
@@ -28,9 +31,10 @@ import {
 } from "@/lib/desktopHub";
 import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
 import LoginScreen from "../app/login";
+import { AppTitleBar } from "./AppTitleBar.web";
 import { Body, Button, Card, Check, Display, Donut, Eyebrow, Spinner, fontDisplay } from "./Warm.web";
 
-const IPHONE_URL = "https://offdesk.dev/#phone";
+const IPHONE_URL = "https://testflight.apple.com/join/rV4ktaGv";
 const ANDROID_URL = "https://offdesk.dev/apk";
 
 async function openOutside(url: string) {
@@ -64,6 +68,8 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<DesktopRole | null | undefined>(undefined);
   const [status, setStatus] = useState<HubStatus | null>(null);
   const [link, setLink] = useState<HubLink | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
+  const [statusError, setStatusError] = useState(false);
 
   useEffect(() => {
     // A bridge that does not know the command (an older shell, or a test's
@@ -89,23 +95,29 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (role !== "hub") return;
     let cancelled = false;
-    hubStatus()
-      .then((s) => {
-        if (!cancelled) setStatus(s);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setStatus({ supported: false, bundled: false, hub_installed: false, node_installed: false, listening: false });
-        }
-      });
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async () => {
+      try {
+        const next = await hubStatus();
+        if (!cancelled) { setStatus(next); setStatusError(false); }
+      } catch {
+        // Keep retrying, but give the user an actionable state.
+        if (!cancelled) setStatusError(true);
+      } finally {
+        if (!cancelled) timer = setTimeout(() => void refresh(), 2000);
+      }
+    };
+    void refresh();
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [role]);
 
   const pick = useCallback(async (picked: DesktopRole) => {
     await setDesktopRole(picked);
     setStatus(null);
+    setSettingUp(picked === "hub");
     setRole(picked);
   }, []);
 
@@ -116,42 +128,69 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     async (current: HubLink) => {
       const token = tokenFromLink(current.link);
       if (token) {
-        await loginWithToken(current.url, token);
+        await loginWithToken(current.local_url ?? current.url, token);
         return;
       }
-      setServerUrl(current.url);
+      setServerUrl(current.local_url ?? current.url);
       await login();
     },
     [login, loginWithToken],
   );
 
-  if (role === undefined) return <Spinner />;
-  if (role === null) return <FirstRun onPick={pick} />;
+  if (isSecureConnection() && !isLoading) return isAuthenticated ? <>{children}</> : <DesktopSetupFrame><LoginScreen /></DesktopSetupFrame>;
+  if (role === undefined) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
+  if (role === null) return <DesktopSetupFrame><FirstRun onPick={pick} /></DesktopSetupFrame>;
 
   if (role === "hub") {
-    if (!status) return <Spinner />;
-    if (!hubIsReady(status)) {
+    if (!status) return <DesktopSetupFrame><Screen><Spinner /><Body>{statusError ? "Could not check this Mac. Retrying…" : "Checking this Mac…"}</Body><Button kind="sky" onClick={() => void pick("client")}>Connect to another Hub</Button></Screen></DesktopSetupFrame>;
+    // Keep existing terminals visible through brief Hub restarts. A first-run
+    // install owns this screen until its command AND readiness checks finish;
+    // the background status poll must not unmount it halfway through.
+    if (!settingUp && isAuthenticated) return <>{children}</>;
+    // A saved login is still being checked during cold-start/restart. Do not
+    // mistake a temporary auth request failure for an incomplete installation
+    // and reinstall services while the existing Hub is recovering.
+    if (!settingUp && status.hub_installed && status.node_installed && isLoading) {
+      return <DesktopSetupFrame><Screen>
+        <div role="status"><Spinner /><Body>Reconnecting to your hub…</Body></div>
+        <Button kind="sky" onClick={() => setSettingUp(true)}>Check this Mac’s setup</Button>
+      </Screen></DesktopSetupFrame>;
+    }
+    if (settingUp || !hubIsReady(status)) {
       return (
-        <HubSetup
+        <DesktopSetupFrame><HubSetup
           status={status}
-          onReady={(ready) => {
+          onStart={() => setSettingUp(true)}
+          onReady={(ready, verified) => {
             setLink(ready);
-            setStatus({ ...status, hub_installed: true, node_installed: true, listening: true });
+            setSettingUp(false);
+            setStatus(verified);
           }}
           onGiveUp={() => void pick("client")}
-        />
+        /></DesktopSetupFrame>
       );
     }
-    if (isLoading) return <Spinner />;
+    if (isLoading) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
     if (!isAuthenticated) {
-      return <HubReadyScreen initial={link} onOpen={openTerminal} />;
+      return <DesktopSetupFrame><HubReadyScreen initial={link} onOpen={openTerminal} /></DesktopSetupFrame>;
     }
     return <>{children}</>;
   }
 
-  if (isLoading) return <Spinner />;
-  if (!isAuthenticated) return <LoginScreen onBecomeHub={() => void pick("hub")} />;
+  if (isLoading) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
+  if (!isAuthenticated) return <DesktopSetupFrame><LoginScreen onBecomeHub={() => void pick("hub")} /></DesktopSetupFrame>;
   return <>{children}</>;
+}
+
+function DesktopSetupFrame({ children }: { children: ReactNode }) {
+  return (
+    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", background: colors.bg0 }}>
+      <AppTitleBar isMobile={false} />
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column" }}>
+        {children}
+      </div>
+    </div>
+  );
 }
 
 // ── First run ─────────────────────────────────────────────────────
@@ -176,7 +215,7 @@ function FirstRun({ onPick }: { onPick: (role: DesktopRole) => Promise<void> }) 
           Same app either way. The only question is whether this is the machine that stays on.
         </Body>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 28, width: "100%", maxWidth: 880 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 28, width: "100%", maxWidth: 880 }}>
         <RoleCard
           accent={colors.accent}
           icon={<ServerIcon />}
@@ -242,17 +281,21 @@ function RoleCard({
 
 // ── Becoming the hub ──────────────────────────────────────────────
 
-function HubSetup({
+export function HubSetup({
   status,
   onReady,
   onGiveUp,
+  onStart,
 }: {
   status: HubStatus;
-  onReady: (link: HubLink) => void;
+  onStart?: () => void;
+  onReady: (link: HubLink, status: HubStatus) => void;
   onGiveUp: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [progress, setProgress] = useState<HubStatus | null>(null);
+  const checked = progress?.setup ?? status.setup;
 
   useEffect(() => {
     if (!status.supported) {
@@ -260,17 +303,26 @@ function HubSetup({
       return;
     }
     let cancelled = false;
+    onStart?.();
     setError(null);
-    hubInstall()
-      .then((link) => {
-        if (!cancelled) onReady(link);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(String(e));
-      });
-    return () => {
-      cancelled = true;
+    const prepare = async () => {
+      const current = await hubStatus();
+      // Reopening a completed installation verifies it without reinstalling.
+      const link = hubIsReady(current) ? await hubLink() : await hubInstall();
+      // launchd accepting a service does not mean the node has connected yet.
+      const deadline = Date.now() + 30000;
+      do {
+        if (cancelled) return;
+        const next = await hubStatus();
+        if (cancelled) return;
+        setProgress(next);
+        if (hubIsReady(next)) { onReady(link, next); return; }
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } while (Date.now() < deadline);
+      throw new Error("Setup has not finished. Keep this Mac online and try again. Your existing data is kept.");
     };
+    void prepare().catch((e: unknown) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt, status.supported]);
 
@@ -278,12 +330,14 @@ function HubSetup({
     <Screen>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
         <Eyebrow>This machine is your hub</Eyebrow>
-        <Display size={38}>{error ? "That did not go through." : "Setting it up…"}</Display>
+        <Display size={38}>{error ? "Let’s finish setting up this Mac" : "Getting this Mac ready…"}</Display>
+        <Body>Your phone can connect after these checks finish. No Terminal commands needed.</Body>
       </div>
       <Card style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 16 }}>
-        <SetupStep done={false} pending={!error} title="Hub is running" sub="Starts at login and restarts if it stops." />
-        <SetupStep done={false} pending={!error} title="This machine is registered" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
-        <SetupStep done={false} pending={!error} title="tmux is ready" sub={status.bundled ? "Bundled with the app." : "From this machine's PATH."} />
+        <SetupStep done={checked?.hub_running ?? status.listening} pending={!error} title="Start your Hub" sub="Starts at login and restarts if it stops." />
+        <SetupStep done={checked?.machine_registered ?? false} pending={!error} title="Connect this Mac to your Hub" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
+        <SetupStep done={checked?.node_online ?? false} pending={!error} title="Wait for this Mac to come online" sub="Checks the live connection, so your phone has a machine to open." />
+        <SetupStep done={checked?.tmux_available ?? false} pending={!error} title="Check terminal tools" sub="Checks that tmux can run on this Mac." />
       </Card>
       {error ? (
         <>
@@ -295,7 +349,7 @@ function HubSetup({
               </Button>
             ) : null}
             <Button kind="sky" onClick={onGiveUp}>
-              Just connect to a hub instead
+              Connect to another Hub
             </Button>
           </div>
         </>
@@ -334,6 +388,31 @@ function SetupStep({ done, pending, title, sub }: { done: boolean; pending: bool
   );
 }
 
+/** Retry pairing when the native hub is briefly unavailable during restart. */
+function useHubPhoneLink(initial: HubLink | null = null) {
+  const [link, setLink] = useState<HubLink | null>(initial);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (link) return;
+    let cancelled = false;
+    let retry: ReturnType<typeof setTimeout>;
+    const read = async () => {
+      try {
+        const next = await hubLink();
+        if (!cancelled) { setError(null); setLink(next); }
+      } catch {
+        if (!cancelled) {
+          setError("Waiting for the hub to reconnect…");
+          retry = setTimeout(() => void read(), 2000);
+        }
+      }
+    };
+    void read();
+    return () => { cancelled = true; clearTimeout(retry); };
+  }, [link]);
+  return { link, setLink, error, setError };
+}
+
 // ── Hub ready: the code for the phone ─────────────────────────────
 
 /**
@@ -350,29 +429,27 @@ export function HubReadyScreen({
   onOpen?: (link: HubLink) => Promise<void>;
   onClose?: () => void;
 }) {
-  const [link, setLink] = useState<HubLink | null>(initial);
-  const [error, setError] = useState<string | null>(null);
+  const { link, setLink, error, setError } = useHubPhoneLink(initial);
   const [opening, setOpening] = useState(false);
-
+  const [verified, setVerified] = useState<HubStatus | null>(null);
   useEffect(() => {
-    if (link) return;
-    hubLink()
-      .then(setLink)
-      .catch((e: unknown) => setError(String(e)));
-  }, [link]);
+    let cancelled = false;
+    void hubStatus().then(value => { if (!cancelled) setVerified(value); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <Screen wide>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 40, width: "100%", maxWidth: 1000, alignItems: "start" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 40, width: "100%", maxWidth: 1000, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <Eyebrow>This machine is your hub</Eyebrow>
-            <Display size={38}>Running. Now get your phone in.</Display>
+            <Display size={38}>Connect your phone</Display>
           </div>
           <Card style={{ display: "flex", flexDirection: "column", gap: 16, padding: 24 }}>
-            <SetupStep done pending={false} title="Hub is running" sub="Starts at login and restarts if it stops." />
-            <SetupStep done pending={false} title="This machine is registered" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
-            <SetupStep done pending={false} title="tmux is ready" sub="Your sessions outlive the app, the network, and you walking away." />
+            <SetupStep done={verified?.setup?.hub_running ?? verified?.listening ?? false} pending={!verified} title="Hub is running" sub="Starts at login and restarts if it stops." />
+            <SetupStep done={verified?.setup?.node_online ?? false} pending={!verified} title="This Mac is online" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
+            <SetupStep done={verified?.setup?.tmux_available ?? false} pending={!verified} title="Terminal tools are available" sub="Your sessions outlive the app, the network, and you walking away." />
           </Card>
           {error ? <Body style={{ color: colors.err }}>{error}</Body> : null}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -421,19 +498,19 @@ export function PhoneCodePanel({
   compact?: boolean;
 }) {
   const [qr, setQr] = useState<string | null>(null);
+  const [qrError, setQrError] = useState(false);
   const [copied, setCopied] = useState(false);
   const [picking, setPicking] = useState(false);
 
   const encoded = link?.short ?? link?.link ?? link?.url ?? "";
   useEffect(() => {
     let cancelled = false;
-    if (!encoded) {
-      setQr(null);
-      return;
-    }
+    setQr(null);
+    setQrError(false);
+    if (!encoded) return;
     QRCode.toString(encoded, {
       type: "svg",
-      margin: 0,
+      margin: 4,
       errorCorrectionLevel: "M",
       // Hex only — the encoder rejects CSS variables. Ink on cream reads
       // fine through a camera and matches the page.
@@ -443,29 +520,20 @@ export function PhoneCodePanel({
         if (!cancelled) setQr(svg);
       })
       .catch(() => {
-        if (!cancelled) setQr(null);
+        if (!cancelled) { setQr(null); setQrError(true); }
       });
     return () => {
       cancelled = true;
     };
   }, [encoded]);
 
-  const port = useMemo(() => (link ? portOf(link.url) : "4317"), [link]);
-  const currentAddress = useMemo(() => {
-    try {
-      return link ? new URL(link.url).hostname : "";
-    } catch {
-      return "";
-    }
-  }, [link]);
+  const options = useMemo(() => link ? hubAddressOptions(link) : [], [link]);
 
-  const pickAddress = (address: string) => {
-    if (!address || address === currentAddress) return;
+  const pickAddress = (url: string) => {
+    if (!url || url === link?.url) return;
     setPicking(true);
-    hubLink(baseUrlFor(address, port))
-      .then((next) => {
-        onLink(next);
-      })
+    hubLink(url)
+      .then(onLink)
       .catch((e: unknown) => onError?.(String(e)))
       .finally(() => setPicking(false));
   };
@@ -478,13 +546,6 @@ export function PhoneCodePanel({
       setTimeout(() => setCopied(false), 1500);
     });
   };
-
-  const candidates = link?.candidates ?? [];
-  const listed = candidates.some((c) => c.address === currentAddress)
-    ? candidates
-    : currentAddress
-      ? [{ interface: "chosen", address: currentAddress }, ...candidates]
-      : candidates;
 
   // On Hub ready this is the sticker card beside the steps; inside a dialog
   // or a Settings section it sits flat, the surface around it is the card.
@@ -504,18 +565,17 @@ export function PhoneCodePanel({
           justifyContent: "center",
           opacity: picking ? 0.5 : 1,
         }}
-        dangerouslySetInnerHTML={qr ? { __html: qr } : undefined}
       >
-        {qr ? undefined : <span style={{ fontSize: 12, color: colors.fg3 }}>{link ? "…" : "waiting for the hub"}</span>}
+        {qr ? <QrImage svg={qr} size={compact ? 142 : 186} label="Phone sign-in QR code" /> : <span role={qrError ? "alert" : "status"} style={{ fontSize: 12, color: colors.fg3 }}>{qrError ? "Could not generate the QR code. Use Copy link below instead." : link ? "Generating QR code…" : "Waiting for the hub…"}</span>}
       </div>
       <Body size={14} style={{ textAlign: "center", maxWidth: 340 }}>
-        The phone's camera is enough. It opens the offdesk app if you have it, and signs you in. No app yet? The browser is the whole client.
+        In the Offdesk phone app, choose Scan QR Code and point it here to sign in. Your phone’s camera can also open it in a browser.
       </Body>
 
       <label style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
         <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg2 }}>Your phone can reach it at</span>
         <select
-          value={currentAddress}
+          value={link?.url ?? ""}
           onChange={(event) => pickAddress(event.target.value)}
           disabled={!link || picking}
           data-testid="hub-address-picker"
@@ -530,13 +590,13 @@ export function PhoneCodePanel({
             fontSize: 13,
           }}
         >
-          {listed.map((c) => (
-            <option key={c.address} value={c.address}>
-              http://{c.address}:{port} · {c.interface}
+          {options.map((option) => (
+            <option key={option.url} value={option.url}>
+              {option.url} · {option.label}
             </option>
           ))}
         </select>
-        <span style={{ fontSize: 12.5, color: colors.fg2 }}>A VPN or a proxy in TUN mode can put the wrong one first.</span>
+        <span style={{ fontSize: 12.5, color: colors.fg2 }}>{link?.public_url === link?.url && link?.public_url ? "Internet address — keep this Mac awake and online." : "Local address — your phone must be on the same network."}</span>
       </label>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
@@ -577,6 +637,7 @@ export function PhoneCodePanel({
           {copied ? "Copied" : "Copy link"}
         </Button>
       </div>
+      {link ? <SecurePairingPanel baseUrl={link.secure_url ?? link.url} managed={Boolean(link.secure_url)} /> : null}
       {link ? (
         <div style={{ fontFamily: fontDisplay, fontSize: 12.5, fontWeight: 600, color: colors.fg3, textAlign: "center" }}>
           {link.link
@@ -597,16 +658,9 @@ export function PhoneCodePanel({
 
 /** The hub's own code, fetched here: for Settings and the Phone dialog. */
 export function HubPhoneCode() {
-  const [link, setLink] = useState<HubLink | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    if (link) return;
-    hubLink()
-      .then(setLink)
-      .catch((e: unknown) => setError(String(e)));
-  }, [link]);
+  const { link, setLink, error, setError } = useHubPhoneLink();
   return (
-    <div style={{ maxWidth: 440 }}>
+    <div style={{ width: "100%", maxWidth: 440, margin: "0 auto" }}>
       {error ? <Body size={12} style={{ color: colors.err, marginBottom: 8 }}>{error}</Body> : null}
       <PhoneCodePanel link={link} onLink={setLink} onError={setError} compact />
     </div>
@@ -617,6 +671,7 @@ export function HubPhoneCode() {
 
 /** The desktop app's role, and the hub's state when it is the hub. */
 export function ThisMachineSection() {
+  const { logout } = useAuth();
   const [role, setRole] = useState<DesktopRole | null | undefined>(undefined);
   const [status, setStatus] = useState<HubStatus | null>(null);
   const [showCode, setShowCode] = useState(false);
@@ -637,6 +692,7 @@ export function ThisMachineSection() {
     setError(null);
     try {
       await setDesktopRole("hub");
+      await logout();
       window.location.reload();
     } catch (e) {
       setError(String(e));
@@ -719,6 +775,7 @@ export function ThisMachineSection() {
         <Body size={12}>The database and your tmux sessions stay. Only the two services go.</Body>
       ) : null}
       {error ? <Body size={12} style={{ color: colors.err }}>{error}</Body> : null}
+      <CloudConnectionPanel />
       {showCode ? <HubPhoneCode /> : null}
     </div>
   );
@@ -734,7 +791,7 @@ function Screen({ children, wide = false }: { children: ReactNode; wide?: boolea
     <div
       style={{
         flex: 1,
-        minHeight: "100vh",
+        minHeight: "100%",
         display: "flex",
         flexDirection: "column",
         background: colors.bg0,

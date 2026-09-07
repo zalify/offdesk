@@ -40,7 +40,7 @@ test("opening an existing terminal keeps its pty size until Fit is requested", a
   await resetMachineState(page);
   await takeControlFromHeader(page);
   await selectHomeWorkpath(page);
-  const tid = await createTerminalViaApi(page, { cwd: "/root" });
+  const tid = await createTerminalViaApi(page, { cwd: "/tmp" });
 
   await expandTerminalById(page, tid);
   await expect(getImmersiveTerminal(page)).toBeVisible();
@@ -82,7 +82,7 @@ test("terminal size stays stable across overlay and cross-device handoff until f
   await resetMachineState(desktopPage);
   await takeControlFromHeader(desktopPage);
   await selectHomeWorkpath(desktopPage);
-  const tid = await createTerminalViaApi(desktopPage, { cwd: "/root" });
+  const tid = await createTerminalViaApi(desktopPage, { cwd: "/tmp" });
 
   // Open the terminal in the ExpandedTerminal overlay.
   await expandTerminalById(desktopPage, tid);
@@ -137,7 +137,7 @@ test("mobile controller resizes the shared pty on activation (auto-fit)", async 
   await resetMachineState(desktopPage);
   await takeControlFromHeader(desktopPage);
   await selectHomeWorkpath(desktopPage);
-  const tid = await createTerminalViaApi(desktopPage, { cwd: "/root" });
+  const tid = await createTerminalViaApi(desktopPage, { cwd: "/tmp" });
   await expandTerminalById(desktopPage, tid);
 
   await fitPaneViaContextMenu(desktopPage, tid);
@@ -232,7 +232,7 @@ test("Fit to Window updates the local terminal size before resize output can arr
   await openApp(page);
   await resetMachineState(page);
   await mobileTakeControl(page);
-  const terminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  const terminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
   // The shell shows the terminal directly (no card list); as the controller,
   // activating the pane auto-fits it. The contract this test guards is that
   // the local terminal size moves in lockstep with the resize frame the

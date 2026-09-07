@@ -26,7 +26,7 @@ import type {
   ResourceStats,
   TerminalInfo,
 } from "@offdesk/shared";
-import { FolderTree, Lock, Plus, Smartphone } from "lucide-react";
+import { FolderTree, Lock, Plus, Settings, Smartphone } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
@@ -74,6 +74,7 @@ interface TabBarProps {
   onSelectMachine: (id: string) => void;
   onAddMachine: () => void;
   onOpenPhone?: () => void;
+  onOpenSettings: () => void;
   onRemoveHost: (machineId: string) => void;
   onRequestControl: () => void;
   onEngageViewOnly: () => void;
@@ -108,6 +109,7 @@ function TabBarComponent({
   onSelectMachine,
   onAddMachine,
   onOpenPhone,
+  onOpenSettings,
   onRemoveHost,
   onRequestControl,
   onEngageViewOnly,
@@ -439,14 +441,14 @@ function TabBarComponent({
                 title={group.label}
                 style={{
                   ...tabButtonStyle,
-                  color: active ? colors.fg0 : colors.fg2,
+                  color: active ? terminalTheme.foreground : colors.fg2,
                 }}
               >
                 <span style={truncateStyle}>{group.label}</span>
                 {annotation && (
                   <span
                     style={{
-                      color: colors.fg3,
+                      color: active ? terminalTheme.white : colors.fg3,
                       fontFamily: "var(--font-mono)",
                       fontSize: 10,
                       ...truncateStyle,
@@ -459,6 +461,7 @@ function TabBarComponent({
             </div>
           );
         })}
+      </div>
         <button
           type="button"
           data-testid="tab-bar-new-group"
@@ -485,7 +488,6 @@ function TabBarComponent({
         >
           <Plus size={14} />
         </button>
-      </div>
 
       {tabMenu && (
         <ContextMenu
@@ -542,6 +544,29 @@ function TabBarComponent({
           onRemoveHost={onRemoveHost}
         />
         <MicroMeters stats={stats} />
+        <button
+          type="button"
+          data-testid="tab-bar-settings"
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="Settings"
+          style={{
+            width: isTouch ? 40 : 30,
+            height: isTouch ? 40 : 30,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            border: `1px solid ${colors.line}`,
+            borderRadius: 6,
+            background: "transparent",
+            color: colors.fg2,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <Settings size={15} />
+        </button>
         {onOpenPhone && (
         <button
           type="button"

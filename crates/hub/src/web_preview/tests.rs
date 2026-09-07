@@ -387,7 +387,9 @@ async fn sse_is_incremental_and_reconnect_cancels_old_lease() {
         while !f.tasks[1].is_finished() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await.expect("an inactive preview must not keep the node command channel alive");
+    })
+    .await
+    .expect("an inactive preview must not keep the node command channel alive");
 }
 
 #[test]
@@ -534,4 +536,53 @@ async fn stream_tickets_are_single_use_expire_and_release_their_budgets() {
     assert!(f.state.web_previews.allocate(lease).is_err());
     drop(guards);
     assert!(f.state.web_previews.streams.lock().unwrap().is_empty());
+}
+
+#[test]
+fn control_routes_keep_lan_and_aliases_without_opening_preview_hosts() {
+    let mut config = Config::new("preview.test", "https://hub.test").unwrap();
+    config.listener = Some("0.0.0.0:4317".parse().unwrap());
+    config.add_control_origin("https://remote.test").unwrap();
+    config
+        .add_control_origin("http://mac-mini.local:4317")
+        .unwrap();
+    let ips = ["192.168.1.94".parse().unwrap()];
+    for host in [
+        "hub.test",
+        "remote.test",
+        "mac-mini.local:4317",
+        "localhost:4317",
+        "127.0.0.1:4317",
+        "192.168.1.94:4317",
+    ] {
+        assert!(config.allows_control(host, &ips), "{host}");
+    }
+    for host in [
+        "unknown.test",
+        "192.168.1.95:4317",
+        "192.168.1.94:4318",
+        "p-abc.preview.test",
+        "preview.test",
+        "192.168.1.94:4317/path",
+        "user@192.168.1.94:4317",
+    ] {
+        assert!(!config.allows_control(host, &ips), "{host}");
+    }
+    assert!(
+        !config.allows_control("192.168.1.94:4317", &[]),
+        "an old DHCP address stops being accepted"
+    );
+    for origin in [
+        "https://p-abc.preview.test",
+        "https://preview.test",
+        "https://remote.test/path",
+        "https://user@remote.test",
+        "file:///tmp",
+    ] {
+        assert!(config.add_control_origin(origin).is_err(), "{origin}");
+    }
+    config.listener = Some("127.0.0.1:4317".parse().unwrap());
+    assert!(!config.allows_control("192.168.1.94:4317", &ips));
+    let ipv6 = Config::new("preview.test", "http://[::1]:4317").unwrap();
+    assert!(ipv6.allows_control("[::1]:4317", &[]));
 }

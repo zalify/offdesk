@@ -1,6 +1,13 @@
+mod connections;
+mod secure;
+mod tunnel_check;
+mod cloud;
+mod cloud_download;
+mod composer;
 mod attach_router;
 mod auth;
 mod first_run;
+mod setup_check;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
 pub mod db;
@@ -14,6 +21,7 @@ use axum::http::{header, HeaderValue};
 use axum::{http::StatusCode, response::IntoResponse, routing::any, Router};
 use clap::{Parser, Subcommand};
 use std::path::Path;
+use std::future::IntoFuture;
 use std::sync::Arc;
 use tower::{service_fn, ServiceBuilder, ServiceExt};
 use tower_http::cors::CorsLayer;
@@ -33,6 +41,11 @@ struct Args {
     /// Listen address
     #[arg(long, default_value = "0.0.0.0:4317", global = true)]
     listen: String,
+
+    /// Optional listener exposing only the encrypted App transport. Point an
+    /// opaque relay here, not at the normal UI/API listener.
+    #[arg(long, env = "OFFDESK_SECURE_LISTEN", global = true)]
+    secure_listen: Option<String>,
 
     /// Let the machine idle-sleep while the hub runs. By default the hub
     /// keeps its host awake (macOS), because a hub whose host is asleep is a
@@ -60,6 +73,35 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report local first-run readiness as JSON, without changing services
+    SetupCheck,
+    /// Invitation-only official encrypted remote connection
+    Cloud {
+        #[command(subcommand)]
+        action: cloud::Action,
+    },
+    /// Create a short-lived QR code for an encrypted App connection
+    Pair {
+        #[arg(long)]
+        json: bool,
+        /// Verify this address reaches this Hub before creating the code
+        #[arg(long)]
+        check: bool,
+        /// Account to pair with on a multi-user Hub
+        #[arg(long)]
+        user_id: Option<String>,
+    },
+    /// Verify a tunnel against this Hub's local identity, without pairing
+    TunnelCheck {
+        /// Public Hub origin; defaults to OFFDESK_SECURE_BASE_URL / OFFDESK_BASE_URL
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        json: bool,
+        /// Also require HTTPS and 404 on sampled ordinary routes
+        #[arg(long)]
+        require_encrypted_only: bool,
+    },
     /// Run the hub at login, restarted if it stops — a launchd agent on macOS,
     /// a systemd user service on Linux
     Service {
@@ -108,7 +150,8 @@ fn service_spec(listen: &str, allow_idle_sleep: bool) -> offdesk_protocol::servi
 fn run_service(action: ServiceCommand, args: &Args) {
     use offdesk_protocol::service as svc;
     let listen = &args.listen;
-    let spec = service_spec(listen, args.allow_idle_sleep);
+    let mut spec = service_spec(listen, args.allow_idle_sleep);
+    if let Some(address) = &args.secure_listen { spec.args.extend(["--secure-listen".into(), address.clone()]); }
     let outcome = match action {
         ServiceCommand::Install => svc::install(&spec).and_then(|()| {
             // Installing is the whole first step now: the hub is up, this
@@ -128,6 +171,7 @@ fn run_service(action: ServiceCommand, args: &Args) {
             };
             let pool = db::create_pool(&database).map_err(|e| e.to_string())?;
             let local = first_run::register_local_node(&pool, listen);
+            local.installation_result()?;
             let base_url = env_or("OFFDESK_BASE_URL", "http://localhost:4317");
             match first_run::service_notice(&pool, &jwt_secret, &base_url, listen, &database, &local) {
                 Some(notice) => {
@@ -166,6 +210,44 @@ fn run_service(action: ServiceCommand, args: &Args) {
 /// Nothing is created or changed — the hub's own key signs a session for its
 /// owner, the same as at install. It has to be run on the machine the hub
 /// runs on; that is where the key is.
+async fn run_pair(args: &Args, json: bool, user_id: Option<&str>, check: bool) -> Result<(), String> {
+    let database = first_run::database_path(args.database.as_deref());
+    if !secure::store::key_path(&database).exists() {
+        return Err("Start an updated Hub before creating an encrypted pairing code".into());
+    }
+    let pool = db::create_pool(&database).map_err(|e| e.to_string())?;
+    let user_id = match user_id {
+        Some(user) => user.to_string(),
+        None => first_run::owner_user_id(&pool).ok_or("For a multi-user Hub, choose the account with --user-id")?,
+    };
+    let identity = secure::store::load_identity(&database)?;
+    let base = env_or("OFFDESK_BASE_URL", "http://localhost:4317");
+    let base = env_or("OFFDESK_SECURE_BASE_URL", &first_run::reachable_base_url(&base, &args.listen));
+    let connection_check = if check {
+        let endpoint = tunnel_check::local_endpoint(&database, &base)?;
+        let report = tunnel_check::check(&endpoint).await;
+        if let Some(failure) = report.failure {
+            return Err(failure.message().into());
+        }
+        Some(report)
+    } else { None };
+    // Mint only after the network check; waiting never consumes the code's TTL.
+    let conn = pool.get().map_err(|e| e.to_string())?;
+    let (descriptor, expires_at) = secure::store::mint(&conn, &user_id, &base, &identity, db::now_ms())?;
+    let uri = descriptor.to_url()?;
+    if json {
+        println!("{}", serde_json::json!({ "pairing_uri": uri, "hub_url": descriptor.endpoint.hub_url,
+            "public_key": descriptor.endpoint.public_key, "expires_at": expires_at,
+            "connection_check": connection_check }));
+    } else {
+        if let Some(report) = &connection_check { tunnel_check::print_report(report, false); }
+        println!("Scan this in the offdesk App to pair an encrypted connection. Expires in five minutes.\n");
+        if let Some(qr) = first_run::qr_code(&uri) { println!("{qr}"); }
+        println!("{uri}\n\nThis code grants access to your Hub. Keep it private.");
+    }
+    Ok(())
+}
+
 fn run_link(args: &Args) {
     let listen = &args.listen;
     let database = first_run::database_path(args.database.as_deref());
@@ -239,6 +321,8 @@ fn run_link_json(args: &Args) {
         "link": first_run::sign_in_link(&pool, &jwt_secret, &base_url, listen),
         "short": first_run::short_link(&pool, &base_url, listen),
         "candidates": candidates,
+        // Encrypted-only Cloud addresses must never receive browser login links.
+        "secure_url": cloud::advertised_url(&database),
     });
     println!("{out}");
 }
@@ -290,8 +374,48 @@ async fn main() {
     promote_legacy_env();
     let args = Args::parse();
 
+    if matches!(args.command, Some(Command::SetupCheck)) {
+        let database = first_run::database_path(args.database.as_deref());
+        println!("{}", serde_json::to_string(&setup_check::check(&database, &args.listen).await).unwrap());
+        return;
+    }
+
+    if let Some(Command::Cloud { action }) = &args.command {
+        let database = first_run::database_path(args.database.as_deref());
+        if let Err(error) = cloud::execute(action, &database).await {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     if let Some(Command::Service { action }) = &args.command {
         run_service(*action, &args);
+        return;
+    }
+    if let Some(Command::TunnelCheck { url, json, require_encrypted_only }) = &args.command {
+        let database = first_run::database_path(args.database.as_deref());
+        let base = env_or("OFFDESK_BASE_URL", "http://localhost:4317");
+        let base = url.clone().unwrap_or_else(|| env_or("OFFDESK_SECURE_BASE_URL", &first_run::reachable_base_url(&base, &args.listen)));
+        let endpoint = match tunnel_check::local_endpoint(&database, &base) {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                if *json { println!("{}", serde_json::json!({ "error": error })); }
+                else { eprintln!("{error}"); }
+                std::process::exit(1);
+            }
+        };
+        let report = tunnel_check::check(&endpoint).await;
+        tunnel_check::print_report(&report, *json);
+        if !report.passed(*require_encrypted_only) { std::process::exit(1); }
+        return;
+    }
+    if let Some(Command::Pair { json, user_id, check }) = &args.command {
+        if let Err(error) = run_pair(&args, *json, user_id.as_deref(), *check).await {
+            if *json { println!("{}", serde_json::json!({ "error": error })); }
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
         return;
     }
     if let Some(Command::Link { json }) = &args.command {
@@ -342,7 +466,18 @@ async fn main() {
         manager: Arc::new(MachineManager::new(pool.clone())),
         router: Arc::new(HubRouter::new()),
         web_previews: Arc::new(match std::env::var("OFFDESK_PREVIEW_DOMAIN") {
-            Ok(domain) if !domain.is_empty() => web_preview::registry::Registry::configured(web_preview::registry::Config::new(&domain, &env_or("OFFDESK_BASE_URL", "http://localhost:4317")).expect("Invalid preview configuration")),
+            Ok(domain) if !domain.is_empty() => {
+                let mut config = web_preview::registry::Config::new(&domain, &env_or("OFFDESK_BASE_URL", "http://localhost:4317"))
+                    .expect("Invalid preview configuration");
+                config.listener = args.listen.parse().ok();
+                for origin in env_or("OFFDESK_PREVIEW_CONTROL_ORIGINS", "").split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    config.add_control_origin(origin).expect("Invalid preview control origin");
+                }
+                if let Some(origin) = env_opt("OFFDESK_SECURE_BASE_URL") {
+                    config.add_control_origin(&origin).expect("Invalid secure Hub origin");
+                }
+                web_preview::registry::Registry::configured(config)
+            },
             _ => web_preview::registry::Registry::default(),
         }),
         db: pool,
@@ -362,14 +497,18 @@ async fn main() {
 
     state.manager.start_seq_flush_task();
 
-    let app = routes::router()
+    let inner = routes::router()
+        .merge(connections::router(args.listen.clone(), env_opt("OFFDESK_SECURE_BASE_URL"), database.clone()))
         .merge(ws::router())
         .merge(web_preview::router())
+        .with_state(state.clone());
+    let encrypted = secure::router(state.clone(), inner.clone(), &database)
+        .expect("Could not initialize encrypted connections");
+    let app = inner.merge(encrypted.clone())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .layer(CorsLayer::permissive())
         .fallback_service(ui_service(args.static_dir.as_deref()))
-        .with_state(state.clone())
         .layer(axum::middleware::from_fn_with_state(state, web_preview::dispatch));
 
     let listener = match tokio::net::TcpListener::bind(&args.listen).await {
@@ -423,7 +562,39 @@ async fn main() {
     let listener = axum::serve::ListenerExt::tap_io(listener, |io| {
         let _ = io.set_nodelay(true);
     });
-    axum::serve(listener, app).await.unwrap();
+    // Standard desktop Hubs expose the encrypted-only route on loopback so
+    // Cloud can be enabled without rewriting the user's service configuration.
+    let automatic_secure = args.secure_listen.is_none()
+        && args
+            .listen
+            .parse::<std::net::SocketAddr>()
+            .is_ok_and(|a| a.port() == 4317);
+    let secure_address = args
+        .secure_listen
+        .as_deref()
+        .or(automatic_secure.then_some("127.0.0.1:4318"));
+    let secure_listener = if let Some(address) = secure_address {
+        match tokio::net::TcpListener::bind(address).await {
+            Ok(listener) => Some(listener),
+            Err(error) if automatic_secure => {
+                tracing::warn!("Cloud's loopback port is unavailable: {error}. Local Hub continues; Cloud setup will report this conflict.");
+                None
+            }
+            Err(error) => panic!("Could not bind the configured encrypted-only listener: {error}"),
+        }
+    } else {
+        None
+    };
+    if let Some(secure_listener) = secure_listener {
+        let secure_listener = axum::serve::ListenerExt::tap_io(secure_listener, |io| { let _ = io.set_nodelay(true); });
+        tracing::info!("Encrypted-only transport listening on {}", secure_address.unwrap());
+        // A failed encrypted listener stops the process so the service manager
+        // can restart it; never continue with a silently unavailable tunnel.
+        tokio::select! {
+            result = axum::serve(listener, app).into_future() => result.unwrap(),
+            result = axum::serve(secure_listener, encrypted).into_future() => result.unwrap(),
+        }
+    } else { axum::serve(listener, app).await.unwrap(); }
 }
 
 fn cache_control_for_static<B>(res: &http::Response<B>) -> Option<HeaderValue> {

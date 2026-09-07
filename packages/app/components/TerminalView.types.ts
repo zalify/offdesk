@@ -2,6 +2,8 @@ import type { MutableRefObject } from "react";
 
 export interface TerminalViewRef {
   sendInput: (data: string) => void;
+  /** Paste through xterm without submitting or moving focus. */
+  pasteText: (text: string) => void;
   sendCommandInput: (data: string) => void;
   // skipIfUnchanged: when true, suppress the WS resize frame if the
   // computed dims already match the live terminal. Used by mobile

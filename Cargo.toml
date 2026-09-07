@@ -6,7 +6,7 @@ resolver = "2"
 # What `offdesk --version` and `offdesk-node --version` print. Bump this
 # before tagging a v* release; the tag and the binaries should agree.
 [workspace.package]
-version = "0.19.2"
+version = "0.20.4"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -39,5 +39,5 @@ bytes = "1"
 flate2 = "1"
 tokio-util = { version = "0.7", features = ["rt"] }
 hyper = { version = "1", features = ["client", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
 http-body-util = "0.1"

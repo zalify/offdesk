@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-hub-pair"
+description = "Enables the hub_pair command without any pre-configured scope."
+commands.allow = ["hub_pair"]
+
+[[permission]]
+identifier = "deny-hub-pair"
+description = "Denies the hub_pair command without any pre-configured scope."
+commands.deny = ["hub_pair"]

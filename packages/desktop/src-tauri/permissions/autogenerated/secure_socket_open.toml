@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-socket-open"
+description = "Enables the secure_socket_open command without any pre-configured scope."
+commands.allow = ["secure_socket_open"]
+
+[[permission]]
+identifier = "deny-secure-socket-open"
+description = "Denies the secure_socket_open command without any pre-configured scope."
+commands.deny = ["secure_socket_open"]

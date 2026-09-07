@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X } from "lucide-react";
+import { Wordmark } from "./Warm.web";
 import { createRegistrationToken } from "@/lib/api";
 import { buildOnboardingScript, getJoinCommand } from "@/lib/nodeInstaller";
 import {
@@ -9,9 +10,7 @@ import {
 import { isRegistrationTokenFresh } from "@/lib/tokenExpiry";
 import { colors } from "@/lib/colors";
 import { getServerUrl } from "@/lib/serverUrl";
-import { desktopRole, isDesktopShell } from "@/lib/desktopHub";
 import { MobileAppPanel } from "./MobileAppPanel.web";
-import { HubReadyScreen } from "./DesktopSetup.web";
 
 // The hub a new machine should dial: in a browser tab the page came from
 // the hub, so its own origin; in the desktop app the page is bundled and
@@ -178,15 +177,7 @@ export function OnboardingView({
     >
       <div style={{ maxWidth: embedded ? "100%" : 600, width: "100%" }}>
         {!embedded && (
-          // The same wordmark the site uses, served from the bundle — a
-          // fresh hub's first page should say whose it is.
-          <img
-            src="/brand/wordmark.svg"
-            alt="offdesk"
-            width={124}
-            height={35}
-            style={{ display: "block", marginBottom: 36 }}
-          />
+          <div style={{ marginBottom: 36 }}><Wordmark size={26} /></div>
         )}
         {/* Header */}
         <h1
@@ -241,7 +232,7 @@ export function OnboardingView({
                 backgroundColor: colors.accent,
                 border: "none",
                 borderRadius: 999,
-                color: colors.background,
+                color: colors.onAccent,
                 padding: "10px 18px",
                 fontSize: 13,
                 fontWeight: 700,
@@ -306,7 +297,7 @@ export function OnboardingView({
                   backgroundColor: colors.accent,
                   border: "none",
                   borderRadius: 6,
-                  color: colors.background,
+                  color: colors.onAccent,
                   padding: "8px 20px",
                   fontSize: 13,
                   fontWeight: 600,
@@ -441,24 +432,6 @@ export function MachineOnboardingDialog({
 /// The phone, reachable from anywhere in the app — not only from the page a
 /// fresh hub opens with, which a hub with a machine never shows again.
 export function MobileAppDialog({ onClose }: { onClose: () => void }) {
-  // On the machine that is the hub, the desktop app has a whole page for
-  // this — the one first run ends on — so the Phone button opens that, with
-  // a way back. The dialog below is for a hub's page in a browser.
-  const [isHub, setIsHub] = useState<boolean | null>(() => (isDesktopShell() ? null : false));
-  useEffect(() => {
-    if (!isDesktopShell()) return;
-    desktopRole()
-      .then((role) => setIsHub(role === "hub"))
-      .catch(() => setIsHub(false));
-  }, []);
-  if (isHub === null) return null;
-  if (isHub) {
-    return (
-      <div data-testid="phone-dialog" style={{ position: "fixed", inset: 0, zIndex: 80, display: "flex", overflow: "auto" }}>
-        <HubReadyScreen initial={null} onClose={onClose} />
-      </div>
-    );
-  }
   return (
     <div
       data-testid="phone-dialog"

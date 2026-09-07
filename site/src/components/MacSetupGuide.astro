@@ -1,0 +1,101 @@
+---
+import Site from "../layouts/Site.astro";
+interface Props { lang?: "en" | "zh-CN" }
+const { lang = "en" } = Astro.props;
+const zh = lang === "zh-CN";
+const path = zh ? "/zh/docs/mac" : "/docs/mac";
+const c = zh ? {
+  title: "从一台 Mac 开始使用 Offdesk", description: "通过真实 App 截图，完成 Mac 首次安装、打开终端和手机扫码连接。",
+  eyebrow: "入门教程 · macOS", lead: "把常开着的 Mac 变成主机，然后用手机连接它的终端。第一次先在同一局域网内完成连接。",
+  preview: "截图版本说明", previewText: "配图来自 Mac Mini 上的 0.6.4-rc.1 实测。正式 macOS 0.6.4 已包含这套引导流程；新版安装窗口改为将左侧 App 拖入右侧 Applications。配图保留了 RC 实测时的版本标识和安装窗口。下面的下载按钮提供正式版。",
+  download: "下载 Mac 正式版", phone: "下载手机 App", contents: "本页步骤", before: "开始之前",
+  needs: ["一台保持开机、联网的 Mac，以及它的登录账户。", "手机和 Mac 位于同一个局域网：例如 Mac 接路由器网线，手机连接同一路由器的 Wi-Fi。", "手机安装 Offdesk：iPhone / iPad 使用 TestFlight，Android 使用官网 APK。"],
+  terms: "Hub 是管理连接的主机；Node 让这台机器的终端可用。选择将 Mac 作为 Hub 后，App 会一并安装它们。正常的 App 安装流程不需要额外运行 install.sh，也不需要 Docker。",
+  steps: [
+    { id:"install", title:"1. 下载并安装 Mac App", body:"从官网的 <a href='/mac'>Mac 下载入口</a>获取安装包，打开 DMG，将 Offdesk 拖入 Applications，再从安装位置打开 App。不要一直从磁盘映像中运行它。", extra:"如果你使用标准账户，写入系统 Applications 可能需要管理员密码；也可以安装到自己用户目录下的 Applications 文件夹。截图里的 RC 是测试版名称。", image:"install", alt:"Mac 的 DMG 窗口，包含 Offdesk RC App 和 Applications 文件夹入口。", caption:"把 App 拖入 Applications，再打开安装后的副本。" },
+    { id:"choose", title:"2. 选择这台 Mac 作为主机", body:"首次打开时，找到 <strong>Which machine is this?</strong>，选择 <strong>The one that stays on → Set this machine up</strong>。这表示你希望手机访问这台 Mac 上的终端。", extra:"只有已经在别处设置过 Hub、现在仅想从这台 Mac 访问它时，才选 <strong>Just connecting</strong>。首次使用不需要先创建账户。" },
+    { id:"ready", title:"3. 等待 Mac 准备完成", body:"新版引导会逐项检查下面四件事。让 App 完成检查，再连接手机；不要因为已经看到一个地址就认为安装完成了。", checks:["Hub 已启动并可以响应。", "这台 Mac 已注册到 Hub。", "本机 Node 已上线。", "终端工具 tmux 可用。"], extra:"完成后会出现 <strong>Connect your phone</strong> 和二维码。如果检查失败，使用页面上的重试按钮。如果 macOS 询问是否允许 Offdesk 的入站连接，在你要让手机连接的这台 Mac 上允许它。" },
+    { id:"terminal", title:"4. 打开第一个终端", body:"点 <strong>Open my terminal</strong>。如果看到 <strong>No terminals yet</strong>，先查看右上角是否是 <strong>Watching</strong>：点击它接管控制，再点 <strong>Start terminal</strong>。如果别的设备正在控制终端，先确认自己确实要接管。", extra:"在终端输入下面这行并按 Enter，应当看到同样的文字返回。此时运行命令的是 Mac，不是手机。", command:"echo hello from offdesk", image:"terminal", alt:"Offdesk 在测试用户的 Mac 终端运行 echo hello from offdesk，并返回 hello from offdesk。", caption:"实际终端输入和输出。右上角的控制状态决定能否创建终端或输入。" },
+    { id:"phone", title:"5. 在手机 App 里扫码", body:"在 Mac App 中点击 <strong>Phone</strong> 或 <strong>Show me</strong>，打开配对页。需要端到端加密时，点击下方的 <strong>Pair an encrypted device</strong>，再用手机 Offdesk 连接首页的 <strong>Scan QR Code</strong> 扫描新生成的加密码。按提示允许使用相机。", extra:"上方普通二维码是登录链接，手机系统相机可以用浏览器打开。下方加密配对码要由 Offdesk App 内的扫描功能读取，不能当作普通浏览器网址。配对码过期后，在 Mac 上重新生成。", image:"phone-pairing", alt:"Mac 上的手机连接弹窗，包含局域网地址、手机 App 下载入口和加密配对按钮；二维码及登录链接已遮挡。", caption:"示例二维码和登录链接已隐藏。请扫你自己 Mac 上的码；加密配对按钮在下方。", after:"配对后，应能看到这台 Mac 和已创建的终端。若没有终端可选，先按上一步在 Mac 创建一个。测试时在手机输入一条简单命令，再退出重开手机 App，确认仍能连接。" },
+    { id:"return", title:"6. 离开 App，再回来", body:"退出 Mac App 后，Hub 和 Node 服务仍在后台运行；重新打开 App，可以回到之前的终端。关闭 App 与让电脑休眠、关机或退出 macOS 账户不是同一回事。", extra:"保持 Mac 开机、登录且联网。局域网地址只适合当前网络；要在外面使用，之后再配置远程连接。这里的扫码步骤本身不会让局域网地址变成公网地址。" }
+  ],
+  trouble:"如果界面和教程不一样", faqs:[
+    ["看到 Connect a machine / Generate a token", "这说明 Hub 里还没有可用机器，不代表手机应该成为主机。先回到 Mac 检查本机是否已完成设置。旧版 0.6.3 的手动恢复方式是：在这台 Mac 的页面点 Generate a token，把生成的整条命令放到这台 Mac 的系统终端执行。这是旧版故障的恢复方式，不是正常安装的必做步骤。"],
+    ["扫码后进入登录页，或只输入 IP 无法登录", "单独的 IP 地址不包含登录信息。普通登录要使用完整登录链接或它对应的二维码；加密配对则使用 App 内扫描器和加密配对码。不要在群聊里分享完整链接或二维码。"],
+    ["手机连接不上或出现空白页", "确认两台设备确实在同一局域网，二维码选择了手机能访问的网络地址；访客 Wi-Fi 可能隔离设备。先在 Mac 确認终端可用，再检查手机的局域网权限。若扫描后黑屏，退出并重新打开 App，记录 App 版本、手机型号及发生步骤；这不应当是每次连接的必需操作。"]
+  ],
+  tested:"这篇教程实际验证到了哪一步？", testedIntro:"2026 年 9 月 7 日，在 Mac Mini 的新建标准账户 offdesk-test 中测试；该账户没有 Offdesk 配置或服务，未预先执行安装脚本。它不是整台机器恢复出厂设置。",
+  passed:["下载 DMG、拖入用户 Applications、从 Finder 打开。", "App 自动安装 Hub / Node，完成注册、上线和 tmux 检查，再显示二维码。", "真实终端命令输入输出。", "退出重开 App 后保留终端；单独重启测试 Hub 后重新连接。"],
+  pending:"本轮尚未完成：手机真机扫码与冷启动、测试账户注销重登，以及正式签名公证包的 Gatekeeper 验收。RC 通过了用户授权的首次运行，不能据此宣称正式安装包验证通过。",
+  known:"测试中也确认了 Watching 状态会隐藏 Start terminal 按钮的引导问题，因此第 4 步明确写出了接管控制的操作。",
+  next:"接下来", nextText:"先确认同一局域网内使用顺畅，再阅读加密连接和远程访问说明。", encryption:"端到端加密说明", lan:"局域网排查", allDocs:"所有技术文档"
+} : {
+  title:"Your first terminal, from a Mac", description:"A screenshot guide to installing Offdesk on a Mac, opening your first terminal, and connecting your phone.",
+  eyebrow:"Getting started · macOS", lead:"Make the Mac that stays on your hub. Then open its terminal from your phone. Start with both devices on the same local network.",
+  preview:"About the screenshots", previewText:"These screenshots come from our Mac Mini test of 0.6.4-rc.1. Stable macOS 0.6.4 includes this guided setup flow and a new installer window: drag the app on the left into Applications on the right. The screenshots retain the RC labels and earlier installer window from that test. The download button serves the stable release.",
+  download:"Download for Mac", phone:"Get the phone app", contents:"On this page", before:"Before you start",
+  needs:["A Mac that can stay powered on and connected, and its macOS login account.", "Your phone and Mac on the same local network. A wired Mac and a phone on the same router’s Wi-Fi work too.", "Offdesk on your phone: TestFlight for iPhone / iPad, or the Android APK from this site."],
+  terms:"The Hub manages connections; the Node makes a machine’s terminals available. Choosing this Mac as the Hub installs both. The normal App setup does not need a separate install.sh command or Docker.",
+  steps:[
+    {id:"install",title:"1. Install the Mac app",body:"Get the disk image from the <a href='/mac'>Mac download page</a>. Open the DMG, drag Offdesk into Applications, then open the installed copy. Do not keep running it from the mounted disk image.",extra:"A standard macOS account may need an administrator’s password to write to the system Applications folder. You can also use an Applications folder inside your own home directory. RC in the screenshot identifies our test build.",image:"install",alt:"The Mac disk image window containing Offdesk RC and an Applications folder shortcut.",caption:"Drag the app into Applications, then launch the installed copy."},
+    {id:"choose",title:"2. Make this Mac the hub",body:"At <strong>Which machine is this?</strong>, choose <strong>The one that stays on → Set this machine up</strong>. Choose this when you want your phone to reach terminals running on this Mac.",extra:"Choose <strong>Just connecting</strong> only if you already have a Hub elsewhere and want to use this Mac as a client. You do not need to create an account for this local setup."},
+    {id:"ready",title:"3. Let the Mac finish getting ready",body:"The updated setup checks four things before showing the phone connection screen. An address appearing on screen alone does not prove setup is finished.",checks:["The Hub is running and responding.","This Mac is registered with the Hub.","The local Node is online.","The terminal tool, tmux, is available."],extra:"Once ready, you will see <strong>Connect your phone</strong> and a QR code. If a check fails, use the retry action on the setup screen. If macOS asks whether Offdesk can accept incoming connections, allow it on the Mac you want your phone to reach."},
+    {id:"terminal",title:"4. Open your first terminal",body:"Choose <strong>Open my terminal</strong>. If you see <strong>No terminals yet</strong>, check the top-right control: if it says <strong>Watching</strong>, click it to take control, then choose <strong>Start terminal</strong>. If another device already has control, make sure you intend to take over.",extra:"Type this line and press Enter. You should see the words returned below it. Commands run on your Mac, even when you type them on your phone.",command:"echo hello from offdesk",image:"terminal",alt:"Offdesk running echo hello from offdesk in the test account’s Mac shell, with hello from offdesk returned below.",caption:"A real shell, with working input and output. Control status determines whether you can create a terminal or type."},
+    {id:"phone",title:"5. Scan from the phone app",body:"On the Mac, choose <strong>Phone</strong> or <strong>Show me</strong> to open the connection panel. For an end-to-end encrypted connection, select <strong>Pair an encrypted device</strong> near the bottom. In the phone App’s connection screen, choose <strong>Scan QR Code</strong> and scan the newly generated encrypted pairing code. Allow camera access when prompted.",extra:"The ordinary code at the top is a sign-in link: your phone’s system camera can open it in a browser. The encrypted pairing code below is for the Offdesk App’s scanner, not a browser URL. Generate a new pairing code on the Mac if it expires.",image:"phone-pairing",alt:"The Mac phone connection panel with a local address, phone app links and Pair an encrypted device; the sign-in code and link are hidden.",caption:"The example code and sign-in link are hidden. Scan your own Mac’s code. Encrypted pairing starts with the button below.",after:"After pairing, look for this Mac and its terminal. If there is no terminal to select, create one on the Mac using the previous step. Try a short command from the phone, then quit and reopen the phone App to check it connects again."},
+    {id:"return",title:"6. Close the app. Come back to your terminal.",body:"Quitting the Mac App leaves the Hub and Node services running in the background. Reopening the App lets you return to the terminal. Quitting the App is different from putting the Mac to sleep, shutting it down, or logging out of macOS.",extra:"Keep the Mac powered on, logged in and connected. A local address works on that network; set up remote access separately when you are ready to use Offdesk away from home. Scanning a code does not make a local address reachable over the internet."}
+  ],
+  trouble:"If your screen looks different",faqs:[
+    ["Connect a machine / Generate a token", "The Hub has no usable machine yet; your phone does not need to become a host. Check setup on the Mac first. For the older 0.6.3 issue, a manual recovery is to choose Generate a token on this Mac and run the full generated command in this same Mac’s system Terminal. This is a recovery path for the older release, not a required step of normal installation."],
+    ["Scanning opens a sign-in page, or the IP address alone does not sign in", "An address alone contains no sign-in credentials. Use the complete sign-in link or its ordinary QR code for browser sign-in. Use the App’s scanner with the encrypted pairing code for encrypted pairing. Keep full sign-in links and QR codes out of shared chats."],
+    ["The phone cannot connect, or the screen is blank", "Check that both devices are on the same local network and that the selected address is reachable from the phone. Guest Wi-Fi may isolate devices. Confirm the terminal works on the Mac and check the phone’s local-network permission. If the screen stays black after scanning, quit and reopen the App, then report the App version, phone model and steps. Reopening should not be required every time."]
+  ],
+  tested:"What did we actually test?",testedIntro:"On September 7, 2026, we tested on a Mac Mini using a new standard account, offdesk-test, with no Offdesk configuration or services and no installer script run beforehand. This was a clean user account, not a factory-reset Mac.",
+  passed:["DMG download, drag into the user’s Applications folder, and launch from Finder.","Automatic Hub / Node installation, machine registration, live connection and tmux checks, followed by a populated QR code.","Input and output in a real terminal.","Terminal persistence after quitting and reopening the App, and reconnection after restarting only the test Hub."],
+  pending:"Not yet completed in this run: physical-phone scanning and cold reopen, test-user logout/login, and Gatekeeper acceptance of the signed, notarized production package. The user authorized the RC’s first launch; that is not proof of production distribution acceptance.",
+  known:"We also reproduced an onboarding gap: Watching hides the Start terminal action. Step 4 includes the take-control action so you have a clear next step.",
+  next:"Keep going",nextText:"Get comfortable on the local network first, then read about encrypted connections and remote access.",encryption:"Encrypted connections",lan:"Local-network troubleshooting",allDocs:"All technical docs"
+};
+const figures: Record<string, {width:number;height:number}> = {install:{width:616,height:291},terminal:{width:802,height:534},"phone-pairing":{width:428,height:489}};
+---
+<Site title={`${c.title} · Offdesk`} description={c.description} path={path} lang={lang}>
+  <article class="doc guide mx-auto max-w-4xl px-6 pt-10 pb-20">
+    <div class="guide-meta"><span class="eyebrow">{c.eyebrow}</span><a href={zh ? "/docs/mac" : "/zh/docs/mac"} lang={zh ? "en" : "zh-CN"}>{zh ? "English" : "简体中文"}</a></div>
+    <h1 class="display mt-4 text-4xl md:text-6xl">{c.title}</h1>
+    <p class="prose-lead">{c.lead}</p>
+    <div class="guide-actions"><a href="/mac" class="btn-coral">{c.download}</a><a href="/#download" class="btn-sky">{c.phone}</a></div>
+    <aside class="version-note"><strong>{c.preview}</strong><p>{c.previewText}</p></aside>
+    <nav aria-label={c.contents} class="contents"><strong>{c.contents}</strong><ol>{c.steps.map(s=><li><a href={`#${s.id}`}>{s.title}</a></li>)}</ol></nav>
+    <h2>{c.before}</h2><ul>{c.needs.map(n=><li>{n}</li>)}</ul><p>{c.terms}</p>
+    {c.steps.map(s=><section aria-labelledby={s.id}>
+      <h2 id={s.id}>{s.title}</h2><p set:html={s.body}/>
+      {"checks" in s && <ul class="checks">{s.checks?.map(check=><li>{check}</li>)}</ul>}
+      <p set:html={s.extra}/>
+      {"command" in s && <pre><code>{s.command}</code></pre>}
+      {"image" in s && s.image && <figure class:list={["screenshot", {portrait:s.image === "phone-pairing"}]}>
+        <a href={`/media/first-install/${s.image}.webp`} aria-label={zh ? "打开完整截图" : "Open full screenshot"}>
+          <img src={`/media/first-install/${s.image}.webp`} {...figures[s.image]} alt={s.alt} loading="lazy" decoding="async"/>
+        </a><figcaption>{s.caption}</figcaption>
+      </figure>}
+      {"after" in s && <p>{s.after}</p>}
+    </section>)}
+    <h2 id="troubleshooting">{c.trouble}</h2>
+    {c.faqs.map(([question,answer])=><details class="faq"><summary>{question}</summary><p>{answer}</p></details>)}
+    <details class="acceptance"><summary>{c.tested}</summary><p>{c.testedIntro}</p><ul>{c.passed.map(x=><li>{x}</li>)}</ul><p>{c.pending}</p><p>{c.known}</p></details>
+    <h2>{c.next}</h2><p>{c.nextText}</p><ul>
+      <li><a href="https://github.com/zalify/offdesk/blob/main/docs/encrypted-connections.md">{c.encryption}</a></li>
+      <li><a href="https://github.com/zalify/offdesk/blob/main/docs/setup-lan.md">{c.lan}</a></li>
+      <li><a href="https://github.com/zalify/offdesk#readme">{c.allDocs}</a></li>
+    </ul>
+  </article>
+</Site>
+<style>
+  .guide-meta,.guide-actions{display:flex;align-items:center;flex-wrap:wrap;gap:16px}.guide-meta{justify-content:space-between}.guide-actions{margin:26px 0 32px}
+  .guide-actions a{font-weight:600;text-decoration:none}.guide-actions .btn-coral{color:var(--color-cream)}.guide-actions .btn-sky{color:var(--color-ink)}
+  .guide :global(h2[id]){scroll-margin-top:28px}.guide :global(a:focus-visible),summary:focus-visible{outline:3px solid var(--color-sea);outline-offset:5px}
+  .version-note,.contents,.acceptance{padding:22px 24px;border:1px solid var(--color-line);border-radius:20px;background:var(--color-cream);margin-top:24px}.version-note{border-left:5px solid var(--color-sun)}.version-note p{margin-top:6px;font-size:14px}
+  .contents ol{padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}.contents li{font-size:15px;margin-top:10px}
+  .checks{padding-top:8px;padding-bottom:16px;border-left:3px solid var(--color-lagoon);background:var(--color-cream);border-radius:0 14px 14px 0}
+  .screenshot{margin:26px 0 0}.screenshot img{display:block;width:100%;height:auto;border:1px solid var(--color-line-2);border-radius:16px;background:var(--color-cream)}.screenshot.portrait{max-width:460px;margin-left:auto;margin-right:auto}figcaption{color:var(--color-muted);font-size:14px;line-height:1.6;margin-top:12px}
+  .faq{border-bottom:1px solid var(--color-line);padding:20px 0}.faq p{margin-bottom:4px}summary{font-weight:700;cursor:pointer;color:var(--color-ink);line-height:1.6}.acceptance{margin-top:36px}.guide code{overflow-wrap:anywhere}
+  @media(max-width:600px){.contents ol{grid-template-columns:1fr}.version-note,.contents,.acceptance{padding:18px}.guide-actions{align-items:stretch}.guide-actions a{flex:1 1 180px}.screenshot img{border-radius:10px}}
+</style>

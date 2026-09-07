@@ -4,6 +4,8 @@ mod config;
 mod hub_conn;
 mod keep_awake;
 mod osc_title;
+mod terminal_attention;
+mod codex_title;
 mod pty;
 mod preview;
 mod service;

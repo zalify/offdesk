@@ -112,7 +112,7 @@ pub fn owner_session(pool: &DbPool, jwt_secret: &str) -> Option<String> {
 
 /// The owner's user id, created on first use. See [`owner_session`] for when
 /// this is `None`.
-fn owner_user_id(pool: &DbPool) -> Option<String> {
+pub(crate) fn owner_user_id(pool: &DbPool) -> Option<String> {
     let conn = pool.get().ok()?;
 
     let user = match db::users::find_user_by_provider(&conn, LOCAL_PROVIDER, LOCAL_PROVIDER_ID) {
@@ -271,6 +271,18 @@ pub enum LocalNode {
     Failed(String),
 }
 
+impl LocalNode {
+    /// A running Hub alone is not a successful whole-machine installation.
+    pub fn installation_result(&self) -> Result<(), String> {
+        match self {
+            Self::Failed(error) => Err(format!("Hub is running, but this machine could not be set up: {error}")),
+            Self::NoBinary => Err("Hub is running, but offdesk-node is missing. Reinstall the complete Offdesk app.".into()),
+            // Preserve an intentional connection to another Hub.
+            Self::Registered { .. } | Self::AlreadyHere | Self::Elsewhere { .. } => Ok(()),
+        }
+    }
+}
+
 /// Register this machine with the hub that just started on it, and keep its
 /// node running as a service. The three-line install used to end with the
 /// person on a "Connect a machine" page, being asked to register the machine
@@ -286,18 +298,22 @@ pub fn register_local_node(pool: &DbPool, listen: &str) -> LocalNode {
     // that was a decision, and not one to overturn from an installer.
     let machine_json = offdesk_protocol::config_dir().join("machine.json");
     if let Ok(existing) = std::fs::read_to_string(&machine_json) {
-        let hub = serde_json::from_str::<serde_json::Value>(&existing)
-            .ok()
-            .and_then(|v| v.get("hub_url").and_then(|u| u.as_str()).map(str::to_string))
-            .unwrap_or_default();
+        let config = serde_json::from_str::<serde_json::Value>(&existing).ok();
+        let hub = config.as_ref().and_then(|v| v.get("hub_url")).and_then(|u| u.as_str()).unwrap_or_default();
         let mine: Vec<Ipv4Addr> = interface_addresses().into_iter().map(|(_, ip)| ip).collect();
-        if hub_is_here(&hub, port, &mine) {
-            let _ = node_service_install(&find_node_binary().unwrap_or_else(|| "offdesk-node".into()));
+        if hub_is_here(hub, port, &mine) && config.as_ref()
+            .and_then(|v| v.get("machine_id")).and_then(|v| v.as_str())
+            .is_some_and(|id| pool.get().ok().and_then(|conn| db::machines::find_machine_by_id(&conn, id).ok().flatten()).is_some()) {
+            if let Err(error) = node_service_install(&find_node_binary().unwrap_or_else(|| "offdesk-node".into())) {
+                return LocalNode::Failed(error);
+            }
             return LocalNode::AlreadyHere;
         }
-        if !hub.is_empty() {
-            return LocalNode::Elsewhere { hub };
+        if !hub.is_empty() && !hub_is_here(hub, port, &mine) {
+            return LocalNode::Elsewhere { hub: hub.to_owned() };
         }
+        // A config left behind by an interrupted install or a reset local DB
+        // is not a registration. Re-register only against this same local Hub.
     }
 
     let Some(node) = find_node_binary() else {
@@ -468,6 +484,11 @@ pub fn lan_candidates() -> Vec<(String, Ipv4Addr)> {
     let interfaces = interface_addresses();
     let best = pick_lan_address(interfaces.clone(), route_address());
     order_candidates(interfaces, best)
+}
+
+/// Physical LAN interfaces only; do not advertise VPN/container addresses as LAN.
+pub fn local_network_addresses() -> Vec<Ipv4Addr> {
+    lan_candidates().into_iter().filter(|(name, ip)| ip.is_private() && !is_virtual(name)).map(|(_, ip)| ip).collect()
 }
 
 fn order_candidates(interfaces: Vec<(String, Ipv4Addr)>, best: Option<Ipv4Addr>) -> Vec<(String, Ipv4Addr)> {
@@ -705,6 +726,16 @@ pub fn sign_in_notice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_local_setup_is_not_reported_as_a_successful_install() {
+        assert!(LocalNode::NoBinary.installation_result().is_err());
+        let error = LocalNode::Failed("registration refused".into()).installation_result().unwrap_err();
+        assert!(error.contains("registration refused"));
+        assert!(LocalNode::Registered { name: "Mac".into() }.installation_result().is_ok());
+        assert!(LocalNode::AlreadyHere.installation_result().is_ok());
+        assert!(LocalNode::Elsewhere { hub: "https://other.example".into() }.installation_result().is_ok());
+    }
 
     #[test]
     fn an_explicit_database_path_is_used_verbatim() {

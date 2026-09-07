@@ -16,8 +16,8 @@
 Vibe code from your phone, on the terminal you left at home.
 One self-hosted hub, every machine you own, any agent that runs in tmux.
 
-Close the laptop and walk away. The session keeps running on the machine at
-home, and your phone opens the same terminal, mid-scroll — not a summary of it.
+Leave the desk and keep your hub awake and online. Your phone opens the same
+terminal on that machine, mid-scroll — not a summary of it.
 
 - **0** accounts to create. The hub is yours; the first run prints a link that
   signs you in.
@@ -25,8 +25,10 @@ home, and your phone opens the same terminal, mid-scroll — not a summary of it
   to one hub. The other tools that give you a real terminal run one server per
   machine.
 - **3** binaries, nothing else. Rust; the hub is one binary plus a SQLite file.
-- **MIT**, all of it, hub included. No relay, no vendor account, no transcript
-  stored anywhere you do not control.
+- **MIT**, including the hub and clients in this repository. Self-hosting needs
+  no vendor account. Optional Offdesk Cloud provides managed remote access;
+  its service is separate and closed source. Encrypted App connections keep
+  terminal content encrypted between your App and Hub.
 
 Questions, setups that did not work, things you want it to do:
 [Discord](https://discord.gg/aFUu6VMzc).
@@ -38,14 +40,32 @@ Questions, setups that did not work, things you want it to do:
 | **macOS** | [offdesk.dev/mac](https://offdesk.dev/mac) | One dmg for Apple silicon and Intel, signed and notarized. Can be the hub. |
 | **Windows** | [offdesk.dev/windows](https://offdesk.dev/windows) | x64 `.msi`. A client. |
 | **Linux** | [offdesk.dev/linux](https://offdesk.dev/linux) | x64 `.AppImage`; `.deb` and `.rpm` on [the release page](https://offdesk.dev/desktop). A client. |
-| **iPhone** | TestFlight, a seat via [Discord](https://discord.gg/aFUu6VMzc) | Or Safari, which is the whole client. |
+| **iPhone / iPad** | [Join TestFlight](https://testflight.apple.com/join/rV4ktaGv) | Use the App for encrypted pairing; a browser can use the Hub sign-in link. |
 | **Android** | [offdesk.dev/apk](https://offdesk.dev/apk) | `arm64-v8a`; [`/apk/universal`](https://offdesk.dev/apk/universal) if unsure. |
 | **Hub, node, CLI** | `curl -fsSL https://offdesk.dev/install \| sh` | Linux and macOS, x64 and arm64. For a NAS, a VPS, anything without a screen. |
 
-Every link follows the newest release of that kind. Windows and Linux desktop
-apps are clients only: the hub needs tmux, which they do not have.
+Every link follows the newest release of that kind. Windows is a desktop client;
+Linux can also host a Hub with tmux installed separately.
+
+## September release
+
+Hub/CLI/node [0.20.4](https://github.com/zalify/offdesk/releases/tag/v0.20.4),
+desktop [0.6.4](https://github.com/zalify/offdesk/releases/tag/desktop-v0.6.4),
+and mobile 0.6.6 improve first-time setup, startup reconnection and Android
+system-navigation spacing. The Mac app checks that its Hub and machine are ready
+before phone pairing, recovers incomplete setup and fixes Chinese punctuation
+input. The macOS installer now includes a drag-to-Applications layout.
+
+Direct input, text paste and photo/file attachments remain; local editor was
+removed in the previous release. Use the download links above for the latest
+published packages. iOS availability is managed through TestFlight and can lag
+behind while Apple reviews the build.
 
 ## Install
+
+Start with the illustrated Mac setup guide: [English](https://offdesk.dev/docs/mac) ·
+[简体中文](https://offdesk.dev/zh/docs/mac). It includes real App screenshots,
+phone pairing, first-terminal steps, and the scope of our clean-account testing.
 
 On the machine that stays on — a Mac, a NAS — which is usually also the first
 machine you want to reach.
@@ -245,18 +265,17 @@ because agents ask questions and builds need a Ctrl-C.
 
 Three packaged clients also ship:
 
-- **iPhone** — on TestFlight, in beta with the team while Apple reviews the
-  first public build; the public link goes here the moment it exists, and a
-  seat before then is a message away on [Discord](https://discord.gg/aFUu6VMzc).
-  It wraps the same web app: on first launch it scans the code the hub shows
-  and is signed in, and one build works with any hub. Two switches on the
+- **iPhone / iPad** — join the [public TestFlight beta](https://testflight.apple.com/join/rV4ktaGv).
+  Open **Scan QR Code** in the App and scan the Hub's encrypted pairing code.
+  Encrypted connections use the App's bundled interface; update through
+  TestFlight to receive interface changes. One build works with any hub. Two switches on the
   phone can stand in the way of a hub on the LAN, and the app names them when
   they do: Local Network, and on phones sold in China, Wireless Data. Built
   from `ios-v*` tags.
 - **Android** — an APK from [offdesk.dev/apk](https://offdesk.dev/apk), which always
   points at the newest app build (`/apk/universal` for the universal one);
   take `arm64-v8a` on a modern phone, `universal` if unsure. Sideload it; it
-  wraps the same web app, with native notifications and clipboard. On first
+  provides in-app update checks, clipboard and encrypted pairing. On first
   launch it scans the code the hub shows — on the terminal at install, under
   the Phone button, or `offdesk-hub link` — and is signed in; one APK works
   with any hub, nothing about a hub is compiled into it. The address can also
@@ -275,8 +294,13 @@ offdesk does not wrap an agent or speak its protocol. It hands you the terminal
 the agent is already running in, with your own subscription, your own config,
 your own dotfiles. Anything that runs in tmux runs here: Claude Code, Codex,
 OpenCode, Gemini CLI, Aider, vim, htop, a build that takes an hour. No
-agent-specific integration, so there is nothing to add when the next agent
-ships — and nothing to be locked into.
+agent-specific integration is required for terminal access.
+
+On Linux and macOS, the node also recognizes local Codex session names for
+the terminal list, even when Codex only puts the project name in its terminal
+title. This needs no Codex configuration change. It reads metadata for the
+session held open by that pane's Codex process; if the session cannot be
+identified or its metadata is unavailable, the normal terminal title is used.
 
 ## For agents
 
@@ -494,12 +518,15 @@ hub keeps in SQLite: [SECURITY.md](SECURITY.md).
 
 ## Questions, answered
 
-**Do I need an account?** No. The hub is yours; the install creates a local
-user and prints a link that signs you in. Nothing here has a sign-up form.
+**Do I need an account?** Self-hosting needs no vendor account: installation
+creates a local user and a sign-in link. Optional Offdesk Cloud uses a separate
+sign-in for managed remote access.
 
-**Does my traffic go through offdesk.dev?** No. That domain serves the install
-script and a web page. Your phone talks to your hub, and your hub talks to your
-machines. That is the whole path.
+**Does my traffic go through offdesk.dev?** Direct LAN connections go to your
+Hub. Optional Offdesk Cloud routes encrypted App traffic through a managed
+address under `*.cloud.offdesk.dev`. A self-managed tunnel uses its provider.
+[Encrypted pairing](docs/encrypted-connections.md) protects terminal content
+between the App and Hub; an ordinary browser sign-in link is a different mode.
 
 **Is it only for Claude Code?** It is a terminal. Claude Code, Codex, OpenCode,
 a build that takes an hour, or vim — whatever runs in tmux runs here, and
@@ -508,7 +535,8 @@ offdesk does not know or care which.
 **What about iPhone?** There is an app, on TestFlight for now — see
 [On your phone](#on-your-phone). Without it, the browser is the whole client:
 scan the hub's code with the camera, and add the page to the home screen.
-Android has an app too; both scan the same code and add native notifications.
+Android has an app too. Use the in-app scanner for encrypted pairing codes;
+use the ordinary sign-in link when connecting through a browser.
 
 **What if two people type at once?** The control lease decides who may type.
 Sending input claims it — last writer wins, no queue. Everyone else keeps
@@ -521,4 +549,5 @@ receiving output, so they watch live instead of being disconnected.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+The code in this repository is MIT. See [LICENSE](LICENSE). The optional
+Offdesk Cloud service is maintained separately and is not included here.

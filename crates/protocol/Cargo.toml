@@ -5,6 +5,7 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
+uuid.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 bytes.workspace = true

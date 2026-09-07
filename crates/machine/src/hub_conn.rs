@@ -1,13 +1,16 @@
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use std::sync::Arc;
-use std::time::Duration;
 use offdesk_protocol::{
     compression::{AttachCompressor, DEFLATE_RAW_V1},
     encode_attach_output_frame, DirEntry, HubToMachine, MachineToHub, TerminalTitleSource,
 };
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{
+    connect_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message},
+};
 
 use crate::acp::AcpManager;
 use crate::attach::{AttachEvent, AttachManager};
@@ -23,23 +26,35 @@ const SEND_BATCH_LIMIT: usize = 64;
 
 enum OutboundHubMessage {
     Json(MachineToHub),
-    AttachOutput { attach_id: String, data: Bytes },
+    AttachOutput {
+        attach_id: String,
+        data: Bytes,
+    },
     /// Turn deflate-raw-v1 on/off for one attach in the send loop. Flows
     /// through the same channel as output so it is ordered against that
     /// attach's AttachOutput chunks: the send task creates the per-attach
     /// compressor before the first compressed chunk and drops it after the
     /// last one.
-    AttachCompression { attach_id: String, enable: bool },
+    AttachCompression {
+        attach_id: String,
+        enable: bool,
+    },
 }
 
 /// One WebSocket message ready to feed to the sink.
 #[derive(Debug, PartialEq)]
 enum WireMessage {
     Json(String),
-    AttachFrame { attach_id: String, payload: Vec<u8> },
+    AttachFrame {
+        attach_id: String,
+        payload: Vec<u8>,
+    },
     /// Pass-through of OutboundHubMessage::AttachCompression; consumed by the
     /// send loop, never sent on the wire. Acts as a merge barrier.
-    AttachCompression { attach_id: String, enable: bool },
+    AttachCompression {
+        attach_id: String,
+        enable: bool,
+    },
 }
 
 /// Flatten a drained send batch into wire messages, merging *adjacent*
@@ -104,7 +119,10 @@ impl HubConnection {
     }
 
     async fn connect_once(&self) -> Result<(), String> {
-        let (ws_stream, _) = connect_async(&self.hub_url)
+        let config = WebSocketConfig::default()
+            .max_message_size(Some(32 * 1024 * 1024))
+            .max_frame_size(Some(32 * 1024 * 1024));
+        let (ws_stream, _) = connect_async_with_config(&self.hub_url, Some(config), false)
             .await
             .map_err(|e| format!("WebSocket connect failed: {}", e))?;
 
@@ -132,7 +150,11 @@ impl HubConnection {
             name: self.machine_name.clone(),
             os: std::env::consts::OS.to_string(),
             home_dir: dirs_home(),
-            capabilities: vec![DEFLATE_RAW_V1.to_string(), offdesk_protocol::preview::CAPABILITY.to_string()],
+            capabilities: vec![
+                DEFLATE_RAW_V1.to_string(),
+                offdesk_protocol::composer::COMPOSER_V1.to_string(),
+                offdesk_protocol::preview::CAPABILITY.to_string(),
+            ],
         };
         let msg = serde_json::to_string(&register).unwrap();
         ws_tx
@@ -237,6 +259,7 @@ impl HubConnection {
                 workspace_group_id: None,
                 cols: s.cols,
                 rows: s.rows,
+                attention: None,
                 reachable: true,
             })
             .collect();
@@ -283,8 +306,9 @@ impl HubConnection {
         // the hub's precedence (OSC beats process) does the rest. The
         // foreground process name remains the fallback for untitled panes;
         // it now rides in the same `list-panes -a` poll (`current_command`),
-        // so one tick costs one tmux subprocess total instead of one per
-        // untitled terminal. Titles and cwds are reported only when they
+        // so metadata needs one tmux subprocess rather than one per untitled
+        // terminal. Attention checks additionally capture candidate agent panes.
+        // Titles, cwds and attention are reported only when they
         // change — every report used to trigger a synchronous SQLite write
         // on the hub — and the dedup maps reset with each hub connection,
         // so a reconnected hub always gets a full refresh.
@@ -299,21 +323,50 @@ impl HubConnection {
                 String,
                 (String, TerminalTitleSource),
             > = std::collections::HashMap::new();
+            let mut last_sent_attention = std::collections::HashMap::new();
             loop {
                 interval.tick().await;
-                let pane_infos = pty_for_titles.pane_infos();
+                let poll_pty = pty_for_titles.clone();
+                let (pane_infos, attentions) = match tokio::task::spawn_blocking(move || {
+                    let panes = poll_pty.pane_infos();
+                    let attention = poll_pty.terminal_attentions(&panes);
+                    (panes, attention)
+                })
+                .await
+                {
+                    Ok(panes) => panes,
+                    Err(error) => {
+                        tracing::warn!("terminal metadata poll failed: {error}");
+                        continue;
+                    }
+                };
                 let terminal_ids = pty_for_titles.list_terminal_ids();
                 // Drop dedup state for terminals that no longer exist so the
                 // maps can't grow without bound over a long connection.
                 last_sent_cwd.retain(|id, _| terminal_ids.contains(id));
                 last_sent_title.retain(|id, _| terminal_ids.contains(id));
+                last_sent_attention.retain(|id, _| terminal_ids.contains(id));
                 for terminal_id in terminal_ids {
+                    let attention = attentions.get(&terminal_id).copied().flatten();
+                    if last_sent_attention.get(&terminal_id) != Some(&attention) {
+                        if send_tx_for_titles
+                            .send(OutboundHubMessage::Json(MachineToHub::TerminalAttention {
+                                terminal_id: terminal_id.clone(),
+                                attention,
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        last_sent_attention.insert(terminal_id.clone(), attention);
+                    }
                     let pane_info = pane_infos.get(&terminal_id);
                     let title_update = match pane_info.and_then(|info| info.title.as_ref()) {
                         Some(title) => Some((title.clone(), TerminalTitleSource::Osc)),
-                        None => fallback_title(
-                            pane_info.and_then(|info| info.current_command.clone()),
-                        ),
+                        None => {
+                            fallback_title(pane_info.and_then(|info| info.current_command.clone()))
+                        }
                     };
                     // Never report an empty title: it would only flip the
                     // hub-side title_source and storm TerminalUpdated events.
@@ -653,6 +706,7 @@ async fn handle_hub_message(
                 .open(attach_id.clone(), terminal_id, cols, rows)
                 .await;
             let send_tx = send_tx.clone();
+            let title_pty = pty.clone();
             tokio::spawn(async move {
                 let mut scanner = OscTitleScanner::new();
                 let mut last_observed_title: Option<String> = None;
@@ -661,6 +715,7 @@ async fn handle_hub_message(
                     match ev {
                         AttachEvent::Output(bytes) => {
                             for title in scanner.push(&bytes) {
+                                let title = title_pty.resolve_osc_title(&scanner_terminal_id, title);
                                 if last_observed_title.as_deref() == Some(title.as_str()) {
                                     continue;
                                 }
@@ -670,8 +725,10 @@ async fn handle_hub_message(
                                 }
                                 let send_title = send_tx.clone();
                                 let terminal_id = scanner_terminal_id.clone();
+                                let title_pty = title_pty.clone();
                                 debounce_task = Some(tokio::spawn(async move {
                                     tokio::time::sleep(Duration::from_millis(300)).await;
+                                    let title = title_pty.resolve_osc_title(&terminal_id, title);
                                     let _ = send_title
                                         .send(OutboundHubMessage::Json(
                                             MachineToHub::TerminalTitle {
@@ -728,6 +785,34 @@ async fn handle_hub_message(
         }
         HubToMachine::RefreshAttach { attach_id } => {
             attach_mgr.refresh(&attach_id).await;
+        }
+        HubToMachine::AttachComposer {
+            request_id,
+            attach_id,
+            message,
+        } => {
+            let attach_mgr = attach_mgr.clone();
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                use offdesk_protocol::{ComposerReceipt, ComposerStatus};
+                let id = message.id.clone();
+                let prepared = tokio::task::spawn_blocking(move || prepare_composer(&message))
+                    .await
+                    .unwrap_or_else(|_| Err("Could not prepare attachments".into()));
+                let receipt = match prepared {
+                Err(detail) => ComposerReceipt { id: id.clone(), status: ComposerStatus::Failed, detail },
+                Ok(paste) => match attach_mgr.write_composer(&attach_id, Bytes::from(paste)).await {
+                    Ok(()) => ComposerReceipt { id: id.clone(), status: ComposerStatus::Delivered, detail: "Delivered to the terminal. Execution is not confirmed.".into() },
+                    Err(status) => ComposerReceipt { id: id.clone(), status, detail: "Terminal delivery failed or could not be confirmed. Check the terminal before sending again.".into() },
+                },
+            };
+                let _ = send_tx
+                    .send(OutboundHubMessage::Json(MachineToHub::ComposerResult {
+                        request_id,
+                        receipt,
+                    }))
+                    .await;
+            });
         }
         HubToMachine::AttachInput { attach_id, data } => {
             attach_mgr
@@ -797,7 +882,14 @@ async fn handle_hub_message(
             model_id,
         } => {
             acp_manager
-                .start_session(session_id, agent_kind, cwd, auto_run, resume_acp_session_id, model_id)
+                .start_session(
+                    session_id,
+                    agent_kind,
+                    cwd,
+                    auto_run,
+                    resume_acp_session_id,
+                    model_id,
+                )
                 .await;
         }
         HubToMachine::AgentSessionPrompt { session_id, text } => {
@@ -837,51 +929,110 @@ fn fallback_title(process_name: Option<String>) -> Option<(String, TerminalTitle
         .map(|name| (name, TerminalTitleSource::Process))
 }
 
-fn handle_image_paste(base64_data: &str, _mime: &str, filename: &str) -> Result<String, String> {
+fn prepare_composer(message: &offdesk_protocol::ComposerMessage) -> Result<String, String> {
     use std::io::Write;
-
-    // Decode base64
-    let data = base64_decode(base64_data).map_err(|e| format!("Base64 decode failed: {}", e))?;
-
-    // Save to temp file
-    let tmp_dir = std::env::temp_dir();
-    let path = tmp_dir.join(filename);
-    let mut file =
-        std::fs::File::create(&path).map_err(|e| format!("Failed to create temp file: {}", e))?;
-    file.write_all(&data)
-        .map_err(|e| format!("Failed to write temp file: {}", e))?;
-
-    let path_str = path.to_string_lossy().to_string();
-
-    Ok(format!("\x1b[200~{}\x1b[201~", path_str))
-}
-
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    // Simple base64 decoder
-    let table: Vec<u8> =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".to_vec();
-    let mut output = Vec::new();
-    let mut buf: u32 = 0;
-    let mut bits: u32 = 0;
-
-    for &byte in input.as_bytes() {
-        if byte == b'=' || byte == b'\n' || byte == b'\r' || byte == b' ' {
-            continue;
+    message.validate()?;
+    let mut decoded = Vec::new();
+    let mut total = 0;
+    for attachment in &message.attachments {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&attachment.data)
+            .map_err(|_| "A file is incomplete or invalid. Attach it again.".to_string())?;
+        total += bytes.len();
+        if total > offdesk_protocol::composer::MAX_COMPOSER_ATTACHMENT_BYTES {
+            return Err("Files exceed 20 MB".into());
         }
-        let val = table
-            .iter()
-            .position(|&b| b == byte)
-            .ok_or_else(|| format!("Invalid base64 char: {}", byte as char))?
-            as u32;
-        buf = (buf << 6) | val;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
+        decoded.push(bytes);
+    }
+    let mut text = message.text.replace("\r\n", "\n").replace('\r', "\n");
+    if !decoded.is_empty() {
+        let dir = std::env::temp_dir().join(format!("offdesk-composer-{}", uuid::Uuid::new_v4()));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder
+            .create(&dir)
+            .map_err(|e| format!("Could not save attachments: {e}"))?;
+        let saved = (|| -> Result<(), String> {
+            for (index, bytes) in decoded.iter().enumerate() {
+                let ext = match message.attachments[index].mime.as_str() {
+                    "image/jpeg" => "jpg",
+                    "image/webp" => "webp",
+                    "image/gif" => "gif",
+                    "image/png" => "png",
+                    _ => "bin",
+                };
+                let name = message.attachments[index].filename.as_deref()
+                    .map(safe_attachment_name).unwrap_or_else(|| format!("image-{index}.{ext}"));
+                let path = dir.join(format!("{index}-{name}"));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .map_err(|e| e.to_string())?;
+                file.write_all(bytes).map_err(|e| e.to_string())?;
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&attachment_path_text(&path));
+            }
+            Ok(())
+        })();
+        if let Err(error) = saved {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(error);
         }
     }
-    Ok(output)
+    Ok(format!("\x1b[200~{text}\x1b[201~"))
+}
+
+fn safe_attachment_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let cleaned: String = base.chars().filter(|c| !c.is_control()).take(180).collect();
+    let cleaned = cleaned.trim_start_matches('.').trim();
+    if cleaned.is_empty() { "attachment.bin".into() } else { cleaned.into() }
+}
+
+fn attachment_path_text(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    if text.chars().all(|c| c.is_alphanumeric() || matches!(c, '/' | '_' | '-' | '.')) {
+        text.into_owned()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+fn handle_image_paste(base64_data: &str, _mime: &str, filename: &str) -> Result<String, String> {
+    use base64::Engine;
+    use std::io::Write;
+    const MAX_BYTES: usize = 25 * 1024 * 1024;
+    if base64_data.len() > MAX_BYTES * 4 / 3 + 16 { return Err("File exceeds 25 MB".into()); }
+    let data = base64::engine::general_purpose::STANDARD.decode(base64_data)
+        .map_err(|e| format!("Base64 decode failed: {e}"))?;
+    if data.len() > MAX_BYTES { return Err("File exceeds 25 MB".into()); }
+    // Each upload has a private, unique directory. Never trust a client path,
+    // overwrite an existing file, or follow a pre-created temporary symlink.
+    let dir = std::env::temp_dir().join(format!("offdesk-upload-{}", uuid::Uuid::new_v4()));
+    let mut builder = std::fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir).map_err(|e| format!("Could not save attachment: {e}"))?;
+    let path = dir.join(safe_attachment_name(filename));
+    let result = (|| -> Result<String, String> {
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
+            .map_err(|e| format!("Could not create attachment: {e}"))?;
+        file.write_all(&data).map_err(|e| format!("Could not write attachment: {e}"))?;
+        Ok(format!("\x1b[200~{}\x1b[201~", attachment_path_text(&path)))
+    })();
+    if result.is_err() { let _ = std::fs::remove_dir_all(&dir); }
+    result
 }
 
 fn read_directory(path: &str) -> Result<Vec<DirEntry>, String> {
@@ -923,6 +1074,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn composer_prepares_all_images_before_terminal_input() {
+        let message = offdesk_protocol::ComposerMessage {
+            id: uuid::Uuid::new_v4().to_string(),
+            text: "第一行\r\n第二行".into(),
+            attachments: vec![offdesk_protocol::ComposerAttachment {
+                mime: "image/png".into(),
+                filename: None,
+                data: "b2ZmZGVzaw==".into(),
+            }],
+        };
+        let paste = prepare_composer(&message).unwrap();
+        assert!(paste.starts_with("\x1b[200~第一行\n第二行\n"));
+        let path = paste
+            .strip_suffix("\x1b[201~")
+            .unwrap()
+            .lines()
+            .last()
+            .unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"offdesk");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let parent = std::path::Path::new(path).parent().unwrap();
+            assert_eq!(
+                std::fs::metadata(parent).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        std::fs::remove_dir_all(std::path::Path::new(path).parent().unwrap()).unwrap();
+        let mut invalid = message;
+        invalid
+            .attachments
+            .push(offdesk_protocol::ComposerAttachment {
+                mime: "image/png".into(),
+                filename: None,
+                data: "truncated!".into(),
+            });
+        assert!(prepare_composer(&invalid).is_err());
+    }
+
+    #[test]
     fn fallback_title_skips_absent_and_empty_process_names() {
         assert_eq!(fallback_title(None), None);
         assert_eq!(fallback_title(Some(String::new())), None);
@@ -934,23 +1126,21 @@ mod tests {
 
     #[test]
     fn image_paste_returns_bracketed_path_for_single_attach_write() {
-        let filename = format!("offdesk-image-paste-test-{}.png", std::process::id());
-        let path = std::env::temp_dir().join(&filename);
-        let _ = std::fs::remove_file(&path);
-
-        let paste = handle_image_paste("b2ZmZGVzaw==", "image/png", &filename)
-            .expect("image paste should be prepared");
-
-        assert_eq!(
-            std::fs::read(&path).expect("image file should exist"),
-            b"offdesk"
-        );
-        assert_eq!(
-            paste,
-            format!("\x1b[200~{}\x1b[201~", path.to_string_lossy())
-        );
-
-        let _ = std::fs::remove_file(path);
+        let paste = handle_image_paste("b2ZmZGVzaw==", "application/pdf", "../../report.pdf")
+            .expect("file paste should be prepared");
+        let path = std::path::PathBuf::from(paste.strip_prefix("\x1b[200~").unwrap().strip_suffix("\x1b[201~").unwrap());
+        assert_eq!(path.file_name().unwrap(), "report.pdf");
+        assert!(path.parent().unwrap().file_name().unwrap().to_string_lossy().starts_with("offdesk-upload-"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"offdesk");
+        let second = handle_image_paste("bmV3", "application/pdf", "report.pdf").unwrap();
+        assert_ne!(paste, second);
+        assert_eq!(std::fs::read(&path).unwrap(), b"offdesk");
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        let other = second.strip_prefix("\x1b[200~").unwrap().strip_suffix("\x1b[201~").unwrap();
+        std::fs::remove_dir_all(std::path::Path::new(other).parent().unwrap()).unwrap();
+        assert_eq!(safe_attachment_name("C:\\folder\\..\\notes.txt"), "notes.txt");
+        assert_eq!(safe_attachment_name("..\x1b\r\n"), "attachment.bin");
+        assert_eq!(attachment_path_text(std::path::Path::new("/tmp/my report's.pdf")), "'/tmp/my report'\\''s.pdf'");
     }
 
     #[test]

@@ -30,6 +30,8 @@ pub struct Config {
     pub domain: String,
     pub port: Option<u16>,
     pub control_authority: String,
+    pub control_aliases: Vec<String>,
+    pub listener: Option<std::net::SocketAddr>,
 }
 impl Config {
     pub fn new(domain: &str, hub: &str) -> Result<Self, String> {
@@ -66,15 +68,80 @@ impl Config {
         {
             return Err("Preview domain must not include the Hub hostname".into());
         }
-        let authority = match hub.port() {
-            Some(port) => format!("{}:{port}", hub.host_str().unwrap_or_default()),
-            None => hub.host_str().unwrap_or_default().to_string(),
-        };
+        if !matches!(hub.scheme(), "http" | "https")
+            || hub.host_str().is_none()
+            || !hub.username().is_empty()
+            || hub.password().is_some()
+        {
+            return Err("Invalid Hub base URL".into());
+        }
+        let authority = hub[url::Position::BeforeHost..url::Position::AfterPort].to_string();
         Ok(Self {
             domain: host,
             port: url.port(),
             control_authority: authority,
+            control_aliases: Vec::new(),
+            listener: None,
         })
+    }
+    pub fn add_control_origin(&mut self, origin: &str) -> Result<(), String> {
+        let url = url::Url::parse(origin).map_err(|_| "Invalid preview control origin")?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("Preview control aliases must be HTTP(S) origins".into());
+        }
+        // Never let an alias bypass preview-host authentication.
+        let host = url.host_str().unwrap();
+        if host == self.domain || host.ends_with(&format!(".{}", self.domain)) {
+            return Err("Preview domain must not include a Hub control alias".into());
+        }
+        self.control_aliases
+            .push(url[url::Position::BeforeHost..url::Position::AfterPort].to_string());
+        Ok(())
+    }
+
+    pub fn allows_control(&self, authority: &str, local_ips: &[std::net::Ipv4Addr]) -> bool {
+        if authority.eq_ignore_ascii_case(&self.control_authority)
+            || self
+                .control_aliases
+                .iter()
+                .any(|a| authority.eq_ignore_ascii_case(a))
+        {
+            return true;
+        }
+        let Some(listener) = self.listener else {
+            return false;
+        };
+        let Ok(url) = url::Url::parse(&format!("http://{authority}")) else {
+            return false;
+        };
+        if !url.username().is_empty()
+            || url.password().is_some()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.port_or_known_default() != Some(listener.port())
+        {
+            return false;
+        }
+        let ip = match url.host() {
+            Some(url::Host::Ipv4(ip)) => std::net::IpAddr::V4(ip),
+            Some(url::Host::Ipv6(ip)) => std::net::IpAddr::V6(ip),
+            Some(url::Host::Domain("localhost")) => {
+                std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+            }
+            _ => return false,
+        };
+        if !listener.ip().is_unspecified() {
+            return ip == listener.ip();
+        }
+        ip.is_loopback() || matches!(ip, std::net::IpAddr::V4(ip) if local_ips.contains(&ip))
     }
     pub fn origin(&self, host: &str) -> String {
         match self.port {

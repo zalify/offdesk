@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-forget"
+description = "Enables the secure_forget command without any pre-configured scope."
+commands.allow = ["secure_forget"]
+
+[[permission]]
+identifier = "deny-secure-forget"
+description = "Denies the secure_forget command without any pre-configured scope."
+commands.deny = ["secure_forget"]

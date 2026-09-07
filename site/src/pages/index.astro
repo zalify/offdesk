@@ -11,9 +11,10 @@ const hasStill = existsSync(new URL("../../public/media/phone-terminal.png", imp
 const hasIphone = existsSync(new URL("../../public/media/phone-ios.jpg", import.meta.url));
 
 const repo = "https://github.com/zalify/offdesk";
-const docs = `${repo}#readme`;
+const docs = "/docs/mac";
 // /apk redirects to the newest app-v* release — see site/worker.js.
 const apk = "https://offdesk.dev/apk";
+const ios = "https://testflight.apple.com/join/rV4ktaGv";
 const description =
   "Vibe code from your phone on the terminal you left at home. One line, one scan, and you're in.";
 const install = "curl -fsSL https://offdesk.dev/install | sh";
@@ -104,7 +105,7 @@ const rows = [
               </div>
               <p class="prose-body mt-2 text-[14.5px]">
                 Open it, say this is the machine that stays on, and it becomes your hub:
-                runs at login, restarts if it stops. No account, no cloud. On a NAS or a
+                runs at login, restarts if it stops. Self-hosting needs no vendor account. On a NAS or a
                 server with no screen, one line does the same:
               </p>
               <div class="cmd mt-2.5">
@@ -133,7 +134,7 @@ const rows = [
                 That's your terminal. Go outside.
               </p>
               <p class="prose-body mt-1 text-[14.5px]">
-                Same tmux session as the desk, live. Close the laptop; nothing stops.
+                Same tmux session as the desk, live. Keep the hub awake and online.
                 Anything that runs in tmux runs here.
               </p>
             </div>
@@ -141,7 +142,7 @@ const rows = [
         </ol>
 
         <div class="mt-5 flex flex-wrap items-center gap-3">
-          <a href="#phone" class="btn-sky px-5 py-2.5 text-[14px]">iPhone app</a>
+          <a href={ios} class="btn-sky px-5 py-2.5 text-[14px]">iPhone app</a>
           <a href={apk} class="btn-sky px-5 py-2.5 text-[14px]">Android app</a>
           <a href="#download" class="btn-sky px-5 py-2.5 text-[14px]">All downloads</a>
           <a href={docs} class="btn-sky px-5 py-2.5 text-[14px]">Read the docs</a>
@@ -234,10 +235,10 @@ const rows = [
         <div class="card">
           <h3 class="display text-2xl">iPhone</h3>
           <p class="prose-body mt-3">
-            On TestFlight while Apple reviews the first public build. A seat is a
-            message away on <a href="https://discord.gg/aFUu6VMzc">Discord</a>. Until
-            then, Safari is the whole client: scan the code and you are in.
+            Available through TestFlight. Open the invitation on your iPhone or
+            iPad, install the app, then choose Scan QR Code to connect to your hub.
           </p>
+          <a href={ios} class="btn-sky mt-6 px-5 py-2.5 text-[14px]">Get the iPhone app</a>
         </div>
         <div class="card">
           <h3 class="display text-2xl">Android</h3>
@@ -318,6 +319,27 @@ const rows = [
     </div>
   </section>
 
+  <section class="mx-auto max-w-6xl px-6 pb-12">
+    <div class="card">
+      <p class="eyebrow">September update</p>
+      <h2 class="display mt-3 text-2xl">A clearer first install. A ready-to-connect Mac.</h2>
+      <p class="prose-body mt-3">
+        Hub 0.20.4, desktop 0.6.4 and mobile 0.6.6 improve first-time setup and
+        startup reconnection. The Mac checks that its Hub and machine are ready
+        before phone pairing, with automatic setup recovery and a clearer installer.
+        This release also fixes Mac Chinese punctuation and improves Android
+        system-navigation spacing.
+        iOS updates become public through TestFlight after Apple’s beta review.
+      </p>
+      <p class="prose-body mt-3">
+        Optional Offdesk Cloud beta adds guided remote setup under
+        <span class="inline-code">*.cloud.offdesk.dev</span>.
+        The Hub and Apps are open source; the managed Cloud service is separate.
+      </p>
+      <a href={`${repo}/blob/main/docs/managed-connections.md`} class="btn-sky mt-5">Cloud beta setup</a>
+    </div>
+  </section>
+
   <!-- Away from home: the tunnel -->
   <section id="away" class="mx-auto max-w-6xl px-6 py-16 md:py-24">
     <div class="grid gap-12 lg:grid-cols-[1fr_1.1fr] lg:gap-16">
@@ -333,11 +355,11 @@ const rows = [
           plan is enough.
         </p>
         <p class="prose-body mt-4">
-          The trade: Cloudflare sees your terminal traffic in the clear. If
-          that's a no, a <a href={`${repo}/blob/main/docs/setup-public.md#tailscale`}>tailnet</a>
-          puts nobody in the middle, and a
-          <a href={`${repo}/blob/main/docs/setup-public.md#a-vps-behind-caddy`}>VPS behind Caddy</a>
-          is the classic. Same binaries, all three.
+          Pair in the App for end-to-end encryption: terminal content stays
+          encrypted between your phone and Hub, including through a tunnel.
+          Ordinary browser connections use HTTPS, which the tunnel provider
+          terminates. See the <a href={`${repo}/blob/main/docs/encrypted-connections.md`}>encrypted connection guide</a>
+          or use a <a href={`${repo}/blob/main/docs/setup-public.md#tailscale`}>tailnet</a>.
         </p>
         <a href="/tunnel" class="btn-coral mt-8">The tunnel guide</a>
       </div>
@@ -353,9 +375,9 @@ const rows = [
           <button type="button" class="cmd-copy" data-copy={tunnel} aria-label="Copy the tunnel commands">Copy</button>
         </div>
         <p class="prose-body mt-4 text-[15px]">
-          Sign-in becomes GitHub or Google, because the address is on the
-          internet now. Everything else — the scan, the phone, the machines — is
-          the same as at home.
+          For encrypted App access, scan the encrypted pairing code with the
+          App's scanner. For ordinary browser access, configure authentication
+          as described in the tunnel guide.
         </p>
       </div>
     </div>
@@ -382,18 +404,17 @@ const rows = [
           <h3 class="display text-2xl">Your phone</h3>
           <p class="prose-body mt-3">
             A key bar for Ctrl, Esc and the arrows, because agents ask questions
-            and builds need a Ctrl‑C. The apps add the camera for the code and
-            native notifications; any browser gets you the same terminal.
+            and builds need a Ctrl‑C. The apps add a QR scanner and end-to-end
+            encrypted connections. You can also use a browser with the hub’s sign-in link.
           </p>
           <p class="prose-body mt-3">
-            <strong class="text-ink">iPhone:</strong> the app is on TestFlight,
-            in beta with the team right now. The public link lands here as soon as
-            Apple waves it through; ask on Discord for a seat before then.
+            <strong class="text-ink">iPhone and iPad:</strong> join the public
+            TestFlight beta using the link below. TestFlight handles app updates.
           </p>
           <div class="mt-5 flex flex-wrap gap-2">
             <a href={apk} class="btn-coral px-5 py-2.5 text-[14px]">Android APK</a>
             <a href="https://offdesk.dev/apk/universal" class="btn-sky px-5 py-2.5 text-[14px]">universal build</a>
-            <a href="https://discord.gg/aFUu6VMzc" class="btn-sky px-5 py-2.5 text-[14px]">iPhone beta on Discord</a>
+            <a href={ios} class="btn-sky px-5 py-2.5 text-[14px]">iPhone · TestFlight</a>
           </div>
         </div>
         <div class="card min-w-0">
@@ -475,7 +496,7 @@ const rows = [
   <section class="mx-auto max-w-6xl px-6 py-20 md:py-28">
     <div class="relative max-w-3xl">
       <div aria-hidden="true" class="absolute -top-10 right-0 h-20 w-20 rounded-full border-[12px] border-coral/70 md:-right-24"></div>
-      <h2 class="display text-4xl md:text-6xl">Go on. Close the laptop.</h2>
+      <h2 class="display text-4xl md:text-6xl">Go on. Leave the desk.</h2>
       <p class="prose-lead mt-6 max-w-xl">
         The session keeps running at home. Your phone opens the same terminal,
         mid-scroll.
@@ -487,7 +508,7 @@ const rows = [
       <div class="mt-8 flex flex-wrap gap-3">
         <a href={repo} class="btn-coral"><Icon name="github" />GitHub</a>
         <a href="https://discord.gg/aFUu6VMzc" class="btn-sky"><Icon name="discord" />Discord</a>
-        <a href="#phone" class="btn-sky">iPhone app</a>
+        <a href={ios} class="btn-sky">iPhone app</a>
         <a href={apk} class="btn-sky">Android app</a>
       </div>
     </div>

@@ -2,8 +2,9 @@ import { memo } from "react";
 import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile, detectOS } from "@/lib/platform";
 import { WindowControls } from "./WindowControls";
+import { Settings } from "lucide-react";
 
-function AppTitleBarComponent({ isMobile }: { isMobile: boolean }) {
+function AppTitleBarComponent({ isMobile, onOpenSettings }: { isMobile: boolean; onOpenSettings?: () => void }) {
   // The bar only hosts desktop window chrome (drag region + min/max/close).
   // The Android/iOS shells have no window to manage, so render nothing there.
   if (!isTauri() || isTauriMobile()) return null;
@@ -11,6 +12,7 @@ function AppTitleBarComponent({ isMobile }: { isMobile: boolean }) {
 
   return (
     <div
+      data-testid="app-title-bar"
       data-tauri-drag-region
       style={{
         display: "flex",
@@ -28,6 +30,12 @@ function AppTitleBarComponent({ isMobile }: { isMobile: boolean }) {
         <div data-tauri-drag-region style={{ width: 78, flexShrink: 0 }} />
       )}
       <div data-tauri-drag-region style={{ flex: 1 }} />
+      {onOpenSettings && (
+        <button type="button" aria-label="Settings" title="Settings" onClick={onOpenSettings}
+          style={{ border: "none", background: "transparent", color: colors.fg2, padding: "0 12px", cursor: "pointer" }}>
+          <Settings size={15} />
+        </button>
+      )}
       <WindowControls position="right" />
     </div>
   );

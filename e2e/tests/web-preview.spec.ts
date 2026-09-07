@@ -113,3 +113,36 @@ test('web preview: browser launch, isolated native handoff, Vite and Next hot up
   const all = await (await page.request.get('/api/web-previews', { headers })).json();
   for (const preview of all.previews) await page.request.delete('/api/web-previews/' + preview.id, { headers });
 });
+
+test('web preview: compact mobile menu opens and revokes a preview', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { openApp } = await import('./helpers');
+  await openApp(page);
+  await resetMachineState(page);
+  await takeControlFromHeader(page);
+  const terminal = await createTerminalViaApi(page);
+  await expandTerminalById(page, terminal);
+  await page.getByTestId('mobile-title-bar').click();
+  await page.getByTestId('mobile-host-button').click();
+  await page.getByRole('button', { name: 'Open web preview', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Open web preview' });
+  await expect(dialog).toBeVisible();
+  await page.getByLabel('Local address').fill('http://localhost:5127/');
+  // A blocked popup must leave a usable launcher, also in the compact shell.
+  await page.evaluate(() => { window.open = () => null; });
+  await page.getByRole('button', { name: 'Open in browser' }).click();
+  await expect(page.getByRole('link', { name: 'open preview here' })).toBeVisible();
+  await page.getByRole('button', { name: 'Done', exact: true }).click();
+  const headers = await getAuthHeaders(page);
+  const created = await (await page.request.post(`/api/machines/e2e-node/web-previews`, {
+    headers, data: { port: 5127, target: '/', terminal_id: terminal },
+  })).json();
+  await page.getByTestId('mobile-title-bar').click();
+  await page.getByTestId('mobile-host-button').click();
+  await page.getByRole('button', { name: 'Open web preview', exact: true }).click();
+  await expect(page.getByText('Port 5127', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Close preview', exact: true }).click();
+  await expect(page.getByText('Port 5127', { exact: true })).toHaveCount(0);
+  const remaining = await (await page.request.get('/api/web-previews', { headers })).json();
+  expect(remaining.previews.some((p: { id: string }) => p.id === created.preview.id)).toBe(false);
+});

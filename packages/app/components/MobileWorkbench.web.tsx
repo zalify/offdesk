@@ -1,3 +1,4 @@
+import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
 // Mobile workbench shell (P1). Rendered when the viewport is below 768px.
 // Permanent chrome is exactly two elements: the session title bar on top and
 // the extended key bar at the bottom (the key bar renders inside
@@ -25,6 +26,7 @@ import {
   ChevronRight,
   CircuitBoard,
   Eye,
+  ExternalLink,
   FolderTree,
   Keyboard as KeyboardIcon,
   Lock,
@@ -83,6 +85,7 @@ interface MobileWorkbenchProps {
   onEngageViewOnly: (machineId: string) => void;
   onDisengageViewOnly: () => void;
   onOpenSettings: () => void;
+  onOpenWebPreview: () => void;
   // The inline TerminalWorkspace (null while the machine has no terminals).
   children: React.ReactNode;
 }
@@ -116,6 +119,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     onEngageViewOnly,
     onDisengageViewOnly,
     onOpenSettings,
+    onOpenWebPreview,
     children,
   } = props;
 
@@ -465,7 +469,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               </>
             ) : deviceId !== null && controlLeases[activeMachine.id] === deviceId ? (
               <>
-                <KeyboardIcon size={13} /> Keyboard
+                <KeyboardIcon size={13} /> In control
               </>
             ) : (
               <>
@@ -535,6 +539,15 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       </div>
 
       {/* Terminal area (edge swipes switch terminals in strip order) */}
+      <MobileTerminalAttention terminals={terminals} machines={machines}
+        activeTerminalId={activeTerminalId}
+        groupLabels={new Map(chips.map(({ terminal, group }) => [terminal.id, group.label]))}
+        onPick={(id) => {
+          const terminal = terminals.find(t => t.id === id);
+          if (!terminal) return;
+          onSelectMachine(terminal.machine_id);
+          onPickTerminal(id);
+        }} />
       <div
         ref={terminalAreaRef}
         data-testid="mobile-terminal-area"
@@ -582,9 +595,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               )}
             </div>
           </div>
-        ) : (
-          children
-        )}
+        ) : children}
       </div>
 
       {/* Session switcher sheet */}
@@ -708,6 +719,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                         }}
                       >
                         {displayTerminalTitle(terminal)}
+                        {terminal.reachable && terminal.attention === "confirmation" && (
+                          <span style={{ display: "block", fontFamily: "inherit", color: colors.accent, fontSize: 11 }}>Confirmation requested</span>
+                        )}
                       </span>
                       <span
                         style={{
@@ -920,6 +934,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             label="Reconnect"
             onClick={() => window.location.reload()}
           />
+          {activeTerminalId && <MenuRow
+            icon={<ExternalLink size={17} />}
+            label="Open web preview"
+            onClick={() => {
+              setHostSheetOpen(false);
+              onOpenWebPreview();
+            }}
+          />}
           <MenuRow
             icon={<SettingsIcon size={17} />}
             label="Settings"

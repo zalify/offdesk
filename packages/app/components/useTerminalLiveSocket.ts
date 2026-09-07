@@ -1,3 +1,4 @@
+import { openSocket } from "@/lib/secureTransport";
 import { useEffect, type RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 
@@ -7,6 +8,8 @@ import { createTerminalReconnectController } from "@/lib/terminalReconnect";
 
 interface UseTerminalLiveSocketOptions {
   termRef: RefObject<Terminal | null>;
+  onControlMessage?: (text: string) => void;
+  onSocketClose?: () => void;
   wsRef: RefObject<WebSocket | null>;
   wsUrl?: string;
   terminalId?: string;
@@ -42,13 +45,15 @@ export function useTerminalLiveSocket({
   sessionGeneration,
   setSessionGeneration,
   onReconnectingChange,
+  onControlMessage,
+  onSocketClose,
 }: UseTerminalLiveSocketOptions) {
   useEffect(() => {
     const term = termRef.current;
     if (!term || !wsUrl) return;
     let disposed = false;
 
-    const ws = new WebSocket(wsUrl);
+    const ws = openSocket(wsUrl);
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
@@ -164,6 +169,7 @@ export function useTerminalLiveSocket({
 
     ws.onmessage = (event) => {
       if (typeof event.data === "string") {
+        onControlMessage?.(event.data);
         compression.handleText(event.data);
         return;
       }
@@ -219,6 +225,7 @@ export function useTerminalLiveSocket({
     };
 
     ws.onclose = () => {
+      onSocketClose?.();
       if (disposed) return;
       onReconnectingChange?.(true);
       reconnectController.scheduleReconnect();
@@ -226,6 +233,7 @@ export function useTerminalLiveSocket({
 
     return () => {
       disposed = true;
+      onSocketClose?.();
       reconnectController.cancelReconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
@@ -244,6 +252,8 @@ export function useTerminalLiveSocket({
     terminalId,
     echoProbeSentAtRef,
     onReconnectingChange,
+    onControlMessage,
+    onSocketClose,
     wsRef,
     wsUrl,
   ]);

@@ -117,13 +117,13 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function setupShellTerminal(page: Page): Promise<string> {
-  const terminalId = await createTerminalViaApi(page);
+  const terminalId = await createTerminalViaApi(page, { cwd: "/tmp", startupCommand: "env BASH_SILENCE_DEPRECATION_WARNING=1 bash --noprofile --norc" });
   await expandTerminalById(page, terminalId);
   await expect(getImmersiveTerminal(page)).toBeVisible();
   // Wait for the bash prompt to render.
   await expect
     .poll(() => readTerminalBuffer(page, terminalId), { timeout: 15_000 })
-    .toMatch(/#\s*$/);
+    .toMatch(/bash-\d+\.\d+[#$]\s*$/);
   await focusTerminal(page, terminalId);
   await clearWsInputLog(page);
   return terminalId;

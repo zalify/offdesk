@@ -18,7 +18,10 @@ import fs from "node:fs";
 import path from "node:path";
 
 const distDir = process.argv[2];
-const buildId = process.argv[3] || String(Math.floor(Date.now() / 1000));
+// Desktop releases need the same cache invalidation as the standalone Hub.
+const buildId = process.argv[3] === "--desktop"
+  ? `desktop-v${JSON.parse(fs.readFileSync(new URL("../packages/desktop/src-tauri/tauri.conf.json", import.meta.url), "utf8")).version}`
+  : process.argv[3] || String(Math.floor(Date.now() / 1000));
 if (!distDir) {
   console.error("usage: node scripts/stamp-build.mjs <dist-dir> [build-id]");
   process.exit(1);

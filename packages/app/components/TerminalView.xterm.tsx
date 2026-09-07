@@ -37,6 +37,9 @@ import {
 import { createSelectionAutoCopyController } from "@/lib/selectionAutoCopy";
 import { createTerminalClipboardProvider } from "@/lib/terminalClipboard";
 import { isTauri } from "@/lib/platform";
+import { bulkKeypressText } from "@/lib/terminalBulkKey";
+import { attachAppleTerminalInput } from "@/lib/appleTerminalInput";
+import { readClipboardText } from "@/lib/readClipboardText";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { useDisplayMode } from "@/lib/hooks";
 import { usePrefixKey } from "@/lib/prefixKeyContext";
@@ -47,7 +50,7 @@ import {
 } from "@/lib/terminalInputBatcher";
 import { createWheelDirectionGate } from "@/lib/terminalWheelGate";
 import { activateGpuRenderer } from "@/lib/terminalGpuRenderer";
-import { resolveTerminalFontFamily } from "@/lib/terminalFonts";
+import { readTerminalFontPreferences, subscribeFontPreferences } from "@/lib/fontPreferences";
 
 const TERM_COLS = 120;
 const TERM_ROWS = 36;
@@ -226,7 +229,7 @@ interface XtermCompositionHelper {
 }
 
 type TerminalWithCompositionHelper = Terminal & {
-  _core?: { _compositionHelper?: XtermCompositionHelper };
+  _core?: { _compositionHelper?: XtermCompositionHelper; _keyPressHandled?: boolean; _keyDownHandled?: boolean };
 };
 
 function patchCompositionHelperSendRace(term: Terminal): () => void {
@@ -374,7 +377,24 @@ function patchCompositionHelperSendRace(term: Terminal): () => void {
     }, 0);
   };
 
+  const apple = /Mac|iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel";
+  const core = (term as TerminalWithCompositionHelper)._core;
+  const removeAppleInput = apple ? attachAppleTerminalInput({
+    textarea: helper._textarea,
+    composing: () => helper._isComposing || helper._isSendingComposition,
+    keyHandled: () => !!core?._keyPressHandled || !!core?._keyDownHandled,
+    disabled: () => !!term.options.screenReaderMode,
+    commit: (text) => {
+      if (helper._textareaChangeTimer !== undefined) window.clearTimeout(helper._textareaChangeTimer);
+      helper._textareaChangeTimer = undefined;
+      helper._dataAlreadySent = "";
+      emittedPrefixLength = helper._textarea.value.length;
+      if (text) helper._coreService.triggerDataEvent(text, true);
+    },
+  }) : () => {};
+
   return () => {
+    removeAppleInput();
     helper.compositionstart = originalCompositionStart;
     helper._finalizeComposition = originalFinalize;
     helper._handleAnyTextareaChanges = originalHandleAnyTextareaChanges;
@@ -484,6 +504,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const fitRef = useRef<FitAddon | null>(null);
     const isControllerRef = useRef(isController ?? true);
     const canTypeRef = useRef(canType ?? isController ?? true);
+
     const canResizeTerminalRef = useRef(canResizeTerminal ?? false);
     const measureRafRef = useRef<number | null>(null);
     const recentClipboardImagePasteRef =
@@ -602,30 +623,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       }
     }, []);
 
-    const clipboardRead = useCallback(async (): Promise<string> => {
-      if (isTauri()) {
-        const internals = (window as unknown as {
-          __TAURI_INTERNALS__?: {
-            invoke: <T = unknown>(
-              cmd: string,
-              args?: Record<string, unknown>,
-            ) => Promise<T>;
-          };
-        }).__TAURI_INTERNALS__;
-        if (internals?.invoke) {
-          try {
-            const text = await internals.invoke<string>(
-              "plugin:clipboard-manager|read_text",
-            );
-            return typeof text === "string" ? text : "";
-          } catch (err) {
-            // eslint-disable-next-line no-console
-            console.warn("[offdesk] tauri clipboard read failed", err);
-          }
-        }
-      }
-      return navigator.clipboard.readText();
-    }, []);
+    const clipboardRead = readClipboardText;
 
     // Forward a picked file (mobile attach button, drag-drop, etc.) over
     // the live WS using the same `image_paste` protocol that clipboard
@@ -634,11 +632,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const sendImageFile = useCallback(
       async (file: Blob & { name?: string }): Promise<void> => {
         if (!canTypeRef.current) {
-          throw new Error("Unlock view only to attach an image.");
+          throw new Error("Unlock view only to attach a file.");
         }
         if (file.size > MAX_IMAGE_PASTE_BYTES) {
           const mb = Math.round(MAX_IMAGE_PASTE_BYTES / (1024 * 1024));
-          throw new Error(`Image too large (max ${mb} MB).`);
+          throw new Error(`File too large (max ${mb} MB).`);
         }
         // Mobile browsers commonly close the WebSocket while a file picker
         // sits in the foreground. Wait for the reconnect to land before
@@ -710,6 +708,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     useImperativeHandle(
       ref,
       () => ({
+        pasteText(text: string) {
+          if (!canTypeRef.current || !isControllerRef.current) throw new Error("Take control before pasting.");
+          if (!termRef.current || wsRef.current?.readyState !== WebSocket.OPEN) throw new Error("Reconnect to the terminal before pasting.");
+          termRef.current.paste(text);
+        },
         sendInput(data: string) {
           // Route through the same batcher as onData input so key-bar bytes
           // stay ordered with keyboard bytes. The ref is only null before
@@ -769,10 +772,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const container = containerRef.current;
       if (!container) return;
 
-      const userFont = localStorage.getItem("offdesk:terminal-font-family");
-      const userFontSize = localStorage.getItem("offdesk:terminal-font-size");
-      const fontFamily = resolveTerminalFontFamily(userFont);
-      const fontSize = userFontSize ? Math.max(10, Math.min(24, parseInt(userFontSize, 10) || 14)) : 14;
+      const { fontFamily, fontSize } = readTerminalFontPreferences();
 
       // The link currently under the pointer, kept by the hover/leave
       // callbacks below. Android WebViews do not synthesize the compat
@@ -964,6 +964,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         // keeps it for hardware keyboards.
         const { prefixKey: pk, isCompact: compact } = prefixKeyRef.current;
         if (!compact && pk.isPrefixKeyEvent(event)) {
+          return false;
+        }
+
+        const bulk = bulkKeypressText(event);
+        if (bulk !== null) {
+          event.preventDefault();
+          // A dictation service can put an entire paragraph in `key`.
+          // xterm's legacy handler reads only charCode and loses the tail.
+          term.paste(bulk);
           return false;
         }
 
@@ -1319,6 +1328,39 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Terminal created once on mount
     }, []);
+
+    // Keep the live terminal and its buffer/socket while preferences change.
+    useEffect(() => {
+      const term = termRef.current;
+      if (!term) return;
+      let disposed = false;
+      let revision = 0;
+      let applied = readTerminalFontPreferences();
+      const update = async (allowFit: boolean) => {
+        const current = ++revision;
+        const { fontFamily, fontSize } = readTerminalFontPreferences();
+        const changed = fontFamily !== applied.fontFamily || fontSize !== applied.fontSize;
+        // Load before measuring. Otherwise a newly downloaded webfont retains
+        // the fallback font's cell metrics and clips/overlaps terminal output.
+        try { await document.fonts?.load(`${fontSize}px ${fontFamily}`); } catch { /* use fallback */ }
+        if (disposed || current !== revision || termRef.current !== term) return;
+        // An equivalent spelling forces xterm's public option-change path to
+        // remeasure even when the configured family was already set at mount.
+        term.options.fontFamily = `${fontFamily} `;
+        term.options.fontFamily = fontFamily;
+        term.options.fontSize = fontSize;
+        term.clearTextureAtlas();
+        term.refresh(0, term.rows - 1);
+        scheduleMeasure();
+        applied = { fontFamily, fontSize };
+        // Opening/reconnecting a view must preserve the remote PTY size.
+        // Only an actual preference change authorizes a new fit here.
+        if (allowFit && changed) fitToContainer({ skipIfUnchanged: true });
+      };
+      void update(false);
+      const unsubscribe = subscribeFontPreferences(() => { void update(true); });
+      return () => { disposed = true; unsubscribe(); };
+    }, [fitToContainer, scheduleMeasure]);
 
     useTerminalLiveSocket({
       termRef,

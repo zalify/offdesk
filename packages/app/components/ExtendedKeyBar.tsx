@@ -1,585 +1,197 @@
-import { useEffect, useRef, useState } from "react";
-import { colors, colorAlpha } from "@/lib/colors";
+import { readClipboardText } from "@/lib/readClipboardText";
+import { AttachmentPicker, formatAttachmentSize } from "./AttachmentPicker";
+import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, LoaderCircle } from "lucide-react";
+import "./ExtendedKeyBar.css";
 
-// Two-row mobile key bar (SPEC-PHASE3 §2, design doc §4).
-// Row 1 (pinned, no scroll): ABC keyboard toggle · attach · select-mode ·
-//   flex spacer · Esc · ⇧Tab · ↑ · ↓ · ⏎ · ^C (accent).
-// Row 2 (scrollable): Ctrl (latch) · Space · Tab · / · @ · ← · → · ~ · | · - · _.
-// Every key sends its bytes immediately through the same per-keystroke path
-// as the soft keyboard — no buffering anywhere.
-
-interface ExtendedKeyBarProps {
+export interface ExtendedKeyBarProps {
   onKey: (data: string) => void;
   onToggleKeyboard: () => void;
+  onPasteText?: (text: string) => void;
   onAttachFile?: (file: File) => void | Promise<void>;
-  // Select-mode plumbing — when both callbacks are provided the bar will
-  // render a "Select" toggle in the fixed cluster, and morph into a slim
-  // [Done] · hint · [Copy] strip while selectMode is true.
   onEnterSelectMode?: () => void;
   onExitSelectMode?: () => void;
   onCopySelection?: () => Promise<string | null> | string | null;
   selectMode?: boolean;
   keyboardVisible: boolean;
   isController: boolean;
-  // Ctrl latch. Owned by the parent (TerminalCard) so the same latch also
-  // transforms soft-keyboard input: while armed, the next character key is
-  // sent as its control byte, then the latch disarms. Tapping Ctrl again
-  // disarms without sending.
   ctrlArmed?: boolean;
   onToggleCtrl?: () => void;
 }
 
-// Long-press auto-repeat for the arrow keys: fire once on press, again after
-// the initial delay, then continuously until the touch ends or leaves.
-const REPEAT_INITIAL_DELAY_MS = 350;
-const REPEAT_INTERVAL_MS = 60;
-
-interface KeyDef {
-  label: string;
-  data: string;
-  testid?: string;
-}
-
-// Pinned row keys right of the spacer (arrows come after ⇧Tab).
-const FIXED_PREFIX_KEYS: KeyDef[] = [
-  { label: "Esc", data: "\x1b", testid: "extended-keybar-esc" },
-  { label: "⇧Tab", data: "\x1b[Z", testid: "extended-keybar-shift-tab" },
-];
-
-const UP_KEY: KeyDef = { label: "↑", data: "\x1b[A" };
-const DOWN_KEY: KeyDef = { label: "↓", data: "\x1b[B" };
-
-// Scrollable row, in spec order. Ctrl is rendered separately (latch).
-// Space leads the row: TUI tools (Claude Code multi-select prompts, fzf,
-// pagers) toggle with it, and typing a space otherwise needs the soft
-// keyboard. The pinned row has no room left on 384px cover screens.
-const SCROLLABLE_KEYS: KeyDef[] = [
-  { label: "Space", data: " ", testid: "extended-keybar-space" },
-  { label: "Tab", data: "\t" },
-  { label: "/", data: "/" },
-  { label: "@", data: "@" },
-  { label: "←", data: "\x1b[D" },
-  { label: "→", data: "\x1b[C" },
-  { label: "~", data: "~" },
-  { label: "|", data: "|" },
-  { label: "-", data: "-" },
-  { label: "_", data: "_" },
-];
-
-const REPEATABLE_LABELS = new Set(["↑", "↓", "←", "→"]);
-
-const BAR_HEIGHT = 40;
-const BUTTON_HEIGHT = 30;
-const UTILITY_SIZE = 40;
-
-export function ExtendedKeyBar({
-  onKey,
-  onToggleKeyboard,
-  onAttachFile,
-  onEnterSelectMode,
-  onExitSelectMode,
-  onCopySelection,
-  selectMode = false,
-  keyboardVisible,
-  isController,
-  ctrlArmed = false,
-  onToggleCtrl,
-}: ExtendedKeyBarProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
+export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachFile,
+  onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
+  ctrlArmed = false, onToggleCtrl }: ExtendedKeyBarProps) {
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const [pasting, setPasting] = useState(false);
+  const pastePending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const paste = async () => {
+    if (!isController || !onPasteText || pastePending.current) return;
+    pastePending.current = true; setPasting(true); setPasteError(null);
+    try {
+      let text: string;
+      try { text = await readClipboardText(); }
+      catch { throw new Error("Could not read the clipboard. Use your keyboard’s Paste action or Cmd/Ctrl+V."); }
+      if (!mounted.current) return;
+      if (!text) throw new Error("The clipboard has no text.");
+      onPasteText(text);
+    } catch (error) {
+      if (mounted.current) setPasteError(error instanceof Error ? error.message : "Could not paste. Try again.");
+    } finally {
+      pastePending.current = false;
+      if (mounted.current) setPasting(false);
+    }
+  };
+  const bar = useRef<HTMLDivElement>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const track = useRef<HTMLDivElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const documentInput = useRef<HTMLInputElement>(null);
+  const [keyWidth, setKeyWidth] = useState(48);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const [choosingAttachment, setChoosingAttachment] = useState(false);
+  const [attachmentStatus, setAttachmentStatus] = useState<{ message: string; submitted: boolean } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [copying, setCopying] = useState(false);
-
-  const handleAttachClick = () => {
-    if (!isController || uploading) return;
-    fileInputRef.current?.click();
+  const selectionAvailable = !!(onEnterSelectMode && onExitSelectMode && onCopySelection);
+  const selection = selectMode && selectionAvailable;
+  const updateEdges = () => {
+    const el = scroller.current;
+    if (el) setEdges({ left: el.scrollLeft > 1, right: el.scrollWidth - el.clientWidth - el.scrollLeft > 1 });
   };
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    // Reset value so the same file can be picked twice in a row.
-    e.target.value = "";
-    if (!file || !onAttachFile) return;
+  useEffect(() => {
+    const update = () => {
+      if (bar.current) { const width = bar.current.clientWidth - 8; setKeyWidth(width / Math.max(7, Math.floor(width / 52))); }
+      updateEdges();
+    };
+    const observer = new ResizeObserver(update);
+    [bar.current, scroller.current, track.current].forEach(el => { if (el) observer.observe(el); });
+    update();
+    return () => observer.disconnect();
+  }, [selection]);
+  useEffect(() => {
+    if (!attachmentStatus?.submitted) return;
+    const timer = setTimeout(() => setAttachmentStatus(null), 5000);
+    return () => clearTimeout(timer);
+  }, [attachmentStatus]);
+  const attach = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]; event.target.value = "";
+    if (!file || !onAttachFile || !isController || uploading) return;
     setUploading(true);
-    try {
-      await onAttachFile(file);
-    } finally {
-      setUploading(false);
-    }
+    const description = `${file.name} (${formatAttachmentSize(file.size)})`;
+    setAttachmentStatus({ message: `Sending ${description}…`, submitted: false });
+    try { await onAttachFile(file); setAttachmentStatus({ message: `Submitted ${description}. Check the terminal for its path.`, submitted: true }); }
+    catch (error) { setAttachmentStatus({ message: error instanceof Error ? error.message : "Could not send the file. Try again.", submitted: false }); }
+    finally { setUploading(false); }
   };
-
-  const selectModeAvailable =
-    typeof onEnterSelectMode === "function" &&
-    typeof onExitSelectMode === "function" &&
-    typeof onCopySelection === "function";
-
-  const handleCopyClick = async () => {
-    if (!onCopySelection || copying) return;
-    setCopying(true);
-    try {
-      await onCopySelection();
-    } finally {
-      setCopying(false);
-    }
-  };
-
-  // Select mode collapses the bar to [Done] · hint · [Copy]. Most keys
-  // are useless during selection so we hide the noise.
-  if (selectMode && selectModeAvailable) {
-    return (
-      <div
-        data-testid="extended-keybar-select-mode"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          borderTop: `1px solid ${colors.border}`,
-          background: colorAlpha.accentSoft,
-          height: BAR_HEIGHT,
-          flexShrink: 0,
-          touchAction: 'none',
-        }}
-      >
-        <button
-          onClick={onExitSelectMode}
-          disabled={copying}
-          data-testid="extended-keybar-select-done"
-          style={{
-            height: BAR_HEIGHT,
-            padding: '0 14px',
-            display: 'flex',
-            alignItems: 'center',
-            background: 'transparent',
-            border: 'none',
-            borderRight: `1px solid ${colorAlpha.accentLine}`,
-            color: colors.accent,
-            fontSize: 13,
-            fontWeight: 600,
-            cursor: copying ? 'wait' : 'pointer',
-            flexShrink: 0,
-          }}
-        >
-          Done
-        </button>
-        <div style={{
-          flex: 1,
-          minWidth: 0,
-          padding: '0 12px',
-          fontSize: 11,
-          color: colors.accent,
-          textAlign: 'center',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          opacity: 0.85,
-        }}>
-          Drag on the terminal to select text
-        </div>
-        <button
-          onClick={handleCopyClick}
-          disabled={copying}
-          data-testid="extended-keybar-copy"
-          style={{
-            height: BAR_HEIGHT,
-            padding: '0 18px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            background: colors.accent,
-            border: 'none',
-            color: colors.onAccent,
-            fontSize: 13,
-            fontWeight: 700,
-            cursor: copying ? 'wait' : 'pointer',
-            flexShrink: 0,
-            opacity: copying ? 0.6 : 1,
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" />
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-          </svg>
-          {copying ? 'Copying…' : 'Copy'}
-        </button>
+  const key = (label: string, data: string, id?: string, icon?: ReactNode) => <KeyButton key={data} label={label} testid={id}
+    disabled={!isController} repeat={!!icon} onPress={() => onKey(data)}>{icon}</KeyButton>;
+  return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar" style={{ "--key-width": `${keyWidth}px` } as CSSProperties}>
+    {selection ? <div className="offdesk-selection-bar" data-testid="extended-keybar-select-mode">
+      <button onClick={onExitSelectMode} disabled={copying} data-testid="extended-keybar-select-done">Done</button>
+      <span>Drag on the terminal to select text</span>
+      <button disabled={copying} data-testid="extended-keybar-copy" onClick={async () => {
+        setCopying(true); try { await onCopySelection?.(); } finally { setCopying(false); }
+      }}><Copy size={18} aria-hidden />{copying ? "Copying…" : "Copy"}</button>
+    </div> : <>
+      {pasteError && <div role="alert" className="offdesk-attachment-status">
+        <span>{pasteError}</span><button aria-label="Dismiss paste error" onClick={() => setPasteError(null)}>Dismiss</button>
+      </div>}
+      {attachmentStatus && <div role="status" data-testid="attachment-status" className="offdesk-attachment-status">
+        <span>{attachmentStatus.message}</span><button aria-label="Dismiss attachment status" onClick={() => setAttachmentStatus(null)}>Dismiss</button>
+      </div>}
+      <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
+        <KeyButton label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")} />
+        {key("Esc", "\x1b", "extended-keybar-esc")}{key("Tab", "\t", "extended-keybar-tab")}{key("/", "/", "extended-keybar-slash")}
+        <span className="offdesk-keybar-spacer" />
+        {key("Arrow up", "\x1b[A", "extended-keybar-up", <ArrowUp size={18} aria-hidden />)}
+        {key("Enter", "\r", "extended-keybar-enter")}
       </div>
-    );
-  }
+      <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
+        <KeyButton label={keyboardVisible ? "Hide keyboard" : "Show keyboard"} disabled={!isController} pressed={keyboardVisible}
+          testid="extended-keybar-keyboard" onPress={onToggleKeyboard}><Keyboard size={18} aria-hidden /></KeyButton>
+        <div className="offdesk-keybar-scroll-wrap" data-left={edges.left} data-right={edges.right}>
+          <div ref={scroller} className="offdesk-keybar-scroll" onScroll={updateEdges} data-testid="keybar-scroll" role="group" aria-label="Input tools and symbols, scroll horizontally">
+            <div ref={track} className="offdesk-keybar-track">
+              {onPasteText && <KeyButton label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}><ClipboardPaste size={18} aria-hidden /></KeyButton>}
+              {onAttachFile && <KeyButton label={uploading ? "Uploading attachment" : "Attach photo or file"} testid="extended-keybar-attach"
+                disabled={!isController || uploading} onPress={() => setChoosingAttachment(true)}>
+                {uploading ? <LoaderCircle size={18} aria-hidden className="offdesk-keybar-spinner" data-testid="extended-keybar-attach-spinner" /> : <Paperclip size={18} aria-hidden />}
+              </KeyButton>}
+              {selectionAvailable && <KeyButton label="Select text to copy" testid="extended-keybar-select-toggle" disabled={!isController} onPress={() => onEnterSelectMode?.()}><SquareDashed size={18} aria-hidden /></KeyButton>}
+              {onToggleCtrl && <KeyButton label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl} />}
+              {["Space", "@", "~", "|", "-", "_"].map(label => key(label, label === "Space" ? " " : label, label === "Space" ? "extended-keybar-space" : undefined))}
+            </div>
+          </div>
+        </div>
+        {key("Arrow left", "\x1b[D", "extended-keybar-left", <ArrowLeft size={18} aria-hidden />)}
+        {key("Arrow down", "\x1b[B", "extended-keybar-down", <ArrowDown size={18} aria-hidden />)}
+        {key("Arrow right", "\x1b[C", "extended-keybar-right", <ArrowRight size={18} aria-hidden />)}
+      </div>
+    </>}
+    <input ref={fileInput} type="file" accept="image/*" hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
+    <input ref={documentInput} type="file" hidden onChange={attach} data-testid="extended-keybar-document-input" disabled={!onAttachFile} />
+    {choosingAttachment && <AttachmentPicker onPhotos={() => fileInput.current?.click()} onFiles={() => documentInput.current?.click()} onClose={() => setChoosingAttachment(false)} />}
+  </div>;
+}
 
-  return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      borderTop: `1px solid ${colors.border}`,
-      background: colors.backgroundSecondary,
-      flexShrink: 0,
-      touchAction: 'none',
+function KeyButton({ label, children, onPress, testid, disabled = false, repeat = false, accent = false, pressed }: {
+  label: string; children?: ReactNode; onPress: () => void; testid?: string; disabled?: boolean; repeat?: boolean; accent?: boolean; pressed?: boolean;
+}) {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const delay = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const interval = useRef<ReturnType<typeof setInterval> | null>(null);
+  const press = useRef(onPress); press.current = onPress;
+  const disabledRef = useRef(disabled); disabledRef.current = disabled;
+  const gesture = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const stop = () => { if (delay.current) clearTimeout(delay.current); if (interval.current) clearInterval(interval.current); delay.current = null; interval.current = null; };
+  useEffect(() => {
+    const hidden = () => { if (document.hidden) stop(); };
+    window.addEventListener("blur", stop); document.addEventListener("visibilitychange", hidden);
+    return () => { stop(); window.removeEventListener("blur", stop); document.removeEventListener("visibilitychange", hidden); };
+  }, []);
+  useEffect(() => { if (disabled) stop(); }, [disabled]);
+  useEffect(() => {
+    const button = buttonRef.current;
+    if (!button) return;
+    const touchEnd = (event: TouchEvent) => {
+      const current = gesture.current;
+      if (!current || current.moved || event.touches.length > 0) return;
+      // Cancelling pointerdown/mousedown does not cancel the touchend
+      // default action in mobile WebViews. Consume the tap here so an
+      // already-focused editable cannot reopen a dismissed OS keyboard.
+      // React's touch listeners are passive: use a native non-passive one.
+      event.preventDefault();
+      stop();
+      if (!disabledRef.current && !repeat) press.current();
+      gesture.current = null;
+    };
+    button.addEventListener("touchend", touchEnd, { passive: false });
+    return () => button.removeEventListener("touchend", touchEnd);
+  }, [repeat]);
+  return <button ref={buttonRef} type="button" className="offdesk-terminal-key" disabled={disabled} data-testid={testid} aria-label={label} title={label}
+    aria-pressed={pressed} data-accent={accent} style={{ touchAction: repeat ? "none" : "pan-x" }}
+    onPointerDown={event => {
+      if (event.button !== 0 || disabled) return;
+      gesture.current = { x: event.clientX, y: event.clientY, moved: false };
+      // Cancel focus, not the horizontal scrolling gesture. mousedown is
+      // canceled too because iOS synthesizes its own compatibility events.
+      event.preventDefault();
+      if (repeat) { stop(); press.current(); delay.current = setTimeout(() => { interval.current = setInterval(() => press.current(), 60); }, 350); }
+    }}
+    onMouseDown={event => event.preventDefault()}
+    onPointerMove={event => { const g = gesture.current; if (g && Math.hypot(event.clientX - g.x, event.clientY - g.y) > 8) { g.moved = true; stop(); } }}
+    onPointerUp={stop} onPointerLeave={stop}
+    onPointerCancel={() => { if (gesture.current) gesture.current.moved = true; stop(); }}
+    onContextMenu={event => { if (repeat) event.preventDefault(); }}
+    onClick={event => {
+      // Keyboard / assistive activation has detail=0. Pointer clicks on
+      // repeat keys were already sent on down; swipes never activate keys.
+      if (event.detail === 0 || (!repeat && !gesture.current?.moved)) onPress();
+      gesture.current = null;
     }}>
-      {/* Row 1 — pinned: utility cluster left, Esc/⇧Tab/↑/↓/^C right. */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        height: BAR_HEIGHT,
-        borderBottom: `1px solid ${colors.border}`,
-      }}>
-        {isController && (
-          <button
-            onClick={onToggleKeyboard}
-            style={{
-              width: UTILITY_SIZE,
-              height: BAR_HEIGHT,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: keyboardVisible ? colorAlpha.accentMedium15 : 'transparent',
-              border: 'none',
-              borderRight: `1px solid ${colors.border}`,
-              color: keyboardVisible ? colors.accent : colors.foregroundSecondary,
-              fontSize: 18,
-              cursor: 'pointer',
-              flexShrink: 0,
-            }}
-            title={keyboardVisible ? 'Hide keyboard' : 'Show keyboard'}
-            aria-label={keyboardVisible ? 'Hide keyboard' : 'Show keyboard'}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="2" y="4" width="20" height="16" rx="2" />
-              <line x1="6" y1="8" x2="6.01" y2="8" />
-              <line x1="10" y1="8" x2="10.01" y2="8" />
-              <line x1="14" y1="8" x2="14.01" y2="8" />
-              <line x1="18" y1="8" x2="18.01" y2="8" />
-              <line x1="6" y1="12" x2="6.01" y2="12" />
-              <line x1="10" y1="12" x2="10.01" y2="12" />
-              <line x1="14" y1="12" x2="14.01" y2="12" />
-              <line x1="18" y1="12" x2="18.01" y2="12" />
-              <line x1="8" y1="16" x2="16" y2="16" />
-            </svg>
-          </button>
-        )}
-
-        {onAttachFile && (
-          <>
-            <button
-              onClick={handleAttachClick}
-              disabled={!isController || uploading}
-              style={{
-                width: UTILITY_SIZE,
-                height: BAR_HEIGHT,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                background: uploading ? colorAlpha.accentSoft : 'transparent',
-                border: 'none',
-                borderRight: `1px solid ${colors.border}`,
-                color: uploading
-                  ? colors.accent
-                  : isController
-                    ? colors.foregroundSecondary
-                    : colors.foregroundMuted,
-                cursor: isController && !uploading ? 'pointer' : 'not-allowed',
-                flexShrink: 0,
-              }}
-              title={uploading ? 'Uploading…' : 'Attach image'}
-              aria-label={uploading ? 'Uploading attachment' : 'Attach image'}
-              data-testid="extended-keybar-attach"
-            >
-              {uploading ? (
-                <svg
-                  width="18"
-                  height="18"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2.5"
-                  strokeLinecap="round"
-                  style={{
-                    animation: 'offdeskSpin 800ms linear infinite',
-                    transformOrigin: 'center',
-                  }}
-                  data-testid="extended-keybar-attach-spinner"
-                >
-                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-              )}
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              style={{ display: 'none' }}
-              onChange={handleFileChange}
-              data-testid="extended-keybar-file-input"
-            />
-          </>
-        )}
-
-        {selectModeAvailable && (
-          <button
-            onClick={onEnterSelectMode}
-            disabled={!isController}
-            data-testid="extended-keybar-select-toggle"
-            style={{
-              width: UTILITY_SIZE,
-              height: BAR_HEIGHT,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'transparent',
-              border: 'none',
-              borderRight: `1px solid ${colors.border}`,
-              color: isController ? colors.foregroundSecondary : colors.foregroundMuted,
-              cursor: isController ? 'pointer' : 'not-allowed',
-              flexShrink: 0,
-            }}
-            title="Select text to copy"
-            aria-label="Select text to copy"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 6.5V4a1 1 0 0 1 1-1h2.5" />
-              <path d="M4 17.5V20a1 1 0 0 0 1 1h2.5" />
-              <path d="M16.5 3H19a1 1 0 0 1 1 1v2.5" />
-              <path d="M16.5 21H19a1 1 0 0 0 1-1v-2.5" />
-              <path d="M9 8v8M15 8v8M9 12h6" />
-            </svg>
-          </button>
-        )}
-
-        {/* Spacer pushes the pinned keys to the right edge. */}
-        <div style={{ flex: 1, minWidth: 0 }} />
-
-        {FIXED_PREFIX_KEYS.map((key) => (
-          <KeyButton
-            key={key.label}
-            label={key.label}
-            onPress={() => isController && onKey(key.data)}
-            isController={isController}
-            testid={key.testid}
-          />
-        ))}
-        <KeyButton
-          label={UP_KEY.label}
-          onPress={() => isController && onKey(UP_KEY.data)}
-          isController={isController}
-          repeat
-        />
-        <KeyButton
-          label={DOWN_KEY.label}
-          onPress={() => isController && onKey(DOWN_KEY.data)}
-          isController={isController}
-          repeat
-        />
-
-        {/* Pinned Enter — submit a command (or confirm a TUI prompt)
-            without raising the soft keyboard. */}
-        <KeyButton
-          label="⏎"
-          onPress={() => isController && onKey('\r')}
-          isController={isController}
-          testid="extended-keybar-enter"
-        />
-
-        {/* Pinned ^C — highest-frequency action, accent-colored. */}
-        <KeyButton
-          label="^C"
-          onPress={() => isController && onKey('\x03')}
-          isController={isController}
-          pinned
-          testid="extended-keybar-ctrl-c"
-        />
-      </div>
-
-      {/* Row 2 — scrollable: Ctrl latch, then the symbol/arrow keys. */}
-      <div style={{
-        position: 'relative',
-        height: BAR_HEIGHT,
-      }}>
-        <div style={{
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          overflowX: 'auto',
-          WebkitOverflowScrolling: 'touch',
-          scrollbarWidth: 'none',
-          gap: 2,
-          padding: '0 6px',
-        }}>
-          {onToggleCtrl && (
-            <button
-              // Activate on pointerup with a canceled pointerdown: a plain
-              // click would focus the button, dismiss the soft keyboard and
-              // break the arm → type flow the latch exists for. iOS moves
-              // focus on the mousedown it synthesises after the touch, and
-              // does not honour the pointerdown cancel for that — so that
-              // one is cancelled too.
-              onPointerDown={(event) => event.preventDefault()}
-              onMouseDown={(event) => event.preventDefault()}
-              onPointerUp={(event) => {
-                event.preventDefault();
-                if (isController) onToggleCtrl();
-              }}
-              disabled={!isController}
-              data-testid="extended-keybar-ctrl-latch"
-              aria-pressed={ctrlArmed}
-              style={{
-                background: ctrlArmed
-                  ? 'rgb(var(--color-info) / 0.18)'
-                  : colors.surface,
-                border: `1px solid ${
-                  ctrlArmed ? colors.info : colors.border
-                }`,
-                borderRadius: 4,
-                color: !isController
-                  ? colors.foregroundMuted
-                  : ctrlArmed
-                    ? colors.info
-                    : colors.foreground,
-                padding: '4px 10px',
-                fontSize: 12,
-                fontFamily: "'JetBrains Mono', monospace",
-                fontWeight: ctrlArmed ? 700 : 400,
-                cursor: isController ? 'pointer' : 'not-allowed',
-                whiteSpace: 'nowrap',
-                minWidth: 36,
-                height: BUTTON_HEIGHT,
-                marginRight: 6,
-                flexShrink: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                userSelect: 'none',
-                WebkitUserSelect: 'none',
-              }}
-              title={ctrlArmed ? 'Ctrl armed — next key sends as Ctrl+<key>' : 'Arm Ctrl for the next key'}
-              aria-label={ctrlArmed ? 'Disarm Ctrl' : 'Arm Ctrl'}
-            >
-              Ctrl
-            </button>
-          )}
-          {SCROLLABLE_KEYS.map((key) => (
-            <KeyButton
-              key={key.label}
-              label={key.label}
-              onPress={() => isController && onKey(key.data)}
-              isController={isController}
-              testid={key.testid}
-              repeat={REPEATABLE_LABELS.has(key.label)}
-            />
-          ))}
-        </div>
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            width: 18,
-            height: '100%',
-            pointerEvents: 'none',
-            background: `linear-gradient(to right, transparent, ${colors.backgroundSecondary})`,
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-interface KeyButtonProps {
-  label: string;
-  onPress: () => void;
-  isController: boolean;
-  pinned?: boolean;
-  testid?: string;
-  // Arrow keys auto-repeat on long-press: one press fires immediately, then
-  // after REPEAT_INITIAL_DELAY_MS the key repeats every REPEAT_INTERVAL_MS
-  // until the touch ends or slides off the button.
-  repeat?: boolean;
-}
-
-function KeyButton({ label, onPress, isController, pinned, testid, repeat }: KeyButtonProps) {
-  const delayTimerRef = useRef<number | null>(null);
-  const intervalTimerRef = useRef<number | null>(null);
-
-  const stopRepeat = () => {
-    if (delayTimerRef.current !== null) {
-      window.clearTimeout(delayTimerRef.current);
-      delayTimerRef.current = null;
-    }
-    if (intervalTimerRef.current !== null) {
-      window.clearInterval(intervalTimerRef.current);
-      intervalTimerRef.current = null;
-    }
-  };
-
-  useEffect(() => stopRepeat, []);
-
-  const startRepeat = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!isController) return;
-    // Prevent the compatibility click so a tap doesn't double-send, and
-    // keep the button from stealing terminal focus.
-    event.preventDefault();
-    onPress();
-    delayTimerRef.current = window.setTimeout(() => {
-      delayTimerRef.current = null;
-      intervalTimerRef.current = window.setInterval(
-        onPress,
-        REPEAT_INTERVAL_MS,
-      );
-    }, REPEAT_INITIAL_DELAY_MS);
-  };
-
-  // Neither kind of key may take focus from the terminal: the soft
-  // keyboard lives on that focus, and a key that dismissed it would cost a
-  // tap to bring it back. Chrome moves focus on pointerdown, iOS on the
-  // mousedown it synthesises afterwards; both are cancelled.
-  const keepFocus = (event: React.SyntheticEvent) => event.preventDefault();
-  const activationProps = repeat
-    ? {
-        onPointerDown: startRepeat,
-        onMouseDown: keepFocus,
-        onPointerUp: stopRepeat,
-        onPointerLeave: stopRepeat,
-        onPointerCancel: stopRepeat,
-        // Long-pressing a button would otherwise open the browser context
-        // menu and swallow the touch end that stops the repeat.
-        onContextMenu: (event: React.MouseEvent<HTMLButtonElement>) =>
-          event.preventDefault(),
-      }
-    : { onPointerDown: keepFocus, onMouseDown: keepFocus, onClick: onPress };
-
-  return (
-    <button
-      disabled={!isController}
-      data-testid={testid}
-      {...activationProps}
-      style={{
-        background: pinned ? colorAlpha.accentSoft : colors.surface,
-        border: `1px solid ${pinned ? colorAlpha.accentLine : colors.border}`,
-        borderRadius: 4,
-        color: !isController
-          ? colors.foregroundMuted
-          : pinned
-            ? colors.accent
-            : colors.foreground,
-        padding: '4px 10px',
-        fontSize: 12,
-        fontFamily: "'JetBrains Mono', monospace",
-        fontWeight: pinned ? 700 : 400,
-        cursor: isController ? 'pointer' : 'not-allowed',
-        whiteSpace: 'nowrap',
-        minWidth: 36,
-        height: BUTTON_HEIGHT,
-        marginLeft: pinned ? 6 : 0,
-        marginRight: pinned ? 6 : 0,
-        flexShrink: 0,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        userSelect: 'none',
-        WebkitUserSelect: 'none',
-      }}
-    >
-      {label}
-    </button>
-  );
+    {children ?? label}
+  </button>;
 }

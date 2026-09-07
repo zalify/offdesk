@@ -15,9 +15,14 @@ HTTPS port is accepted (`preview-example.net:8443`). This variable is not a URL.
 
 Keep the Hub itself at its existing `OFFDESK_BASE_URL`. Its hostname cannot be
 inside the preview suffix. When previews are enabled the Hub accepts its exact
-configured control authority and active preview hostnames; health probes and
-nodes using an alternate internal hostname must retain the configured control
-Host or use the configured Hub URL. When the variable is absent, existing Hub
+configured control authority, local addresses on the actual Hub listener, and
+active preview hostnames. LAN addresses are checked against the current network
+interfaces, so enabling previews does not disable local connections. Additional
+control origins (for example an mDNS name or another reverse proxy) can be listed
+in `OFFDESK_PREVIEW_CONTROL_ORIGINS`, comma-separated, such as
+`http://mac-mini.local:4317,https://hub.example.net`. `OFFDESK_SECURE_BASE_URL` is
+also accepted as a control origin. Aliases inside the preview domain are rejected.
+Keep Host intact for health probes and node connections as well. When the variable is absent, existing Hub
 routing remains unchanged and the preview UI explains that it is not configured.
 
 Your reverse proxy must preserve the browser's Host, support WebSocket Upgrade,
@@ -38,8 +43,9 @@ write parent-domain cookies. Do not treat a preview as an application sandbox.
 
 - Click an HTTP `localhost`, `127.0.0.1` or `[::1]` link in a terminal. The terminal
   supplies the correct machine. `0.0.0.0` links are mapped to IPv4 loopback.
-- Or open the terminal's context menu (right click / long press), choose **Open
-  web preview**, and enter the local URL. The dialog also lists this machine's
+- On a phone, tap the session title, then the machine name to open the host
+  menu, choose **Open web preview**, and enter the local URL. On a desktop or
+  wide screen, use the terminal's context menu (right click / long press). The dialog also lists this machine's
   active previews and has **Close preview** buttons.
 - The Web client opens a trusted Hub launcher. Android/Desktop use the native
   browser opener and a one-use launch code; the external browser never receives
@@ -50,6 +56,22 @@ write parent-domain cookies. Do not treat a preview as an application sandbox.
   authenticate another browser, create a new preview. Closing a preview revokes
   its access and active streams. Hub restarts and machine reconnections invalidate
   leases. Previously downloaded/cached content cannot be recalled.
+
+## Encrypted App connections
+
+Creating, listing and revoking previews use the same authenticated API as the
+rest of the App, including the current end-to-end encrypted connection. The
+external browser receives only the short-lived preview launch URL, never the
+Hub login token or device key. Switching between LAN and remote Hub routes does
+not change a preview's HTTPS hostname.
+
+The **website preview itself is HTTPS, not the terminal's end-to-end encrypted
+transport**. The Hub and a TLS-terminating reverse proxy can process page content.
+A separate preview ingress must route to the regular Hub listener (typically
+4317); the encrypted-only listener (typically 4318) remains restricted to
+`/ws/secure`. Do not broaden the managed Cloud tunnel's encrypted-only route to
+serve previews. This open-source feature does not configure or deploy an
+Offdesk Cloud preview service.
 
 ## Development-server compatibility
 

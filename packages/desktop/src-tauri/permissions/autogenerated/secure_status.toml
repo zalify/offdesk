@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-status"
+description = "Enables the secure_status command without any pre-configured scope."
+commands.allow = ["secure_status"]
+
+[[permission]]
+identifier = "deny-secure-status"
+description = "Denies the secure_status command without any pre-configured scope."
+commands.deny = ["secure_status"]

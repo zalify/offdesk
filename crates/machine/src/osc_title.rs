@@ -146,7 +146,7 @@ fn push_title(titles: &mut Vec<String>, bytes: &[u8]) {
     }
 }
 
-fn sanitize_title(bytes: &[u8]) -> String {
+pub(crate) fn sanitize_title(bytes: &[u8]) -> String {
     let mut title = String::new();
     for character in String::from_utf8_lossy(bytes)
         .chars()

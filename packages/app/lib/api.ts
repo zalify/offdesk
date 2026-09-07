@@ -1,3 +1,4 @@
+import { isSecureConnection, secureFetch } from "./secureTransport";
 import type {
   User,
   BrowserStateSnapshot,
@@ -16,6 +17,12 @@ import { generateDeviceId } from "./deviceIdShared";
 let _baseUrl = "";
 let _token: string | null = null;
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, message: string) {
+    super(`${status}: ${message}`);
+  }
+}
+
 export function configure(baseUrl: string, token: string | null) {
   _baseUrl = baseUrl;
   _token = token;
@@ -25,6 +32,7 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -32,15 +40,18 @@ async function request<T>(
   if (_token) headers["Authorization"] = `Bearer ${_token}`;
 
   const url = `${_baseUrl}${path}`;
-  const res = await fetch(url, {
+  const res = isSecureConnection()
+    ? await secureFetch(method, path, body ? JSON.stringify(body) : undefined, signal)
+    : await fetch(url, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal,
   });
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`${res.status}: ${text}`);
+    throw new ApiError(res.status, text);
   }
 
   const text = await res.text();
@@ -49,7 +60,7 @@ async function request<T>(
 }
 
 // Auth
-export const getMe = () => request<User>("GET", "/api/auth/me");
+export const getMe = (signal?: AbortSignal) => request<User>("GET", "/api/auth/me", undefined, signal);
 export const devLogin = () =>
   request<{ token: string }>("GET", "/api/auth/dev");
 
@@ -273,6 +284,10 @@ export function releaseControlKeepalive(
   if (!_token) {
     return;
   }
+  if (isSecureConnection()) {
+    void request("POST", "/api/mode/release", { machine_id: machineId, device_id: deviceId }).catch(() => {});
+    return;
+  }
 
   const body = JSON.stringify({
     machine_id: machineId,
@@ -361,3 +376,10 @@ export const createWebPreview = (machineId: string, body: { port: number; addres
   request<{ preview: WebPreviewInfo; launch_url: string }>("POST", `/api/machines/${encodeURIComponent(machineId)}/web-previews`, body);
 export const listWebPreviews = () => request<{ configured: boolean; previews: WebPreviewInfo[] }>("GET", "/api/web-previews");
 export const closeWebPreview = (id: string) => request<void>("DELETE", `/api/web-previews/${encodeURIComponent(id)}`);
+
+// E2EE device management; requests follow the current encrypted/direct transport.
+export interface SecureDevice {
+  id: string; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null;
+}
+export const listSecureDevices = () => request<SecureDevice[]>("GET", "/api/security/devices");
+export const revokeSecureDevice = (id: string) => request<void>("DELETE", `/api/security/devices/${encodeURIComponent(id)}`);

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   configure,
+  getMe,
+  ApiError,
   deleteWorkspaceGroup,
   deleteMachine,
   createApiToken,
@@ -9,6 +11,14 @@ import {
 } from "./api";
 
 describe("api request", () => {
+  test("auth validation receives its abort signal and keeps HTTP status", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("Unauthorized", { status: 401 }));
+    await expect(getMe(controller.signal)).rejects.toBeInstanceOf(ApiError);
+    await expect(getMe()).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/auth/me", expect.objectContaining({ signal: controller.signal }));
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     configure("", null);

@@ -193,6 +193,16 @@ pub struct HubStatus {
     pub node_installed: bool,
     /// Something answers on the hub's port on this machine.
     pub listening: bool,
+    pub setup: SetupStatus,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug)]
+pub struct SetupStatus {
+    pub hub_running: bool,
+    pub machine_registered: bool,
+    pub node_online: bool,
+    pub tmux_available: bool,
+    pub error: Option<String>,
 }
 
 fn service_files(home: &Path) -> (PathBuf, PathBuf) {
@@ -212,7 +222,11 @@ fn service_files(home: &Path) -> (PathBuf, PathBuf) {
 }
 
 #[tauri::command]
-pub fn hub_status() -> HubStatus {
+pub async fn hub_status() -> Result<HubStatus, String> {
+    tauri::async_runtime::spawn_blocking(read_status).await.map_err(|e| e.to_string())
+}
+
+fn read_status() -> HubStatus {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
@@ -221,6 +235,10 @@ pub fn hub_status() -> HubStatus {
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("offdesk-hub").is_file()))
         .unwrap_or(false);
+    let setup = hub_command(&["setup-check"], None)
+        .and_then(|command| run(command, "checking this Mac"))
+        .and_then(|stdout| serde_json::from_str::<SetupStatus>(stdout.trim()).map_err(|e| e.to_string()))
+        .unwrap_or_else(|_| SetupStatus { error: Some("Could not check this Mac. Try setup again with the latest Offdesk app.".into()), ..Default::default() });
     HubStatus {
         supported: cfg!(any(target_os = "macos", target_os = "linux")),
         bundled,
@@ -231,6 +249,7 @@ pub fn hub_status() -> HubStatus {
             Duration::from_millis(500),
         )
         .is_ok(),
+        setup,
     }
 }
 
@@ -247,6 +266,15 @@ pub struct HubLink {
     pub short: Option<String>,
     /// Addresses a phone might reach this machine at, best first.
     pub candidates: Vec<Candidate>,
+    /// The installed service's public address, retained when selecting LAN.
+    #[serde(default)]
+    pub public_url: Option<String>,
+    /// This desktop can always reach its own hub without the tunnel.
+    #[serde(default)]
+    pub local_url: Option<String>,
+    /// Verified managed address, exclusively for encrypted device pairing.
+    #[serde(default)]
+    pub secure_url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -265,11 +293,42 @@ fn parse_link(stdout: &str) -> Result<HubLink, String> {
 }
 
 pub fn read_link(base_url: Option<&str>) -> Result<HubLink, String> {
+    let public_url = configured_public_url();
     let stdout = run(
-        hub_command(&["link", "--json"], base_url)?,
+        hub_command(&["link", "--json"], base_url.or(public_url.as_deref()))?,
         "offdesk-hub link",
     )?;
-    parse_link(&stdout)
+    let mut link = parse_link(&stdout)?;
+    link.public_url = public_url;
+    link.local_url = Some(format!("http://127.0.0.1:{HUB_PORT}"));
+    Ok(link)
+}
+
+fn configured_public_url() -> Option<String> {
+    // A Finder-launched app does not inherit its launch agent's environment.
+    // Read only this setting, never the service's other environment values.
+    let value = if cfg!(target_os = "macos") {
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        let (service, _) = service_files(&home);
+        let output = Command::new("/usr/bin/plutil")
+            .args(["-extract", "EnvironmentVariables.OFFDESK_BASE_URL", "raw", "-o", "-"])
+            .arg(service).output().ok()?;
+        if !output.status.success() { return None; }
+        String::from_utf8(output.stdout).ok()?
+    } else {
+        std::env::var("OFFDESK_BASE_URL").ok()?
+    };
+    normalize_public_url(&value)
+}
+
+fn normalize_public_url(value: &str) -> Option<String> {
+    let url = tauri::Url::parse(value.trim()).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+        || !url.username().is_empty() || url.password().is_some()
+        || url.query().is_some() || url.fragment().is_some() {
+        return None;
+    }
+    Some(url.as_str().trim_end_matches('/').to_owned())
 }
 
 /// The sign-in link and the phone code's contents, from the hub on this
@@ -328,6 +387,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn public_addresses_preserve_https_and_reject_credentials() {
+        assert_eq!(normalize_public_url(" https://hub.example.com:8443/ "), Some("https://hub.example.com:8443".into()));
+        assert_eq!(normalize_public_url("https://hub.example.com/?token=secret"), None);
+        assert_eq!(normalize_public_url("https://user:secret@hub.example.com"), None);
+        assert_eq!(normalize_public_url("file:///tmp/hub"), None);
+    }
+
+    #[test]
     fn the_sidecar_directory_leads_the_path() {
         assert_eq!(
             prepend_path(Some(Path::new("/app/MacOS")), Some("/usr/bin:/bin")),
@@ -358,6 +425,7 @@ mod tests {
         let printed = "\n{\"url\":\"http://192.168.1.10:4317\",\"link\":\"http://192.168.1.10:4317/?token=abc\",\"short\":\"http://192.168.1.10:4317/?code=XYZ\",\"candidates\":[{\"interface\":\"en0\",\"address\":\"192.168.1.10\"}]}\n";
         let link = parse_link(printed).unwrap();
         assert_eq!(link.url, "http://192.168.1.10:4317");
+        assert_eq!(link.secure_url, None);
         assert_eq!(
             link.link.as_deref(),
             Some("http://192.168.1.10:4317/?token=abc")
@@ -378,6 +446,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(link.link, None);
+    }
+
+    #[test]
+    fn managed_pairing_address_survives_the_native_bridge() {
+        let link = parse_link(r#"{"url":"https://personal.example","link":null,"short":null,"candidates":[],"secure_url":"https://0123456789abcdef0123456789abcdef.cloud.offdesk.dev"}"#).unwrap();
+        let serialized = serde_json::to_value(&link).unwrap();
+        assert_eq!(serialized["secure_url"], "https://0123456789abcdef0123456789abcdef.cloud.offdesk.dev");
+        assert_eq!(link.url, "https://personal.example");
     }
 
     #[test]
@@ -408,4 +484,56 @@ mod dev_tests {
         eprintln!("hub_binary -> {} (dir {:?})", binary.display(), dir);
         assert!(binary.to_string_lossy().contains("/target/"), "{}", binary.display());
     }
+}
+
+/// Only the local bundled App can mint this short-lived device pairing code.
+#[tauri::command]
+pub async fn hub_pair(base_url: Option<String>) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let public_url = configured_public_url();
+        let selected_url = base_url.as_deref().or(public_url.as_deref());
+        let mut command = hub_command(&["pair", "--json", "--check"], selected_url)?;
+        // The address selected on screen must also be the one checked/minted,
+        // even when a shell-launched App inherited a secure-origin override.
+        if let Some(url) = selected_url { command.env("OFFDESK_SECURE_BASE_URL", url); }
+        let output = command.output().map_err(|_| "Could not create a pairing code")?;
+        if !output.status.success() {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                if let Some(error) = value.get("error").and_then(|value| value.as_str()) {
+                    return Err(error.to_owned());
+                }
+            }
+            return Err("Could not create an encrypted pairing code. Update the Hub and try again.".into());
+        }
+        serde_json::from_slice(&output.stdout).map_err(|_| "Invalid Hub pairing response".into())
+    }).await.map_err(|_| "Pairing request interrupted".to_string())?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CloudAction { Status, Login, LoginStatus, Enable, Check, Disable }
+
+/// Only the bundled desktop UI may manage its local connector. Arguments are
+/// an enum, and credentials stay in the Hub CLI's private storage.
+#[tauri::command]
+pub async fn cloud_action(action: CloudAction) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let action = match action {
+            CloudAction::Status => "status", CloudAction::Login => "login",
+            CloudAction::LoginStatus => "login-status", CloudAction::Enable => "install",
+            CloudAction::Check => "check", CloudAction::Disable => "disable",
+        };
+        let output = hub_command(&["cloud", action], None)?.output().map_err(|_| "Could not start Cloud setup")?;
+        if !output.status.success() {
+            // CLI errors are local, bounded messages; never forward stdout from
+            // a failed check (it is not a successful connection status).
+            let message = String::from_utf8_lossy(&output.stderr);
+            let message = message.lines().rev().find(|line| line.starts_with("error:")).unwrap_or("");
+            return Err(if message.is_empty() || message.len() > 512 {
+                "Cloud setup could not finish. Update the Hub, then retry.".into()
+            } else { message.trim_start_matches("error:").trim().to_owned() });
+        }
+        if output.stdout.len() > 16384 { return Err("Invalid Cloud status response".into()); }
+        serde_json::from_slice(&output.stdout).map_err(|_| "Invalid Cloud status response".into())
+    }).await.map_err(|_| "Cloud setup was interrupted".to_string())?
 }

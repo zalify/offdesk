@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-pair"
+description = "Enables the secure_pair command without any pre-configured scope."
+commands.allow = ["secure_pair"]
+
+[[permission]]
+identifier = "deny-secure-pair"
+description = "Denies the secure_pair command without any pre-configured scope."
+commands.deny = ["secure_pair"]

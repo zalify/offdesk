@@ -1,3 +1,4 @@
+import { openSocket } from "@/lib/secureTransport";
 import {
   createContext,
   useCallback,
@@ -72,7 +73,7 @@ export function TerminalPreviewMuxProvider({
     if (!deviceId || !hasPreviewSubscriptions) return;
 
     let disposed = false;
-    const ws = new WebSocket(terminalPreviewsWsUrl(deviceId));
+    const ws = openSocket(terminalPreviewsWsUrl(deviceId));
     ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 

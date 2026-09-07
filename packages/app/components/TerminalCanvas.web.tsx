@@ -1,3 +1,4 @@
+import { openSocket } from "@/lib/secureTransport";
 import {
   lazy,
   Suspense,
@@ -59,7 +60,7 @@ import {
 import { getPersistentDeviceId } from "@/lib/deviceId";
 import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile } from "@/lib/platform";
-import { useDisplayMode, useVisualViewportHeight } from "@/lib/hooks";
+import { useDisplayMode, useVisualViewport } from "@/lib/hooks";
 import { KeyBarSlotProvider, WorkspaceKeyBarSlot } from "@/lib/keyBarSlot";
 import {
   formatPrefixBinding,
@@ -96,10 +97,10 @@ import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-const OnboardingView = lazy(() =>
+const EmptyMachinesView = lazy(() =>
   lazyWithReload(() =>
-    import("./OnboardingView.web").then((module) => ({
-      default: module.OnboardingView,
+    import("./EmptyMachinesView.web").then((module) => ({
+      default: module.EmptyMachinesView,
     })),
   ),
 );
@@ -234,9 +235,10 @@ function TerminalCanvasInner() {
     createInitialMainLayout,
   );
   const { isCompact, isTouch } = useDisplayMode();
-  const viewportHeight = useVisualViewportHeight();
+  const viewport = useVisualViewport();
+  const viewportHeight = viewport?.height ?? null;
   const rootHeight: string =
-    viewportHeight !== null ? `${viewportHeight}px` : "100dvh";
+    viewport !== null ? `${viewport.height * viewport.scale}px` : "100dvh";
   const { logout } = useAuth();
 
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -255,6 +257,19 @@ function TerminalCanvasInner() {
   const [addMachineOpen, setAddMachineOpen] = useState(false);
   const [phoneOpen, setPhoneOpen] = useState(false);
 
+  useEffect(() => {
+    if (!isTauri() || isTauriMobile()) return;
+    const openSettings = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "," && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        event.stopPropagation();
+        setShowSettings(true);
+      }
+    };
+    window.addEventListener("keydown", openSettings, true);
+    return () => window.removeEventListener("keydown", openSettings, true);
+  }, []);
+
   // The menu bar item on the hub machine opens the window and says what it
   // wants shown; see packages/desktop/src-tauri/src/tray.rs.
   useEffect(() => {
@@ -265,6 +280,7 @@ function TerminalCanvasInner() {
       if (disposed) return;
       void listen("offdesk://show-phone-code", () => setPhoneOpen(true)).then((un) => unlisteners.push(un));
       void listen("offdesk://add-machine", () => setAddMachineOpen(true)).then((un) => unlisteners.push(un));
+      void listen("offdesk://settings", () => setShowSettings(true)).then((un) => unlisteners.push(un));
     });
     return () => {
       disposed = true;
@@ -545,7 +561,7 @@ function TerminalCanvasInner() {
 
   useEffect(() => {
     if (!bootstrapReady || !deviceId) return;
-    const ws = new WebSocket(eventsWsUrl(deviceId, lastSeqRef.current));
+    const ws = openSocket(eventsWsUrl(deviceId, lastSeqRef.current));
     let disposed = false;
     let pingTimer: ReturnType<typeof window.setInterval> | null = null;
 
@@ -754,7 +770,13 @@ function TerminalCanvasInner() {
     if (!bootstrapReady || handoffLandingHandledRef.current) return;
     handoffLandingHandledRef.current = true;
 
-    if (window.location.hash.startsWith("#/t/")) return;
+    if (window.location.hash.startsWith("#/t/")) {
+      // A shortcut may point to another machine. Restore that machine too;
+      // otherwise reloading leaves the selected pane outside the active tab list.
+      const linked = terminals.find(t => t.id === window.location.hash.slice(4));
+      if (linked) setActiveMachineId(linked.machine_id);
+      return;
+    }
     const terminalId = browserState.lastFocusedTerminalId;
     if (!terminalId) return;
     const terminal = terminals.find((item) => item.id === terminalId);
@@ -1553,7 +1575,14 @@ function TerminalCanvasInner() {
 
   return (
     <div
+      data-testid="terminal-canvas"
       style={{
+        // iOS can pan the visual viewport while focusing ANY field. Anchor
+        // the app chrome to its visible top, not the scrolled document. Keep
+        // deliberate pinch zoom independent of keyboard layout changes.
+        position: "fixed",
+        top: viewport && Math.abs(viewport.scale - 1) < 0.01 ? viewport.offsetTop : 0,
+        left: 0,
         display: "flex",
         flexDirection: "column",
         height: rootHeight,
@@ -1562,7 +1591,7 @@ function TerminalCanvasInner() {
         background: colors.bg0,
       }}
     >
-      <AppTitleBar isMobile={isCompact} />
+      <AppTitleBar isMobile={isCompact} onOpenSettings={machines.length === 0 ? () => setShowSettings(true) : undefined} />
 
       <TerminalPreviewMuxProvider deviceId={deviceId}>
         <div
@@ -1579,7 +1608,7 @@ function TerminalCanvasInner() {
             </Suspense>
           ) : machines.length === 0 ? (
             <Suspense fallback={<LazyLoadingFallback />}>
-              <OnboardingView />
+              <EmptyMachinesView onOpenSettings={() => setShowSettings(true)} />
             </Suspense>
           ) : isCompact ? (
             <MobileWorkbench
@@ -1612,9 +1641,11 @@ function TerminalCanvasInner() {
               onEngageViewOnly={handleEngageViewOnly}
               onDisengageViewOnly={handleDisengageViewOnly}
               onOpenSettings={() => setShowSettings(true)}
+              onOpenWebPreview={() => workspaceCommandsRef.current.openWebPreview?.()}
             >
-              {scopedTerminals.length > 0 && workspaceTerminal ? (
+              {scopedTerminals.length > 0 && workspaceTerminal?.machine_id === activeMachine?.id && workspaceTerminal ? (
                 <TerminalWorkspace
+                  key={workspaceTerminal.machine_id}
                   terminal={workspaceTerminal}
                   siblings={scopedTerminals}
                   workspaceGroups={activeMachineWorkspaceGroups}
@@ -1681,6 +1712,7 @@ function TerminalCanvasInner() {
                 onSelectMachine={setActiveMachineId}
                 onAddMachine={() => setAddMachineOpen(true)}
                 onOpenPhone={() => setPhoneOpen(true)}
+                onOpenSettings={() => setShowSettings(true)}
                 onRemoveHost={handleRemoveHost}
                 onRequestControl={() => {
                   if (activeMachine) void handleRequestControl(activeMachine.id);
@@ -1716,7 +1748,7 @@ function TerminalCanvasInner() {
                       background: colors.accent,
                       border: "none",
                       borderRadius: 6,
-                      color: colors.background,
+                      color: colors.onAccent,
                       cursor: "pointer",
                       fontSize: 12,
                       fontWeight: 600,

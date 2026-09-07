@@ -15,6 +15,7 @@ use crate::AppState;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(crate::secure::management_router())
         .merge(auth::router())
         .merge(terminals::router())
         .merge(agent_sessions::router())

@@ -1,0 +1,11 @@
+[package]
+name = "tauri-plugin-offdesk-android-updater"
+version = "0.1.0"
+edition = "2021"
+links = "tauri-plugin-offdesk-android-updater"
+[workspace]
+[dependencies]
+tauri = "2"
+serde_json = "1"
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

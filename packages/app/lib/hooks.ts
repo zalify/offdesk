@@ -81,8 +81,14 @@ export function useDisplayMode(): DisplayMode {
  * `null` if `visualViewport` is unavailable — callers should fall back to
  * `100dvh` or similar in that case.
  */
-export function useVisualViewportHeight(): number | null {
-  const [height, setHeight] = useState<number | null>(() => {
+interface VisualViewportBounds {
+  height: number;
+  offsetTop: number;
+  scale: number;
+}
+
+export function useVisualViewport(): VisualViewportBounds | null {
+  const [bounds, setBounds] = useState<VisualViewportBounds | null>(() => {
     if (
       Platform.OS !== "web" ||
       typeof window === "undefined" ||
@@ -90,7 +96,8 @@ export function useVisualViewportHeight(): number | null {
     ) {
       return null;
     }
-    return window.visualViewport.height;
+    const vv = window.visualViewport;
+    return { height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale };
   });
 
   useEffect(() => {
@@ -102,7 +109,7 @@ export function useVisualViewportHeight(): number | null {
       return;
     }
     const vv = window.visualViewport;
-    const update = () => setHeight(vv.height);
+    const update = () => setBounds({ height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale });
     update();
     vv.addEventListener("resize", update);
     // iOS Safari fires `scroll` — not `resize` — when the keyboard shifts.
@@ -115,5 +122,9 @@ export function useVisualViewportHeight(): number | null {
     };
   }, []);
 
-  return height;
+  return bounds;
+}
+
+export function useVisualViewportHeight(): number | null {
+  return useVisualViewport()?.height ?? null;
 }

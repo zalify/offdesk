@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-socket-send"
+description = "Enables the secure_socket_send command without any pre-configured scope."
+commands.allow = ["secure_socket_send"]
+
+[[permission]]
+identifier = "deny-secure-socket-send"
+description = "Denies the secure_socket_send command without any pre-configured scope."
+commands.deny = ["secure_socket_send"]

@@ -1,4 +1,6 @@
+pub mod composer;
 use bytes::Bytes;
+pub use composer::{ComposerAttachment, ComposerMessage, ComposerReceipt, ComposerStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -36,6 +38,15 @@ pub struct TerminalInfo {
     pub rows: u16,
     #[serde(default = "default_reachable")]
     pub reachable: bool,
+    /// Best-effort detection of an interactive confirmation on the live screen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention: Option<TerminalAttention>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalAttention {
+    Confirmation,
 }
 
 fn default_reachable() -> bool {
@@ -281,6 +292,12 @@ pub enum HubToMachine {
         address_family: preview::AddressFamily,
         expires_at: i64,
     },
+    #[serde(rename = "attach_composer")]
+    AttachComposer {
+        request_id: String,
+        attach_id: String,
+        message: ComposerMessage,
+    },
     #[serde(rename = "create_terminal")]
     CreateTerminal {
         request_id: String,
@@ -388,6 +405,11 @@ pub enum HubToMachine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum MachineToHub {
+    #[serde(rename = "composer_result")]
+    ComposerResult {
+        request_id: String,
+        receipt: ComposerReceipt,
+    },
     #[serde(rename = "register")]
     Register {
         machine_id: String,
@@ -448,6 +470,11 @@ pub enum MachineToHub {
     },
     #[serde(rename = "terminal_cwd")]
     TerminalCwd { terminal_id: String, cwd: String },
+    #[serde(rename = "terminal_attention")]
+    TerminalAttention {
+        terminal_id: String,
+        attention: Option<TerminalAttention>,
+    },
     #[serde(rename = "pong")]
     Pong,
     /// Agent session state changes. Fields left `None` are unchanged.
@@ -1025,6 +1052,11 @@ mod tests {
 /// The move only happens when the new directory does not exist yet, so it
 /// can never clobber a fresh config.
 pub fn config_dir() -> std::path::PathBuf {
+    // Allows isolated development/test daemons without touching user services,
+    // credentials or tmux session metadata. No legacy migration in this mode.
+    if let Some(path) = std::env::var_os("OFFDESK_CONFIG_DIR").filter(|p| !p.is_empty()) {
+        return std::path::PathBuf::from(path);
+    }
     let base = dirs::config_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = base.join("offdesk");
     static MIGRATED: std::sync::OnceLock<()> = std::sync::OnceLock::new();

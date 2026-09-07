@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { colors } from "@/lib/colors";
+import { colors, colorAlpha } from "@/lib/colors";
 
 export function HandoffBanner({
   isMobile,
@@ -31,7 +31,7 @@ export function HandoffBanner({
         zIndex: 45,
         padding: "5px 10px",
         borderRadius: 999,
-        background: "rgba(20, 20, 24, 0.9)",
+        background: colorAlpha.surfaceOpaque94,
         border: `1px solid ${colors.border}`,
         color: colors.foregroundSecondary,
         fontSize: 11,

@@ -20,7 +20,7 @@ module.exports = ({ config }) => ({
   slug: "offdesk",
   version: process.env.OFFDESK_APP_VERSION || "0.1.0",
   scheme: "offdesk",
-  userInterfaceStyle: "dark",
+  userInterfaceStyle: "automatic",
   platforms: ["web", "android"],
   web: {
     bundler: "metro",
@@ -28,7 +28,7 @@ module.exports = ({ config }) => ({
     headTags: [
       {
         tag: "script",
-        innerHTML: `(function(){try{var t=localStorage.getItem('theme');var d=t==='dark'||(t!=='light'&&window.matchMedia('(prefers-color-scheme:dark)').matches);if(d)document.documentElement.classList.add('dark');document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();`,
+        innerHTML: `(function(){try{var t=localStorage.getItem('offdesk:theme');var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();`,
       },
     ],
   },

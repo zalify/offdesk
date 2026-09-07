@@ -12,6 +12,14 @@ export interface HubStatus {
   hub_installed: boolean;
   node_installed: boolean;
   listening: boolean;
+  // Optional only for compatibility with shells released before diagnostics.
+  setup?: {
+    hub_running: boolean;
+    machine_registered: boolean;
+    node_online: boolean;
+    tmux_available: boolean;
+    error?: string | null;
+  };
 }
 
 export interface HubCandidate {
@@ -24,6 +32,9 @@ export interface HubLink {
   link: string | null;
   short: string | null;
   candidates: HubCandidate[];
+  public_url?: string | null;
+  local_url?: string | null;
+  secure_url?: string | null;
 }
 
 /** The desktop app, as opposed to the phone app or a browser tab. */
@@ -43,9 +54,11 @@ export const hubLink = (baseUrl?: string) => invoke<HubLink>("hub_link", { baseU
 export const hubInstall = (baseUrl?: string) => invoke<HubLink>("hub_install", { baseUrl: baseUrl ?? null });
 export const hubUninstall = () => invoke<void>("hub_uninstall");
 
-/** A hub is ready when both services are installed and something answers. */
+/** Modern shells verify the registered node is live, not just a listening port. */
 export function hubIsReady(status: HubStatus): boolean {
-  return status.hub_installed && status.node_installed && status.listening;
+  const setup = status.setup;
+  return status.hub_installed && status.node_installed && status.listening &&
+    (!setup || (setup.hub_running && setup.machine_registered && setup.node_online && setup.tmux_available));
 }
 
 /** The `?token=` on a sign-in link, or null when the link has none. */
@@ -79,5 +92,18 @@ export function portOf(url: string): string {
 
 /** An address from the picker becomes the base URL the hub is asked for. */
 export function baseUrlFor(address: string, port: string): string {
-  return `http://${address}:${port}`;
+  const host = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+  return `http://${host}:${port}`;
+}
+
+/** Preserve the public URL's scheme and port; LAN uses the local hub port. */
+export function hubAddressOptions(link: HubLink): { url: string; label: string }[] {
+  const options = new Map<string, string>();
+  if (link.public_url) options.set(link.public_url, "Internet");
+  const port = portOf(link.local_url ?? (link.public_url ? "" : link.url));
+  for (const candidate of link.candidates) {
+    options.set(baseUrlFor(candidate.address, port), candidate.interface);
+  }
+  if (!options.has(link.url)) options.set(link.url, "Current address");
+  return [...options].map(([url, label]) => ({ url, label }));
 }

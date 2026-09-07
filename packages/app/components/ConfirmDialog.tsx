@@ -157,7 +157,7 @@ export function ConfirmDialog({
               background: confirmBg,
               border: "none",
               borderRadius: 6,
-              color: colors.background,
+              color: colors.onAccent,
               cursor: "pointer",
               fontSize: 13,
               fontWeight: 700,

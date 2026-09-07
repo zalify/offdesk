@@ -1,3 +1,6 @@
+import { scanWithCleanup } from "../lib/scanLifecycle";
+import { ConnectionRoutesPanel } from "../components/ConnectionRoutesPanel";
+import { isPairingUri, pairSecureConnection, isSecureConnection, secureConnectionStatus, secureConnectionError, forgetSecureConnection } from "../lib/secureTransport";
 import { useEffect, useState } from "react";
 import { Platform } from "react-native";
 import { getAuthProviders, redeemLoginCode, type AuthProviders } from "../lib/api";
@@ -5,6 +8,7 @@ import { useAuth } from "../lib/auth";
 import { codeFromLink, tokenFromLink } from "../lib/desktopHub";
 import { isBundledOrigin, isTauri, isTauriMobile } from "../lib/platform";
 import { getServerUrl, setServerUrl } from "../lib/serverUrl";
+import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
 import { Body, Button, Card, Display, Eyebrow, Wordmark, fontDisplay, inputStyle } from "../components/Warm.web";
 import { colors } from "../lib/colors";
 
@@ -82,7 +86,15 @@ export default function LoginScreen({
     };
   }, [isDesktop, needsHub, providersAttempt]);
 
+  const pair = async (uri: string) => {
+    setConnecting(true); setHubError(null); setDesktopLinkError(null);
+    try {
+      const status = await pairSecureConnection(uri);
+      await loginWithToken(status.endpoint.hub_url, "secure-session");
+    } catch (error) { setHubError(String(error)); setDesktopLinkError(String(error)); setConnecting(false); }
+  };
   const handleHubConnect = () => {
+    if (isPairingUri(serverUrlInput)) { void pair(serverUrlInput.trim()); return; }
     setConnecting(true);
     setHubError(null);
     void import("@tauri-apps/api/core")
@@ -107,6 +119,10 @@ export default function LoginScreen({
   const [linkError, setLinkError] = useState<string | null>(null);
   const handleOpenLink = () => openLink(pastedLink.trim());
   const openLink = (raw: string) => {
+    if (isPairingUri(raw)) {
+      setLinkError("This is an encrypted pairing code. Open the Offdesk app’s connection screen and choose Scan QR Code, or paste the pairing link there. It cannot sign in to this browser page.");
+      return;
+    }
     let url: URL;
     try {
       url = new URL(raw);
@@ -139,11 +155,7 @@ export default function LoginScreen({
       // Nothing to do: the message already says where the switch is.
     }
   };
-  const handleSwitchHub = () => {
-    void import("@tauri-apps/api/core").then(({ invoke }) =>
-      invoke("clear_mobile_hub_url"),
-    );
-  };
+  const { switchHub: handleSwitchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
 
   // The phone's camera, in the app: reads the code the hub's page shows —
   // the sign-in link, with the token on it — so nothing is typed. Only the
@@ -167,7 +179,7 @@ export default function LoginScreen({
   const scanCode = async (): Promise<string | null> => {
     setScanError(null);
     try {
-      const { scan, Format, checkPermissions, requestPermissions, openAppSettings } =
+      const { scan, cancel, Format, checkPermissions, requestPermissions, openAppSettings } =
         await import("@tauri-apps/plugin-barcode-scanner");
       // The camera has to be asked for before it is used; scan() alone does
       // not put the system prompt up. Denied once, the prompt is gone for
@@ -183,7 +195,10 @@ export default function LoginScreen({
         void openAppSettings().catch(() => {});
         return null;
       }
-      const result = await scan({ windowed: false, formats: [Format.QRCode] });
+      const result = await scanWithCleanup(
+        () => scan({ windowed: false, formats: [Format.QRCode] }),
+        cancel,
+      );
       return result.content?.trim() || null;
     } catch (error) {
       const text = describe(error);
@@ -197,6 +212,7 @@ export default function LoginScreen({
     const content = await scanCode();
     if (!content) return;
     setServerUrlInput(content);
+    if (isPairingUri(content)) { await pair(content); return; }
     setConnecting(true);
     setHubError(null);
     void import("@tauri-apps/api/core")
@@ -228,6 +244,7 @@ export default function LoginScreen({
   const [desktopLinkError, setDesktopLinkError] = useState<string | null>(null);
   const handleDesktopLink = () => {
     const raw = desktopLink.trim();
+    if (isPairingUri(raw)) { void pair(raw); return; }
     let origin: string;
     try {
       origin = new URL(raw).origin;
@@ -302,7 +319,30 @@ export default function LoginScreen({
     handleHubConnect();
   };
 
-  if (needsHub && blockedMessage && !retyping) {
+  if (isSecureConnection()) {
+    return frame(<>
+      <Wordmark />
+      <Display size={28}>Encrypted connection</Display>
+      <Body>{secureConnectionStatus()?.endpoint.hub_url ?? "Your paired Hub"}</Body>
+      <Body size={14}>{secureConnectionError() ?? "Could not reconnect. Check that your Hub is running, then try again."}</Body>
+      <ConnectionRoutesPanel onSwitched={() => {
+        const url = secureConnectionStatus()?.endpoint.hub_url;
+        if (url) void loginWithToken(url, "secure-session").catch(error => setHubError(String(error)));
+      }} />
+      <Button onClick={() => window.location.reload()}>Try again</Button>
+      <Button kind="ghost" disabled={connecting} onClick={() => {
+        setConnecting(true);
+        void forgetSecureConnection().then(async () => {
+          localStorage.removeItem("offdesk:server_url");
+          if (isTauriMobile()) { const { invoke } = await import("@tauri-apps/api/core"); await invoke("clear_mobile_hub_url"); }
+          else window.location.reload();
+        }).catch((error) => { setHubError(String(error)); setConnecting(false); });
+      }}>Forget connection and pair again</Button>
+      {hubError ? note(hubError, "error") : null}
+    </>);
+  }
+
+  if (needsHub && blockedMessage && !retyping && !isPairingUri(serverUrlInput)) {
     const address = (() => {
       try {
         return new URL(serverUrlInput.includes("://") ? serverUrlInput : `http://${serverUrlInput}`).host;
@@ -381,6 +421,7 @@ export default function LoginScreen({
           Scan the code
         </Button>
         {scanError ? note(scanError, "error") : null}
+        {hubError ? note(hubError, "error") : null}
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
           <div style={{ flexGrow: 1, height: 1, background: colors.line }} />
           <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg3 }}>No code handy?</span>
@@ -393,7 +434,7 @@ export default function LoginScreen({
           onKeyDown={(event) => {
             if (event.key === "Enter") handleHubConnect();
           }}
-          placeholder="192.168.1.10:4317, or the whole sign-in link"
+          placeholder="Hub address or offdesk://pair?…"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}
@@ -447,7 +488,7 @@ export default function LoginScreen({
             onKeyDown={(event) => {
               if (event.key === "Enter") handleDesktopLink();
             }}
-            placeholder="http://192.168.1.10:4317/?token=…"
+            placeholder="Hub sign-in link or offdesk://pair?…"
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
@@ -499,9 +540,7 @@ export default function LoginScreen({
   const link = providers?.link ? (
     <>
       <Body>
-        This hub has no GitHub or Google sign-in, so the address alone does not get you in. It printed a link
-        when it was installed — also under Settings → Mobile app on the computer that runs it, as a code for
-        this phone's camera. Paste that link here:
+        The Hub address alone does not sign you in. On the computer running Offdesk, open the phone connection screen and choose Copy link. Paste the complete sign-in link here, including the token or code:
       </Body>
       <input
         type="url"
@@ -524,15 +563,17 @@ export default function LoginScreen({
       <Button onClick={handleOpenLink} disabled={!pastedLink.trim()}>
         Open the link
       </Button>
+      <Body size={13}>For an end-to-end encrypted connection, use Scan QR Code on the Offdesk app’s connection screen. The encrypted pairing code cannot sign in to a browser.</Body>
       {inMobileApp ? (
         <Button kind="sky" onClick={() => void handleScanForLink()}>
           Scan the code instead
         </Button>
       ) : null}
       {scanError && inMobileApp ? note(scanError, "error") : null}
+      {switchHubError && inMobileApp ? <div role="alert">{note(switchHubError, "error")}</div> : null}
       {inMobileApp ? (
-        <Button kind="ghost" onClick={handleSwitchHub} style={{ alignSelf: "center", height: 36, fontSize: 13 }}>
-          Use a different hub
+        <Button kind="ghost" onClick={() => void handleSwitchHub()} disabled={switchingHub} style={{ alignSelf: "center", height: 36, fontSize: 13 }}>
+          {switchingHub ? "Switching…" : "Use a different hub"}
         </Button>
       ) : null}
     </>

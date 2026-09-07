@@ -28,6 +28,7 @@ pub struct EventEnvelope {
 type PendingResponse = oneshot::Sender<Result<PendingResult, String>>;
 
 pub enum PendingResult {
+    Composer(offdesk_protocol::ComposerReceipt),
     TerminalCreated {
         terminal_id: String,
         title: String,
@@ -120,6 +121,7 @@ impl MachineManager {
                         workspace_group_id: row.workspace_group_id,
                         cols: u16::try_from(row.cols).unwrap_or(80),
                         rows: u16::try_from(row.rows).unwrap_or(24),
+                        attention: None,
                         reachable: false,
                     });
             }
@@ -816,6 +818,7 @@ impl MachineManager {
                     workspace_group_id: None,
                     cols,
                     rows,
+                    attention: None,
                     reachable: true,
                 };
                 Ok(terminal)
@@ -917,6 +920,42 @@ impl MachineManager {
             .send(msg)
             .await
             .map_err(|_| "Machine disconnected".to_string())
+    }
+
+    pub async fn submit_composer(
+        &self,
+        machine_id: &str,
+        attach_id: String,
+        message: offdesk_protocol::ComposerMessage,
+    ) -> offdesk_protocol::ComposerReceipt {
+        use offdesk_protocol::{ComposerReceipt, ComposerStatus};
+        let id = message.id.clone();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+        if let Err(detail) = self
+            .send_to_machine(
+                machine_id,
+                HubToMachine::AttachComposer {
+                    request_id: request_id.clone(),
+                    attach_id,
+                    message,
+                },
+            )
+            .await
+        {
+            self.remove_pending(&request_id).await;
+            return ComposerReceipt {
+                id,
+                status: ComposerStatus::Failed,
+                detail,
+            };
+        }
+        let result = tokio::time::timeout(Duration::from_secs(30), rx).await;
+        self.remove_pending(&request_id).await;
+        match result {
+            Ok(Ok(Ok(PendingResult::Composer(receipt)))) if receipt.id == id => receipt,
+            _ => ComposerReceipt { id, status: ComposerStatus::Unknown, detail: "Delivery could not be confirmed. Check the terminal before sending anything again.".into() },
+        }
     }
 
     /// Look up the (cols, rows) of a terminal. The hub-side WS handler uses
@@ -1043,6 +1082,7 @@ impl MachineManager {
                             workspace_group_id: None,
                             cols,
                             rows,
+                            attention: None,
                             reachable: true,
                         };
                         conn.terminals.insert(terminal_id.clone(), terminal.clone());
@@ -1156,6 +1196,23 @@ impl MachineManager {
                             terminal_id = %terminal_id,
                             "Failed to apply terminal title update: {error}"
                         );
+                    }
+                }
+            }
+            MachineToHub::TerminalAttention {
+                terminal_id,
+                attention,
+            } => {
+                let mut machines = self.machines.lock().await;
+                if let Some(conn) = machines.get_mut(machine_id) {
+                    let user_id = conn.user_id.clone();
+                    if let Some(terminal) = conn.terminals.get_mut(&terminal_id) {
+                        if terminal.attention != attention {
+                            terminal.attention = attention;
+                            let terminal = terminal.clone();
+                            drop(machines);
+                            self.send_event(user_id, BrowserEvent::TerminalUpdated { terminal });
+                        }
                     }
                 }
             }
@@ -1351,6 +1408,14 @@ impl MachineManager {
                         has_foreground_process,
                         process_name,
                     }));
+                }
+            }
+            MachineToHub::ComposerResult {
+                request_id,
+                receipt,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::Composer(receipt)));
                 }
             }
             MachineToHub::Pong => {}
@@ -1758,7 +1823,10 @@ impl MachineManager {
             .unwrap_or_default()
     }
 
-    pub async fn get_machine_stats(&self, machine_id: &str) -> Option<offdesk_protocol::ResourceStats> {
+    pub async fn get_machine_stats(
+        &self,
+        machine_id: &str,
+    ) -> Option<offdesk_protocol::ResourceStats> {
         self.machines
             .lock()
             .await
@@ -2100,6 +2168,7 @@ mod tests {
             workspace_group_id: None,
             cols: 80,
             rows: 24,
+            attention: None,
             reachable: true,
         }
     }
@@ -2379,6 +2448,76 @@ mod tests {
             BrowserEvent::TerminalResized { terminal }
                 if terminal.id == "term-a" && terminal.cols == 132 && terminal.rows == 40
         ));
+    }
+
+    #[tokio::test]
+    async fn terminal_attention_is_scoped_deduplicated_cleared_and_in_bootstrap() {
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-b", "machine-b");
+        let manager = MachineManager::new(pool);
+        let (conn_id, _rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".into()))
+            .await;
+        manager
+            .register_machine(machine("machine-b"), Some("user-b".into()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![terminal("machine-a", "term-a")],
+                },
+            )
+            .await;
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        let mut events = manager.subscribe_events_after("user-a", snapshot.snapshot_seq);
+        let message = |attention| MachineToHub::TerminalAttention {
+            terminal_id: "term-a".into(),
+            attention,
+        };
+        let pending = Some(offdesk_protocol::TerminalAttention::Confirmation);
+        // Another machine cannot mark this terminal, even knowing its id.
+        manager
+            .handle_machine_message("machine-b", message(pending))
+            .await;
+        assert!(events.receiver.try_recv().is_err());
+        assert!(manager.snapshot_for_user("user-a").await.terminals[0]
+            .attention
+            .is_none());
+        manager
+            .handle_machine_message("machine-a", message(pending))
+            .await;
+        assert!(
+            matches!(events.receiver.recv().await.unwrap().event, BrowserEvent::TerminalUpdated { terminal } if terminal.attention == pending)
+        );
+        assert_eq!(
+            manager.snapshot_for_user("user-a").await.terminals[0].attention,
+            pending
+        );
+        assert!(manager
+            .snapshot_for_user("user-b")
+            .await
+            .terminals
+            .is_empty());
+        manager
+            .handle_machine_message("machine-a", message(pending))
+            .await;
+        assert!(events.receiver.try_recv().is_err());
+        manager
+            .handle_machine_message("machine-a", message(None))
+            .await;
+        assert!(
+            matches!(events.receiver.recv().await.unwrap().event, BrowserEvent::TerminalUpdated { terminal } if terminal.attention.is_none())
+        );
+        assert!(manager.snapshot_for_user("user-a").await.terminals[0]
+            .attention
+            .is_none());
+        manager
+            .handle_machine_message("machine-a", message(pending))
+            .await;
+        manager.unregister_machine("machine-a", &conn_id).await;
+        assert!(!manager.snapshot_for_user("user-a").await.terminals[0].reachable);
     }
 
     #[tokio::test]

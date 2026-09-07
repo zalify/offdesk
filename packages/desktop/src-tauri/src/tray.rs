@@ -29,6 +29,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let add = MenuItem::with_id(app, "add", "Add a machine", true, None::<&str>)?;
     let copy = MenuItem::with_id(app, "copy", "Copy hub address", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit offdesk", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -37,6 +38,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             &code,
             &add,
             &copy,
+            &settings,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -59,6 +61,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             "open" => show_window(app),
             "code" => show_and_emit(app, "offdesk://show-phone-code"),
             "add" => show_and_emit(app, "offdesk://add-machine"),
+            "settings" => show_and_emit(app, "offdesk://settings"),
             "copy" => {
                 // The hub on this machine says where it is; nothing to copy
                 // when there is none, and nothing to say about it either.

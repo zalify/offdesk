@@ -40,7 +40,14 @@ pub enum AttachEvent {
 #[derive(Debug)]
 enum AttachCommand {
     Input(Bytes),
-    Resize { cols: u16, rows: u16 },
+    Composer {
+        paste: Bytes,
+        ack: tokio::sync::oneshot::Sender<bool>,
+    },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     /// Ask tmux to fully redraw this attach's client (hub dropped output
     /// frames for a slow browser and needs the screen repaired).
     Refresh,
@@ -67,6 +74,29 @@ struct AttachHandle {
 }
 
 impl AttachManager {
+    pub async fn write_composer(
+        &self,
+        attach_id: &str,
+        paste: Bytes,
+    ) -> Result<(), offdesk_protocol::ComposerStatus> {
+        use offdesk_protocol::ComposerStatus;
+        let sender = self
+            .inner
+            .lock()
+            .await
+            .get(attach_id)
+            .map(|h| h.command_tx.clone())
+            .ok_or(ComposerStatus::Failed)?;
+        let (ack, rx) = tokio::sync::oneshot::channel();
+        sender
+            .send(AttachCommand::Composer { paste, ack })
+            .await
+            .map_err(|_| ComposerStatus::Failed)?;
+        match tokio::time::timeout(std::time::Duration::from_secs(20), rx).await {
+            Ok(Ok(true)) => Ok(()),
+            _ => Err(ComposerStatus::Unknown),
+        }
+    }
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -227,6 +257,24 @@ fn run_attach_task(
     // dropped (close_attach / AttachManager dropped).
     while let Some(command) = command_rx.blocking_recv() {
         match command {
+            AttachCommand::Composer { paste, ack } => {
+                // Keep the paste and its submit key together in the writer
+                // queue. Give terminal applications a chance to process the
+                // bracketed paste before handling Enter as a separate key.
+                let pasted = writer
+                    .write_all(&paste)
+                    .and_then(|_| writer.flush())
+                    .is_ok();
+                if pasted {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                let delivered =
+                    pasted && writer.write_all(b"\r").and_then(|_| writer.flush()).is_ok();
+                let _ = ack.send(delivered);
+                if !delivered {
+                    break;
+                }
+            }
             AttachCommand::Input(chunk) => {
                 if writer.write_all(&chunk).is_err() {
                     break;

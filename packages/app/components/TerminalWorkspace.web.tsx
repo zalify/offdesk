@@ -104,6 +104,7 @@ interface TerminalWorkspaceProps {
 // Handlers the desktop chrome (TabBar, CommandPalette) invokes on the
 // workspace. Optional fields stay unset until the workspace mounts.
 export interface WorkspaceCommandChannel {
+  openWebPreview?: () => void;
   selectGroup?: (groupId: string) => void;
   reorderGroups?: (
     sourceGroupId: string,
@@ -818,6 +819,9 @@ function TerminalWorkspaceComponent({
   useEffect(() => {
     if (!commandsRef) return;
     commandsRef.current = {
+      openWebPreview: () => {
+        if (activeTerminal) setWebPreviewTerminal(activeTerminal);
+      },
       selectGroup: (groupId) => activateGroup(groupId),
       reorderGroups: (sourceGroupId, targetGroupId, placement) =>
         void handleReorderGroups(sourceGroupId, targetGroupId, placement),
@@ -920,6 +924,7 @@ function TerminalWorkspaceComponent({
             />
           )}
         </div>
+        {webPreviewTerminal && <WebPreviewDialog machineId={webPreviewTerminal.machine_id} terminalId={webPreviewTerminal.id} onClose={() => setWebPreviewTerminal(null)} />}
       </div>
     );
   }

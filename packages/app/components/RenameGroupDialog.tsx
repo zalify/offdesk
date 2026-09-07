@@ -143,7 +143,7 @@ export function RenameGroupDialog({
               background: colors.accent,
               border: "none",
               borderRadius: 6,
-              color: colors.background,
+              color: colors.onAccent,
               cursor: canSubmit ? "pointer" : "not-allowed",
               opacity: canSubmit ? 1 : 0.45,
               fontSize: 13,

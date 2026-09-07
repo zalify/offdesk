@@ -16,6 +16,36 @@ use tauri::{AppHandle, Manager, Runtime, Url};
 
 use crate::hub_url;
 
+/// A paired App must stay on its trusted UI even when WebView history still
+/// contains a Hub page from before pairing. Startup checks alone cannot stop
+/// Android's system Back action from loading that old, already-authorized page.
+pub fn encrypted_navigation_guard<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("encrypted-navigation")
+        .setup(|app, _| {
+            // Plugin setup runs before WebView creation, outside Android's UI
+            // navigation callback. Android path APIs require a main-thread round trip.
+            let marker = crate::secure::marker(app).ok();
+            let shell = if cfg!(dev) {
+                app.config().build.dev_url.clone()
+            } else {
+                None
+            }
+            .or_else(|| {
+                app.config().app.windows.iter()
+                    .find(|window| window.label == "main")
+                    .and_then(|config| crate::mobile_shell::setup_url(config, cfg!(target_os = "android")).ok())
+            });
+            app.manage(crate::mobile_shell::EncryptedNavigationGuard::new(marker, shell));
+            Ok(())
+        })
+        .on_navigation(|webview, destination| {
+            webview.label() != "main" || webview.app_handle()
+                .try_state::<crate::mobile_shell::EncryptedNavigationGuard>()
+                .is_some_and(|guard| guard.allows(destination))
+        })
+        .build()
+}
+
 /// A hub URL baked in at build time. Optional, and there is no default: it
 /// only saves the first-launch step for someone building their own APK.
 const PRESET_HUB_URL: Option<&str> = option_env!("OFFDESK_MOBILE_HUB_URL");
@@ -25,11 +55,6 @@ const STORE_FILE: &str = "hub.json";
 /// Long enough for a phone waking its Wi-Fi, short enough that a wrong
 /// address does not look like a hang.
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Where the app returns to when it has no hub — the bundled setup screen.
-/// Captured at startup rather than reconstructed, because the local origin
-/// differs by platform (`tauri://localhost`, `http://tauri.localhost`).
-pub struct ShellUrl(pub Url);
 
 #[derive(Default, Serialize, Deserialize)]
 struct Store {
@@ -114,6 +139,15 @@ pub fn grant_and_load<R: Runtime>(app: &AppHandle<R>, hub_url: &str) -> Result<(
     )
     .map_err(|e| format!("failed to grant {url} plugin access: {e}"))?;
 
+    #[cfg(target_os = "android")]
+    app.add_capability(
+        CapabilityBuilder::new("mobile-hub-android-updater")
+            .local(false).window("main")
+            .remote(format!("{}/*", hub_url::origin(&url)))
+            .permission("offdesk-android-updater:allow-check")
+            .permission("offdesk-android-updater:allow-install"),
+    ).map_err(|e| format!("failed to grant updater access: {e}"))?;
+
     let window = app
         .get_webview_window("main")
         .ok_or("the main window is missing")?;
@@ -126,6 +160,7 @@ pub fn grant_and_load<R: Runtime>(app: &AppHandle<R>, hub_url: &str) -> Result<(
 /// files: the setup screen may call this, a hub may not.
 #[tauri::command]
 pub fn set_mobile_hub_url<R: Runtime>(app: AppHandle<R>, url: String) -> Result<String, String> {
+    if crate::secure::configured(&app) { return Err("Forget the encrypted connection before choosing a different Hub".into()); }
     let parsed = hub_url::parse(&url)?;
     // What gets remembered is the hub — its origin. A link scanned off the
     // hub's page can carry `?token=…`, which the web UI reads, stores and
@@ -205,16 +240,15 @@ fn local_network_blocked(error: &std::io::Error) -> bool {
 /// is why this goes back to the local screen rather than loading anything else.
 #[tauri::command]
 pub fn clear_mobile_hub_url<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    write_store(&app, &Store::default())?;
-
-    let shell = app
-        .try_state::<ShellUrl>()
-        .ok_or("the setup screen's address was not recorded at startup")?
-        .0
-        .clone();
+    // Android's WebView can return an empty URL during setup. Do not depend
+    // on capturing that transient value (or on the current remote Hub URL).
+    let config = app.config().app.windows.iter().find(|window| window.label == "main")
+        .ok_or("the main window configuration is missing")?;
+    let shell = crate::mobile_shell::setup_url(config, cfg!(target_os = "android"))?;
     let window = app
         .get_webview_window("main")
         .ok_or("the main window is missing")?;
+    write_store(&app, &Store::default())?;
     window
         .navigate(shell)
         .map_err(|e| format!("failed to open the setup screen: {e}"))

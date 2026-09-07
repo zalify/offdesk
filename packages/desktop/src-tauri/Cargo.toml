@@ -19,6 +19,7 @@ tauri-build = { version = "2", features = [] }
 [workspace]
 
 [dependencies]
+futures = "0.3"
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"
@@ -27,6 +28,10 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+offdesk-secure = { path = "../../../crates/secure" }
+tokio = { version = "1", features = ["full"] }
+base64 = "0.22"
+zeroize = { version = "1", features = ["derive"] }
 
 # Mobile-only: the camera reads the hub's QR code so nothing is typed on a
 # phone. Android and iOS ship the plugin's native view; there is no desktop
@@ -41,6 +46,17 @@ tauri-plugin-barcode-scanner = "2"
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-updater = "2"
-tokio = { version = "1", features = ["net", "rt"] }
 axum = "0.8"
 open = "5"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+security-framework = "3.7"
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", features = ["apple-native"] }
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", features = ["windows-native"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust", "vendored"] }
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-offdesk-keystore = { path = "../keystore" }
+tauri-plugin-offdesk-android-updater = { path = "../android-updater" }

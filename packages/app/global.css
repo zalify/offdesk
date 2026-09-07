@@ -7,14 +7,15 @@
      words, coral for the one thing to press. The terminal stays night-dark;
      see --color-term-bg. Stored as space-separated sRGB triplets so
      `rgb(var(--x) / <alpha>)` works with both Tailwind and inline styles.
-     Source of truth for the hex values: site/src/styles/global.css. */
+     Concrete React Native counterparts live in lib/themePalette.ts. */
   :root {
-    --color-bg-0: 255 244 227;           /* #fff4e3 sand — canvas */
-    --color-bg-1: 255 251 244;           /* #fffbf4 cream — elevated (bars, sheets) */
-    --color-bg-2: 255 251 244;           /* #fffbf4 cream — surface (cards, menus) */
-    --color-bg-3: 255 233 204;           /* #ffe9cc sand-2 — surface hover / pressed */
-    --color-line: 230 207 174;           /* #e6cfae — solid border */
-    --color-line-soft: 241 222 198;      /* #f1dec6 — subtle divider */
+    color-scheme: light;
+    --color-bg-0: 255 244 227;
+    --color-bg-1: 255 251 244;
+    --color-bg-2: 255 251 244;
+    --color-bg-3: 255 233 204;
+    --color-line: 230 207 174;
+    --color-line-soft: 241 222 198;
 
     /* Fredoka for what is said once (titles, buttons), Nunito for the rest;
        both ship in public/fonts so a hub with no internet still has them. */
@@ -22,21 +23,21 @@
     --font-sans: 'Nunito Variable', 'Nunito', ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     --font-mono: 'Maple Mono NF CN', 'Noto Sans Mono CJK SC', 'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
 
-    --color-fg-0: 43 35 64;              /* #2b2340 ink */
-    --color-fg-1: 74 65 96;              /* #4a4160 ink-2 */
-    --color-fg-2: 110 100 134;           /* #6e6486 muted */
-    --color-fg-3: 157 149 179;           /* #9d95b3 faint */
+    --color-fg-0: 43 35 64;
+    --color-fg-1: 74 65 96;
+    --color-fg-2: 110 100 134;
+    --color-fg-3: 119 107 136;
 
-    --color-accent: 255 107 87;          /* #ff6b57 coral */
-    --color-on-accent: 255 251 244;      /* cream, on coral */
-    --color-ok: 31 158 140;              /* lagoon, dark enough to read on cream */
-    --color-warn: 210 154 18;            /* sun, same */
-    --color-err: 232 84 63;              /* #e8543f coral-2 */
-    --color-info: 31 143 194;            /* sea, same */
+    --color-accent: 174 61 46;
+    --color-on-accent: 255 251 244;
+    --color-ok: 24 125 110;
+    --color-warn: 135 98 11;
+    --color-err: 191 56 39;
+    --color-info: 23 117 157;
     --color-violet: 124 92 191;
 
     /* Terminal body — the night-dark the site draws terminals in. */
-    --color-term-bg: 30 27 46;           /* #1e1b2e */
+    --color-term-bg: 30 27 46;
 
     /* Legacy aliases — existing components reference these via colors.web.ts.
        Forwarded to the new tokens so the refactor can land in stages. */
@@ -54,6 +55,28 @@
     --color-border: var(--color-line);
     --color-border-active: var(--color-accent);
   }
+  :root.dark {
+    color-scheme: dark;
+    --color-bg-0: 23 20 32;
+    --color-bg-1: 32 28 45;
+    --color-bg-2: 40 34 54;
+    --color-bg-3: 53 45 70;
+    --color-line: 82 70 95;
+    --color-line-soft: 57 48 68;
+    --color-fg-0: 245 239 251;
+    --color-fg-1: 223 213 232;
+    --color-fg-2: 186 172 201;
+    --color-fg-3: 162 149 177;
+    --color-accent: 255 146 126;
+    --color-on-accent: 43 24 32;
+    --color-ok: 99 209 184;
+    --color-warn: 240 198 107;
+    --color-err: 255 146 136;
+    --color-info: 130 202 255;
+    --color-violet: 197 164 245;
+    --color-term-bg: 30 27 46;
+  }
+
 }
 
 @font-face {
@@ -84,6 +107,20 @@ body {
   margin: 0;
 }
 
+/* WebKit zooms small editable text on focus, including xterm's invisible
+   textarea. Keep the editing surface legible without changing terminal canvas
+   fonts or disabling the user's pinch zoom. Covers settings/login fields too. */
+@supports (-webkit-touch-callout: none) {
+  @media (hover: none), (pointer: coarse) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not([type='submit']):not([type='file']),
+    textarea,
+    select,
+    [contenteditable='true'] {
+      font-size: max(16px, 1rem) !important;
+    }
+  }
+}
+
 * {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
@@ -92,6 +129,13 @@ body {
 :focus-visible {
   outline: 2px solid rgb(var(--color-info));
   outline-offset: 2px;
+}
+
+/* Terminal selection must never inherit the light chrome foreground. */
+.terminal-select-overlay::selection,
+.terminal-select-overlay ::selection {
+  background: #685139;
+  color: #ffffff;
 }
 
 ::selection {
@@ -164,4 +208,13 @@ body {
 @keyframes offdeskReconnect {
   from { transform: translateX(-100%); }
   to   { transform: translateX(265%); }
+}
+
+/* JetBrains Mono v2.304, bundled under the adjacent SIL OFL license. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-Regular.woff2') format('woff2');
 }

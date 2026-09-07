@@ -27,6 +27,20 @@ describe("createTerminalClipboardProvider", () => {
     expect(writes).toEqual(["copied from tmux"]);
   });
 
+  it("writes tmux OSC 52 data with an omitted selection target", async () => {
+    const writes: string[] = [];
+    const provider = createTerminalClipboardProvider({
+      readText: () => "",
+      writeText: (text) => {
+        writes.push(text);
+      },
+    });
+
+    await provider.writeText("" as WriteSelection, "copied from tmux");
+
+    expect(writes).toEqual(["copied from tmux"]);
+  });
+
   it("ignores OSC 52 primary selection writes", async () => {
     const writes: string[] = [];
     const provider = createTerminalClipboardProvider({

@@ -10,58 +10,79 @@ import {
   takeControlFromHeader,
 } from "./helpers";
 
-test("slightly transformed desktop terminal maps selection to visible cells", async ({
-  browser,
-}) => {
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 520 },
+for (const withShift of [true, false]) {
+  test(`slightly transformed desktop terminal copies selection (shift=${withShift})`, async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 520 },
+    });
+    const page = await context.newPage();
+    await page.addInitScript(() => {
+      (window as unknown as { __selectionCopies: string[] }).__selectionCopies = [];
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: async (text: string) => {
+            (window as unknown as { __selectionCopies: string[] })
+              .__selectionCopies.push(text);
+          },
+        },
+      });
+    });
+
+    await openApp(page);
+    await resetMachineState(page);
+    await takeControlFromHeader(page);
+    await selectHomeWorkpath(page);
+
+    const marker = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const terminalId = await createTerminalViaApi(page, {
+      cwd: "/root",
+      cols: 120,
+      rows: 80,
+      startupCommand: `printf '\\033[2J\\033[H${marker}\\n'; sleep 600`,
+    });
+    await expandTerminalById(page, terminalId);
+    await expect(getImmersiveTerminal(page)).toBeVisible();
+    await expect
+      .poll(async () => readBufferLine(page, terminalId, 0))
+      .toContain(marker);
+
+    await page.evaluate(() => {
+      const terminal = document.querySelector<HTMLElement>(
+        "[data-terminal-display-mode='immersive']",
+      );
+      if (!terminal) throw new Error("immersive terminal is not mounted");
+      terminal.style.transform = "scale(0.95)";
+      terminal.style.transformOrigin = "top left";
+    });
+
+    const layout = await readScaledTerminalLayout(page);
+
+    const targetText = marker.slice(0, 20);
+    const start = cellPoint(layout, 0.1, 0.5);
+    const end = cellPoint(layout, 20.1, 0.5);
+
+    if (withShift) await page.keyboard.down("Shift");
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(end.x, end.y, { steps: 8 });
+    await page.mouse.up();
+    if (withShift) await page.keyboard.up("Shift");
+
+    if (withShift) {
+      await expect.poll(() => readSelection(page, terminalId)).toBe(targetText);
+    }
+
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as { __selectionCopies: string[] })
+        .__selectionCopies.at(-1),
+    )).toBe(targetText);
+
+    await context.close();
   });
-  const page = await context.newPage();
-
-  await openApp(page);
-  await resetMachineState(page);
-  await takeControlFromHeader(page);
-  await selectHomeWorkpath(page);
-
-  const marker = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  const terminalId = await createTerminalViaApi(page, {
-    cwd: "/root",
-    cols: 120,
-    rows: 80,
-    startupCommand: `printf '\\033[2J\\033[H${marker}\\n'; sleep 600`,
-  });
-  await expandTerminalById(page, terminalId);
-  await expect(getImmersiveTerminal(page)).toBeVisible();
-  await expect
-    .poll(async () => readBufferLine(page, terminalId, 0))
-    .toContain(marker);
-
-  await page.evaluate(() => {
-    const terminal = document.querySelector<HTMLElement>(
-      "[data-terminal-display-mode='immersive']",
-    );
-    if (!terminal) throw new Error("immersive terminal is not mounted");
-    terminal.style.transform = "scale(0.95)";
-    terminal.style.transformOrigin = "top left";
-  });
-
-  const layout = await readScaledTerminalLayout(page);
-
-  const targetText = marker.slice(0, 20);
-  const start = cellPoint(layout, 0.1, 0.5);
-  const end = cellPoint(layout, 20.1, 0.5);
-
-  await page.keyboard.down("Shift");
-  await page.mouse.move(start.x, start.y);
-  await page.mouse.down();
-  await page.mouse.move(end.x, end.y, { steps: 8 });
-  await page.mouse.up();
-  await page.keyboard.up("Shift");
-
-  await expect.poll(async () => readSelection(page, terminalId)).toBe(targetText);
-
-  await context.close();
-});
+}
 
 async function readBufferLine(
   page: Page,

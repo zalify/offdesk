@@ -36,7 +36,7 @@ test("desktop Fit reaches a stable terminal size after one click", async ({
   await resetMachineState(page);
   await takeControlFromHeader(page);
   await selectHomeWorkpath(page);
-  const terminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  const terminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
   await expandTerminalById(page, terminalId);
   await expect(getImmersiveTerminal(page)).toBeVisible();
 
@@ -84,7 +84,7 @@ test("rapid Fit clicks all produce the same terminal size", async ({
   await resetMachineState(page);
   await takeControlFromHeader(page);
   await selectHomeWorkpath(page);
-  const terminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  const terminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
   await expandTerminalById(page, terminalId);
   await expect(getImmersiveTerminal(page)).toBeVisible();
 
@@ -115,7 +115,7 @@ test("desktop immersive terminal keeps tall sessions at native scale", async ({
   await takeControlFromHeader(page);
   await selectHomeWorkpath(page);
   const terminalId = await createTerminalViaApi(page, {
-    cwd: "/root",
+    cwd: "/tmp",
     cols: 80,
     rows: 80,
   });
@@ -149,7 +149,7 @@ test("desktop thumbnail switch fits the newly focused terminal to the overlay", 
   await selectHomeWorkpath(page);
 
   const firstId = await createTerminalViaApi(page, {
-    cwd: "/root",
+    cwd: "/tmp",
     cols: 80,
     rows: 24,
   });
@@ -159,7 +159,7 @@ test("desktop thumbnail switch fits the newly focused terminal to the overlay", 
     (terminal) => terminal.id === firstId,
   )!.workspace_group_id!;
   const compactId = await createTerminalViaApi(page, {
-    cwd: "/root",
+    cwd: "/tmp",
     cols: 164,
     rows: 16,
     workspaceGroupId: firstTabId,

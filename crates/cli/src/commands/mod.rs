@@ -103,6 +103,7 @@ mod tests {
             workspace_group_id: group_id.map(str::to_string),
             cols: 80,
             rows: 24,
+            attention: None,
             reachable: true,
         }
     }

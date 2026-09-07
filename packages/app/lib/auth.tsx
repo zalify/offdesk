@@ -1,3 +1,4 @@
+import { refreshConnectionRoutes, restoreSecureConnection, isSecureConnection, forgetSecureConnection } from "./secureTransport";
 import {
   createContext,
   useCallback,
@@ -12,7 +13,7 @@ import { Platform } from "react-native";
 // object per render, and an effect that depends on it re-runs forever.
 import { router } from "expo-router";
 
-import { configure, devLogin, getMe, redeemLoginCode } from "./api";
+import { ApiError, configure, devLogin, getMe, redeemLoginCode } from "./api";
 import type { User } from "@offdesk/shared";
 import { storage } from "./storage";
 import { getServerUrl, setServerUrl } from "./serverUrl";
@@ -194,6 +195,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const restore = async () => {
       try {
+        // Encrypted sessions always restore through native Rust on bundled
+        // assets, before any legacy token or development login is considered.
+        try {
+          const secure = await restoreSecureConnection();
+          if (secure) {
+            setServerUrl(secure.endpoint.hub_url);
+            configure(secure.endpoint.hub_url, "secure-session");
+            const me = await getMe();
+            void refreshConnectionRoutes().catch(() => {});
+            if (!cancelled) { setUser(me); setToken("secure-session"); setIsLoading(false); }
+            return;
+          }
+        } catch {
+          if (isSecureConnection()) { if (!cancelled) setIsLoading(false); return; }
+        }
         // 1. A token that arrived on the URL — an OAuth callback, or the
         //    hub's own sign-in link. Already off the address bar; see above.
         //    A scanned code is one step further back: redeem it for the
@@ -244,8 +260,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // 3. On web in dev mode, try automatic dev login
-        if (Platform.OS === "web") {
+        // 3. Development login belongs to a browser-served Hub. The
+        // bundled App has no Hub to contact before the user chooses one.
+        if (Platform.OS === "web" && !isTauri()) {
           try {
             const result = await devLogin();
             if (result?.token) {
@@ -278,42 +295,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (token === null) return;
 
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let controller: AbortController | undefined;
 
     const loadUser = async () => {
+      controller = new AbortController();
+      const timeoutId = setTimeout(() => controller?.abort(), GET_ME_TIMEOUT_MS);
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(
-          () => controller.abort(),
-          GET_ME_TIMEOUT_MS,
-        );
-        const me = await getMe();
-        clearTimeout(timeoutId);
-
-        if (!cancelled) {
-          setUser(me);
-
-          // If web page was opened with ?desktop_callback=…, send the
-          // validated token to the desktop app's loopback server.
-          if (Platform.OS === "web" && !isTauri()) {
-            redirectTokenToDesktop(token);
-          }
+        const me = await getMe(controller.signal);
+        if (cancelled) return;
+        setUser(me);
+        setIsLoading(false);
+        if (Platform.OS === "web" && !isTauri()) redirectTokenToDesktop(token);
+      } catch (error) {
+        if (cancelled) return;
+        // Native failures (changed key, revoked device, locked credentials or
+        // an interrupted first getMe) are not HTTP 401s. Preserve the pinned
+        // connection and leave loading so LoginScreen can offer recovery,
+        // just as the startup restore path does. Never retry indefinitely or
+        // fall back to ordinary authentication after encrypted pairing.
+        if (isSecureConnection()) {
+          setToken(null);
+          setUser(null);
+          setIsLoading(false);
+          return;
         }
-      } catch {
-        await storage.remove(TOKEN_KEY);
-        if (!cancelled) {
+        // A restart, timeout or gateway failure is not a revoked session.
+        if (error instanceof ApiError && error.status === 401) {
+          await storage.remove(TOKEN_KEY);
+          if (cancelled) return;
           configure(currentServerUrl(), null);
           setToken(null);
           setUser(null);
+          setIsLoading(false);
+        } else {
+          retry = setTimeout(() => void loadUser(), 2000);
         }
-      }
-
-      if (!cancelled) {
-        setIsLoading(false);
+      } finally {
+        clearTimeout(timeoutId);
       }
     };
 
     void loadUser();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      clearTimeout(retry);
+      controller?.abort();
+    };
   }, [currentServerUrl, token]);
 
   const login = useCallback(async (provider?: "github" | "google") => {
@@ -353,6 +381,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [currentServerUrl]);
 
   const logout = useCallback(async () => {
+    if (isSecureConnection()) await forgetSecureConnection();
     await storage.remove(TOKEN_KEY);
     configure(currentServerUrl(), null);
     setToken(null);

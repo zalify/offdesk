@@ -1,0 +1,22 @@
+[package]
+name = "offdesk-secure"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+snow = { version = "0.10", default-features = false, features = ["std", "default-resolver", "use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+base64 = "0.22"
+url = "2"
+zeroize = { version = "1", features = ["derive"] }
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+futures.workspace = true
+uuid.workspace = true
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

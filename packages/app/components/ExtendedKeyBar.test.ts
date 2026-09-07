@@ -12,16 +12,16 @@ const baseProps = {
 };
 
 describe("ExtendedKeyBar", () => {
-  it("renders ^C as a pinned button so it can't scroll out of view", () => {
+  it("renders Ctrl+C as a pinned button so it can't scroll out of view", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).toContain('data-testid="extended-keybar-ctrl-c"');
-    expect(html).toContain("^C");
+    expect(html).toContain("Ctrl+C");
   });
 
   it("hides the attach button when onAttachFile is not provided", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).not.toContain('data-testid="extended-keybar-attach"');
-    expect(html).not.toContain('data-testid="extended-keybar-file-input"');
+    expect(html).toContain('data-testid="extended-keybar-file-input" disabled=""');
   });
 
   it("renders an attach button + image-only file input when onAttachFile is provided", () => {
@@ -42,9 +42,7 @@ describe("ExtendedKeyBar", () => {
     );
     // Pinned ^C still renders but is disabled.
     expect(html).toContain('data-testid="extended-keybar-ctrl-c"');
-    // The keyboard toggle is hidden entirely when not in control.
-    expect(html).not.toContain('aria-label="Show keyboard"');
-    expect(html).not.toContain('aria-label="Hide keyboard"');
+    expect(html).toContain('disabled="" data-testid="extended-keybar-keyboard"');
   });
 
   it("hides the select toggle when select-mode callbacks are missing", () => {
@@ -83,7 +81,7 @@ describe("ExtendedKeyBar", () => {
     expect(html).not.toContain('data-testid="extended-keybar-attach"');
   });
 
-  it("renders Space at the front of the scrollable row for TUI toggles (Claude Code multi-select)", () => {
+  it("keeps Space in the scrolling tools for TUI toggles", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).toContain('data-testid="extended-keybar-space"');
     expect(html).toContain(">Space<");
@@ -92,13 +90,14 @@ describe("ExtendedKeyBar", () => {
   it("renders Enter in the pinned row so commands can be submitted without the soft keyboard", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).toContain('data-testid="extended-keybar-enter"');
-    expect(html).toContain("⏎");
+    expect(html).toContain("Enter");
   });
 
-  it("renders ⇧Tab in the pinned row", () => {
+  it("keeps Tab pinned and removes Shift+Tab", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
-    expect(html).toContain('data-testid="extended-keybar-shift-tab"');
-    expect(html).toContain("⇧Tab");
+    expect(html).toContain('data-testid="extended-keybar-tab"');
+    expect(html).not.toContain('data-testid="extended-keybar-shift-tab"');
+    expect(html).toContain(">Tab<");
   });
 
   it("renders the Ctrl latch key only when onToggleCtrl is provided", () => {

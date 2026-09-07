@@ -561,6 +561,12 @@
           "markdownDescription": "Enables the clear_mobile_hub_url command without any pre-configured scope."
         },
         {
+          "description": "Enables the cloud_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cloud-action",
+          "markdownDescription": "Enables the cloud_action command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_role command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-role",
@@ -579,6 +585,12 @@
           "markdownDescription": "Enables the hub_link command without any pre-configured scope."
         },
         {
+          "description": "Enables the hub_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hub-pair",
+          "markdownDescription": "Enables the hub_pair command without any pre-configured scope."
+        },
+        {
           "description": "Enables the hub_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-hub-status",
@@ -595,6 +607,60 @@
           "type": "string",
           "const": "allow-mobile-hub-url",
           "markdownDescription": "Enables the mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_forget command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-forget",
+          "markdownDescription": "Enables the secure_forget command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-pair",
+          "markdownDescription": "Enables the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-request",
+          "markdownDescription": "Enables the secure_request command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_routes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-routes",
+          "markdownDescription": "Enables the secure_routes command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_socket_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-socket-close",
+          "markdownDescription": "Enables the secure_socket_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_socket_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-socket-open",
+          "markdownDescription": "Enables the secure_socket_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_socket_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-socket-send",
+          "markdownDescription": "Enables the secure_socket_send command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-status",
+          "markdownDescription": "Enables the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_switch_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-switch-route",
+          "markdownDescription": "Enables the secure_switch_route command without any pre-configured scope."
         },
         {
           "description": "Enables the set_desktop_role command without any pre-configured scope.",
@@ -621,6 +687,12 @@
           "markdownDescription": "Denies the clear_mobile_hub_url command without any pre-configured scope."
         },
         {
+          "description": "Denies the cloud_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cloud-action",
+          "markdownDescription": "Denies the cloud_action command without any pre-configured scope."
+        },
+        {
           "description": "Denies the desktop_role command without any pre-configured scope.",
           "type": "string",
           "const": "deny-desktop-role",
@@ -639,6 +711,12 @@
           "markdownDescription": "Denies the hub_link command without any pre-configured scope."
         },
         {
+          "description": "Denies the hub_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hub-pair",
+          "markdownDescription": "Denies the hub_pair command without any pre-configured scope."
+        },
+        {
           "description": "Denies the hub_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-hub-status",
@@ -655,6 +733,60 @@
           "type": "string",
           "const": "deny-mobile-hub-url",
           "markdownDescription": "Denies the mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_forget command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-forget",
+          "markdownDescription": "Denies the secure_forget command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-pair",
+          "markdownDescription": "Denies the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-request",
+          "markdownDescription": "Denies the secure_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_routes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-routes",
+          "markdownDescription": "Denies the secure_routes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_socket_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-socket-close",
+          "markdownDescription": "Denies the secure_socket_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_socket_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-socket-open",
+          "markdownDescription": "Denies the secure_socket_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_socket_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-socket-send",
+          "markdownDescription": "Denies the secure_socket_send command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-status",
+          "markdownDescription": "Denies the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_switch_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-switch-route",
+          "markdownDescription": "Denies the secure_switch_route command without any pre-configured scope."
         },
         {
           "description": "Denies the set_desktop_role command without any pre-configured scope.",

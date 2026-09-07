@@ -94,8 +94,10 @@ jobs:
       - name: Build shared package
         run: pnpm --filter @offdesk/shared build
 
-      - name: Build web bundle (loaded as launch shell, replaced at runtime)
-        run: pnpm --filter @offdesk/app build
+      - name: Build trusted web bundle (retained for encrypted connections)
+        run: |
+          pnpm --filter @offdesk/app build
+          node scripts/stamp-build.mjs packages/app/dist "$GITHUB_REF_NAME"
 
       - name: Set release version from tag
         id: version
@@ -233,6 +235,28 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Enable emulator acceleration
+        if: startsWith(github.ref, 'refs/tags/')
+        run: sudo chmod a+rw /dev/kvm
+
+      - name: Verify signed release APK starts before publishing
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: Nexus 6
+          disable-animations: true
+          script: python3 scripts/android-startup-smoke.py artifacts/offdesk-${{ steps.version.outputs.version }}-x86_64.apk
+
+      - name: Upload startup evidence
+        if: always() && startsWith(github.ref, 'refs/tags/')
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-startup-evidence
+          path: /tmp/offdesk-android-startup
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -248,7 +272,7 @@ jobs:
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
               --title "Mobile ${tag}" \
-              --notes "Tauri-based Android client. Sideload via 'install from unknown sources'. Pick the **arm64-v8a** APK on modern phones; the **universal** APK works on any architecture but is larger. On first launch the app asks for your hub's address; everything after that — the whole UI — comes from your hub, so new features arrive without a new APK."
+              --notes "Tauri-based Android client. Sideload via 'install from unknown sources'. Pick the **arm64-v8a** APK on modern phones; the **universal** APK works on any architecture but is larger. On first launch the app asks for your hub's address; legacy connections load their UI from the Hub; encrypted pairing retains the trusted App bundle and requires an App update for UI changes."
           fi
           for apk in artifacts/*.apk; do
             gh release upload "$tag" "$apk" --clobber

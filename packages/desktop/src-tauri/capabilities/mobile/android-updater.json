@@ -1,0 +1,8 @@
+{
+  "identifier": "android-updater",
+  "description": "Official Android releases only; installation requires native confirmation.",
+  "platforms": ["android"],
+  "local": true,
+  "windows": ["main"],
+  "permissions": ["offdesk-android-updater:allow-check", "offdesk-android-updater:allow-install"]
+}

@@ -38,7 +38,7 @@ const buttonKinds: Record<ButtonKind, CSSProperties> = {
   sky: {
     background: colors.bg1,
     color: colors.fg0,
-    border: "2px solid rgb(43 35 64 / 0.15)",
+    border: `2px solid ${colors.line}`,
   },
   ghost: {
     background: "transparent",

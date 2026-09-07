@@ -37,6 +37,22 @@ pub struct ServiceSpec {
 
 // ── Shared helpers ─────────────────────────────────────────────────
 
+#[cfg(any(target_os = "macos", test))]
+fn xml_text(value: &str) -> String {
+    value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn unit_value(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace('%', "%%")
+        .replace('\n', "\\n").replace('\r', "\\r").replace('\t', "\\t"))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn unit_argument(value: &str) -> String {
+    unit_value(value).replace('$', "$$")
+}
+
 fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(cmd)
         .args(args)
@@ -85,6 +101,7 @@ mod platform {
     fn render_unit(spec: &ServiceSpec, home_dir: &str, exe_path: &str, path_env: &str) -> String {
         let exec = std::iter::once(exe_path.to_string())
             .chain(spec.args.iter().cloned())
+            .map(|value| unit_argument(&value))
             .collect::<Vec<_>>()
             .join(" ");
         format!(
@@ -99,16 +116,19 @@ ExecStart={exec}
 Restart=always
 RestartSec=10
 KillMode=process
-Environment=HOME={home_dir}
-Environment=PATH={path_env}
-Environment=LANG={lang_env}
-WorkingDirectory={home_dir}
+Environment={home_env}
+Environment={path_env}
+Environment={lang_env}
+WorkingDirectory={working_directory}
 
 [Install]
 WantedBy=default.target
 "#,
             description = spec.description,
-            lang_env = lang_env(),
+            home_env = unit_value(&format!("HOME={home_dir}")),
+            path_env = unit_value(&format!("PATH={path_env}")),
+            lang_env = unit_value(&format!("LANG={}", lang_env())),
+            working_directory = unit_value(home_dir),
         )
     }
 
@@ -201,11 +221,11 @@ mod platform {
     use super::*;
 
     fn render_plist(spec: &ServiceSpec, home_dir: &str, exe_path: &str, path_env: &str) -> String {
-        let log_dir = format!("{home_dir}/Library/Logs/offdesk");
-        let lang_env = lang_env();
+        let log_dir = xml_text(&format!("{home_dir}/Library/Logs/offdesk"));
+        let lang_env = xml_text(&lang_env());
         let args = std::iter::once(exe_path.to_string())
             .chain(spec.args.iter().cloned())
-            .map(|a| format!("        <string>{a}</string>"))
+            .map(|a| format!("        <string>{}</string>", xml_text(&a)))
             .collect::<Vec<_>>()
             .join("\n");
         format!(
@@ -245,6 +265,8 @@ mod platform {
 "#,
             label = spec.label,
             name = spec.name,
+            home_dir = xml_text(home_dir),
+            path_env = xml_text(path_env),
         )
     }
 
@@ -380,4 +402,15 @@ pub fn is_active(spec: &ServiceSpec) -> Option<String> {
 }
 pub fn service_file_path(spec: &ServiceSpec, home_dir: &str) -> String {
     platform::service_file_path(spec, home_dir)
+}
+
+#[cfg(test)]
+mod quoting_tests {
+    use super::*;
+    #[test]
+    fn managed_connector_database_paths_remain_single_literal_arguments() {
+        assert_eq!(unit_argument("/home/A B/$user%/hub.db"), "\"/home/A B/$$user%%/hub.db\"");
+        assert_eq!(unit_argument("a\"b\\c\n"), "\"a\\\"b\\\\c\\n\"");
+        assert_eq!(xml_text("/Users/A & B/<hub>.db"), "/Users/A &amp; B/&lt;hub&gt;.db");
+    }
 }

@@ -24,7 +24,7 @@ export const PREFERRED_TERMINAL_FONTS = [
   "DejaVu Sans Mono",
 ] as const;
 
-function quoteFontFamily(font: string): string {
+export function quoteFontFamily(font: string): string {
   return `'${font.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 

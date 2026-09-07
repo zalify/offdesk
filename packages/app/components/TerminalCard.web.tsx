@@ -1,5 +1,5 @@
-import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
+import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
 import { X } from "lucide-react";
 import type { TerminalViewRef, SelectionSnapshot } from "./TerminalView.types";
@@ -10,6 +10,7 @@ import { colors, terminalTheme } from "@/lib/colors";
 import { ctrlLatchTransform } from "@/lib/ctrlLatch";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { useVisualViewportHeight } from "@/lib/hooks";
+import { useTerminalKeyboard } from "@/lib/useTerminalKeyboard";
 import { useKeyBarSlot } from "@/lib/keyBarSlot";
 import { getMobileViewportTerminalAction } from "@/lib/mobileViewportTerminal";
 import { estimateInitialTerminalDimensions } from "@/lib/terminalViewModel";
@@ -77,6 +78,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   const selectOverlayRef = useRef<HTMLPreElement>(null);
   const fitRefRetryTimer = useRef<number | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  useTerminalKeyboard(isTouch && isActive, setKeyboardVisible);
   const [selectMode, setSelectMode] = useState(false);
   const [terminalReconnecting, setTerminalReconnecting] = useState(false);
   const [selectSnapshot, setSelectSnapshot] = useState<SelectionSnapshot | null>(null);
@@ -221,15 +223,9 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
     setKeyboardVisible(false);
   }, [canType]);
 
-  // A key-bar tap must leave the soft keyboard where it was. The buttons
-  // decline focus, but a browser that took it anyway has just dismissed
-  // the keyboard — so while it is meant to be up, focus goes back to the
-  // terminal inside the same tap, which is the only time a phone lets a
-  // page raise it.
-  const keepKeyboard = useCallback(() => {
-    if (keyboardVisible) termViewRef.current?.focus();
-  }, [keyboardVisible]);
-
+  // ExtendedKeyBar prevents pointer/mouse focus changes itself. Never focus
+  // here: the OS may have dismissed its keyboard while keyboardVisible still
+  // reflects the last toggle, and refocusing would unexpectedly reopen it.
   const handleToolbarKey = useCallback((data: string) => {
     if (!canType) return;
     if (ctrlArmedRef.current) {
@@ -238,33 +234,19 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
     } else {
       termViewRef.current?.sendCommandInput(data);
     }
-    keepKeyboard();
-  }, [canType, keepKeyboard, setCtrlLatch]);
+  }, [canType, setCtrlLatch]);
 
   const handleToggleCtrl = useCallback(() => {
     if (!canType) return;
     // Tapping Ctrl again while armed disarms without sending anything.
     setCtrlLatch(!ctrlArmedRef.current);
-    // Ctrl is the first half of C-p or C-n; the second half is typed on
-    // the keyboard, so it has to still be there.
-    keepKeyboard();
-  }, [canType, keepKeyboard, setCtrlLatch]);
+  }, [canType, setCtrlLatch]);
 
   const handleAttachFile = useCallback(async (file: File) => {
-    if (!canType) return;
-    try {
-      await termViewRef.current?.sendImageFile(file);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn("[offdesk] attach file failed", err);
-      // Mobile users can't see console.warn — alert is the only surface
-      // we have until there's a toast system. Without it the failure looks
-      // identical to a successful upload that produced no terminal echo.
-      const msg = err instanceof Error ? err.message : "Image upload failed.";
-      if (typeof window !== "undefined") {
-        window.alert(msg);
-      }
-    }
+    if (!canType) throw new Error("Unlock view only to attach a file.");
+    const view = termViewRef.current;
+    if (!view) throw new Error("Reconnect to the terminal before attaching a file.");
+    await view.sendImageFile(file);
   }, [canType]);
 
   const handleToggleKeyboard = useCallback(() => {
@@ -339,21 +321,6 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
     termViewRef.current?.scrollToBottom();
   }, []);
 
-  const keyBar = (
-    <ExtendedKeyBar
-      onKey={handleToolbarKey}
-      onToggleKeyboard={handleToggleKeyboard}
-      onAttachFile={handleAttachFile}
-      onEnterSelectMode={handleEnterSelectMode}
-      onExitSelectMode={handleExitSelectMode}
-      onCopySelection={handleCopySelection}
-      selectMode={selectMode}
-      keyboardVisible={keyboardVisible}
-      isController={canType}
-      ctrlArmed={ctrlArmed}
-      onToggleCtrl={handleToggleCtrl}
-    />
-  );
 
   return (
     <div
@@ -410,7 +377,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             pointerEvents: "all",
           }}
         >
-          <span style={{ color: colors.foregroundSecondary, fontSize: 14 }}>
+          <span style={{ color: terminalTheme.foreground, fontSize: 14 }}>
             Waiting for reconnection…
           </span>
         </div>
@@ -454,7 +421,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                 borderRadius: 999,
                 background: "rgba(20, 20, 24, 0.88)",
                 border: `1px solid ${colors.border}`,
-                color: colors.foregroundSecondary,
+                color: terminalTheme.foreground,
                 fontSize: 10,
               }}
             >
@@ -478,7 +445,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             justifyContent: "space-between",
             padding: "4px 8px",
             borderBottom: `1px solid ${colors.border}`,
-            background: "rgba(0,0,0,0.2)",
+            background: colors.bg1,
             cursor: "pointer",
           }}
           onClick={handleCardClick}
@@ -618,7 +585,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                     background: colors.accent,
                     border: "none",
                     borderRadius: 6,
-                    color: colors.background,
+                    color: colors.onAccent,
                     cursor: "pointer",
                     fontSize: 12,
                     fontWeight: 600,
@@ -673,6 +640,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             {isTab && isTouch && selectMode && selectSnapshot && (
               <pre
                 ref={selectOverlayRef}
+                className="terminal-select-overlay"
                 data-testid="terminal-select-overlay"
                 style={{
                   position: "absolute",
@@ -714,13 +682,19 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
 
         {/* Compact phone: inline key bar. Large+touch: portal into the
             workspace bottom slot so one bar operates on the focused pane. */}
-        {isTab && isCompact && keyBar}
-        {isTab &&
-          isTouch &&
-          !isCompact &&
-          isActive &&
-          keyBarSlot &&
-          createPortal(keyBar, keyBarSlot)}
+        {isTab && (isCompact || isTouch) && (
+          <TerminalKeyBarPortal target={!isCompact && isActive ? keyBarSlot : null} hidden={!isCompact && !isActive}>
+            <ExtendedKeyBar onKey={handleToolbarKey} onToggleKeyboard={handleToggleKeyboard}
+              onPasteText={text => {
+                const view = termViewRef.current;
+                if (!view) throw new Error("Reconnect to the terminal before pasting.");
+                view.pasteText(text);
+              }} onAttachFile={handleAttachFile}
+              onEnterSelectMode={handleEnterSelectMode} onExitSelectMode={handleExitSelectMode} onCopySelection={handleCopySelection}
+              selectMode={selectMode} keyboardVisible={keyboardVisible} isController={canType}
+              ctrlArmed={ctrlArmed} onToggleCtrl={handleToggleCtrl} />
+          </TerminalKeyBarPortal>
+        )}
       </div>
 
       {/* Footer - only in card mode */}
@@ -816,3 +790,8 @@ function areTerminalCardPropsEqual(
 }
 
 export const TerminalCard = memo(TerminalCardComponent, areTerminalCardPropsEqual);
+
+function TerminalKeyBarPortal({ target, hidden, children }: { target: HTMLElement | null; hidden: boolean; children: import("react").ReactNode }) {
+  const content = <div hidden={hidden} style={{ flexShrink: 0, minWidth: 0 }}>{children}</div>;
+  return target ? createPortal(content, target) : content;
+}

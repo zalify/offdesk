@@ -26,3 +26,10 @@ packages/desktop/src-tauri/gen/schemas/capabilities.json
 # Sidecars the desktop release build bundles; scripts/desktop-sidecars.sh
 # and scripts/build-tmux-sidecar.sh put them here.
 packages/desktop/src-tauri/binaries/
+
+# Persistent Hub encryption identity; never commit private keys.
+*.secure-key
+
+# Native plugin outputs generated during Android builds.
+packages/desktop/*/android/build/
+packages/desktop/*/android/.tauri/

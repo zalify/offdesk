@@ -1,7 +1,16 @@
+import { ConnectionRoutesPanel } from "./ConnectionRoutesPanel";
+import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
+import { SecureDevicesPanel } from "./SecureConnectionPanel";
+import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTransport";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
+import { useMobileHubSwitch } from "@/lib/useMobileHubSwitch";
+import { useTheme, type Theme } from "@/lib/theme";
 import { MobileAppPanel } from "./MobileAppPanel.web";
 import { ThisMachineSection } from "./DesktopSetup.web";
+import { UpdateNotification } from "./UpdateNotification";
+import { AndroidUpdateNotification } from "./AndroidUpdateNotification";
+import { useAuth } from "@/lib/auth";
 import { isTauri, isTauriMobile } from "@/lib/platform";
 import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
 import {
@@ -26,7 +35,7 @@ import {
 } from "@/lib/prefixKey";
 import { ArrowLeft } from "lucide-react";
 
-// Frontend build id stamped into index.html by the Docker build
+// Frontend build id stamped into index.html by release builds
 // (window.__OFFDESK_BUILD__). "dev" when running unstamped (local dev).
 function getFrontendBuildId(): string {
   if (typeof window === "undefined") return "dev";
@@ -52,7 +61,10 @@ async function getShellVersion(): Promise<string> {
 
 // Common UI (proportional) fonts
 const UI_FONTS = [
-  "System Default",
+  "App Default",
+  "System UI",
+  "Nunito Variable",
+  "Fredoka Variable",
   "Inter",
   "Roboto",
   "Segoe UI",
@@ -95,11 +107,13 @@ interface SettingsPageProps {
 
 // Reusable select with custom input fallback
 function FontSelect({
+  label,
   value,
   options,
   emptyLabel,
   onChange,
 }: {
+  label: string;
   value: string;
   options: string[];
   emptyLabel: string;
@@ -115,6 +129,7 @@ function FontSelect({
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          aria-label={label}
           placeholder="Enter font name..."
           style={{
             flex: 1,
@@ -151,6 +166,7 @@ function FontSelect({
   return (
     <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
       <select
+        aria-label={label}
         value={value || options[0]}
         onChange={(e) => {
           const v = e.target.value;
@@ -171,7 +187,7 @@ function FontSelect({
       >
         {options.map((opt) => (
           <option key={opt} value={opt}>
-            {opt === options[0] ? emptyLabel : opt}
+            {opt === options[0] ? emptyLabel : ["Nunito Variable", "Fredoka Variable", "JetBrains Mono"].includes(opt) ? `${opt} (included)` : opt}
           </option>
         ))}
       </select>
@@ -272,6 +288,37 @@ function formatTokenDate(ms: number | null): string {
 }
 
 export function SettingsPage({ onClose }: SettingsPageProps) {
+  const contentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+    let frame = 0;
+    const revealFocusedInput = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const field = document.activeElement;
+        if (!(field instanceof HTMLElement) || !content.contains(field) ||
+            !field.matches("input, textarea, select, [contenteditable=true]")) return;
+        const bounds = content.getBoundingClientRect();
+        const rect = field.getBoundingClientRect();
+        // The keyboard (including its accessory bar) shrinks this scroller
+        // after focus. Scroll only its contents, never the whole app chrome.
+        if (rect.bottom > bounds.bottom - 12) content.scrollTop += rect.bottom - bounds.bottom + 12;
+        else if (rect.top < bounds.top + 12) content.scrollTop += rect.top - bounds.top - 12;
+      });
+    };
+    const observer = new ResizeObserver(revealFocusedInput);
+    observer.observe(content);
+    content.addEventListener("focusin", revealFocusedInput);
+    return () => {
+      observer.disconnect();
+      content.removeEventListener("focusin", revealFocusedInput);
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+  const secureStatus = useSecureConnectionStatus();
+  const { logout } = useAuth();
+  const { theme, setTheme } = useTheme();
   // Terminal font settings
   const [terminalFont, setTerminalFont] = useState(
     () => localStorage.getItem("offdesk:terminal-font-family") || "",
@@ -326,6 +373,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
   // Server URL (desktop only)
   const [serverUrl, setServerUrlState] = useState(() => getServerUrl());
+  const [serverUrlError, setServerUrlError] = useState<string | null>(null);
   const [prefixBindings, setPrefixBindings] = useState(() =>
     loadPrefixBindings(),
   );
@@ -372,15 +420,6 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     [],
   );
 
-  // Apply UI font to document
-  useEffect(() => {
-    if (uiFont) {
-      document.documentElement.style.fontFamily = `'${uiFont}', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif`;
-    } else {
-      document.documentElement.style.fontFamily = "";
-    }
-  }, [uiFont]);
-
   // Save terminal font
   const handleTerminalFontChange = useCallback((value: string) => {
     setTerminalFont(value);
@@ -389,6 +428,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     } else {
       localStorage.removeItem("offdesk:terminal-font-family");
     }
+    notifyFontPreferencesChanged();
   }, []);
 
   const handleTerminalFontSizeChange = useCallback(
@@ -401,6 +441,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
       } else if (!v) {
         localStorage.removeItem("offdesk:terminal-font-size");
       }
+      notifyFontPreferencesChanged();
     },
     [],
   );
@@ -413,6 +454,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     } else {
       localStorage.removeItem("offdesk:ui-font-family");
     }
+    notifyFontPreferencesChanged();
   }, []);
 
   const handleUiFontSizeChange = useCallback(
@@ -422,11 +464,10 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
       const size = parseInt(v, 10);
       if (size >= 10 && size <= 20) {
         localStorage.setItem("offdesk:ui-font-size", String(size));
-        document.documentElement.style.fontSize = `${size}px`;
       } else if (!v) {
         localStorage.removeItem("offdesk:ui-font-size");
-        document.documentElement.style.fontSize = "";
       }
+      notifyFontPreferencesChanged();
     },
     [],
   );
@@ -533,24 +574,28 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   }, [createdToken]);
 
   // Server URL
-  const handleServerUrlSave = useCallback(() => {
-    setServerUrl(serverUrl);
-    window.location.reload();
-  }, [serverUrl]);
+  const handleServerUrlSave = useCallback(async () => {
+    try {
+      const parsed = new URL(serverUrl.trim());
+      if (!/^https?:$/.test(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+        throw new Error("Enter an http:// or https:// hub address without sign-in credentials.");
+      }
+      const next = parsed.toString().replace(/\/+$/, "");
+      if (next === getServerUrl()) return;
+      // A saved login belongs to the old hub. Never send it to the new one.
+      await logout();
+      setServerUrl(next);
+      window.location.reload();
+    } catch (e) {
+      setServerUrlError(e instanceof TypeError ? "Enter a valid http:// or https:// hub address." : String(e));
+    }
+  }, [serverUrl, logout]);
 
   // The mobile app is pointed at one hub at a time. Letting go of it drops
   // the app back to its own setup screen, where the next address is typed by
   // hand — this page is served by a hub, and a hub does not get to choose the
   // next one.
-  const handleSwitchHub = useCallback(() => {
-    // Recoverable, but only by retyping an address on a phone keyboard.
-    if (!window.confirm("Disconnect from this hub and enter another address?")) {
-      return;
-    }
-    void import("@tauri-apps/api/core").then(({ invoke }) =>
-      invoke("clear_mobile_hub_url"),
-    );
-  }, []);
+  const { switchHub: handleSwitchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
 
   const handlePrefixRecordKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -674,6 +719,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
       {/* Content */}
       <div
+        ref={contentRef}
+        data-testid="settings-content"
         style={{
           flex: 1,
           overflow: "auto",
@@ -685,14 +732,47 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Appearance</SectionTitle>
 
+          <SettingRow label="Theme" description="Saved on this device. Terminal colors stay the same.">
+            <div role="group" aria-label="Theme" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {([
+                ["light", "Light"],
+                ["dark", "Dark"],
+                ["system", "System"],
+              ] as const).map(([value, label]: readonly [Theme, string]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={theme === value}
+                  onClick={() => setTheme(value)}
+                  style={{
+                    flex: 1,
+                    minHeight: 44,
+                    padding: "10px 16px",
+                    borderRadius: 8,
+                    border: `1px solid ${theme === value ? colors.accent : colors.border}`,
+                    background: theme === value ? colorAlpha.accentSoft : colors.surface,
+                    color: theme === value ? colors.accent : colors.foregroundSecondary,
+                    font: "inherit",
+                    fontSize: 13,
+                    fontWeight: theme === value ? 700 : 500,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </SettingRow>
+
           <SettingRow
             label="UI Font"
-            description="Font used for the interface (tabs, dialogs, palette)"
+            description="Applies immediately to the interface. Included fonts work on every device; other fonts must be installed locally."
           >
             <FontSelect
+              label="UI Font"
               value={uiFont}
               options={UI_FONTS}
-              emptyLabel="System Default"
+              emptyLabel="App Default"
               onChange={handleUiFontChange}
             />
           </SettingRow>
@@ -716,9 +796,10 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           <SettingRow
             label="Terminal Font"
-            description="Monospace font used inside terminal windows"
+            description="Applies to open terminals immediately. JetBrains Mono is included; other fonts must be installed on this device. Chinese characters use a system fallback."
           >
             <FontSelect
+              label="Terminal Font"
               value={terminalFont}
               options={TERMINAL_FONTS}
               emptyLabel="Auto Detect"
@@ -729,6 +810,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           <SettingRow label="Terminal Font Size">
             <input
               type="number"
+              aria-label="Terminal Font Size"
               value={terminalFontSize}
               onChange={handleTerminalFontSizeChange}
               placeholder="14"
@@ -963,10 +1045,11 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     overflowWrap: "anywhere",
                   }}
                 >
-                  {typeof window !== "undefined" ? window.location.origin : ""}
+                  {secureStatus?.endpoint.hub_url ?? (typeof window !== "undefined" ? window.location.origin : "")}
                 </span>
                 <button
-                  onClick={handleSwitchHub}
+                  onClick={() => void handleSwitchHub()}
+                  disabled={switchingHub}
                   style={{
                     background: "none",
                     border: `1px solid ${colors.border}`,
@@ -979,12 +1062,20 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     whiteSpace: "nowrap",
                   }}
                 >
-                  Switch hub
+                  {switchingHub ? "Switching…" : "Switch hub"}
                 </button>
               </div>
             </SettingRow>
+            {switchHubError && <p role="alert" style={{ color: colors.err, fontSize: 13, margin: "8px 0 0" }}>{switchHubError}</p>}
           </section>
         )}
+
+        {isSecureConnection() && <section style={{ marginBottom: 32 }}><ConnectionRoutesPanel /></section>}
+
+        <section style={{ marginBottom: 32 }}>
+          <SectionTitle>Encrypted devices</SectionTitle>
+          <SecureDevicesPanel />
+        </section>
 
         {/* This machine — the desktop app's role, and the hub when it is one */}
         {isTauri() && !isTauriMobile() && (
@@ -995,19 +1086,20 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         )}
 
         {/* Connection Section — Tauri desktop only */}
-        {isTauri() && !isTauriMobile() && (
+        {isTauri() && !isTauriMobile() && !isSecureConnection() && (
           <section style={{ marginBottom: 32 }}>
             <SectionTitle>Connection</SectionTitle>
 
             <SettingRow
               label="Server URL"
-              description="WebSocket server address for terminal connections"
+              description="Changing hubs signs this app out. Paste an http:// or https:// address."
             >
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <input
                   type="text"
+                  aria-label="Server URL"
                   value={serverUrl}
-                  onChange={(e) => setServerUrlState(e.target.value)}
+                  onChange={(e) => { setServerUrlState(e.target.value); setServerUrlError(null); }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleServerUrlSave();
                   }}
@@ -1031,6 +1123,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 </button>
               </div>
             </SettingRow>
+            {serverUrlError && <div role="alert" style={{ color: colors.err, fontSize: 12 }}>{serverUrlError}</div>}
           </section>
         )}
 
@@ -1236,6 +1329,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               <div>Shell version: {shellVersion ?? "loading…"}</div>
             )}
           </div>
+          <UpdateNotification inline />
+          <AndroidUpdateNotification inline />
         </section>
 
         {/* Reload notice */}
@@ -1246,8 +1341,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             marginTop: 8,
           }}
         >
-          Some settings (terminal font) take effect after
-          creating a new terminal or reloading the page.
+          Font changes are saved on this device and apply without reloading.
         </div>
       </div>
     </div>

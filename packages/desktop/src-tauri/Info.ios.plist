@@ -18,10 +18,9 @@
     <key>NSAllowsArbitraryLoadsInWebContent</key>
     <true/>
   </dict>
-  <!-- Only the platform's TLS, no encryption of our own: exempt, and saying
-       so here spares every TestFlight build the export-compliance question. -->
-  <key>ITSAppUsesNonExemptEncryption</key>
-  <false/>
+  <!-- Encrypted pairing now includes Noise/Snow cryptography. Leave export
+       classification to the updated App Store Connect declaration rather than
+       retaining the previous platform-TLS-only exemption. -->
   <key>UISupportedInterfaceOrientations</key>
   <array>
     <string>UIInterfaceOrientationPortrait</string>

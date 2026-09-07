@@ -1,8 +1,14 @@
 {
   "identifier": "default",
   "description": "Default capability for the main window",
-  "platforms": ["macOS", "windows", "linux"],
-  "windows": ["main"],
+  "platforms": [
+    "macOS",
+    "windows",
+    "linux"
+  ],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
@@ -25,6 +31,18 @@
     "allow-hub-status",
     "allow-hub-link",
     "allow-hub-install",
-    "allow-hub-uninstall"
-  ]
+    "allow-hub-uninstall",
+    "allow-secure-status",
+    "allow-secure-routes",
+    "allow-secure-switch-route",
+    "allow-secure-pair",
+    "allow-secure-forget",
+    "allow-secure-request",
+    "allow-secure-socket-open",
+    "allow-secure-socket-send",
+    "allow-secure-socket-close",
+    "allow-hub-pair",
+    "allow-cloud-action"
+  ],
+  "local": true
 }

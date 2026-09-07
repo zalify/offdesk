@@ -18,6 +18,21 @@
     "barcode-scanner:allow-cancel",
     "barcode-scanner:allow-request-permissions",
     "barcode-scanner:allow-check-permissions",
-    "barcode-scanner:allow-open-app-settings"
+    "barcode-scanner:allow-open-app-settings",
+    "allow-secure-status",
+    "allow-secure-routes",
+    "allow-secure-switch-route",
+    "allow-secure-pair",
+    "allow-secure-forget",
+    "allow-secure-request",
+    "allow-secure-socket-open",
+    "allow-secure-socket-send",
+    "allow-secure-socket-close",
+    "notification:default",
+    "shell:allow-open",
+    "opener:default",
+    "clipboard-manager:allow-read-text",
+    "clipboard-manager:allow-write-text",
+    "process:default"
   ]
 }

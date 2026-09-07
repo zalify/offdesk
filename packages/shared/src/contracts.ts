@@ -18,6 +18,8 @@ export interface TerminalInfo {
   cols: number
   rows: number
   reachable: boolean
+  /** Best-effort live-screen detection; absent on older nodes. */
+  attention?: "confirmation" | null
 }
 
 export interface WorkspaceGroupInfo {

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tauri dev",
     "build": "tauri build",
+    "build:web": "pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app build && node ../../scripts/stamp-build.mjs ../app/dist --desktop",
     "tauri": "tauri"
   },
   "devDependencies": {
