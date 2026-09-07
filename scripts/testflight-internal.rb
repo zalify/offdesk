@@ -5,6 +5,7 @@ require 'json'
 require 'net/http'
 require 'openssl'
 require 'uri'
+$stdout.sync = true
 
 def b64(value)
   Base64.urlsafe_encode64(value, padding: false)
@@ -52,10 +53,19 @@ raise 'Apple processing still pending; rerun the internal distribution step late
 previous = api('get', '/v1/builds', nil, 'filter[app]' => app, 'filter[version]' => '0.6.4')['data'].first
 raise 'Previous 0.6.4 build not found for encryption declaration' unless previous
 declaration = api('get', "/v1/builds/#{previous['id']}/appEncryptionDeclaration")['data']
-raise 'Previous encryption declaration unavailable; complete compliance in App Store Connect' unless declaration
-attrs = declaration['attributes']
-raise 'Declaration does not match existing standard-crypto/no-France configuration' unless attrs['containsThirdPartyCryptography'] && !attrs['containsProprietaryCryptography'] && !attrs['availableOnFrenchStore']
-api('patch', "/v1/builds/#{build['id']}", data: {type: 'builds', id: build['id'], relationships: {appEncryptionDeclaration: {data: {type: 'appEncryptionDeclarations', id: declaration['id']}}}})
+puts JSON.generate(previousBuild: previous['attributes']['version'], usesNonExemptEncryption: previous['attributes']['usesNonExemptEncryption'], declarationAvailable: !declaration.nil?)
+if declaration
+  attrs = declaration['attributes']
+  raise 'Declaration does not match existing standard-crypto/no-France configuration' unless attrs['containsThirdPartyCryptography'] && !attrs['containsProprietaryCryptography'] && !attrs['availableOnFrenchStore']
+  api('patch', "/v1/builds/#{build['id']}", data: {type: 'builds', id: build['id'], relationships: {appEncryptionDeclaration: {data: {type: 'appEncryptionDeclarations', id: declaration['id']}}}})
+elsif previous['attributes']['usesNonExemptEncryption'] == false
+  # ASC may store the completed questionnaire as an exemption rather than a
+  # declaration resource. Reuse that explicit classification, never infer it
+  # merely from a missing declaration. This assumes unchanged cryptography.
+  api('patch', "/v1/builds/#{build['id']}", data: {type: 'builds', id: build['id'], attributes: {usesNonExemptEncryption: false}})
+else
+  raise 'Previous encryption classification unavailable; complete compliance in App Store Connect'
+end
 api('post', "/v1/betaGroups/#{group['id']}/relationships/builds", data: [{type: 'builds', id: build['id']}])
 detail = api('get', "/v1/builds/#{build['id']}/buildBetaDetail")['data']['attributes']
 puts JSON.generate(build: number, group: 'Zalify Team', internalBuildState: detail['internalBuildState'], externalBuildState: detail['externalBuildState'])

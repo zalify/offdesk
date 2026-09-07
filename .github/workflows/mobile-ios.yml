@@ -27,6 +27,9 @@ on:
       archive_sha256:
         description: "Required SHA256 of a prebuilt archive"
         type: string
+      existing_build:
+        description: "Only enable an already-uploaded RC build for internal testing"
+        type: string
 
 concurrency:
   group: mobile-ios-${{ github.ref }}
@@ -34,7 +37,7 @@ concurrency:
 
 jobs:
   build-ipa:
-    if: ${{ !inputs.prebuilt_release }}
+    if: ${{ !inputs.prebuilt_release && !inputs.existing_build }}
     # App Store Connect only takes apps built against the iOS 26 SDK, which
     # means Xcode 26; macos-26 has it as the default Xcode.
     runs-on: macos-26
@@ -219,7 +222,7 @@ jobs:
           files: artifacts/*.ipa
 
   sign-prebuilt-rc:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prebuilt_release != '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prebuilt_release != '' && inputs.existing_build == '' }}
     runs-on: macos-26
     timeout-minutes: 30
     permissions:
@@ -265,3 +268,21 @@ jobs:
             ${{ runner.temp }}/rc/export/*.ipa
             ${{ runner.temp }}/rc/build-number.txt
           retention-days: 7
+
+  distribute-existing-rc:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.existing_build != '' && inputs.prebuilt_release == '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Enable existing internal TestFlight group
+        env:
+          RC_BUILD: ${{ inputs.existing_build }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: |
+          printf '%s' "$RC_BUILD" > "$RUNNER_TEMP/build-number.txt"
+          ruby scripts/testflight-internal.rb "$RUNNER_TEMP/build-number.txt"
