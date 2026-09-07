@@ -97,10 +97,10 @@ import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-const OnboardingView = lazy(() =>
+const EmptyMachinesView = lazy(() =>
   lazyWithReload(() =>
-    import("./OnboardingView.web").then((module) => ({
-      default: module.OnboardingView,
+    import("./EmptyMachinesView.web").then((module) => ({
+      default: module.EmptyMachinesView,
     })),
   ),
 );
@@ -1608,7 +1608,7 @@ function TerminalCanvasInner() {
             </Suspense>
           ) : machines.length === 0 ? (
             <Suspense fallback={<LazyLoadingFallback />}>
-              <OnboardingView />
+              <EmptyMachinesView onOpenSettings={() => setShowSettings(true)} />
             </Suspense>
           ) : isCompact ? (
             <MobileWorkbench

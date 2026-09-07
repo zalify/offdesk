@@ -271,6 +271,18 @@ pub enum LocalNode {
     Failed(String),
 }
 
+impl LocalNode {
+    /// A running Hub alone is not a successful whole-machine installation.
+    pub fn installation_result(&self) -> Result<(), String> {
+        match self {
+            Self::Failed(error) => Err(format!("Hub is running, but this machine could not be set up: {error}")),
+            Self::NoBinary => Err("Hub is running, but offdesk-node is missing. Reinstall the complete Offdesk app.".into()),
+            // Preserve an intentional connection to another Hub.
+            Self::Registered { .. } | Self::AlreadyHere | Self::Elsewhere { .. } => Ok(()),
+        }
+    }
+}
+
 /// Register this machine with the hub that just started on it, and keep its
 /// node running as a service. The three-line install used to end with the
 /// person on a "Connect a machine" page, being asked to register the machine
@@ -292,7 +304,9 @@ pub fn register_local_node(pool: &DbPool, listen: &str) -> LocalNode {
             .unwrap_or_default();
         let mine: Vec<Ipv4Addr> = interface_addresses().into_iter().map(|(_, ip)| ip).collect();
         if hub_is_here(&hub, port, &mine) {
-            let _ = node_service_install(&find_node_binary().unwrap_or_else(|| "offdesk-node".into()));
+            if let Err(error) = node_service_install(&find_node_binary().unwrap_or_else(|| "offdesk-node".into())) {
+                return LocalNode::Failed(error);
+            }
             return LocalNode::AlreadyHere;
         }
         if !hub.is_empty() {
@@ -710,6 +724,16 @@ pub fn sign_in_notice(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incomplete_local_setup_is_not_reported_as_a_successful_install() {
+        assert!(LocalNode::NoBinary.installation_result().is_err());
+        let error = LocalNode::Failed("registration refused".into()).installation_result().unwrap_err();
+        assert!(error.contains("registration refused"));
+        assert!(LocalNode::Registered { name: "Mac".into() }.installation_result().is_ok());
+        assert!(LocalNode::AlreadyHere.installation_result().is_ok());
+        assert!(LocalNode::Elsewhere { hub: "https://other.example".into() }.installation_result().is_ok());
+    }
 
     #[test]
     fn an_explicit_database_path_is_used_verbatim() {

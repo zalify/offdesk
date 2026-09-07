@@ -40,8 +40,7 @@ test("bulk input and legacy keypress preserve a whole dictated paragraph", async
   await expect.poll(() => inputs.join("").replace(/\x1b\[20[01]~/g, "")).toBe(text);
 });
 
-test("iOS delayed 229 punctuation, tail replacement and dictation reach the terminal once", async ({ page }) => {
-  test.skip(device !== "iPhone 14", "iOS text-input compatibility path");
+test("Apple delayed 229 punctuation, tail replacement and dictation reach the terminal once", async ({ page }) => {
   const inputs: string[] = [];
   page.on("websocket", socket => socket.on("framesent", frame => {
     if (typeof frame.payload !== "string") return;
@@ -65,7 +64,7 @@ test("iOS delayed 229 punctuation, tail replacement and dictation reach the term
       ta.dispatchEvent(new InputEvent("input", { inputType, data, bubbles: true, composed: true }));
     };
     ta.value = "";
-    for (const char of ["，", "！", " "]) {
+    for (const char of ["？", "（", "）", "，", "！", " "]) {
       ta.dispatchEvent(new KeyboardEvent("keydown", { key: char, keyCode: 229, bubbles: true }));
       // Replay the upstream iOS trace: the keydown timer finishes BEFORE
       // WebKit commits punctuation. A same-task insertion hides the bug.
@@ -83,10 +82,10 @@ test("iOS delayed 229 punctuation, tail replacement and dictation reach the term
     // Another commit in the same task must not be swallowed by a dedup timer.
     edit("insertText", "？", ta.value + "？");
   });
-  await expect.poll(() => inputs.join("")).toBe("，！ \x7f。语音输入测试测试，English 🦊！？");
+  await expect.poll(() => inputs.join("")).toBe("？（），！ \x7f。语音输入测试测试，English 🦊！？");
   // A fresh real keyboard input still uses xterm's normal deduplicated path.
   await page.keyboard.type("ab");
-  await expect.poll(() => inputs.join("")).toBe("，！ \x7f。语音输入测试测试，English 🦊！？ab");
+  await expect.poll(() => inputs.join("")).toBe("？（），！ \x7f。语音输入测试测试，English 🦊！？ab");
 });
 
 test("Paste sends the full paragraph without Enter, mode switching or keyboard focus", async ({ page }) => {

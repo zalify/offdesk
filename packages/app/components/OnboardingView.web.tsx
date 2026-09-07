@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X } from "lucide-react";
+import { Wordmark } from "./Warm.web";
 import { createRegistrationToken } from "@/lib/api";
 import { buildOnboardingScript, getJoinCommand } from "@/lib/nodeInstaller";
 import {
@@ -176,15 +177,7 @@ export function OnboardingView({
     >
       <div style={{ maxWidth: embedded ? "100%" : 600, width: "100%" }}>
         {!embedded && (
-          // The same wordmark the site uses, served from the bundle — a
-          // fresh hub's first page should say whose it is.
-          <img
-            src="/brand/wordmark.svg"
-            alt="offdesk"
-            width={124}
-            height={35}
-            style={{ display: "block", marginBottom: 36 }}
-          />
+          <div style={{ marginBottom: 36 }}><Wordmark size={26} /></div>
         )}
         {/* Header */}
         <h1

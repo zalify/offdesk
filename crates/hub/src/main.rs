@@ -167,6 +167,7 @@ fn run_service(action: ServiceCommand, args: &Args) {
             };
             let pool = db::create_pool(&database).map_err(|e| e.to_string())?;
             let local = first_run::register_local_node(&pool, listen);
+            local.installation_result()?;
             let base_url = env_or("OFFDESK_BASE_URL", "http://localhost:4317");
             match first_run::service_notice(&pool, &jwt_secret, &base_url, listen, &database, &local) {
                 Some(notice) => {

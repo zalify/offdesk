@@ -37,7 +37,7 @@ import { createSelectionAutoCopyController } from "@/lib/selectionAutoCopy";
 import { createTerminalClipboardProvider } from "@/lib/terminalClipboard";
 import { isTauri } from "@/lib/platform";
 import { bulkKeypressText } from "@/lib/terminalBulkKey";
-import { attachIosTerminalInput } from "@/lib/iosTerminalInput";
+import { attachAppleTerminalInput } from "@/lib/appleTerminalInput";
 import { readClipboardText } from "@/lib/readClipboardText";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { useDisplayMode } from "@/lib/hooks";
@@ -376,9 +376,9 @@ function patchCompositionHelperSendRace(term: Terminal): () => void {
     }, 0);
   };
 
-  const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const apple = /Mac|iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel";
   const core = (term as TerminalWithCompositionHelper)._core;
-  const removeIosInput = ios ? attachIosTerminalInput({
+  const removeAppleInput = apple ? attachAppleTerminalInput({
     textarea: helper._textarea,
     composing: () => helper._isComposing || helper._isSendingComposition,
     keyHandled: () => !!core?._keyPressHandled || !!core?._keyDownHandled,
@@ -393,7 +393,7 @@ function patchCompositionHelperSendRace(term: Terminal): () => void {
   }) : () => {};
 
   return () => {
-    removeIosInput();
+    removeAppleInput();
     helper.compositionstart = originalCompositionStart;
     helper._finalizeComposition = originalFinalize;
     helper._handleAnyTextareaChanges = originalHandleAnyTextareaChanges;
