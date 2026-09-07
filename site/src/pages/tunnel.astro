@@ -19,10 +19,11 @@ const repo = "https://github.com/zalify/offdesk";
       is not even possible.
     </p>
     <p>
-      What you give up: Cloudflare terminates TLS at its edge, so your terminal
-      traffic — keystrokes, source, whatever an agent prints — passes through
-      Cloudflare in the clear. Their network, their logs. If that is not
-      acceptable for the machines you are registering, use a
+      For ordinary browser connections, Cloudflare terminates HTTPS and can
+      read terminal traffic. Encrypted App pairing adds encryption between the
+      App and Hub, so the tunnel carries encrypted terminal content. Follow the
+      <a href={`${repo}/blob/main/docs/encrypted-connections.md`}>encrypted connection guide</a>
+      for that mode. You can also use a
       <a href={`${repo}/blob/main/docs/setup-public.md#tailscale`}>tailnet</a>
       instead: same binaries, nobody in the middle.
     </p>
