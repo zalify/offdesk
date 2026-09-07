@@ -46,6 +46,14 @@ fi
 cp "$RUNNER_TEMP/rc-profile.mobileprovision" "$app/embedded.mobileprovision"
 codesign --force --sign "$identity" --keychain "$keychain" --entitlements "$rc_dir/entitlements.plist" "$app"
 codesign --verify --deep --strict "$app"
+python3 - <<'PY'
+import os, plistlib
+path = os.environ['RC_DIR'] + '/offdesk.xcarchive/Info.plist'
+with open(path, 'rb') as f: info = plistlib.load(f)
+info['ApplicationProperties']['Team'] = os.environ['APPLE_DEVELOPMENT_TEAM']
+info['ApplicationProperties']['SigningIdentity'] = 'Apple Distribution'
+with open(path, 'wb') as f: plistlib.dump(info, f)
+PY
 xcodebuild -exportArchive -archivePath "$archive" -exportOptionsPlist "$rc_dir/ExportOptions.plist" -exportPath "$rc_dir/export"
 ipa=$(find "$rc_dir/export" -maxdepth 1 -name '*.ipa' -print -quit)
 test -n "$ipa"
