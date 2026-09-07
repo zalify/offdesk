@@ -1,5 +1,5 @@
 import { test, expect, devices } from "@playwright/test";
-import { chooseInputMode, openApp, resetMachineState, requestMachineControl, createTerminalViaApi, expandTerminalById, readTerminalBuffer } from "./helpers";
+import { openApp, resetMachineState, requestMachineControl, createTerminalViaApi, expandTerminalById, readTerminalBuffer } from "./helpers";
 
 test.use({ ...devices["iPhone 14"], browserName: "chromium" });
 
@@ -11,10 +11,8 @@ async function setup(page: import("@playwright/test").Page) {
   return id;
 }
 
-test("keyboard viewport pan keeps the editor and terminal chrome in the visible area", async ({ page }) => {
+test("keyboard viewport pan keeps the key bar and terminal chrome in the visible area", async ({ page }) => {
   await setup(page);
-  await chooseInputMode(page, true);
-  await page.getByTestId("composer-input").fill("Keep this draft");
   await page.evaluate(() => {
     const viewport = window.visualViewport!;
     Object.defineProperty(viewport, "height", { configurable: true, value: 420 });
@@ -25,7 +23,7 @@ test("keyboard viewport pan keeps the editor and terminal chrome in the visible 
   const canvas = page.getByTestId("terminal-canvas");
   await expect(canvas).toHaveCSS("height", "420px");
   await expect(canvas).toHaveCSS("top", "96px");
-  await expect.poll(() => page.getByTestId("composer-input").evaluate(el => {
+  await expect.poll(() => page.getByTestId("extended-keybar").evaluate(el => {
     const rect = el.getBoundingClientRect();
     return rect.top >= 96 && rect.bottom <= 516;
   })).toBe(true);
@@ -36,13 +34,10 @@ test("keyboard viewport pan keeps the editor and terminal chrome in the visible 
     viewport.dispatchEvent(new Event("resize"));
   });
   await expect(canvas).toHaveCSS("top", "0px");
-  await expect(page.getByTestId("composer-input")).toHaveValue("Keep this draft");
 });
 
 test("equal keys and fixed inverted-T survive scrolling, folding and rotation", async ({ page }, testInfo) => {
   await setup(page);
-  await chooseInputMode(page, true);
-  await page.getByTestId("composer-input").fill("Preserve this draft 🦊");
   // Production typography follows the design system and user font override,
   // rather than the wireframe's hard-coded system font.
   await page.evaluate(() => {
@@ -50,7 +45,6 @@ test("equal keys and fixed inverted-T survive scrolling, folding and rotation", 
     document.documentElement.style.setProperty("--font-sans", "serif");
   });
   await expect(page.getByTestId("extended-keybar-esc")).toHaveCSS("font-family", "monospace");
-  await expect(page.getByTestId("composer-input")).toHaveCSS("font-family", "serif");
   await page.evaluate(() => {
     document.documentElement.style.removeProperty("--font-display");
     document.documentElement.style.removeProperty("--font-sans");
@@ -59,7 +53,7 @@ test("equal keys and fixed inverted-T survive scrolling, folding and rotation", 
     await page.setViewportSize({ width, height: 900 });
     const bar = page.getByTestId("extended-keybar").filter({ visible: true });
     await expect(bar).toBeVisible();
-    await expect(page.getByTestId("composer-input").filter({ visible: true })).toHaveValue("Preserve this draft 🦊");
+    await expect(page.getByTestId("terminal-input-settings")).toHaveCount(0);
     await expect.poll(async () => {
       return bar.evaluate(el => {
         const width = el.clientWidth - 8;
@@ -107,61 +101,13 @@ test("equal keys and fixed inverted-T survive scrolling, folding and rotation", 
   }
 });
 
-test("local arrows and symbols edit at the caret; Enter sends once and swipe cancels activation", async ({ page }) => {
-  const commands: string[] = [];
-  const sends: string[] = [];
-  page.on("websocket", socket => socket.on("framesent", frame => {
-    if (typeof frame.payload !== "string") return;
-    try { const m = JSON.parse(frame.payload); if (m.type === "command_input") commands.push(m.data); if (m.type === "composer") sends.push(frame.payload); } catch {}
-  }));
-  await setup(page);
-  await page.getByTitle("Show keyboard", { exact: true }).click();
-  await page.getByTestId("terminal-input-settings").click();
-  await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "Input settings", exact: true })).toHaveCount(0);
-  expect(commands).toEqual([]);
-  await chooseInputMode(page, true);
-  const input = page.getByTestId("composer-input");
-  await expect(input).toHaveAttribute("rows", "1");
-  await input.fill("echo ab");
-  await input.evaluate((el: HTMLTextAreaElement) => { el.setSelectionRange(6, 6); el.blur(); });
-  await page.getByTestId("extended-keybar-left").click();
-  await expect.poll(() => input.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(5);
-  await page.getByTestId("extended-keybar-slash").click();
-  await expect(input).toHaveValue("echo /ab");
-  await expect(input).not.toBeFocused();
-  expect(commands).toEqual([]);
-  // IME confirmation must not submit, while native Shift+Enter adds a line.
-  await input.dispatchEvent("compositionstart");
-  await page.getByTestId("extended-keybar-enter").click();
-  expect(sends).toHaveLength(0);
-  await input.dispatchEvent("compositionend");
-  const space = page.getByTestId("extended-keybar-space");
-  await space.scrollIntoViewIfNeeded();
-  await space.dispatchEvent("pointerdown", { button: 0, clientX: 50, clientY: 20 });
-  await space.dispatchEvent("pointermove", { clientX: 90, clientY: 20 });
-  await space.dispatchEvent("pointerup");
-  await space.dispatchEvent("click", { detail: 1 });
-  await expect(input).toHaveValue("echo /ab");
-  await input.fill("echo KEYBAR_DELIVERED");
-  await input.evaluate((el: HTMLTextAreaElement) => el.blur());
-  await page.getByTestId("extended-keybar-enter").click();
-  await expect(input).toHaveValue("");
-  expect(sends).toHaveLength(1);
-  await expect(input).not.toBeFocused();
-  await page.getByTestId("extended-keybar-enter").click();
-  await expect.poll(() => commands).toEqual(["\r"]);
-});
-
 test("touch key taps consume the native default action without changing input focus", async ({ page }) => {
   const commands: string[] = [];
-  const sends: string[] = [];
   page.on("websocket", socket => socket.on("framesent", frame => {
     if (typeof frame.payload !== "string") return;
     try {
       const message = JSON.parse(frame.payload);
       if (message.type === "command_input") commands.push(message.data);
-      if (message.type === "composer") sends.push(frame.payload);
     } catch {}
   }));
   await setup(page);
@@ -195,17 +141,14 @@ test("touch key taps consume the native default action without changing input fo
   await page.getByTestId("extended-keybar-left").tap();
   await expect.poll(() => commands).toEqual(["\r", "\r", "\x1b[D"]);
   await expect(textarea).not.toBeFocused();
-
-  await chooseInputMode(page, true);
-  const input = page.getByTestId("composer-input");
-  await input.fill("echo TOUCH_ENTER_DELIVERED");
-  await input.evaluate((el: HTMLTextAreaElement) => el.blur());
-  await enter.tap();
-  await expect(input).toHaveValue("");
-  await expect(enter).toHaveAttribute("data-touch-default-cancelled", "true");
-  await expect(input).not.toBeFocused();
-  expect(sends).toHaveLength(1);
+  const space = page.getByTestId("extended-keybar-space");
+  await space.scrollIntoViewIfNeeded();
+  await space.dispatchEvent("pointerdown", { button: 0, clientX: 50, clientY: 20 });
+  await space.dispatchEvent("pointermove", { clientX: 90, clientY: 20 });
+  await space.dispatchEvent("pointerup");
+  await space.dispatchEvent("click", { detail: 1 });
   expect(commands).toEqual(["\r", "\r", "\x1b[D"]);
+
 });
 
 test("IME dismissal releases retained focus and every command key keeps it closed", async ({ page }) => {
@@ -232,17 +175,4 @@ test("IME dismissal releases retained focus and every command key keeps it close
   await page.getByTestId("extended-keybar-enter").tap();
   await expect(direct).toBeFocused();
   await nativeVisibility(false);
-
-  await chooseInputMode(page, true);
-  const editor = page.getByTestId("composer-input");
-  await editor.fill("echo IME_DISMISSED_DRAFT");
-  await editor.dispatchEvent("compositionstart");
-  await nativeVisibility(true);
-  await nativeVisibility(false);
-  await expect(editor).not.toBeFocused();
-  await page.getByTestId("extended-keybar-left").tap();
-  await expect(editor).not.toBeFocused();
-  await page.getByTestId("extended-keybar-enter").tap();
-  await expect(editor).toHaveValue("");
-  await expect(editor).not.toBeFocused();
 });

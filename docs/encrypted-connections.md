@@ -1,8 +1,8 @@
 # Encrypted App connections (preview)
 
 The native offdesk App can pair with a Hub and carry its API requests, terminal
-input/output, previews, and local-editor images over an end-to-end encrypted
-connection. Direct terminal input and the local editor use the same transport;
+input/output, previews, and file attachments over an end-to-end encrypted
+connection. Terminal input and uploads use the same transport;
 encryption does not require a local input box.
 
 This is the client/Hub foundation for an optional managed tunnel. It does not
@@ -222,7 +222,7 @@ model; offdesk does not implement Happy wire-protocol compatibility).
 - `pnpm test`: native IPC routing, ordered binary/text input, interrupted requests,
   no plaintext fallback, existing frontend behavior.
 - `pnpm e2e:test` / `pnpm e2e:ci`: container Chromium verifies bundled pairing,
-  recovery and hub switching alongside existing terminal/local-editor flows.
+  recovery and hub switching alongside existing terminal input and attachment flows.
   The browser bridge is stubbed; cryptography is verified by the Rust tests.
 - Native CI compiles macOS and iOS. Android's build workflow compiles the
   KeyStore plugin and application. Platform compilation alone does not prove

@@ -1,4 +1,3 @@
-import { HubLatencyContext } from "@/lib/hubLatency";
 import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
 // Mobile workbench shell (P1). Rendered when the viewport is below 768px.
 // Permanent chrome is exactly two elements: the session title bar on top and
@@ -593,9 +592,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               )}
             </div>
           </div>
-        ) : (
-          <HubLatencyContext.Provider value={rttMs}>{children}</HubLatencyContext.Provider>
-        )}
+        ) : children}
       </div>
 
       {/* Session switcher sheet */}

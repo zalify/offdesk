@@ -1,5 +1,5 @@
 import { test, expect, devices } from "@playwright/test";
-import { chooseInputMode, openApp, resetMachineState, requestMachineControl, createTerminalViaApi, expandTerminalById, readTerminalBuffer } from "./helpers";
+import { openApp, resetMachineState, requestMachineControl, createTerminalViaApi, expandTerminalById, readTerminalBuffer } from "./helpers";
 
 // CI keeps its normal Chromium/container path. WebKit is opt-in for host
 // debugging of the iOS/macOS report, not a replacement for container E2E.
@@ -89,54 +89,47 @@ test("iOS delayed 229 punctuation, tail replacement and dictation reach the term
   await expect.poll(() => inputs.join("")).toBe("，！ \x7f。语音输入测试测试，English 🦊！？ab");
 });
 
-test("Paste opens a complete editable draft without sending terminal input", async ({ page }, testInfo) => {
-  test.skip(device !== "iPhone 14", "The local editor is currently mobile-only.");
+test("Paste sends the full paragraph without Enter, mode switching or keyboard focus", async ({ page }) => {
+  test.skip(device !== "iPhone 14", "Mobile key bar behavior.");
   const text = "整段粘贴文字，保留重复词测试测试。\nSecond line 🦊";
   await page.addInitScript(text => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => text } });
   }, text);
-  const inputs: string[] = [];
+  const inputs: string[] = [], commands: string[] = [];
   page.on("websocket", socket => socket.on("framesent", frame => {
-    if (typeof frame.payload === "string") {
-      try { const message = JSON.parse(frame.payload); if (["input", "composer"].includes(message.type)) inputs.push(frame.payload); } catch {}
-    }
+    if (typeof frame.payload !== "string") return;
+    try { const m = JSON.parse(frame.payload); if (m.type === "input") inputs.push(m.data); if (m.type === "command_input") commands.push(m.data); } catch {}
   }));
-  await openApp(page);
-  await resetMachineState(page);
-  await requestMachineControl(page);
-  const id = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await openApp(page); await resetMachineState(page); await requestMachineControl(page);
+  const id = await createTerminalViaApi(page, { cwd: "/tmp", startupCommand: "env BASH_SILENCE_DEPRECATION_WARNING=1 bash --noprofile --norc" });
   await expandTerminalById(page, id);
-  await expect(page.getByRole("button", { name: "Paste", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Paste", exact: true }).click();
-  const editor = page.getByTestId("composer-input");
-  await expect(editor).toHaveValue(text);
-  await page.getByRole("button", { name: "Expand editor", exact: true }).click();
-  await expect(editor).toHaveAttribute("rows", "5");
-  await page.screenshot({ path: testInfo.outputPath("expanded-paste-editor.png") });
-  await expect(page.getByTestId("composer-save-status")).toHaveText("Saved on this device");
-  await editor.fill("Before [replace] after");
-  await editor.evaluate((el: HTMLTextAreaElement) => el.setSelectionRange(7, 16));
-  await page.getByRole("button", { name: "Paste", exact: true }).click();
-  await expect(editor).toHaveValue("Before " + text + " after");
-  expect(inputs.filter(raw => { const m = JSON.parse(raw); return m.type === "composer" || !/^(?:\x1b\](?:10|11);rgb:[0-9a-f/]+\x1b\\)+$/i.test(m.data); })).toEqual([]);
+  await expect.poll(() => readTerminalBuffer(page, id)).toMatch(/bash-\d+\.\d+[#$]/);
+  inputs.length = 0;
+  const textarea = page.locator(".xterm-helper-textarea").first();
+  await expect(textarea).not.toBeFocused();
+  await page.getByRole("button", { name: "Paste", exact: true }).tap();
+  // xterm normalizes pasted line breaks to CR and honors bracketed paste.
+  await expect.poll(() => inputs.join("")).toBe("\x1b[200~" + text.replaceAll("\n", "\r") + "\x1b[201~");
+  expect(commands).toEqual([]);
+  await expect(textarea).not.toBeFocused();
+  await expect(page.getByTestId("composer-input")).toHaveCount(0);
+  await page.getByTestId("extended-keybar-enter").tap();
+  await expect.poll(() => commands).toEqual(["\r"]);
 });
 
-test("denied clipboard access keeps the draft and exposes manual Paste", async ({ page }) => {
-  test.skip(device !== "iPhone 14", "The local editor is currently mobile-only.");
+test("denied clipboard access reports an error and leaves direct input usable", async ({ page }) => {
+  test.skip(device !== "iPhone 14", "Mobile key bar behavior.");
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { readText: async () => { throw new DOMException("Denied", "NotAllowedError"); } } });
   });
-  await openApp(page);
-  await resetMachineState(page);
-  await requestMachineControl(page);
+  await openApp(page); await resetMachineState(page); await requestMachineControl(page);
   const id = await createTerminalViaApi(page, { cwd: "/tmp" });
   await expandTerminalById(page, id);
-  await chooseInputMode(page, true);
-  await page.getByTestId("composer-input").fill("Keep this draft");
-  await page.getByRole("button", { name: "Paste", exact: true }).click();
-  await expect(page.getByText(/Could not read the clipboard/)).toBeVisible();
-  await expect(page.getByTestId("composer-input")).toHaveValue("Keep this draft");
-  await expect(page.getByTestId("composer-input")).toBeEnabled();
+  await page.getByRole("button", { name: "Paste", exact: true }).tap();
+  await expect(page.getByRole("alert")).toContainText("Could not read the clipboard");
+  await expect(page.getByTestId("composer-input")).toHaveCount(0);
+  await page.getByTestId("extended-keybar-keyboard").tap();
+  await expect(page.locator(".xterm-helper-textarea").first()).toBeFocused();
 });
 
 test("terminal Enter preserves focus after the OS dismisses the keyboard", async ({ page }) => {

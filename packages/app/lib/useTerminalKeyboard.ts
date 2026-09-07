@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { createKeyboardViewportTracker } from "./terminalKeyboard";
 
-const INPUT = '.xterm-helper-textarea, [data-testid="composer-input"]';
+const INPUT = '.xterm-helper-textarea';
 
 /** OS keyboard visibility and DOM focus are separate states. Release the stale
  * terminal focus when the IME closes, before another toolbar tap can reopen it. */
