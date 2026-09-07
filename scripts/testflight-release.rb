@@ -66,9 +66,14 @@ class TestFlightRelease
     encryption = if declaration
       a = declaration['attributes']
       raise 'Baseline is not standard-crypto/no-France' unless a['containsThirdPartyCryptography'] == true && a['containsProprietaryCryptography'] == false && a['availableOnFrenchStore'] == false
-      {relationships: {appEncryptionDeclaration: {data: {type: 'appEncryptionDeclarations', id: declaration['id']}}}}
+      current = call('get', "/v1/builds/#{id}/appEncryptionDeclaration")['data']
+      raise 'Build already has a different encryption declaration' if current && current['id'] != declaration['id']
+      raise 'Build has a conflicting exemption' if !current && build['attributes']['usesNonExemptEncryption'] == false
+      current ? nil : {relationships: {appEncryptionDeclaration: {data: {type: 'appEncryptionDeclarations', id: declaration['id']}}}}
     elsif previous['attributes']['usesNonExemptEncryption'] == false
-      {attributes: {usesNonExemptEncryption: false}}
+      current = build['attributes']['usesNonExemptEncryption']
+      raise 'Build has a conflicting encryption classification' if current == true
+      current == false ? nil : {attributes: {usesNonExemptEncryption: false}}
     else
       raise 'Explicit encryption classification missing'
     end
@@ -85,7 +90,7 @@ class TestFlightRelease
     report = {version: @version, build: @number, buildId: id, externalBuildState: state, group: 'Testers', apply: @apply, encryptionBaseline: previous['attributes']['version']}
     return report unless @apply
 
-    call('patch', "/v1/builds/#{id}", {data: {type: 'builds', id: id}.merge(encryption)})
+    call('patch', "/v1/builds/#{id}", {data: {type: 'builds', id: id}.merge(encryption)}) if encryption
     localizations = call('get', "/v1/builds/#{id}/betaBuildLocalizations")['data']
     unless localizations.any? { |l| l['attributes']['locale'] == 'en-US' }
       call('post', '/v1/betaBuildLocalizations', data: {type: 'betaBuildLocalizations', attributes: {locale: 'en-US', whatsNew: 'Improved first-time connection and startup reconnection. Please test pairing, reopening the app and terminal input.'}, relationships: {build: {data: {type: 'builds', id: id}}}})
