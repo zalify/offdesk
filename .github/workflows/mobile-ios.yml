@@ -20,6 +20,13 @@ on:
     tags:
       - "ios-v*"
   workflow_dispatch:
+    inputs:
+      prebuilt_release:
+        description: "Optional draft RC release containing ios-archive.zip (skip compilation)"
+        type: string
+      archive_sha256:
+        description: "Required SHA256 of a prebuilt archive"
+        type: string
 
 concurrency:
   group: mobile-ios-${{ github.ref }}
@@ -27,6 +34,7 @@ concurrency:
 
 jobs:
   build-ipa:
+    if: ${{ !inputs.prebuilt_release }}
     # App Store Connect only takes apps built against the iOS 26 SDK, which
     # means Xcode 26; macos-26 has it as the default Xcode.
     runs-on: macos-26
@@ -209,3 +217,49 @@ jobs:
           body: |
             The offdesk iOS app, ${{ steps.version.outputs.version }}. Install it from TestFlight; the .ipa here is the same build, for the record.
           files: artifacts/*.ipa
+
+  sign-prebuilt-rc:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prebuilt_release != '' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download verified draft RC archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_RELEASE: ${{ inputs.prebuilt_release }}
+          ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+        run: |
+          [[ "$RC_RELEASE" == rc-ios-* ]]
+          [[ "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(gh release view "$RC_RELEASE" --json isDraft --jq .isDraft)" = true
+          gh release download "$RC_RELEASE" --pattern ios-archive.zip --dir "$RUNNER_TEMP/rc"
+          cd "$RUNNER_TEMP/rc"
+          printf '%s  ios-archive.zip\n' "$ARCHIVE_SHA256" | shasum -a 256 --check
+          ditto -x -k ios-archive.zip .
+      - name: Sign and upload RC to TestFlight only
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+          IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          IOS_MOBILE_PROVISION: ${{ secrets.IOS_MOBILE_PROVISION }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: bash scripts/sign-ios-rc.sh "$RUNNER_TEMP/rc"
+      - name: Enable existing internal TestFlight group
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
+        run: ruby scripts/testflight-internal.rb "$RUNNER_TEMP/rc/build-number.txt"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-rc-testflight
+          path: |
+            ${{ runner.temp }}/rc/export/*.ipa
+            ${{ runner.temp }}/rc/build-number.txt
+          retention-days: 7
