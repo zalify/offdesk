@@ -78,6 +78,35 @@ project (`pnpm tauri ios build --open`) and picked the team.
 Releases go through TestFlight from `.github/workflows/mobile-ios.yml` on an
 `ios-v*` tag; the secrets it needs are listed at the top of that file.
 
+### Internal iOS candidates built on a local Mac
+
+To test on a physical phone before publishing a release, compile a pinned
+commit on the build Mac with Tauri CLI 2.11.4's `ios build --no-sign
+--archive-only`. Build and stamp the trusted frontend from that same commit
+first. Use the production bundle ID `dev.offdesk.ios` and a unique numeric
+version/build number; a simulator archive cannot be uploaded to TestFlight.
+
+Package the resulting archive as `offdesk.xcarchive` inside `ios-archive.zip`.
+Upload it to a **draft** release named `rc-ios-...`, record its SHA256, and
+dispatch `mobile-ios.yml` with `prebuilt_release` and `archive_sha256`. This
+path skips compilation, verifies the handoff, signs using existing repository
+secrets and exports for internal TestFlight only. It does not publish the
+draft release, submit App Store review or enable external beta distribution.
+GitHub requires write access to read draft release assets, so the signing job
+has that permission even though it never publishes the draft.
+
+The current internal-distribution script targets the existing **Zalify Team**
+group and reuses this app's 0.6.4 encryption declaration after checking its
+standard third-party cryptography and no-France settings. Changes to the
+cryptography require a new declaration instead of reusing this path. Apple
+processing may take time; upload success alone does not mean testers can
+install the build yet.
+
+Record the commit, build number and physical-device results for every
+candidate. Validate Chinese IME punctuation/dictation, keyboard show/hide,
+focused-input layout, cold start, encrypted pairing and reconnect on the
+actual supported devices before creating formal release tags.
+
 ## The desktop app, with the hub inside
 
 The desktop app can make its machine the hub. It does that by shipping
