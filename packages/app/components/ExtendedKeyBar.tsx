@@ -1,15 +1,14 @@
+import { readClipboardText } from "@/lib/readClipboardText";
 import { AttachmentPicker, formatAttachmentSize } from "./AttachmentPicker";
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, Settings, LoaderCircle } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, LoaderCircle } from "lucide-react";
 import "./ExtendedKeyBar.css";
 
 export interface ExtendedKeyBarProps {
   onKey: (data: string) => void;
   onToggleKeyboard: () => void;
-  onPaste?: () => void;
-  onInputSettings?: () => void;
+  onPasteText?: (text: string) => void;
   onAttachFile?: (file: File) => void | Promise<void>;
-  onChooseAttachment?: () => void;
   onEnterSelectMode?: () => void;
   onExitSelectMode?: () => void;
   onCopySelection?: () => Promise<string | null> | string | null;
@@ -18,14 +17,33 @@ export interface ExtendedKeyBarProps {
   isController: boolean;
   ctrlArmed?: boolean;
   onToggleCtrl?: () => void;
-  enterLabel?: string;
-  enterDisabled?: boolean;
-  local?: boolean;
 }
 
-export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPaste, onInputSettings, onAttachFile, onChooseAttachment,
+export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
-  ctrlArmed = false, onToggleCtrl, enterLabel = "Enter", enterDisabled = false, local = false }: ExtendedKeyBarProps) {
+  ctrlArmed = false, onToggleCtrl }: ExtendedKeyBarProps) {
+  const [pasteError, setPasteError] = useState<string | null>(null);
+  const [pasting, setPasting] = useState(false);
+  const pastePending = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const paste = async () => {
+    if (!isController || !onPasteText || pastePending.current) return;
+    pastePending.current = true; setPasting(true); setPasteError(null);
+    try {
+      let text: string;
+      try { text = await readClipboardText(); }
+      catch { throw new Error("Could not read the clipboard. Use your keyboard’s Paste action or Cmd/Ctrl+V."); }
+      if (!mounted.current) return;
+      if (!text) throw new Error("The clipboard has no text.");
+      onPasteText(text);
+    } catch (error) {
+      if (mounted.current) setPasteError(error instanceof Error ? error.message : "Could not paste. Try again.");
+    } finally {
+      pastePending.current = false;
+      if (mounted.current) setPasting(false);
+    }
+  };
   const bar = useRef<HTMLDivElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const track = useRef<HTMLDivElement>(null);
@@ -78,6 +96,9 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPaste, onInputSettin
         setCopying(true); try { await onCopySelection?.(); } finally { setCopying(false); }
       }}><Copy size={18} aria-hidden />{copying ? "Copying…" : "Copy"}</button>
     </div> : <>
+      {pasteError && <div role="alert" className="offdesk-attachment-status">
+        <span>{pasteError}</span><button aria-label="Dismiss paste error" onClick={() => setPasteError(null)}>Dismiss</button>
+      </div>}
       {attachmentStatus && <div role="status" data-testid="attachment-status" className="offdesk-attachment-status">
         <span>{attachmentStatus.message}</span><button aria-label="Dismiss attachment status" onClick={() => setAttachmentStatus(null)}>Dismiss</button>
       </div>}
@@ -86,9 +107,7 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPaste, onInputSettin
         {key("Esc", "\x1b", "extended-keybar-esc")}{key("Tab", "\t", "extended-keybar-tab")}{key("/", "/", "extended-keybar-slash")}
         <span className="offdesk-keybar-spacer" />
         {key("Arrow up", "\x1b[A", "extended-keybar-up", <ArrowUp size={18} aria-hidden />)}
-        <KeyButton label={enterLabel} testid="extended-keybar-enter" disabled={!isController || enterDisabled} onPress={() => onKey("\r")}>
-          {enterLabel === "Sending…" ? <LoaderCircle size={18} aria-hidden className="offdesk-keybar-spinner" /> : "Enter"}
-        </KeyButton>
+        {key("Enter", "\r", "extended-keybar-enter")}
       </div>
       <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
         <KeyButton label={keyboardVisible ? "Hide keyboard" : "Show keyboard"} disabled={!isController} pressed={keyboardVisible}
@@ -96,13 +115,12 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPaste, onInputSettin
         <div className="offdesk-keybar-scroll-wrap" data-left={edges.left} data-right={edges.right}>
           <div ref={scroller} className="offdesk-keybar-scroll" onScroll={updateEdges} data-testid="keybar-scroll" role="group" aria-label="Input tools and symbols, scroll horizontally">
             <div ref={track} className="offdesk-keybar-track">
-              {onPaste && <KeyButton label="Paste" testid="extended-keybar-paste" onPress={onPaste}><ClipboardPaste size={18} aria-hidden /></KeyButton>}
-              {(onAttachFile || onChooseAttachment) && <KeyButton label={uploading ? "Uploading attachment" : "Attach photo or file"} testid="extended-keybar-attach"
-                disabled={(!isController && !local) || uploading} onPress={() => onChooseAttachment ? onChooseAttachment() : setChoosingAttachment(true)}>
+              {onPasteText && <KeyButton label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}><ClipboardPaste size={18} aria-hidden /></KeyButton>}
+              {onAttachFile && <KeyButton label={uploading ? "Uploading attachment" : "Attach photo or file"} testid="extended-keybar-attach"
+                disabled={!isController || uploading} onPress={() => setChoosingAttachment(true)}>
                 {uploading ? <LoaderCircle size={18} aria-hidden className="offdesk-keybar-spinner" data-testid="extended-keybar-attach-spinner" /> : <Paperclip size={18} aria-hidden />}
               </KeyButton>}
               {selectionAvailable && <KeyButton label="Select text to copy" testid="extended-keybar-select-toggle" disabled={!isController} onPress={() => onEnterSelectMode?.()}><SquareDashed size={18} aria-hidden /></KeyButton>}
-              {onInputSettings && <KeyButton label="Input settings" testid="terminal-input-settings" onPress={onInputSettings}><Settings size={18} aria-hidden /></KeyButton>}
               {onToggleCtrl && <KeyButton label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl} />}
               {["Space", "@", "~", "|", "-", "_"].map(label => key(label, label === "Space" ? " " : label, label === "Space" ? "extended-keybar-space" : undefined))}
             </div>
