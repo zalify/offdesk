@@ -78,6 +78,39 @@ project (`pnpm tauri ios build --open`) and picked the team.
 Releases go through TestFlight from `.github/workflows/mobile-ios.yml` on an
 `ios-v*` tag; the secrets it needs are listed at the top of that file.
 
+### Internal iOS candidates built on a local Mac
+
+To test on a physical phone before publishing a release, compile a pinned
+commit on the build Mac with Tauri CLI 2.11.4's `ios build --no-sign
+--archive-only`. Build and stamp the trusted frontend from that same commit
+first. Use the production bundle ID `dev.offdesk.ios` and a unique numeric
+version/build number; a simulator archive cannot be uploaded to TestFlight.
+
+Package the resulting archive as `offdesk.xcarchive` inside `ios-archive.zip`.
+Upload it to a **draft** release named `rc-ios-...`, record its SHA256, and
+dispatch `mobile-ios.yml` with `prebuilt_release` and `archive_sha256`. This
+path skips compilation, verifies the handoff, signs using existing repository
+secrets and exports for internal TestFlight only. It does not publish the
+draft release, submit App Store review or enable external beta distribution.
+GitHub requires write access to read draft release assets, so the signing job
+has that permission even though it never publishes the draft.
+
+The current internal-distribution script checks the existing **Zalify Team**
+group and reuses this app's completed 0.6.4 encryption classification. It
+accepts an explicit exemption or a matching standard-crypto/no-France
+declaration; a missing declaration alone is not treated as an exemption.
+Changes to the cryptography require classification review instead of reusing
+this path. Apple's public API rejects internal-group build assignment: rely
+on the existing automatic internal distribution, or add the build in App
+Store Connect. The script verifies the internal testing state after Apple
+processing. Use the `existing_build` workflow input to resume this step
+without recompiling, signing or uploading the binary again.
+
+Record the commit, build number and physical-device results for every
+candidate. Validate Chinese IME punctuation/dictation, keyboard show/hide,
+focused-input layout, cold start, encrypted pairing and reconnect on the
+actual supported devices before creating formal release tags.
+
 ## The desktop app, with the hub inside
 
 The desktop app can make its machine the hub. It does that by shipping
