@@ -69,8 +69,7 @@ else
   raise 'Previous encryption classification unavailable; complete compliance in App Store Connect'
 end
 detail = api('get', "/v1/builds/#{build['id']}/buildBetaDetail")['data']['attributes']
-assigned = api('get', "/v1/builds/#{build['id']}/betaGroups")['data']
-puts JSON.generate(internalBuildState: detail['internalBuildState'], assignedGroups: assigned.map { |g| g['attributes']['name'] }, hasAccessToAllBuilds: group['attributes']['hasAccessToAllBuilds'])
+puts JSON.generate(internalBuildState: detail['internalBuildState'], hasAccessToAllBuilds: group['attributes']['hasAccessToAllBuilds'])
 # Apple's public API rejects assigning builds to internal groups. Existing
 # automatic internal distribution can already make this candidate available;
 # otherwise an administrator must add it through App Store Connect's UI.
