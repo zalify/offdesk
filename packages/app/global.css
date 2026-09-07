@@ -107,6 +107,20 @@ body {
   margin: 0;
 }
 
+/* WebKit zooms small editable text on focus, including xterm's invisible
+   textarea. Keep the editing surface legible without changing terminal canvas
+   fonts or disabling the user's pinch zoom. Covers settings/login fields too. */
+@supports (-webkit-touch-callout: none) {
+  @media (hover: none), (pointer: coarse) {
+    input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='button']):not([type='submit']):not([type='file']),
+    textarea,
+    select,
+    [contenteditable='true'] {
+      font-size: max(16px, 1rem) !important;
+    }
+  }
+}
+
 * {
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;

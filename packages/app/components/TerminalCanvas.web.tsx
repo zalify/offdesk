@@ -60,7 +60,7 @@ import {
 import { getPersistentDeviceId } from "@/lib/deviceId";
 import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile } from "@/lib/platform";
-import { useDisplayMode, useVisualViewportHeight } from "@/lib/hooks";
+import { useDisplayMode, useVisualViewport } from "@/lib/hooks";
 import { KeyBarSlotProvider, WorkspaceKeyBarSlot } from "@/lib/keyBarSlot";
 import {
   formatPrefixBinding,
@@ -235,9 +235,10 @@ function TerminalCanvasInner() {
     createInitialMainLayout,
   );
   const { isCompact, isTouch } = useDisplayMode();
-  const viewportHeight = useVisualViewportHeight();
+  const viewport = useVisualViewport();
+  const viewportHeight = viewport?.height ?? null;
   const rootHeight: string =
-    viewportHeight !== null ? `${viewportHeight}px` : "100dvh";
+    viewport !== null ? `${viewport.height * viewport.scale}px` : "100dvh";
   const { logout } = useAuth();
 
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -1574,7 +1575,14 @@ function TerminalCanvasInner() {
 
   return (
     <div
+      data-testid="terminal-canvas"
       style={{
+        // iOS can pan the visual viewport while focusing ANY field. Anchor
+        // the app chrome to its visible top, not the scrolled document. Keep
+        // deliberate pinch zoom independent of keyboard layout changes.
+        position: "fixed",
+        top: viewport && Math.abs(viewport.scale - 1) < 0.01 ? viewport.offsetTop : 0,
+        left: 0,
         display: "flex",
         flexDirection: "column",
         height: rootHeight,

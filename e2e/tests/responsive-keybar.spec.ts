@@ -11,6 +11,34 @@ async function setup(page: import("@playwright/test").Page) {
   return id;
 }
 
+test("keyboard viewport pan keeps the editor and terminal chrome in the visible area", async ({ page }) => {
+  await setup(page);
+  await chooseInputMode(page, true);
+  await page.getByTestId("composer-input").fill("Keep this draft");
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, "height", { configurable: true, value: 420 });
+    Object.defineProperty(viewport, "offsetTop", { configurable: true, value: 96 });
+    viewport.dispatchEvent(new Event("resize"));
+    viewport.dispatchEvent(new Event("scroll"));
+  });
+  const canvas = page.getByTestId("terminal-canvas");
+  await expect(canvas).toHaveCSS("height", "420px");
+  await expect(canvas).toHaveCSS("top", "96px");
+  await expect.poll(() => page.getByTestId("composer-input").evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    return rect.top >= 96 && rect.bottom <= 516;
+  })).toBe(true);
+  await page.evaluate(() => {
+    const viewport = window.visualViewport!;
+    Object.defineProperty(viewport, "height", { configurable: true, value: 800 });
+    Object.defineProperty(viewport, "offsetTop", { configurable: true, value: 0 });
+    viewport.dispatchEvent(new Event("resize"));
+  });
+  await expect(canvas).toHaveCSS("top", "0px");
+  await expect(page.getByTestId("composer-input")).toHaveValue("Keep this draft");
+});
+
 test("equal keys and fixed inverted-T survive scrolling, folding and rotation", async ({ page }, testInfo) => {
   await setup(page);
   await chooseInputMode(page, true);
