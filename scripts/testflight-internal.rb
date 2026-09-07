@@ -62,15 +62,17 @@ elsif previous['attributes']['usesNonExemptEncryption'] == false
   # ASC may store the completed questionnaire as an exemption rather than a
   # declaration resource. Reuse that explicit classification, never infer it
   # merely from a missing declaration. This assumes unchanged cryptography.
-  api('patch', "/v1/builds/#{build['id']}", data: {type: 'builds', id: build['id'], attributes: {usesNonExemptEncryption: false}})
+  unless build['attributes']['usesNonExemptEncryption'] == false
+    api('patch', "/v1/builds/#{build['id']}", data: {type: 'builds', id: build['id'], attributes: {usesNonExemptEncryption: false}})
+  end
 else
   raise 'Previous encryption classification unavailable; complete compliance in App Store Connect'
 end
 detail = api('get', "/v1/builds/#{build['id']}/buildBetaDetail")['data']['attributes']
 assigned = api('get', "/v1/builds/#{build['id']}/betaGroups")['data']
 puts JSON.generate(internalBuildState: detail['internalBuildState'], assignedGroups: assigned.map { |g| g['attributes']['name'] }, hasAccessToAllBuilds: group['attributes']['hasAccessToAllBuilds'])
-unless assigned.any? { |g| g['id'] == group['id'] } || (group['attributes']['hasAccessToAllBuilds'] && detail['internalBuildState'] == 'IN_BETA_TESTING')
-  api('post', "/v1/betaGroups/#{group['id']}/relationships/builds", data: [{type: 'builds', id: build['id']}])
-end
-detail = api('get', "/v1/builds/#{build['id']}/buildBetaDetail")['data']['attributes']
-puts JSON.generate(build: number, group: 'Zalify Team', internalBuildState: detail['internalBuildState'], externalBuildState: detail['externalBuildState'])
+# Apple's public API rejects assigning builds to internal groups. Existing
+# automatic internal distribution can already make this candidate available;
+# otherwise an administrator must add it through App Store Connect's UI.
+raise 'Add this processed build to the internal group in App Store Connect' unless detail['internalBuildState'] == 'IN_BETA_TESTING'
+puts JSON.generate(build: number, internalBuildState: detail['internalBuildState'], externalBuildState: detail['externalBuildState'])
