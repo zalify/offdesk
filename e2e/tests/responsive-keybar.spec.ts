@@ -179,3 +179,42 @@ test("touch key taps consume the native default action without changing input fo
   expect(sends).toHaveLength(1);
   expect(commands).toEqual(["\r", "\r", "\x1b[D"]);
 });
+
+test("IME dismissal releases retained focus and every command key keeps it closed", async ({ page }) => {
+  await setup(page);
+  const keyboard = page.getByTestId("extended-keybar-keyboard");
+  const direct = page.locator(".xterm-helper-textarea").first();
+  const nativeVisibility = (visible: boolean) => page.evaluate(value => {
+    window.dispatchEvent(new CustomEvent("offdesk:keyboard-visibility", { detail: value }));
+  }, visible);
+  const keys = ["enter", "tab", "esc", "up", "down", "left", "right", "ctrl-c"];
+  for (const name of keys) {
+    await keyboard.tap();
+    await expect(direct).toBeFocused();
+    await nativeVisibility(true);
+    // This is the IME's own hide button: no synthetic DOM blur in the test.
+    await nativeVisibility(false);
+    await expect(direct).not.toBeFocused();
+    await expect(keyboard).toHaveAttribute("aria-label", "Show keyboard");
+    await page.getByTestId(`extended-keybar-${name}`).tap();
+    await expect(direct).not.toBeFocused();
+  }
+  await keyboard.tap();
+  await nativeVisibility(true);
+  await page.getByTestId("extended-keybar-enter").tap();
+  await expect(direct).toBeFocused();
+  await nativeVisibility(false);
+
+  await chooseInputMode(page, true);
+  const editor = page.getByTestId("composer-input");
+  await editor.fill("echo IME_DISMISSED_DRAFT");
+  await editor.dispatchEvent("compositionstart");
+  await nativeVisibility(true);
+  await nativeVisibility(false);
+  await expect(editor).not.toBeFocused();
+  await page.getByTestId("extended-keybar-left").tap();
+  await expect(editor).not.toBeFocused();
+  await page.getByTestId("extended-keybar-enter").tap();
+  await expect(editor).toHaveValue("");
+  await expect(editor).not.toBeFocused();
+});

@@ -36,29 +36,66 @@ def hierarchy():
     return ET.fromstring(xml)
 
 
+def dismiss_update(root):
+    # A release check can finish between a screen read and an input gesture.
+    # Dismiss only this known prompt, never an ANR/crash/permission dialog.
+    if not any(re.fullmatch(r"Update Offdesk to [0-9.]+\?", n.get("text", "")) for n in root.iter("node")):
+        return False
+    cancel = next((n for n in root.iter("node")
+                   if n.get("resource-id") == "android:id/button2"
+                   and n.get("text", "").upper() == "CANCEL"), None)
+    if cancel is None:
+        return False
+    left, top, right, bottom = map(int, re.findall(r"\d+", cancel.attrib["bounds"]))
+    adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+    return True
+
+
 def wait_for_screen(text):
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         try:
             root = hierarchy()
-            # An older CI version can legitimately show the production updater.
-            # Dismiss only this known dialog; never dismiss an ANR/crash dialog.
-            if any(re.fullmatch(r"Update Offdesk to [0-9.]+\?", n.get("text", "")) for n in root.iter("node")):
-                cancel = next((n for n in root.iter("node")
-                               if n.get("resource-id") == "android:id/button2"
-                               and n.get("text", "").upper() == "CANCEL"), None)
-                if cancel is not None:
-                    bounds = list(map(int, re.findall(r"\d+", cancel.attrib["bounds"])))
-                    if len(bounds) == 4:
-                        left, top, right, bottom = bounds
-                        adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
-                        continue
+            if dismiss_update(root):
+                continue
             if any(text in (n.get("text", "") + n.get("content-desc", "")) for n in root.iter("node")):
                 return root
         except (ET.ParseError, subprocess.SubprocessError):
             pass
         time.sleep(1)
     raise AssertionError(f"APK did not render {text!r} within 60 seconds (startup hang/ANR)")
+
+
+def check_webview_input():
+    for _ in range(3):
+        root = wait_for_screen("Scan the code")
+        field = next(n for n in root.iter("node") if n.get("class") == "android.widget.EditText")
+        if "example.invalid" in field.get("text", ""):
+            return
+        left, top, right, bottom = map(int, re.findall(r"\d+", field.attrib["bounds"]))
+        adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+        adb("shell", "input", "text", "http://example.invalid")
+        root = hierarchy()
+        if dismiss_update(root):
+            continue  # Retry only an action interrupted by the known updater.
+        assert any("example.invalid" in n.get("text", "") for n in root.iter("node")), "WebView input is unresponsive"
+        return
+    raise AssertionError("Update prompts repeatedly interrupted WebView input")
+
+
+def root_emulator():
+    # Restarting adbd can drop its own transport and return nonzero even when
+    # root succeeds. Verify the effective UID after reconnection instead.
+    adb("root", check=False)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        try:
+            if adb("shell", "id", "-u", timeout=5, check=False).strip() == "0":
+                return
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(1)
+    raise AssertionError("Emulator did not reconnect as root; use a rooted disposable emulator")
 
 
 try:
@@ -68,12 +105,7 @@ try:
     adb("logcat", "-c")
     adb("shell", "input", "keyevent", "82")
     adb("shell", "am", "start", "-W", "-n", "dev.offdesk.desktop/.MainActivity")
-    root = wait_for_screen("Scan the code")
-    field = next(n for n in root.iter("node") if n.get("class") == "android.widget.EditText")
-    left, top, right, bottom = map(int, re.findall(r"\d+", field.attrib["bounds"]))
-    adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
-    adb("shell", "input", "text", "http://example.invalid")
-    assert any("example.invalid" in n.get("text", "") for n in hierarchy().iter("node")), "WebView input is unresponsive"
+    check_webview_input()
     adb("shell", "input", "keyevent", "3")
     adb("shell", "am", "start", "-W", "-n", "dev.offdesk.desktop/.MainActivity")
     # Cross both the JavaScript and native automatic-update timers.
@@ -82,9 +114,7 @@ try:
     # Upgrade the same installation with a damaged pairing marker. Startup
     # must keep trusted bundled assets and offer recovery, not the old Hub.
     adb("shell", "am", "force-stop", "dev.offdesk.desktop")
-    adb("root")
-    adb("wait-for-device")
-    assert adb("shell", "id", "-u").strip() == "0", "Use a rooted disposable emulator"
+    root_emulator()
     data = "/data/user/0/dev.offdesk.desktop"
     adb("shell", f"printf '{{}}' > {data}/secure-connection.json")
     adb("shell", f"printf '%s' '{{\"hub_url\":\"http://127.0.0.1:9\"}}' > {data}/hub.json")
