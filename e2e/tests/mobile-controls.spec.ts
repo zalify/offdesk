@@ -902,7 +902,7 @@ test("long session lists keep host metrics inside the card at narrow and short s
     snapshot_seq: 100, last_focused_terminal_id: terminals[0].id,
     machines: [{ id: "e2e-node", name: "MacBook-Pro-3.local", os: "macos", home_dir: "/tmp" }, { id: "mini", name: "Mac-mini.local", os: "macos", home_dir: "/tmp" }],
     terminals, workspace_groups: [], workspace_layouts: [], control_leases: [],
-    machine_stats: [{ machine_id: "e2e-node", stats: { cpu_percent: 15, memory_used: 73, memory_total: 100, disk_used: 77, disk_total: 100 } }],
+    machine_stats: [{ machine_id: "e2e-node", stats: { cpu_percent: 15, memory_used: 73, memory_total: 100, disks: [{ mount_point: "/", used_bytes: 77, total_bytes: 100 }] } }],
   } }));
   await page.routeWebSocket(/\/ws\/events/, () => {});
   await page.routeWebSocket(/\/ws\/terminal\//, ws => ws.send(Buffer.from("ready\r\n")));
