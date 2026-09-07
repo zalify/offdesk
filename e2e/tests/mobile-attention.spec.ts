@@ -80,3 +80,34 @@ test("mobile attention shortcuts switch tabs and machines and track live resolut
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("mobile-attention-narrow.png") });
 });
+
+
+test("missed attention events recover without another message or manual reconnect", async ({ page }) => {
+  let bootstrapCount = 0;
+  let socket: WebSocketRoute;
+  const terminals = ["current", "waiting"].map(id => ({ id, title: id, machine_id: "e2e-node", cwd: "/tmp", cols: 80, rows: 24, reachable: true }));
+  await page.route("**/api/bootstrap", route => {
+    bootstrapCount++;
+    return route.fulfill({ json: {
+      snapshot_seq: bootstrapCount === 1 ? 100 : 103,
+      last_focused_terminal_id: "current",
+      machines: [{ id: "e2e-node", name: "Mac", os: "macos", home_dir: "/tmp" }],
+      terminals: terminals.map(t => ({ ...t, attention: bootstrapCount > 1 && t.id === "waiting" ? "confirmation" : null })),
+      workspace_groups: [], workspace_layouts: [], machine_stats: [], control_leases: [],
+    } });
+  });
+  await page.routeWebSocket(/\/ws\/events/, ws => { socket = ws; });
+  await page.routeWebSocket(/\/ws\/terminal\//, ws => ws.send(Buffer.from("ready\r\n")));
+  await openApp(page);
+  const strip = page.getByTestId("mobile-terminal-attention");
+  await expect(page.getByTestId("mobile-title-bar-label")).toContainText("current");
+  await expect(strip).toHaveCount(0);
+  // Warm the state queue first: subsequent updater execution can be deferred.
+  socket!.send(JSON.stringify({ seq: 101, event: { type: "terminal_updated", terminal: terminals[0] } }));
+  socket!.send(JSON.stringify({ seq: 103, event: { type: "terminal_updated", terminal: terminals[0] } }));
+  await expect.poll(() => bootstrapCount).toBeGreaterThan(1);
+  await expect(strip).toContainText("1 waiting");
+  await page.getByTestId("mobile-attention-waiting").click();
+  await expect(page).toHaveURL(/#\/t\/waiting$/);
+  await expect(strip).toHaveCount(0);
+});

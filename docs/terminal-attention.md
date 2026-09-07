@@ -30,3 +30,8 @@ excluded. This feature is an in-app cue, not a background push notification.
 中文：手机顶部显示其他终端的确认请求，点击直接切换；处理后自动清除。
 首版通过电脑端可见屏幕识别常见英文 Claude/Codex 确认菜单，约五秒更新，
 并不覆盖所有待办或任务完成状态。需同时更新 Hub 和 node。
+
+Event delivery is checked synchronously against the last received sequence.
+A gap triggers a fresh authenticated bootstrap, even when React batches state
+updates. The snapshot restores pending confirmations missed during a disconnect;
+this does not broaden the screen detector's supported prompt formats.

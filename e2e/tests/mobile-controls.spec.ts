@@ -894,3 +894,33 @@ async function terminalHasKeyboardFocus(
     return active instanceof HTMLElement && active.closest(".xterm") !== null;
   });
 }
+
+
+test("long session lists keep host metrics inside the card at narrow and short sizes", async ({ page }, testInfo) => {
+  const terminals = Array.from({ length: 12 }, (_, i) => ({ id: `layout-${i}`, title: `Long terminal title ${i}`, machine_id: "e2e-node", cwd: "/tmp/a/long/workspace/path", cols: 80, rows: 24, reachable: true }));
+  await page.route("**/api/bootstrap", route => route.fulfill({ json: {
+    snapshot_seq: 100, last_focused_terminal_id: terminals[0].id,
+    machines: [{ id: "e2e-node", name: "MacBook-Pro-3.local", os: "macos", home_dir: "/tmp" }, { id: "mini", name: "Mac-mini.local", os: "macos", home_dir: "/tmp" }],
+    terminals, workspace_groups: [], workspace_layouts: [], control_leases: [],
+    machine_stats: [{ machine_id: "e2e-node", stats: { cpu_percent: 15, memory_used: 73, memory_total: 100, disk_used: 77, disk_total: 100 } }],
+  } }));
+  await page.routeWebSocket(/\/ws\/events/, () => {});
+  await page.routeWebSocket(/\/ws\/terminal\//, ws => ws.send(Buffer.from("ready\r\n")));
+  await openApp(page);
+  await page.getByTestId("mobile-title-bar").click();
+  for (const [width, height] of [[390, 844], [320, 480], [768, 600]]) {
+    await page.setViewportSize({ width, height });
+    const card = page.getByTestId("mobile-host-button");
+    const metrics = page.getByTestId("mobile-session-header-metrics");
+    await expect(metrics).toBeVisible();
+    await expect.poll(async () => {
+      const outer = await card.boundingBox();
+      const inner = await metrics.boundingBox();
+      return !!outer && !!inner && inner.y >= outer.y && inner.y + inner.height <= outer.y + outer.height - 5;
+    }).toBe(true);
+    await expect(page.getByTestId("mobile-session-header-machine-mini")).toBeAttached();
+    await page.getByTestId("mobile-session-row-layout-11").scrollIntoViewIfNeeded();
+    await expect(card).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`host-metrics-${width}.png`) });
+  }
+});

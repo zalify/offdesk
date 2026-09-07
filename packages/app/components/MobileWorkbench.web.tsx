@@ -1013,6 +1013,7 @@ function SessionSwitcherHeader({
     <div
       data-testid="mobile-session-header"
       style={{
+        flexShrink: 0,
         display: "flex",
         alignItems: "stretch",
         gap: 8,
@@ -1033,6 +1034,8 @@ function SessionSwitcherHeader({
         style={{
           flexShrink: 0,
           minWidth: 140,
+          maxWidth: "100%",
+          height: "auto",
           display: "flex",
           flexDirection: "column",
           gap: 4,
@@ -1064,7 +1067,7 @@ function SessionSwitcherHeader({
           </span>
           <ChevronRight size={14} style={{ flexShrink: 0, color: colors.fg3 }} />
         </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span data-testid="mobile-session-header-metrics" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 8px", fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: 1.5 }}>
           <span data-testid="mobile-session-header-rtt" style={{ color: colors.fg1 }}>
             {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
           </span>
@@ -1126,6 +1129,7 @@ function HeaderMetric({
         display: "inline-flex",
         alignItems: "center",
         gap: 3,
+        whiteSpace: "nowrap",
         color: colors.fg1,
       }}
     >
@@ -1234,6 +1238,7 @@ function Sheet({
           style={{
             display: "flex",
             justifyContent: "center",
+            flexShrink: 0,
             padding: "8px 0 4px",
           }}
         >
@@ -1249,6 +1254,7 @@ function Sheet({
         {header ?? (title && (
           <div
             style={{
+              flexShrink: 0,
               padding: "4px 20px 10px",
               fontFamily: fontDisplay,
               fontSize: 18,
@@ -1259,7 +1265,7 @@ function Sheet({
             {title}
           </div>
         ))}
-        <div style={{ overflow: "auto", paddingBottom: 4 }}>{children}</div>
+        <div style={{ overflow: "auto", minHeight: 0, paddingBottom: 4 }}>{children}</div>
       </div>
     </div>
   );
