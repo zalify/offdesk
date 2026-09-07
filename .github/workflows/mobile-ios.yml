@@ -223,6 +223,10 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
+          # Keep the IPA staged until release artifact checks finish. The
+          # repository's global Latest belongs to the standalone Hub release.
+          draft: true
+          make_latest: "false"
           tag_name: ${{ steps.version.outputs.tag }}
           name: iOS ${{ steps.version.outputs.tag }}
           body: |
