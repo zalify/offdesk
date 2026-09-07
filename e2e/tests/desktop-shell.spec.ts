@@ -185,7 +185,8 @@ test("hub phone dialog offers tunnel and LAN QR codes without covering the deskt
   const picker = dialog.getByTestId("hub-address-picker");
   await expect(picker).toHaveValue("https://hub.example.com:8443");
   await expectPaintedQr(dialog.getByRole("img", { name: "Phone sign-in QR code", exact: true }));
-  await expect(page.getByText("Running. Now get your phone in.")).toHaveCount(0);
+  await expect(page.getByTestId("hub-ready-open")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls)).not.toContain("hub_install");
   await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeInViewport();
   await picker.selectOption("http://192.168.1.10:4317");
   await expect(picker).toHaveValue("http://192.168.1.10:4317");

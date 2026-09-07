@@ -147,6 +147,15 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     // install owns this screen until its command AND readiness checks finish;
     // the background status poll must not unmount it halfway through.
     if (!settingUp && isAuthenticated) return <>{children}</>;
+    // A saved login is still being checked during cold-start/restart. Do not
+    // mistake a temporary auth request failure for an incomplete installation
+    // and reinstall services while the existing Hub is recovering.
+    if (!settingUp && status.hub_installed && status.node_installed && isLoading) {
+      return <DesktopSetupFrame><Screen>
+        <div role="status"><Spinner /><Body>Reconnecting to your hub…</Body></div>
+        <Button kind="sky" onClick={() => setSettingUp(true)}>Check this Mac’s setup</Button>
+      </Screen></DesktopSetupFrame>;
+    }
     if (settingUp || !hubIsReady(status)) {
       return (
         <DesktopSetupFrame><HubSetup
