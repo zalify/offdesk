@@ -68,6 +68,8 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<DesktopRole | null | undefined>(undefined);
   const [status, setStatus] = useState<HubStatus | null>(null);
   const [link, setLink] = useState<HubLink | null>(null);
+  const [settingUp, setSettingUp] = useState(false);
+  const [statusError, setStatusError] = useState(false);
 
   useEffect(() => {
     // A bridge that does not know the command (an older shell, or a test's
@@ -97,9 +99,10 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     const refresh = async () => {
       try {
         const next = await hubStatus();
-        if (!cancelled) setStatus(next);
+        if (!cancelled) { setStatus(next); setStatusError(false); }
       } catch {
-        // A temporarily unavailable bridge must not turn into "not installed".
+        // Keep retrying, but give the user an actionable state.
+        if (!cancelled) setStatusError(true);
       } finally {
         if (!cancelled) timer = setTimeout(() => void refresh(), 2000);
       }
@@ -114,6 +117,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   const pick = useCallback(async (picked: DesktopRole) => {
     await setDesktopRole(picked);
     setStatus(null);
+    setSettingUp(picked === "hub");
     setRole(picked);
   }, []);
 
@@ -138,18 +142,29 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   if (role === null) return <DesktopSetupFrame><FirstRun onPick={pick} /></DesktopSetupFrame>;
 
   if (role === "hub") {
-    if (!status) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
-    if (status.hub_installed && status.node_installed && (!status.listening || isLoading)) {
-      if (isAuthenticated) return <>{children}</>;
-      return <DesktopSetupFrame><div role="status" style={{ margin: "auto", textAlign: "center", padding: 24 }}><Spinner /><Body>Reconnecting to your hub…</Body></div></DesktopSetupFrame>;
+    if (!status) return <DesktopSetupFrame><Screen><Spinner /><Body>{statusError ? "Could not check this Mac. Retrying…" : "Checking this Mac…"}</Body><Button kind="sky" onClick={() => void pick("client")}>Connect to another Hub</Button></Screen></DesktopSetupFrame>;
+    // Keep existing terminals visible through brief Hub restarts. A first-run
+    // install owns this screen until its command AND readiness checks finish;
+    // the background status poll must not unmount it halfway through.
+    if (!settingUp && isAuthenticated) return <>{children}</>;
+    // A saved login is still being checked during cold-start/restart. Do not
+    // mistake a temporary auth request failure for an incomplete installation
+    // and reinstall services while the existing Hub is recovering.
+    if (!settingUp && status.hub_installed && status.node_installed && isLoading) {
+      return <DesktopSetupFrame><Screen>
+        <div role="status"><Spinner /><Body>Reconnecting to your hub…</Body></div>
+        <Button kind="sky" onClick={() => setSettingUp(true)}>Check this Mac’s setup</Button>
+      </Screen></DesktopSetupFrame>;
     }
-    if (!hubIsReady(status)) {
+    if (settingUp || !hubIsReady(status)) {
       return (
         <DesktopSetupFrame><HubSetup
           status={status}
-          onReady={(ready) => {
+          onStart={() => setSettingUp(true)}
+          onReady={(ready, verified) => {
             setLink(ready);
-            setStatus({ ...status, hub_installed: true, node_installed: true, listening: true });
+            setSettingUp(false);
+            setStatus(verified);
           }}
           onGiveUp={() => void pick("client")}
         /></DesktopSetupFrame>
@@ -266,17 +281,21 @@ function RoleCard({
 
 // ── Becoming the hub ──────────────────────────────────────────────
 
-function HubSetup({
+export function HubSetup({
   status,
   onReady,
   onGiveUp,
+  onStart,
 }: {
   status: HubStatus;
-  onReady: (link: HubLink) => void;
+  onStart?: () => void;
+  onReady: (link: HubLink, status: HubStatus) => void;
   onGiveUp: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [progress, setProgress] = useState<HubStatus | null>(null);
+  const checked = progress?.setup ?? status.setup;
 
   useEffect(() => {
     if (!status.supported) {
@@ -284,17 +303,26 @@ function HubSetup({
       return;
     }
     let cancelled = false;
+    onStart?.();
     setError(null);
-    hubInstall()
-      .then((link) => {
-        if (!cancelled) onReady(link);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(String(e));
-      });
-    return () => {
-      cancelled = true;
+    const prepare = async () => {
+      const current = await hubStatus();
+      // Reopening a completed installation verifies it without reinstalling.
+      const link = hubIsReady(current) ? await hubLink() : await hubInstall();
+      // launchd accepting a service does not mean the node has connected yet.
+      const deadline = Date.now() + 30000;
+      do {
+        if (cancelled) return;
+        const next = await hubStatus();
+        if (cancelled) return;
+        setProgress(next);
+        if (hubIsReady(next)) { onReady(link, next); return; }
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } while (Date.now() < deadline);
+      throw new Error("Setup has not finished. Keep this Mac online and try again. Your existing data is kept.");
     };
+    void prepare().catch((e: unknown) => { if (!cancelled) setError(String(e)); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt, status.supported]);
 
@@ -302,12 +330,14 @@ function HubSetup({
     <Screen>
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
         <Eyebrow>This machine is your hub</Eyebrow>
-        <Display size={38}>{error ? "That did not go through." : "Setting it up…"}</Display>
+        <Display size={38}>{error ? "Let’s finish setting up this Mac" : "Getting this Mac ready…"}</Display>
+        <Body>Your phone can connect after these checks finish. No Terminal commands needed.</Body>
       </div>
       <Card style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 16 }}>
-        <SetupStep done={false} pending={!error} title="Hub is running" sub="Starts at login and restarts if it stops." />
-        <SetupStep done={false} pending={!error} title="This machine is registered" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
-        <SetupStep done={false} pending={!error} title="tmux is ready" sub={status.bundled ? "Bundled with the app." : "From this machine's PATH."} />
+        <SetupStep done={checked?.hub_running ?? status.listening} pending={!error} title="Start your Hub" sub="Starts at login and restarts if it stops." />
+        <SetupStep done={checked?.machine_registered ?? false} pending={!error} title="Connect this Mac to your Hub" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
+        <SetupStep done={checked?.node_online ?? false} pending={!error} title="Wait for this Mac to come online" sub="Checks the live connection, so your phone has a machine to open." />
+        <SetupStep done={checked?.tmux_available ?? false} pending={!error} title="Check terminal tools" sub="Checks that tmux can run on this Mac." />
       </Card>
       {error ? (
         <>
@@ -319,7 +349,7 @@ function HubSetup({
               </Button>
             ) : null}
             <Button kind="sky" onClick={onGiveUp}>
-              Just connect to a hub instead
+              Connect to another Hub
             </Button>
           </div>
         </>
@@ -401,6 +431,12 @@ export function HubReadyScreen({
 }) {
   const { link, setLink, error, setError } = useHubPhoneLink(initial);
   const [opening, setOpening] = useState(false);
+  const [verified, setVerified] = useState<HubStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void hubStatus().then(value => { if (!cancelled) setVerified(value); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <Screen wide>
@@ -408,12 +444,12 @@ export function HubReadyScreen({
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <Eyebrow>This machine is your hub</Eyebrow>
-            <Display size={38}>Running. Now get your phone in.</Display>
+            <Display size={38}>Connect your phone</Display>
           </div>
           <Card style={{ display: "flex", flexDirection: "column", gap: 16, padding: 24 }}>
-            <SetupStep done pending={false} title="Hub is running" sub="Starts at login and restarts if it stops." />
-            <SetupStep done pending={false} title="This machine is registered" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
-            <SetupStep done pending={false} title="tmux is ready" sub="Your sessions outlive the app, the network, and you walking away." />
+            <SetupStep done={verified?.setup?.hub_running ?? verified?.listening ?? false} pending={!verified} title="Hub is running" sub="Starts at login and restarts if it stops." />
+            <SetupStep done={verified?.setup?.node_online ?? false} pending={!verified} title="This Mac is online" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
+            <SetupStep done={verified?.setup?.tmux_available ?? false} pending={!verified} title="Terminal tools are available" sub="Your sessions outlive the app, the network, and you walking away." />
           </Card>
           {error ? <Body style={{ color: colors.err }}>{error}</Body> : null}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>

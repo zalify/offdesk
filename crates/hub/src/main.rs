@@ -7,6 +7,7 @@ mod composer;
 mod attach_router;
 mod auth;
 mod first_run;
+mod setup_check;
 #[cfg(feature = "embed-ui")]
 mod embedded_ui;
 pub mod db;
@@ -71,6 +72,8 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Report local first-run readiness as JSON, without changing services
+    SetupCheck,
     /// Invitation-only official encrypted remote connection
     Cloud {
         #[command(subcommand)]
@@ -368,6 +371,12 @@ async fn main() {
 
     promote_legacy_env();
     let args = Args::parse();
+
+    if matches!(args.command, Some(Command::SetupCheck)) {
+        let database = first_run::database_path(args.database.as_deref());
+        println!("{}", serde_json::to_string(&setup_check::check(&database, &args.listen).await).unwrap());
+        return;
+    }
 
     if let Some(Command::Cloud { action }) = &args.command {
         let database = first_run::database_path(args.database.as_deref());

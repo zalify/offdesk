@@ -51,6 +51,14 @@ describe("the hub's port", () => {
 });
 
 describe("a ready hub", () => {
+  it("does not confuse installed services with a connected local machine", () => {
+    const status = { supported: true, bundled: true, hub_installed: true, node_installed: true, listening: true,
+      setup: { hub_running: true, machine_registered: true, node_online: true, tmux_available: true } };
+    expect(hubIsReady(status)).toBe(true);
+    for (const key of Object.keys(status.setup)) {
+      expect(hubIsReady({ ...status, setup: { ...status.setup, [key]: false } })).toBe(false);
+    }
+  });
   it("has both services and answers", () => {
     const status = { supported: true, bundled: true, hub_installed: true, node_installed: true, listening: true };
     expect(hubIsReady(status)).toBe(true);

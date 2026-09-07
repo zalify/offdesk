@@ -8,7 +8,7 @@ async function desktopBridge(page: Page, role: "client" | "hub" | null = "client
     let role = initialRole;
     let callbackId = 0;
     const callbacks = new Map<number, (data: unknown) => void>();
-    const state = { updater: "current", calls: [] as string[], listening: true, linkFailures: 0, linkRequests: [] as string[], pairError: "", pairDelay: 0, pairCompleted: 0, qrOverflow: false, secureUrl: null as string | null, cloudState: { state: "unregistered", local_enabled: false, verified: false } as Record<string, unknown>, cloudError: "", cloudActions: [] as string[], cloudApproved: false };
+    const state = { installed: true, setup: { hub_running: true, machine_registered: true, node_online: true, tmux_available: true }, installError: "", holdInstall: false, finishInstall: (() => {}) as () => void, updater: "current", calls: [] as string[], listening: true, linkFailures: 0, linkRequests: [] as string[], pairError: "", pairDelay: 0, pairCompleted: 0, qrOverflow: false, secureUrl: null as string | null, cloudState: { state: "unregistered", local_enabled: false, verified: false } as Record<string, unknown>, cloudError: "", cloudActions: [] as string[], cloudApproved: false };
     Object.assign(window, { __desktopTest: state });
     Object.assign(window, {
       __TAURI_INTERNALS__: {
@@ -36,7 +36,7 @@ async function desktopBridge(page: Page, role: "client" | "hub" | null = "client
           }
           if (command === "secure_status") return null;
           if (command === "desktop_role") return role;
-          if (command === "hub_status") return { supported: true, bundled: true, hub_installed: true, node_installed: true, listening: state.listening };
+          if (command === "hub_status") return { supported: true, bundled: true, hub_installed: state.installed, node_installed: state.installed, listening: state.listening, setup: state.setup };
           if (command === "hub_pair") {
             const hub_url = args?.baseUrl ?? "https://hub.example.com:8443";
             const error = state.pairError;
@@ -44,6 +44,11 @@ async function desktopBridge(page: Page, role: "client" | "hub" | null = "client
             state.pairCompleted++;
             if (error) throw new Error(error);
             return { pairing_uri: "offdesk://pair?v=2&hub=" + encodeURIComponent(hub_url) + "&key=" + "A".repeat(43) + "&code=" + "B".repeat(43), hub_url, expires_at: Date.now() + 300000, connection_check: { identity_verified: true, handshake_ms: 850, legacy_routes_hidden: false } };
+          }
+          if (command === "hub_install") {
+            if (state.holdInstall) await new Promise<void>(resolve => { state.finishInstall = resolve; });
+            if (state.installError) throw new Error(state.installError);
+            return { url: "http://192.168.1.10:4317", link: "http://192.168.1.10:4317/?token=test-token", short: null, candidates: [] };
           }
           if (command === "hub_link") {
             if (state.linkFailures > 0) { state.linkFailures--; throw new Error("Hub restarting"); }
@@ -180,7 +185,8 @@ test("hub phone dialog offers tunnel and LAN QR codes without covering the deskt
   const picker = dialog.getByTestId("hub-address-picker");
   await expect(picker).toHaveValue("https://hub.example.com:8443");
   await expectPaintedQr(dialog.getByRole("img", { name: "Phone sign-in QR code", exact: true }));
-  await expect(page.getByText("Running. Now get your phone in.")).toHaveCount(0);
+  await expect(page.getByTestId("hub-ready-open")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls)).not.toContain("hub_install");
   await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeInViewport();
   await picker.selectOption("http://192.168.1.10:4317");
   await expect(picker).toHaveValue("http://192.168.1.10:4317");
@@ -359,4 +365,54 @@ test("phone QR generation failure keeps the full-link fallback and recovers on a
   await page.evaluate(() => { (window as any).__desktopTest.qrOverflow = false; });
   await dialog.getByTestId("hub-address-picker").selectOption("https://hub.example.com:8443");
   await expectPaintedQr(dialog.getByRole("img", { name: "Phone sign-in QR code", exact: true }));
+});
+
+
+test("first-run does not expose the phone QR while installation is still running", async ({ page }) => {
+  await desktopBridge(page, null);
+  await page.goto("/");
+  await expect(page.getByTestId("first-run-hub")).toBeVisible();
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.installed = false;
+    state.setup.node_online = false;
+    state.holdInstall = true;
+  });
+  await page.getByTestId("first-run-hub").click();
+  await expect(page.getByText("Getting this Mac ready…", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__desktopTest.calls.filter((c: string) => c === "hub_install").length)).toBe(1);
+  // Reproduce launchd becoming ready before the install command has returned.
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.installed = true;
+    state.setup.node_online = true;
+  });
+  await page.waitForTimeout(2500);
+  await expect(page.getByTestId("hub-ready-open")).toHaveCount(0);
+  await expect(page.getByText("Getting this Mac ready…", { exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).__desktopTest.finishInstall());
+  await expect(page.getByTestId("hub-ready-open")).toBeVisible();
+});
+
+test("first-run failure stays actionable and retries without manual terminal commands", async ({ page }) => {
+  await desktopBridge(page, null);
+  await page.goto("/");
+  await expect(page.getByTestId("first-run-hub")).toBeVisible();
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.installed = false;
+    state.setup.machine_registered = false;
+    state.installError = "Could not register this Mac";
+  });
+  await page.getByTestId("first-run-hub").click();
+  await expect(page.getByText(/Could not register this Mac/)).toBeVisible();
+  await expect(page.getByTestId("hub-ready-open")).toHaveCount(0);
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.installError = "";
+    state.installed = true;
+    state.setup.machine_registered = true;
+  });
+  await page.getByTestId("hub-setup-retry").click();
+  await expect(page.getByTestId("hub-ready-open")).toBeVisible();
 });

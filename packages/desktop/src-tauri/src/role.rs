@@ -193,6 +193,16 @@ pub struct HubStatus {
     pub node_installed: bool,
     /// Something answers on the hub's port on this machine.
     pub listening: bool,
+    pub setup: SetupStatus,
+}
+
+#[derive(Default, Serialize, Deserialize, Debug)]
+pub struct SetupStatus {
+    pub hub_running: bool,
+    pub machine_registered: bool,
+    pub node_online: bool,
+    pub tmux_available: bool,
+    pub error: Option<String>,
 }
 
 fn service_files(home: &Path) -> (PathBuf, PathBuf) {
@@ -212,7 +222,11 @@ fn service_files(home: &Path) -> (PathBuf, PathBuf) {
 }
 
 #[tauri::command]
-pub fn hub_status() -> HubStatus {
+pub async fn hub_status() -> Result<HubStatus, String> {
+    tauri::async_runtime::spawn_blocking(read_status).await.map_err(|e| e.to_string())
+}
+
+fn read_status() -> HubStatus {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
@@ -221,6 +235,10 @@ pub fn hub_status() -> HubStatus {
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("offdesk-hub").is_file()))
         .unwrap_or(false);
+    let setup = hub_command(&["setup-check"], None)
+        .and_then(|command| run(command, "checking this Mac"))
+        .and_then(|stdout| serde_json::from_str::<SetupStatus>(stdout.trim()).map_err(|e| e.to_string()))
+        .unwrap_or_else(|_| SetupStatus { error: Some("Could not check this Mac. Try setup again with the latest Offdesk app.".into()), ..Default::default() });
     HubStatus {
         supported: cfg!(any(target_os = "macos", target_os = "linux")),
         bundled,
@@ -231,6 +249,7 @@ pub fn hub_status() -> HubStatus {
             Duration::from_millis(500),
         )
         .is_ok(),
+        setup,
     }
 }
 
