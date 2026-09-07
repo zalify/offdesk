@@ -23,6 +23,25 @@ async function options(page: Page) {
     return term ? { family: term.options.fontFamily, size: term.options.fontSize } : null;
   });
 }
+test("focused settings field stays visible when the keyboard shrinks the viewport", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await mockTerminal(page);
+  await openApp(page);
+  await settings(page);
+  const field = page.getByRole("spinbutton", { name: "Terminal Font Size", exact: true });
+  await field.focus();
+  await page.evaluate(() => {
+    Object.defineProperty(window.visualViewport!, "height", { configurable: true, value: 420 });
+    window.visualViewport!.dispatchEvent(new Event("resize"));
+  });
+  await expect(page.getByTestId("terminal-canvas")).toHaveCSS("height", "420px");
+  await expect.poll(() => field.evaluate(el => {
+    const rect = el.getBoundingClientRect();
+    const scroller = el.closest('[data-testid="settings-content"]')!.getBoundingClientRect();
+    return rect.top >= scroller.top && rect.bottom <= scroller.bottom && rect.bottom <= 420;
+  })).toBe(true);
+  await expect(field).toBeFocused();
+});
 for (const width of [390, 1280]) {
   test(`font preferences apply, persist, reset and update a live terminal at ${width}px`, async ({ browser }) => {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
