@@ -1,7 +1,16 @@
 import { test, expect, devices } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
 import { createTerminalViaApi, expandTerminalById, getAuthHeaders, mobileTakeControl, readTerminalBuffer, resetMachineState, takeControlFromHeader } from './helpers';
 
-test.use({ ignoreHTTPSErrors: true });
+// Chromium's preview-only DNS override must not leak into the ordinary
+// suite, which also launches WebKit for native QR rendering regressions.
+const previewEdgeIp = process.env.PLAYWRIGHT_PREVIEW_EDGE
+  ? execFileSync('getent', ['ahostsv4', process.env.PLAYWRIGHT_PREVIEW_EDGE], { encoding: 'utf8' }).trim().split(/\s+/)[0]
+  : null;
+test.use({
+  ignoreHTTPSErrors: true,
+  launchOptions: previewEdgeIp ? { args: [`--host-resolver-rules=MAP *.preview.test ${previewEdgeIp}`] } : {},
+});
 
 test('web preview: browser launch, isolated native handoff, Vite and Next hot updates', async ({ page, browser }, testInfo) => {
   test.setTimeout(150_000);

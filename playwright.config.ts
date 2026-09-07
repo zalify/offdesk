@@ -1,9 +1,4 @@
 import { defineConfig } from "@playwright/test";
-import { execFileSync } from "node:child_process";
-
-const previewEdgeIp = process.env.PLAYWRIGHT_PREVIEW_EDGE
-  ? execFileSync("getent", ["ahostsv4", process.env.PLAYWRIGHT_PREVIEW_EDGE], { encoding: "utf8" }).trim().split(/\s+/)[0]
-  : null;
 
 export default defineConfig({
   testDir: "./e2e/tests",
@@ -21,7 +16,6 @@ export default defineConfig({
     timeout: 10_000,
   },
   use: {
-    launchOptions: previewEdgeIp ? { args: [`--host-resolver-rules=MAP *.preview.test ${previewEdgeIp}`] } : {},
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:4317",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
