@@ -1,3 +1,4 @@
+import { scanWithCleanup } from "../lib/scanLifecycle";
 import { ConnectionRoutesPanel } from "../components/ConnectionRoutesPanel";
 import { isPairingUri, pairSecureConnection, isSecureConnection, secureConnectionStatus, secureConnectionError, forgetSecureConnection } from "../lib/secureTransport";
 import { useEffect, useState } from "react";
@@ -178,7 +179,7 @@ export default function LoginScreen({
   const scanCode = async (): Promise<string | null> => {
     setScanError(null);
     try {
-      const { scan, Format, checkPermissions, requestPermissions, openAppSettings } =
+      const { scan, cancel, Format, checkPermissions, requestPermissions, openAppSettings } =
         await import("@tauri-apps/plugin-barcode-scanner");
       // The camera has to be asked for before it is used; scan() alone does
       // not put the system prompt up. Denied once, the prompt is gone for
@@ -194,7 +195,10 @@ export default function LoginScreen({
         void openAppSettings().catch(() => {});
         return null;
       }
-      const result = await scan({ windowed: false, formats: [Format.QRCode] });
+      const result = await scanWithCleanup(
+        () => scan({ windowed: false, formats: [Format.QRCode] }),
+        cancel,
+      );
       return result.content?.trim() || null;
     } catch (error) {
       const text = describe(error);

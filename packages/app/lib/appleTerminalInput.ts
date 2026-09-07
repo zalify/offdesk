@@ -15,7 +15,7 @@ export function terminalTailEdit(before: TextEditSnapshot, after: TextEditSnapsh
   return "\x7f".repeat(oldChars.length - common) + newChars.slice(common).join("");
 }
 
-interface IosTextInputOptions {
+interface AppleTextInputOptions {
   textarea: HTMLTextAreaElement;
   composing: () => boolean;
   keyHandled: () => boolean;
@@ -23,10 +23,10 @@ interface IosTextInputOptions {
   commit: (text: string) => void;
 }
 
-/** iOS Chinese punctuation and text services use input after keyCode 229's
+/** Apple IME punctuation and text services use input after keyCode 229's
  * timer has already fired. Own committed edits at input time, before xterm's
  * insertText-only handler; leave composition and physical keys with xterm. */
-export function attachIosTerminalInput(options: IosTextInputOptions): () => void {
+export function attachAppleTerminalInput(options: AppleTextInputOptions): () => void {
   const { textarea } = options;
   // xterm registers a capture listener on the textarea before addons attach.
   // Capture on its parent so the edit has exactly one owner, even when xterm's

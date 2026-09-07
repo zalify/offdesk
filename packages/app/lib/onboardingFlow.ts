@@ -39,3 +39,12 @@ export function getTokenActionLabel({
 
   return token ? "New token" : "Generate a token";
 }
+
+/** Only the desktop connected to its own loopback Hub may repair local setup. */
+export function isLocalHubAddress(address: string): boolean {
+  try {
+    const url = new URL(address);
+    return ["http:", "https:"].includes(url.protocol) &&
+      ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
+  } catch { return false; }
+}

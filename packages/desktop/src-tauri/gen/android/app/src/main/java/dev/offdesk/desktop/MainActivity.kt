@@ -44,11 +44,16 @@ class MainActivity : TauriActivity() {
     val content = findViewById<android.view.View>(android.R.id.content)
     content.setBackgroundColor(Color.parseColor("#0b0c0f"))
     ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
-      val top = insets.getInsets(
-        WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout()
-      ).top
+      // Android WebView does not reliably publish system navigation insets
+      // to CSS. Reserve them here for both three-button and gesture navigation,
+      // including side-mounted bars/cutouts in landscape and split screen.
+      val bars = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+      )
       val ime = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
-      view.setPadding(view.paddingLeft, top, view.paddingRight, ime)
+      // IME bounds already include the navigation bar. Adding them would leave
+      // a second empty strip above the keyboard.
+      view.setPadding(bars.left, bars.top, bars.right, maxOf(ime, bars.bottom))
       val visible = insets.isVisible(WindowInsetsCompat.Type.ime())
       if (keyboardVisible != visible) {
         keyboardVisible = visible

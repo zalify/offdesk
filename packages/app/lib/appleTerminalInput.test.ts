@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { terminalTailEdit } from "./iosTerminalInput";
+import { terminalTailEdit } from "./appleTerminalInput";
 const atEnd = (value: string) => ({ value, start: value.length, end: value.length });
 
-describe("iOS terminal tail edits", () => {
+describe("Apple terminal tail edits", () => {
   it("preserves punctuation, repeated words and dictated paragraphs", () => {
     for (const text of ["，", "。！？；：、", " ", "测试测试，整段语音 English 🦊"]) {
       expect(terminalTailEdit(atEnd("已有"), atEnd("已有" + text))).toBe(text);
