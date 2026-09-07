@@ -12,6 +12,14 @@ export interface HubStatus {
   hub_installed: boolean;
   node_installed: boolean;
   listening: boolean;
+  // Optional only for compatibility with shells released before diagnostics.
+  setup?: {
+    hub_running: boolean;
+    machine_registered: boolean;
+    node_online: boolean;
+    tmux_available: boolean;
+    error?: string | null;
+  };
 }
 
 export interface HubCandidate {
@@ -46,9 +54,11 @@ export const hubLink = (baseUrl?: string) => invoke<HubLink>("hub_link", { baseU
 export const hubInstall = (baseUrl?: string) => invoke<HubLink>("hub_install", { baseUrl: baseUrl ?? null });
 export const hubUninstall = () => invoke<void>("hub_uninstall");
 
-/** A hub is ready when both services are installed and something answers. */
+/** Modern shells verify the registered node is live, not just a listening port. */
 export function hubIsReady(status: HubStatus): boolean {
-  return status.hub_installed && status.node_installed && status.listening;
+  const setup = status.setup;
+  return status.hub_installed && status.node_installed && status.listening &&
+    (!setup || (setup.hub_running && setup.machine_registered && setup.node_online && setup.tmux_available));
 }
 
 /** The `?token=` on a sign-in link, or null when the link has none. */

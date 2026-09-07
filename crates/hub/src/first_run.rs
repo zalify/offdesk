@@ -298,20 +298,22 @@ pub fn register_local_node(pool: &DbPool, listen: &str) -> LocalNode {
     // that was a decision, and not one to overturn from an installer.
     let machine_json = offdesk_protocol::config_dir().join("machine.json");
     if let Ok(existing) = std::fs::read_to_string(&machine_json) {
-        let hub = serde_json::from_str::<serde_json::Value>(&existing)
-            .ok()
-            .and_then(|v| v.get("hub_url").and_then(|u| u.as_str()).map(str::to_string))
-            .unwrap_or_default();
+        let config = serde_json::from_str::<serde_json::Value>(&existing).ok();
+        let hub = config.as_ref().and_then(|v| v.get("hub_url")).and_then(|u| u.as_str()).unwrap_or_default();
         let mine: Vec<Ipv4Addr> = interface_addresses().into_iter().map(|(_, ip)| ip).collect();
-        if hub_is_here(&hub, port, &mine) {
+        if hub_is_here(hub, port, &mine) && config.as_ref()
+            .and_then(|v| v.get("machine_id")).and_then(|v| v.as_str())
+            .is_some_and(|id| pool.get().ok().and_then(|conn| db::machines::find_machine_by_id(&conn, id).ok().flatten()).is_some()) {
             if let Err(error) = node_service_install(&find_node_binary().unwrap_or_else(|| "offdesk-node".into())) {
                 return LocalNode::Failed(error);
             }
             return LocalNode::AlreadyHere;
         }
-        if !hub.is_empty() {
-            return LocalNode::Elsewhere { hub };
+        if !hub.is_empty() && !hub_is_here(hub, port, &mine) {
+            return LocalNode::Elsewhere { hub: hub.to_owned() };
         }
+        // A config left behind by an interrupted install or a reset local DB
+        // is not a registration. Re-register only against this same local Hub.
     }
 
     let Some(node) = find_node_binary() else {
