@@ -73,6 +73,11 @@ class TestFlightRelease
       raise 'Explicit encryption classification missing'
     end
 
+    # Apple supports reading builds from a group, but not GET_RELATED for a
+    # build's betaGroups relationship. Check this during preview as well.
+    members = call('get', "/v1/betaGroups/#{group['id']}/relationships/builds", nil, 'limit' => '200')
+    raise 'Testers group membership is paginated; inspect before distribution' if members.dig('links', 'next')
+    attached = members['data'].any? { |b| b['id'] == id }
     detail = call('get', "/v1/builds/#{id}/buildBetaDetail")['data']
     state = detail['attributes']['externalBuildState']
     accepted_states = %w[MISSING_EXPORT_COMPLIANCE READY_FOR_BETA_SUBMISSION WAITING_FOR_BETA_REVIEW IN_BETA_REVIEW BETA_APPROVED READY_FOR_BETA_TESTING IN_BETA_TESTING]
@@ -85,7 +90,6 @@ class TestFlightRelease
     unless localizations.any? { |l| l['attributes']['locale'] == 'en-US' }
       call('post', '/v1/betaBuildLocalizations', data: {type: 'betaBuildLocalizations', attributes: {locale: 'en-US', whatsNew: 'Improved first-time connection and startup reconnection. Please test pairing, reopening the app and terminal input.'}, relationships: {build: {data: {type: 'builds', id: id}}}})
     end
-    attached = call('get', "/v1/builds/#{id}/betaGroups")['data'].any? { |g| g['id'] == group['id'] }
     call('post', "/v1/betaGroups/#{group['id']}/relationships/builds", data: [{type: 'builds', id: id}]) unless attached
 
     state = call('get', "/v1/builds/#{id}/buildBetaDetail")['data']['attributes']['externalBuildState']

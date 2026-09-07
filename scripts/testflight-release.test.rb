@@ -29,8 +29,8 @@ class TestFlightReleaseTest < Minitest::Test
         {id: 'detail', attributes: {externalBuildState: @state}}
       when '/v1/builds/new/betaBuildLocalizations'
         [{attributes: {locale: 'en-US'}}]
-      when '/v1/builds/new/betaGroups'
-        @attached ? [{id: 'testers'}] : []
+      when '/v1/betaGroups/testers/relationships/builds'
+        @attached ? [{id: 'new'}] : []
       else
         raise "Unexpected request #{path}"
       end
