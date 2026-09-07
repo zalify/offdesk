@@ -11,15 +11,16 @@ interface Props {
   title: string;
   description: string;
   path?: string;
+  lang?: "en" | "zh-CN";
 }
-const { title, description, path = "/" } = Astro.props;
+const { title, description, path = "/", lang = "en" } = Astro.props;
 const repo = "https://github.com/zalify/offdesk";
 const discord = "https://discord.gg/aFUu6VMzc";
 const canonical = `https://offdesk.dev${path}`;
 ---
 
 <!doctype html>
-<html lang="en">
+<html lang={lang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -78,7 +79,7 @@ const canonical = `https://offdesk.dev${path}`;
           <a href="/#download" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Download</a>
           <a href="/#how" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">How it works</a>
           <a href="/#away" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Away from home</a>
-          <a href="/#more" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">More</a>
+          <a href="/docs/mac" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Docs</a>
           <a href="/#agents" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">For agents</a>
         </div>
         <div class="flex items-center gap-2">
@@ -102,7 +103,7 @@ const canonical = `https://offdesk.dev${path}`;
           MIT · made by <a href="https://zalify.com" class="text-ink hover:text-coral">Zalify</a> · go outside
         </span>
         <span class="flex items-center gap-6 font-display text-[14px] font-semibold text-muted">
-          <a href={`${repo}#readme`} class="hover:text-coral">Docs</a>
+          <a href="/docs/mac" class="hover:text-coral">Getting started</a>
           <a href="/tunnel" class="hover:text-coral">Tunnel guide</a>
           <a href={`${repo}/blob/main/SECURITY.md`} class="hover:text-coral">Security</a>
           <a href={discord} class="inline-flex items-center gap-1.5 hover:text-coral"><Icon name="discord" /> Discord</a>
