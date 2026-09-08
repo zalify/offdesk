@@ -1,4 +1,4 @@
-import { DEFAULT_TERMINAL_FONT } from "@/lib/terminalFonts";
+import { DEFAULT_TERMINAL_FONT, TERMINAL_SYMBOL_FONT } from "@/lib/terminalFonts";
 import { openWebPreview, parseLocalPreview } from "@/lib/webPreview";
 import {
   useEffect,
@@ -1359,9 +1359,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         try {
           await Promise.allSettled([
             document.fonts?.load(`${fontSize}px ${fontFamily}`),
-            // Keep the bundled fallback ready even with a custom font.
-            // Clear cached missing glyphs after both fonts have settled.
-            document.fonts?.load(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`, "⏵"),
+            // Load both fallbacks even when a custom face handles ordinary text.
+            // Redraw only after the symbol subset has settled too.
+            document.fonts?.load(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`),
+            document.fonts?.load(`${fontSize}px "${TERMINAL_SYMBOL_FONT}"`, "⏵"),
           ]);
         } catch { /* use system fallback if a bundled font cannot load */ }
         if (disposed || current !== revision || termRef.current !== term) return;
