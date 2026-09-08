@@ -4,6 +4,7 @@ require_relative 'testflight-release'
 class TestFlightReleaseTest < Minitest::Test
   def setup
     @writes = []
+    @localizations = [{attributes: {locale: 'en-US'}}]
     @version = '0.6.6'
     @state = 'READY_FOR_BETA_SUBMISSION'
     @french = false
@@ -41,7 +42,7 @@ class TestFlightReleaseTest < Minitest::Test
       when '/v1/builds/new/buildBetaDetail'
         {id: 'detail', attributes: {externalBuildState: @state}}
       when '/v1/builds/new/betaBuildLocalizations'
-        [{attributes: {locale: 'en-US'}}]
+        @localizations
       when '/v1/betaGroups/testers/relationships/builds'
         @attached ? [{id: 'new'}] : []
       else
@@ -58,6 +59,26 @@ class TestFlightReleaseTest < Minitest::Test
   def test_preview_never_mutates
     assert_equal 'READY_FOR_BETA_SUBMISSION', run_release(false)[:externalBuildState]
     assert_empty @writes
+  end
+
+  def test_release_specific_notes_are_previewed_without_mutation
+    notes = "Test multiple attachments, pairing and terminal symbols.\nChinese punctuation: ？（）"
+    report = TestFlightRelease.new(@client, '0.6.6', '26.1', whats_new: notes).run
+    assert_equal notes, report[:whatsNew]
+    assert_empty @writes
+  end
+
+  def test_release_specific_notes_are_used_for_new_localization
+    @localizations = []
+    notes = 'Test multiple attachments and terminal symbols.'
+    TestFlightRelease.new(@client, '0.6.6', '26.1', apply: true, whats_new: notes).run
+    write = @writes.find { |_, path, _| path == '/v1/betaBuildLocalizations' }
+    assert_equal notes, write[2].dig(:data, :attributes, :whatsNew)
+  end
+
+  def test_existing_notes_are_preserved
+    TestFlightRelease.new(@client, '0.6.6', '26.1', apply: true, whats_new: 'New notes').run
+    refute @writes.any? { |_, path, _| path.include?('betaBuildLocalizations') }
   end
 
   def test_wrong_marketing_version_is_rejected_before_mutation

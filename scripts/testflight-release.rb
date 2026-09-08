@@ -32,10 +32,12 @@ end
 
 class TestFlightRelease
   APP = '6807904930'
-  def initialize(client, version, number, apply: false)
+  def initialize(client, version, number, apply: false, whats_new: nil)
     raise 'Expected a stable marketing version' unless version.match?(/\A\d+\.\d+\.\d+\z/)
     raise 'Invalid numeric build number' unless number.match?(/\A\d+(?:\.\d+){0,2}\z/)
     @client, @version, @number, @apply = client, version, number, apply
+    @whats_new = whats_new.to_s.strip
+    @whats_new = 'Improved first-time connection and startup reconnection. Please test pairing, reopening the app and terminal input.' if @whats_new.empty?
   end
 
   def call(method, path, payload = nil, query = {})
@@ -87,13 +89,13 @@ class TestFlightRelease
     state = detail['attributes']['externalBuildState']
     accepted_states = %w[MISSING_EXPORT_COMPLIANCE READY_FOR_BETA_SUBMISSION WAITING_FOR_BETA_REVIEW IN_BETA_REVIEW BETA_APPROVED READY_FOR_BETA_TESTING IN_BETA_TESTING]
     raise "Build needs manual attention: #{state}" unless accepted_states.include?(state)
-    report = {version: @version, build: @number, buildId: id, externalBuildState: state, group: 'Testers', apply: @apply, encryptionBaseline: previous['attributes']['version']}
+    report = {version: @version, build: @number, buildId: id, externalBuildState: state, group: 'Testers', apply: @apply, encryptionBaseline: previous['attributes']['version'], whatsNew: @whats_new}
     return report unless @apply
 
     call('patch', "/v1/builds/#{id}", {data: {type: 'builds', id: id}.merge(encryption)}) if encryption
     localizations = call('get', "/v1/builds/#{id}/betaBuildLocalizations")['data']
     unless localizations.any? { |l| l['attributes']['locale'] == 'en-US' }
-      call('post', '/v1/betaBuildLocalizations', data: {type: 'betaBuildLocalizations', attributes: {locale: 'en-US', whatsNew: 'Improved first-time connection and startup reconnection. Please test pairing, reopening the app and terminal input.'}, relationships: {build: {data: {type: 'builds', id: id}}}})
+      call('post', '/v1/betaBuildLocalizations', data: {type: 'betaBuildLocalizations', attributes: {locale: 'en-US', whatsNew: @whats_new}, relationships: {build: {data: {type: 'builds', id: id}}}})
     end
     call('post', "/v1/betaGroups/#{group['id']}/relationships/builds", data: [{type: 'builds', id: id}]) unless attached
 
@@ -109,7 +111,7 @@ class TestFlightRelease
 end
 
 if __FILE__ == $PROGRAM_NAME
-  report = TestFlightRelease.new(method(:api), ENV.fetch('RELEASE_VERSION'), ENV.fetch('BUILD_NUMBER'), apply: ENV['APPLY_DISTRIBUTION'] == 'true').run
+  report = TestFlightRelease.new(method(:api), ENV.fetch('RELEASE_VERSION'), ENV.fetch('BUILD_NUMBER'), apply: ENV['APPLY_DISTRIBUTION'] == 'true', whats_new: ENV['WHATS_NEW']).run
   puts JSON.pretty_generate(report)
   File.write(ENV.fetch('REPORT_PATH', 'testflight-release.json'), JSON.pretty_generate(report) + "\n")
 end
