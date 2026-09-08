@@ -96,21 +96,21 @@ async fn create(
             return StatusCode::NOT_FOUND.into_response();
         }
     }
-    let Some((conn_id, commands, cancel)) =
-        state.manager.preview_connection(&user_id, &machine).await
-    else {
+    if state
+        .manager
+        .preview_connection(&user_id, &machine)
+        .await
+        .is_none()
+    {
         return (
             StatusCode::CONFLICT,
             "Update this machine's offdesk-node to enable web previews",
         )
             .into_response();
-    };
+    }
     match state.web_previews.create(
         user_id,
         machine,
-        conn_id,
-        commands,
-        cancel,
         body.port,
         body.address_family,
         body.target,
@@ -197,19 +197,14 @@ pub async fn dispatch(State(state): State<AppState>, request: Request, next: Nex
     let Some(config) = &state.web_previews.config else {
         return next.run(request).await;
     };
-    if request.headers().get_all(header::HOST).iter().count() != 1 {
-        return StatusCode::MISDIRECTED_REQUEST.into_response();
-    }
-    let authority = request
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("");
-    if config.allows_control(authority, &crate::first_run::local_network_addresses()) {
+    let Some(authority) = request_authority(&request) else {
+        return unknown_authority();
+    };
+    if config.allows_control(authority, crate::first_run::local_network_addresses) {
         return next.run(request).await;
     }
     let Ok(url) = url::Url::parse(&format!("https://{authority}")) else {
-        return StatusCode::MISDIRECTED_REQUEST.into_response();
+        return unknown_authority();
     };
     let host = url.host_str().unwrap_or_default();
     if url.port() != config.port
@@ -218,7 +213,7 @@ pub async fn dispatch(State(state): State<AppState>, request: Request, next: Nex
         || !url.username().is_empty()
         || url.password().is_some()
     {
-        return StatusCode::MISDIRECTED_REQUEST.into_response();
+        return unknown_authority();
     }
     let Some(lease) = state.web_previews.find(host) else {
         let mut response = (
@@ -238,10 +233,38 @@ pub async fn dispatch(State(state): State<AppState>, request: Request, next: Nex
         } else if path.starts_with(SYSTEM_PATH) {
             StatusCode::NOT_FOUND.into_response()
         } else {
-            proxy::forward(state.web_previews.clone(), lease, request).await
+            proxy::forward(state, lease, request).await
         };
     private(&mut response);
     response
+}
+
+fn unknown_authority() -> Response {
+    let mut response = (StatusCode::MISDIRECTED_REQUEST,
+        "Unrecognized Hub address. When web previews are enabled, add your external LAN/Docker or reverse-proxy origin to OFFDESK_PREVIEW_CONTROL_ORIGINS and restart the Hub. Preserve Host (or HTTP/2 :authority) through your proxy.")
+        .into_response();
+    private(&mut response);
+    response
+}
+
+fn request_authority(request: &Request) -> Option<&str> {
+    let mut hosts = request.headers().get_all(header::HOST).iter();
+    let host = hosts.next();
+    if hosts.next().is_some() {
+        return None;
+    }
+    let uri = request.uri().authority().map(|a| a.as_str());
+    match host {
+        Some(host) => {
+            let host = host.to_str().ok()?;
+            if uri.is_some_and(|uri| !uri.eq_ignore_ascii_case(host)) {
+                return None;
+            }
+            Some(host)
+        }
+        None if request.version() == axum::http::Version::HTTP_2 => uri,
+        None => None,
+    }
 }
 async fn redeem(lease: Arc<registry::Lease>, request: Request<Body>) -> Response {
     if request

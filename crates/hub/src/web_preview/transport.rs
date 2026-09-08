@@ -1,4 +1,4 @@
-use super::registry::{now, Registry, StreamGuard};
+use super::registry::{now, StreamGuard};
 use crate::{auth::hash_token, AppState};
 use axum::{
     extract::{
@@ -18,11 +18,22 @@ use tokio::io::DuplexStream;
 use tokio_tungstenite::tungstenite::Message;
 
 pub async fn open(
-    registry: &Arc<Registry>,
+    state: &AppState,
     lease: Arc<super::registry::Lease>,
 ) -> Result<(DuplexStream, StreamGuard), (StatusCode, &'static str)> {
-    let (guard, ticket, rx) = registry
-        .allocate(lease.clone())
+    let Some((conn_id, commands, connection_cancel)) = state
+        .manager
+        .preview_connection(&lease.user, &lease.machine)
+        .await
+    else {
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Preview machine is offline or unavailable; retry after it reconnects",
+        ));
+    };
+    let (guard, ticket, rx) = state
+        .web_previews
+        .allocate(lease.clone(), conn_id, connection_cancel)
         .map_err(|e| (StatusCode::TOO_MANY_REQUESTS, e))?;
     let command = HubToMachine::OpenPreviewStream {
         stream_id: guard.id.clone(),
@@ -30,12 +41,6 @@ pub async fn open(
         port: lease.port,
         address_family: lease.family,
         expires_at: now() + 10_000,
-    };
-    let Some(commands) = lease.commands.upgrade() else {
-        return Err((
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Preview machine disconnected",
-        ));
     };
     let result = tokio::select! {
         _ = guard.cancel.cancelled() => return Err((StatusCode::SERVICE_UNAVAILABLE, "Preview machine disconnected")),
@@ -63,15 +68,15 @@ pub async fn accept(
         .lock()
         .unwrap()
         .get(&id)
-        .map(|s| s.lease.clone());
-    let Some(lease) = lease else {
+        .map(|s| (s.lease.clone(), s.conn_id.clone()));
+    let Some((lease, stream_conn_id)) = lease else {
         return StatusCode::UNAUTHORIZED.into_response();
     };
     if !state
         .manager
         .preview_connection(&lease.user, &lease.machine)
         .await
-        .is_some_and(|(conn_id, _, _)| conn_id == lease.conn_id)
+        .is_some_and(|(conn_id, _, _)| conn_id == stream_conn_id)
     {
         return StatusCode::UNAUTHORIZED.into_response();
     }

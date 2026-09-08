@@ -219,7 +219,7 @@ impl MachineManager {
         (conn_id, cmd_rx)
     }
 
-    /// A preview binds to this exact authenticated connection, never a replacement node.
+    /// Resolve an authorized, capable node connection for each new preview stream.
     pub async fn preview_connection(
         &self,
         user: &str,

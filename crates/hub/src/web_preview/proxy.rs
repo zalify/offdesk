@@ -1,5 +1,5 @@
 use super::{
-    registry::{Lease, Registry, StreamGuard, COOKIE},
+    registry::{Lease, StreamGuard, COOKIE},
     transport,
 };
 use axum::{
@@ -260,7 +260,7 @@ pub fn response_headers(headers: &mut HeaderMap, lease: &Lease, websocket: bool)
 }
 
 pub async fn forward(
-    registry: Arc<Registry>,
+    state: crate::AppState,
     lease: Arc<Lease>,
     mut request: Request<Body>,
 ) -> Response {
@@ -301,7 +301,7 @@ pub async fn forward(
     } else {
         None
     };
-    let (io, guard) = match transport::open(&registry, lease.clone()).await {
+    let (io, guard) = match transport::open(&state, lease.clone()).await {
         Ok(v) => v,
         Err(e) => return e.into_response(),
     };

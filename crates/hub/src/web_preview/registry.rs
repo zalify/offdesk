@@ -1,14 +1,11 @@
 use crate::auth::hash_token;
-use offdesk_protocol::{preview::AddressFamily, HubToMachine};
+use offdesk_protocol::preview::AddressFamily;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use tokio::{
-    io::DuplexStream,
-    sync::{mpsc, oneshot},
-};
+use tokio::{io::DuplexStream, sync::oneshot};
 use tokio_util::sync::CancellationToken;
 
 pub const COOKIE: &str = "__Host-offdesk-preview";
@@ -106,7 +103,11 @@ impl Config {
         Ok(())
     }
 
-    pub fn allows_control(&self, authority: &str, local_ips: &[std::net::Ipv4Addr]) -> bool {
+    pub fn allows_control(
+        &self,
+        authority: &str,
+        local_ips: impl FnOnce() -> Vec<std::net::Ipv4Addr>,
+    ) -> bool {
         if authority.eq_ignore_ascii_case(&self.control_authority)
             || self
                 .control_aliases
@@ -141,7 +142,7 @@ impl Config {
         if !listener.ip().is_unspecified() {
             return ip == listener.ip();
         }
-        ip.is_loopback() || matches!(ip, std::net::IpAddr::V4(ip) if local_ips.contains(&ip))
+        ip.is_loopback() || matches!(ip, std::net::IpAddr::V4(ip) if local_ips().contains(&ip))
     }
     pub fn origin(&self, host: &str) -> String {
         match self.port {
@@ -157,15 +158,12 @@ pub struct Lease {
     pub origin: String,
     pub user: String,
     pub machine: String,
-    pub conn_id: String,
     pub port: u16,
     pub family: AddressFamily,
     pub target: String,
     pub expires_at: i64,
     pub expires: Instant,
     pub cancel: CancellationToken,
-    // A lease must not keep cmd_rx alive after the manager forgets a machine.
-    pub commands: mpsc::WeakSender<HubToMachine>,
     credentials: Mutex<Credentials>,
 }
 struct Credentials {
@@ -198,6 +196,7 @@ impl Lease {
 
 pub struct StreamEntry {
     pub lease: Arc<Lease>,
+    pub conn_id: String,
     pub ticket_hash: String,
     pub deadline: Instant,
     pub sender: Option<oneshot::Sender<Result<DuplexStream, ()>>>,
@@ -230,9 +229,6 @@ impl Registry {
         &self,
         user: String,
         machine: String,
-        conn_id: String,
-        commands: mpsc::Sender<HubToMachine>,
-        cancel: CancellationToken,
         port: u16,
         family: AddressFamily,
         target: String,
@@ -255,14 +251,12 @@ impl Registry {
             hostname: hostname.clone(),
             user,
             machine,
-            conn_id,
             port,
             family,
             target,
             expires_at: now() + LEASE_MS,
             expires: Instant::now() + Duration::from_millis(LEASE_MS as u64),
-            cancel,
-            commands: commands.downgrade(),
+            cancel: CancellationToken::new(),
             credentials: Mutex::new(Credentials {
                 code_hash: Some(hash_token(&code)),
                 code_expires: Instant::now() + Duration::from_secs(60),
@@ -290,6 +284,8 @@ impl Registry {
     pub fn allocate(
         self: &Arc<Self>,
         lease: Arc<Lease>,
+        conn_id: String,
+        connection_cancel: CancellationToken,
     ) -> Result<
         (
             StreamGuard,
@@ -320,10 +316,20 @@ impl Registry {
         let ticket = secret();
         let (sender, receiver) = oneshot::channel();
         let cancel = lease.cancel.child_token();
+        // Disconnect ends streams, not the browser's authenticated lease.
+        // A new stream resolves and authorizes the current node connection.
+        let disconnected = cancel.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = connection_cancel.cancelled() => disconnected.cancel(),
+                _ = disconnected.cancelled() => {},
+            }
+        });
         streams.insert(
             id.clone(),
             StreamEntry {
                 lease,
+                conn_id,
                 ticket_hash: hash_token(&ticket),
                 deadline: Instant::now() + Duration::from_secs(10),
                 sender: Some(sender),

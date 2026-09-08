@@ -1,6 +1,6 @@
 # Private web previews through your Hub
 
-Open a development website from your phone, including away from home. offdesk
+Open a development website from your phone, including away from home. Offdesk
 relays requests through the Hub to the node's loopback HTTP port. The machine
 must stay awake and connected; no inbound port forwarding on that machine is
 required. The Hub and node must both include `preview-tcp-v1` support.
@@ -22,6 +22,12 @@ control origins (for example an mDNS name or another reverse proxy) can be liste
 in `OFFDESK_PREVIEW_CONTROL_ORIGINS`, comma-separated, such as
 `http://mac-mini.local:4317,https://hub.example.net`. `OFFDESK_SECURE_BASE_URL` is
 also accepted as a control origin. Aliases inside the preview domain are rejected.
+The Hub logs the configured control authority, aliases and listener at startup.
+For Docker publishing `8431:4317`, explicitly add the host-facing origin, for
+example `http://192.168.1.94:8431`; the host's LAN interface and published port
+are not the container's interface and listener. Unrecognized addresses return
+421 with an `OFFDESK_PREVIEW_CONTROL_ORIGINS` configuration hint. HTTP/2 requests
+without Host use `:authority`; conflicting Host and `:authority` are rejected.
 Keep Host intact for health probes and node connections as well. When the variable is absent, existing Hub
 routing remains unchanged and the preview UI explains that it is not configured.
 
@@ -54,8 +60,13 @@ write parent-domain cookies. Do not treat a preview as an application sandbox.
 - A preview expires after two hours. Launch codes expire in sixty seconds and
   cannot be shared/replayed. Refresh works within an authenticated lease; to
   authenticate another browser, create a new preview. Closing a preview revokes
-  its access and active streams. Hub restarts and machine reconnections invalidate
-  leases. Previously downloaded/cached content cannot be recalled.
+  its access and active streams. Machine disconnections close active HTTP, SSE
+  and WebSocket streams, but preserve the lease and browser cookie. While offline,
+  requests return 503; retry or refresh after the node reconnects. Each new stream
+  rechecks machine ownership and capability. Hub restarts invalidate leases.
+  The two-hour lifetime is fixed, not renewed by activity: expiry closes even
+  active SSE/WS streams. Create a new preview when it expires.
+  Previously downloaded content cannot be recalled.
 
 ## Encrypted App connections
 
@@ -87,7 +98,10 @@ controlled preview hostnames. For Next, use
 For Vite, use its version-appropriate allowedHosts and HMR settings; the automated
 Vite 8 fixture uses `allowedHosts: ['.preview.test']` and
 `hmr: { protocol: 'wss', clientPort: 443 }`. Never enable all hosts just to make a
-preview work. Choose the external HTTPS port if it is not 443.
+preview work. A Vite 403 saying the host is not allowed comes from Vite: add
+only your dedicated preview suffix to `server.allowedHosts` and restart Vite.
+The Hub preserves this response rather than bypassing Vite's host check.
+Choose the external HTTPS port if it is not 443.
 
 JavaScript hardcoding another `localhost` API/WS port, cross-origin API use,
 cross-site iframe embedding, OAuth callback domains and local self-signed HTTPS
@@ -101,6 +115,16 @@ response headers. Excess connections fail with 429 rather than queue indefinitel
 Streams have bounded buffers and independent backpressure; closing a browser
 request frees its connection even if the upstream uses keep-alive. Large assets
 still consume the Hub's bandwidth and the development machine's upload bandwidth.
+
+This version opens a new reverse WebSocket (including TLS for WSS) and loopback
+TCP connection for each HTTP request; it does not pool upstream keep-alive
+connections. Asset-heavy pages may hit the per-machine limit even when the
+browser uses HTTP/2. All preview responses deliberately use `private, no-store`
+and disable CDN caching, including immutable assets, so subsequent loads still
+require authorization. This is a development convenience, not a production
+asset-serving proxy. Connection pooling and opt-in private static-asset caching
+need separate performance measurements and a defined revocation policy before
+being enabled; tracked in [#456](https://github.com/zalify/offdesk/issues/456).
 
 ## Verification
 

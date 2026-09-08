@@ -45,48 +45,6 @@ impl Fixture {
             google_client_id: None,
             google_client_secret: None,
         };
-        let (_, mut commands) = state
-            .manager
-            .register_machine_with_capabilities(
-                offdesk_protocol::MachineInfo {
-                    id: "m".into(),
-                    name: "machine".into(),
-                    os: "linux".into(),
-                    home_dir: "/tmp".into(),
-                    production: false,
-                },
-                Some("u".into()),
-                vec![offdesk_protocol::preview::CAPABILITY.into()],
-            )
-            .await;
-        let hub = base.replace("http://", "ws://") + "/ws/machine";
-        let node = tokio::spawn(async move {
-            let mut tasks = tokio::task::JoinSet::new();
-            while let Some(cmd) = commands.recv().await {
-                while tasks.try_join_next().is_some() {}
-                if let offdesk_protocol::HubToMachine::OpenPreviewStream {
-                    stream_id,
-                    ticket,
-                    port,
-                    address_family,
-                    expires_at,
-                } = cmd
-                {
-                    let hub = hub.clone();
-                    tasks.spawn(async move {
-                        offdesk_preview_transport::connect(
-                            &hub,
-                            &stream_id,
-                            &ticket,
-                            port,
-                            address_family,
-                            expires_at,
-                        )
-                        .await
-                    });
-                }
-            }
-        });
         let app = router()
             .route("/api/control-only", get(|| async { "hub-secret" }))
             .layer(tower_http::cors::CorsLayer::permissive())
@@ -161,12 +119,60 @@ impl Fixture {
         let upstream = tokio::spawn(async move {
             axum::serve(upstream, app).await.unwrap();
         });
-        Self {
+        let mut fixture = Self {
             state,
             base,
             port,
-            tasks: vec![server, node, upstream],
-        }
+            tasks: vec![server, upstream],
+        };
+        fixture.connect_node().await;
+        fixture
+    }
+    async fn connect_node(&mut self) {
+        let (_, mut commands) = self
+            .state
+            .manager
+            .register_machine_with_capabilities(
+                offdesk_protocol::MachineInfo {
+                    id: "m".into(),
+                    name: "machine".into(),
+                    os: "linux".into(),
+                    home_dir: "/tmp".into(),
+                    production: false,
+                },
+                Some("u".into()),
+                vec![offdesk_protocol::preview::CAPABILITY.into()],
+            )
+            .await;
+        let hub = self.base.replace("http://", "ws://") + "/ws/machine";
+        let node = tokio::spawn(async move {
+            let mut tasks = tokio::task::JoinSet::new();
+            while let Some(cmd) = commands.recv().await {
+                while tasks.try_join_next().is_some() {}
+                if let offdesk_protocol::HubToMachine::OpenPreviewStream {
+                    stream_id,
+                    ticket,
+                    port,
+                    address_family,
+                    expires_at,
+                } = cmd
+                {
+                    let hub = hub.clone();
+                    tasks.spawn(async move {
+                        offdesk_preview_transport::connect(
+                            &hub,
+                            &stream_id,
+                            &ticket,
+                            port,
+                            address_family,
+                            expires_at,
+                        )
+                        .await
+                    });
+                }
+            }
+        });
+        self.tasks.push(node);
     }
     fn client(&self) -> reqwest::Client {
         reqwest::Client::builder()
@@ -176,20 +182,11 @@ impl Fixture {
             .unwrap()
     }
     async fn lease(&self) -> (Arc<registry::Lease>, String) {
-        let (conn, tx, cancel) = self
-            .state
-            .manager
-            .preview_connection("u", "m")
-            .await
-            .unwrap();
         self.state
             .web_previews
             .create(
                 "u".into(),
                 "m".into(),
-                conn,
-                tx,
-                cancel,
                 self.port,
                 AddressFamily::Ipv4,
                 "/echo?x=1#anchor".into(),
@@ -373,23 +370,45 @@ async fn websocket_subprotocol_binary_and_revocation() {
 }
 
 #[tokio::test]
-async fn sse_is_incremental_and_reconnect_cancels_old_lease() {
-    let f = Fixture::new().await;
+async fn sse_disconnects_but_same_preview_recovers_after_node_reconnect() {
+    let mut f = Fixture::new().await;
     let (lease, code) = f.lease().await;
     let session = lease.redeem(&code).unwrap();
     let mut response = f.request(&lease, &session, "/sse").send().await.unwrap();
     assert_eq!(response.chunk().await.unwrap().unwrap(), "data: 0\n\n");
-    let conn = lease.conn_id.clone();
+    let conn = f
+        .state
+        .manager
+        .preview_connection("u", "m")
+        .await
+        .unwrap()
+        .0;
     f.state.manager.unregister_machine("m", &conn).await;
-    assert!(!lease.live());
-    assert!(f.state.web_previews.find(&lease.hostname).is_none());
+    assert!(lease.live());
+    assert!(f.state.web_previews.find(&lease.hostname).is_some());
+    let closed = tokio::time::timeout(Duration::from_secs(2), response.chunk())
+        .await
+        .unwrap();
+    assert!(closed.is_err() || closed.unwrap().is_none());
+    assert_eq!(
+        f.request(&lease, &session, "/echo")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
     tokio::time::timeout(Duration::from_secs(1), async {
-        while !f.tasks[1].is_finished() {
+        while !f.tasks[2].is_finished() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .expect("an inactive preview must not keep the node command channel alive");
+    f.connect_node().await;
+    let response = f.request(&lease, &session, "/echo").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
 }
 
 #[test]
@@ -478,7 +497,7 @@ async fn management_requires_owner_and_old_nodes_are_not_sent_preview_commands()
         .lock()
         .unwrap()
         .values()
-        .all(|l| !l.live()));
+        .all(|l| l.live()));
 }
 
 #[tokio::test]
@@ -486,7 +505,12 @@ async fn stream_tickets_are_single_use_expire_and_release_their_budgets() {
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error, Message};
     let f = Fixture::new().await;
     let (lease, _) = f.lease().await;
-    let (guard, ticket, _rx) = f.state.web_previews.allocate(lease.clone()).unwrap();
+    let (conn, _, cancel) = f.state.manager.preview_connection("u", "m").await.unwrap();
+    let (guard, ticket, _rx) = f
+        .state
+        .web_previews
+        .allocate(lease.clone(), conn.clone(), cancel.child_token())
+        .unwrap();
     let request = || {
         let mut request = format!(
             "{}/ws/preview-stream/{}",
@@ -507,7 +531,11 @@ async fn stream_tickets_are_single_use_expire_and_release_their_budgets() {
     assert!(matches!(repeated, Error::Http(r) if r.status() == StatusCode::UNAUTHORIZED));
     ws.send(Message::Text("unavailable".into())).await.unwrap();
     drop(guard);
-    let (guard, ticket, _) = f.state.web_previews.allocate(lease.clone()).unwrap();
+    let (guard, ticket, _) = f
+        .state
+        .web_previews
+        .allocate(lease.clone(), conn.clone(), cancel.child_token())
+        .unwrap();
     f.state
         .web_previews
         .streams
@@ -531,9 +559,19 @@ async fn stream_tickets_are_single_use_expire_and_release_their_budgets() {
     );
     drop(guard);
     let guards: Vec<_> = (0..32)
-        .map(|_| f.state.web_previews.allocate(lease.clone()).unwrap().0)
+        .map(|_| {
+            f.state
+                .web_previews
+                .allocate(lease.clone(), conn.clone(), cancel.child_token())
+                .unwrap()
+                .0
+        })
         .collect();
-    assert!(f.state.web_previews.allocate(lease).is_err());
+    assert!(f
+        .state
+        .web_previews
+        .allocate(lease, conn.clone(), cancel.child_token())
+        .is_err());
     drop(guards);
     assert!(f.state.web_previews.streams.lock().unwrap().is_empty());
 }
@@ -555,7 +593,7 @@ fn control_routes_keep_lan_and_aliases_without_opening_preview_hosts() {
         "127.0.0.1:4317",
         "192.168.1.94:4317",
     ] {
-        assert!(config.allows_control(host, &ips), "{host}");
+        assert!(config.allows_control(host, || ips.to_vec()), "{host}");
     }
     for host in [
         "unknown.test",
@@ -566,10 +604,10 @@ fn control_routes_keep_lan_and_aliases_without_opening_preview_hosts() {
         "192.168.1.94:4317/path",
         "user@192.168.1.94:4317",
     ] {
-        assert!(!config.allows_control(host, &ips), "{host}");
+        assert!(!config.allows_control(host, || ips.to_vec()), "{host}");
     }
     assert!(
-        !config.allows_control("192.168.1.94:4317", &[]),
+        !config.allows_control("192.168.1.94:4317", Vec::new),
         "an old DHCP address stops being accepted"
     );
     for origin in [
@@ -582,7 +620,175 @@ fn control_routes_keep_lan_and_aliases_without_opening_preview_hosts() {
         assert!(config.add_control_origin(origin).is_err(), "{origin}");
     }
     config.listener = Some("127.0.0.1:4317".parse().unwrap());
-    assert!(!config.allows_control("192.168.1.94:4317", &ips));
+    assert!(!config.allows_control("192.168.1.94:4317", || ips.to_vec()));
     let ipv6 = Config::new("preview.test", "http://[::1]:4317").unwrap();
-    assert!(ipv6.allows_control("[::1]:4317", &[]));
+    assert!(ipv6.allows_control("[::1]:4317", Vec::new));
+}
+
+#[test]
+fn ordinary_hosts_do_not_enumerate_network_interfaces() {
+    let mut config = Config::new("preview.test", "https://hub.test").unwrap();
+    config.listener = Some("0.0.0.0:4317".parse().unwrap());
+    config
+        .add_control_origin("http://docker-host.test:8443")
+        .unwrap();
+    for host in [
+        "hub.test",
+        "docker-host.test:8443",
+        "localhost:4317",
+        "127.0.0.1:4317",
+        "p-abc.preview.test",
+        "unknown.test",
+        "192.168.1.94:4318",
+    ] {
+        config.allows_control(host, || panic!("unexpected network enumeration for {host}"));
+    }
+    let calls = std::cell::Cell::new(0);
+    assert!(config.allows_control("192.168.1.94:4317", || {
+        calls.set(calls.get() + 1);
+        vec!["192.168.1.94".parse().unwrap()]
+    }));
+    assert_eq!(calls.get(), 1);
+}
+
+#[tokio::test]
+async fn http2_authority_is_supported_but_conflicting_hosts_are_rejected() {
+    use axum::http::Version;
+    use tower::ServiceExt;
+    let mut config = Config::new("preview.test", "https://hub.test").unwrap();
+    config.listener = Some("0.0.0.0:4317".parse().unwrap());
+    config
+        .add_control_origin("http://192.168.1.94:8431")
+        .unwrap();
+    let f = Fixture::new().await;
+    let mut state = f.state.clone();
+    state.web_previews = Arc::new(Registry::configured(config));
+    let app = Router::new()
+        .route("/health", get(|| async { "healthy" }))
+        .layer(axum::middleware::from_fn_with_state(state, dispatch));
+    let h2 = || {
+        Request::builder()
+            .version(Version::HTTP_2)
+            .uri("http://192.168.1.94:8431/health")
+    };
+    assert_eq!(
+        app.clone()
+            .oneshot(h2().body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.clone()
+            .oneshot(h2().header("host", "hub.test").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::MISDIRECTED_REQUEST
+    );
+    let mut duplicate = h2()
+        .header("host", "192.168.1.94:8431")
+        .body(Body::empty())
+        .unwrap();
+    duplicate
+        .headers_mut()
+        .append("host", HeaderValue::from_static("hub.test"));
+    assert_eq!(
+        app.clone().oneshot(duplicate).await.unwrap().status(),
+        StatusCode::MISDIRECTED_REQUEST
+    );
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST);
+    assert_eq!(response.headers()["cache-control"], "private, no-store");
+    assert!(String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap()
+            .to_vec()
+    )
+    .unwrap()
+    .contains("OFFDESK_PREVIEW_CONTROL_ORIGINS"));
+}
+
+#[tokio::test]
+async fn reconnect_reauthorizes_owner_capability_and_rejects_old_tickets() {
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error};
+    let mut f = Fixture::new().await;
+    let (lease, code) = f.lease().await;
+    let session = lease.redeem(&code).unwrap();
+    let (conn, _, cancel) = f.state.manager.preview_connection("u", "m").await.unwrap();
+    let (guard, ticket, _rx) = f
+        .state
+        .web_previews
+        .allocate(lease.clone(), conn, cancel)
+        .unwrap();
+    f.connect_node().await;
+    let mut old = format!(
+        "{}/ws/preview-stream/{}",
+        f.base.replace("http://", "ws://"),
+        guard.id
+    )
+    .into_client_request()
+    .unwrap();
+    old.headers_mut()
+        .insert("authorization", format!("Bearer {ticket}").parse().unwrap());
+    assert!(
+        matches!(tokio_tungstenite::connect_async(old).await.unwrap_err(), Error::Http(r) if r.status() == StatusCode::UNAUTHORIZED)
+    );
+    drop(guard);
+    for (owner, capabilities) in [
+        ("other", vec![offdesk_protocol::preview::CAPABILITY.into()]),
+        ("u", vec![]),
+    ] {
+        let (_, mut commands) = f
+            .state
+            .manager
+            .register_machine_with_capabilities(
+                offdesk_protocol::MachineInfo {
+                    id: "m".into(),
+                    name: "replacement".into(),
+                    os: "linux".into(),
+                    home_dir: "/tmp".into(),
+                    production: false,
+                },
+                Some(owner.into()),
+                capabilities,
+            )
+            .await;
+        assert_eq!(
+            f.request(&lease, &session, "/echo")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert!(
+            commands.try_recv().is_err(),
+            "unauthorized or old node must not receive preview commands"
+        );
+    }
+    f.connect_node().await;
+    let response = f.request(&lease, &session, "/echo").send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    response.bytes().await.unwrap();
+    f.state.web_previews.revoke("u", &lease.id);
+    f.connect_node().await;
+    assert_eq!(
+        f.request(&lease, &session, "/echo")
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::GONE
+    );
 }

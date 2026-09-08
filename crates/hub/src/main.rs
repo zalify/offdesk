@@ -476,6 +476,7 @@ async fn main() {
                 if let Some(origin) = env_opt("OFFDESK_SECURE_BASE_URL") {
                     config.add_control_origin(&origin).expect("Invalid secure Hub origin");
                 }
+                tracing::info!(control = %config.control_authority, aliases = ?config.control_aliases, listener = ?config.listener, "Web previews enabled; Docker published addresses must be listed in OFFDESK_PREVIEW_CONTROL_ORIGINS");
                 web_preview::registry::Registry::configured(config)
             },
             _ => web_preview::registry::Registry::default(),
