@@ -7,6 +7,7 @@ use std::collections::HashMap;
 pub mod compression;
 pub mod keep_awake;
 pub mod local_host;
+pub mod preview;
 pub mod service;
 
 // ── Shared data types ──
@@ -283,6 +284,14 @@ pub struct BrowserStateSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum HubToMachine {
+    #[serde(rename = "open_preview_stream")]
+    OpenPreviewStream {
+        stream_id: String,
+        ticket: String,
+        port: u16,
+        address_family: preview::AddressFamily,
+        expires_at: i64,
+    },
     #[serde(rename = "attach_composer")]
     AttachComposer {
         request_id: String,

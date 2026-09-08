@@ -59,6 +59,7 @@ const SEQ_RECOVERY_OFFSET: u64 = 200;
 
 /// A connected machine
 struct MachineConnection {
+    preview_lifetime: tokio_util::sync::CancellationToken,
     /// Unique connection ID (changes on reconnect)
     pub conn_id: String,
     pub info: MachineInfo,
@@ -176,6 +177,7 @@ impl MachineManager {
         let conn_id = uuid::Uuid::new_v4().to_string();
 
         let conn = MachineConnection {
+            preview_lifetime: tokio_util::sync::CancellationToken::new(),
             conn_id: conn_id.clone(),
             info: info.clone(),
             user_id: user_id.clone(),
@@ -188,6 +190,7 @@ impl MachineManager {
         {
             let mut machines = self.machines.lock().await;
             if let Some(old_conn) = machines.insert(machine_id.clone(), conn) {
+                old_conn.preview_lifetime.cancel();
                 // A reconnecting machine can register its new connection
                 // before the old connection's disconnect is detected; the
                 // later unregister_machine then no-ops on the conn_id
@@ -216,6 +219,22 @@ impl MachineManager {
         (conn_id, cmd_rx)
     }
 
+    /// Resolve an authorized, capable node connection for each new preview stream.
+    pub async fn preview_connection(
+        &self,
+        user: &str,
+        machine: &str,
+    ) -> Option<(String, mpsc::Sender<HubToMachine>, tokio_util::sync::CancellationToken)> {
+        let machines = self.machines.lock().await;
+        let conn = machines.get(machine)?;
+        if !connection_visible_to(conn, user)
+            || !conn.capabilities.iter().any(|c| c == offdesk_protocol::preview::CAPABILITY)
+        {
+            return None;
+        }
+        Some((conn.conn_id.clone(), conn.cmd_tx.clone(), conn.preview_lifetime.child_token()))
+    }
+
     /// Whether the connected machine declared `capability` in its Register.
     /// Unknown/disconnected machines report false, so optional wire features
     /// (e.g. deflate-raw-v1) stay off unless both sides opted in.
@@ -240,6 +259,7 @@ impl MachineManager {
             return;
         }
         if let Some(conn) = machines.remove(machine_id) {
+            conn.preview_lifetime.cancel();
             let target_user_id = conn.user_id.clone();
 
             // Agent processes die with the machine connection: their sessions
@@ -325,7 +345,9 @@ impl MachineManager {
         // and unregister_machine later no-ops on a missing conn.
         {
             let mut machines = self.machines.lock().await;
-            machines.remove(machine_id);
+            if let Some(conn) = machines.remove(machine_id) {
+                conn.preview_lifetime.cancel();
+            }
         }
         self.persisted_terminals.lock().await.remove(machine_id);
         self.clear_machine_mode(user_id, machine_id);

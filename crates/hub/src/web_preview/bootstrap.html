@@ -1,0 +1,20 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Open preview · offdesk</title>
+<body><h1>Opening preview…</h1><p id="status">Connecting to your development machine.</p>
+<script nonce="__NONCE__">
+(() => {
+  const code = new URLSearchParams(location.hash.slice(1)).get('code');
+  history.replaceState(null, '', location.pathname);
+  async function open() {
+    if (!code) throw new Error('Open a new preview from offdesk. This launch link has already been used.');
+    const response = await fetch('/__offdesk_preview__/redeem', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({code}), credentials: 'same-origin', cache: 'no-store',
+    });
+    if (!response.ok) throw new Error('This launch link expired or was already used. Open a new preview from offdesk.');
+    const data = await response.json();
+    const target = new URL(data.target, location.origin);
+    if (target.origin !== location.origin) throw new Error('Invalid preview destination.');
+    location.replace(target.href);
+  }
+  open().catch(error => { document.querySelector('h1').textContent = 'Preview unavailable'; document.getElementById('status').textContent = error.message; });
+})();
+</script></body></html>

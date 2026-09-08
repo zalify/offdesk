@@ -16,6 +16,7 @@ services:
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET}"
       OFFDESK_BASE_URL: "${OFFDESK_BASE_URL}"
+      OFFDESK_PREVIEW_DOMAIN: "${OFFDESK_PREVIEW_DOMAIN:-}"
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 

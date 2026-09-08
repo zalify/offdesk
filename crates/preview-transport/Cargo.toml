@@ -1,0 +1,12 @@
+[package]
+name = "offdesk-preview-transport"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+tokio.workspace = true
+futures.workspace = true
+tokio-tungstenite.workspace = true
+offdesk-protocol = { path = "../protocol" }
+url = "2"

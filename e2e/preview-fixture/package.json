@@ -1,0 +1,6 @@
+{
+  "name": "offdesk-preview-fixture",
+  "private": true,
+  "type": "module",
+  "dependencies": { "vite": "8.0.8", "next": "15.5.15", "react": "19.1.1", "react-dom": "19.1.1" }
+}

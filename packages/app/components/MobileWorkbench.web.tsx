@@ -26,6 +26,7 @@ import {
   ChevronRight,
   CircuitBoard,
   Eye,
+  ExternalLink,
   FolderTree,
   Keyboard as KeyboardIcon,
   Lock,
@@ -84,6 +85,7 @@ interface MobileWorkbenchProps {
   onEngageViewOnly: (machineId: string) => void;
   onDisengageViewOnly: () => void;
   onOpenSettings: () => void;
+  onOpenWebPreview: () => void;
   // The inline TerminalWorkspace (null while the machine has no terminals).
   children: React.ReactNode;
 }
@@ -117,6 +119,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     onEngageViewOnly,
     onDisengageViewOnly,
     onOpenSettings,
+    onOpenWebPreview,
     children,
   } = props;
 
@@ -931,6 +934,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             label="Reconnect"
             onClick={() => window.location.reload()}
           />
+          {activeTerminalId && <MenuRow
+            icon={<ExternalLink size={17} />}
+            label="Open web preview"
+            onClick={() => {
+              setHostSheetOpen(false);
+              onOpenWebPreview();
+            }}
+          />}
           <MenuRow
             icon={<SettingsIcon size={17} />}
             label="Settings"

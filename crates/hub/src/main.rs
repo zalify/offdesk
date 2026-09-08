@@ -14,6 +14,7 @@ pub mod db;
 mod machine_manager;
 mod routes;
 mod ws;
+mod web_preview;
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue};
@@ -330,6 +331,7 @@ fn run_link_json(args: &Args) {
 pub struct AppState {
     pub manager: Arc<MachineManager>,
     pub router: Arc<HubRouter>,
+    pub web_previews: Arc<web_preview::registry::Registry>,
     pub db: DbPool,
     pub jwt_secret: String,
     pub base_url: String,
@@ -463,6 +465,22 @@ async fn main() {
     let state = AppState {
         manager: Arc::new(MachineManager::new(pool.clone())),
         router: Arc::new(HubRouter::new()),
+        web_previews: Arc::new(match std::env::var("OFFDESK_PREVIEW_DOMAIN") {
+            Ok(domain) if !domain.is_empty() => {
+                let mut config = web_preview::registry::Config::new(&domain, &env_or("OFFDESK_BASE_URL", "http://localhost:4317"))
+                    .expect("Invalid preview configuration");
+                config.listener = args.listen.parse().ok();
+                for origin in env_or("OFFDESK_PREVIEW_CONTROL_ORIGINS", "").split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    config.add_control_origin(origin).expect("Invalid preview control origin");
+                }
+                if let Some(origin) = env_opt("OFFDESK_SECURE_BASE_URL") {
+                    config.add_control_origin(&origin).expect("Invalid secure Hub origin");
+                }
+                tracing::info!(control = %config.control_authority, aliases = ?config.control_aliases, listener = ?config.listener, "Web previews enabled; Docker published addresses must be listed in OFFDESK_PREVIEW_CONTROL_ORIGINS");
+                web_preview::registry::Registry::configured(config)
+            },
+            _ => web_preview::registry::Registry::default(),
+        }),
         db: pool,
         jwt_secret: jwt_secret.clone(),
         base_url: env_or("OFFDESK_BASE_URL", "http://localhost:4317"),
@@ -480,13 +498,19 @@ async fn main() {
 
     state.manager.start_seq_flush_task();
 
-    let inner = routes::router().merge(connections::router(args.listen.clone(), env_opt("OFFDESK_SECURE_BASE_URL"), database.clone())).merge(ws::router()).with_state(state.clone());
-    let encrypted = secure::router(state.clone(), inner.clone(), &database).expect("Could not initialize encrypted connections");
+    let inner = routes::router()
+        .merge(connections::router(args.listen.clone(), env_opt("OFFDESK_SECURE_BASE_URL"), database.clone()))
+        .merge(ws::router())
+        .merge(web_preview::router())
+        .with_state(state.clone());
+    let encrypted = secure::router(state.clone(), inner.clone(), &database)
+        .expect("Could not initialize encrypted connections");
     let app = inner.merge(encrypted.clone())
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .layer(CorsLayer::permissive())
-        .fallback_service(ui_service(args.static_dir.as_deref()));
+        .fallback_service(ui_service(args.static_dir.as_deref()))
+        .layer(axum::middleware::from_fn_with_state(state, web_preview::dispatch));
 
     let listener = match tokio::net::TcpListener::bind(&args.listen).await {
         Ok(listener) => listener,

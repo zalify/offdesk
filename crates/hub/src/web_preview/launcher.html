@@ -1,0 +1,22 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Open preview · offdesk</title>
+<body><h1>Opening preview…</h1><p id="status">Connecting to your development machine.</p>
+<script nonce="__NONCE__">
+(() => {
+  const params = new URLSearchParams(location.search);
+  history.replaceState(null, '', location.pathname);
+  async function open() {
+    const token = localStorage.getItem('offdesk:token');
+    if (!token) throw new Error('Sign in to this Hub, then open the preview again.');
+    const response = await fetch('/api/machines/' + encodeURIComponent(params.get('machine') || '') + '/web-previews', {
+      method: 'POST', headers: {'Content-Type':'application/json', Authorization:'Bearer ' + token},
+      body: JSON.stringify({port: Number(params.get('port')), address_family: params.get('family') || 'ipv4', target: params.get('target') || '/', terminal_id: params.get('terminal') || undefined}), cache:'no-store',
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    const launch = new URL(data.launch_url);
+    if (launch.protocol !== 'https:') throw new Error('Invalid preview URL.');
+    location.replace(launch.href);
+  }
+  open().catch(error => { document.querySelector('h1').textContent = 'Preview unavailable'; document.getElementById('status').textContent = error.message; });
+})();
+</script></body></html>

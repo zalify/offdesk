@@ -18,9 +18,10 @@ services:
       OFFDESK_STATIC_DIR: "/app/web"
       OFFDESK_DEV_MODE: "true"
       JWT_SECRET: "e2e-test-secret"
-      OFFDESK_BASE_URL: "http://localhost:4317"
+      OFFDESK_BASE_URL: "http://hub:4317"
+      OFFDESK_PREVIEW_DOMAIN: "preview.test"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:4317/api/auth/dev || exit 1"]
+      test: ["CMD-SHELL", "curl -sf -H 'Host: hub:4317' http://localhost:4317/api/auth/dev || exit 1"]
       interval: 3s
       timeout: 5s
       retries: 10
@@ -47,6 +48,14 @@ services:
       hub:
         condition: service_healthy
 
+  preview-edge:
+    build:
+      context: ..
+      dockerfile: e2e/Dockerfile.preview-edge
+    depends_on:
+      hub:
+        condition: service_healthy
+
   runner:
     build:
       context: ..
@@ -55,10 +64,14 @@ services:
     environment:
       CI: "true"
       PLAYWRIGHT_BASE_URL: "http://hub:4317"
+      PLAYWRIGHT_PREVIEW_EDGE: "preview-edge"
+    command: ["pnpm", "exec", "playwright", "test", "--grep", "${E2E_TEST_GREP:-.*}"]
     depends_on:
       hub:
         condition: service_healthy
       node:
+        condition: service_started
+      preview-edge:
         condition: service_started
     volumes:
       - ./artifacts:/work/e2e/artifacts

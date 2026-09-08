@@ -6,6 +6,7 @@
 - **Node** (`offdesk-node`): Machine daemon connecting to hub via `ws://hub:4317/ws/machine`. Built inside Docker for E2E. Manages real PTY sessions with bash. Runs with `--id e2e-node` (dev mode, no registration needed). Ships `e2e/machine.json` at `/root/.config/offdesk/machine.json` — its `acp_agents` map points every agent kind (claude/codex/grok/kimi) at the fake ACP agent (`/opt/offdesk/fake-acp-agent.py`, python3), and `FAKE_ACP_ASK=1` in the container env makes it emit a permission request per prompt (only surfaces as an ask-card when the session's `auto_run` is false).
 - **Runner** (`playwright`): Playwright test runner based on the official Playwright image with browsers preinstalled. The actual browser process runs inside the `runner` container and talks to `http://hub:4317` on the compose network. Normal E2E verification must use this containerized browser path.
 - **Database:** SQLite at `/app/data/offdesk.db` (ephemeral per test run, no volume mount)
+- **Preview edge:** nginx terminates HTTPS for `*.preview.test` and forwards to the Hub, retaining Host and WebSocket upgrades. The runner maps that wildcard to the edge's container IP. Only preview browser contexts ignore the fixture's self-signed certificate; production preview URLs require valid HTTPS. The node contains pinned Vite 8.0.8 / Next 15.5.15 fixtures for real hot-update tests.
 
 ## Default Commands
 
@@ -41,7 +42,7 @@ How to access service logs for debugging:
 1. Build and start app services: `pnpm e2e:up`
 2. Wait for hub health: hub has built-in healthcheck (3s interval, 10 retries on `GET /api/auth/dev`)
 3. Verify node connected: `docker compose -f e2e/docker-compose.yml logs hub` — look for "Machine e2e-node registered"
-4. Test dev login: `curl -sf http://localhost:4317/api/auth/dev`
+4. Test dev login: `curl -sf -H 'Host: hub:4317' http://localhost:4317/api/auth/dev` (the E2E Hub's configured control authority is `hub:4317`; preview routing rejects unknown Host values).
 5. Run automated browser tests with the containerized browser: `pnpm e2e:test`
 6. Teardown: `pnpm e2e:down`
 

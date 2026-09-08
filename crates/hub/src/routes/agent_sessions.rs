@@ -609,6 +609,7 @@ mod tests {
         AppState {
             manager: Arc::new(MachineManager::new(pool.clone())),
             router: Arc::new(HubRouter::new()),
+            web_previews: Arc::new(crate::web_preview::registry::Registry::default()),
             db: pool,
             jwt_secret: "test-secret".to_string(),
             base_url: "http://localhost:4317".to_string(),

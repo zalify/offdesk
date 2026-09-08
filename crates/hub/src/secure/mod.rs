@@ -459,6 +459,9 @@ mod tests {
             .unwrap();
         }
         let state = AppState {
+            web_previews: Arc::new(crate::web_preview::registry::Registry::configured(
+                crate::web_preview::registry::Config::new("preview.test", "https://remote.example").unwrap(),
+            )),
             manager: Arc::new(crate::machine_manager::MachineManager::new(pool.clone())),
             router: Arc::new(crate::attach_router::HubRouter::new()),
             db: pool.clone(),
@@ -470,7 +473,16 @@ mod tests {
             google_client_id: None,
             google_client_secret: None,
         };
+        let (_, _preview_commands) = state.manager.register_machine_with_capabilities(
+            offdesk_protocol::MachineInfo {
+                id: "preview-machine".into(), name: "Preview machine".into(), os: "test".into(),
+                home_dir: "/tmp".into(), production: false,
+            },
+            Some("secure-owner".into()),
+            vec![offdesk_protocol::preview::CAPABILITY.into()],
+        ).await;
         let inner = crate::routes::router()
+            .merge(crate::web_preview::router())
             .merge(crate::connections::router("0.0.0.0:4317".into(), None, database.into()))
             .merge(crate::ws::router())
             .route("/ws/terminal/secure-test-echo", get(|ws: WebSocketUpgrade| async {
@@ -588,6 +600,32 @@ mod tests {
             }
             _ => panic!("expected HTTP response"),
         }
+        // Preview management must work through the encrypted API router;
+        // the public encrypted-only listener still exposes no plain Hub API.
+        let created = client.request("POST".into(), "/api/machines/preview-machine/web-previews".into(),
+            Some(r#"{"port":3000,"target":"/demo"}"#.into())).await.unwrap();
+        let preview_id = match created {
+            Response::Http { status, body, .. } => {
+                assert_eq!(status, 200, "{body}");
+                let result: serde_json::Value = serde_json::from_str(&body).unwrap();
+                assert!(result["launch_url"].as_str().unwrap().contains(".preview.test/"));
+                result["preview"]["id"].as_str().unwrap().to_string()
+            }
+            _ => panic!("expected preview response"),
+        };
+        match client.request("GET".into(), "/api/web-previews".into(), None).await.unwrap() {
+            Response::Http { status, body, .. } => {
+                assert_eq!(status, 200);
+                assert!(body.contains(&preview_id));
+                assert!(!body.contains("code="), "listing must not disclose a launch credential");
+            }
+            _ => panic!("expected preview list"),
+        }
+        match client.request("DELETE".into(), format!("/api/web-previews/{preview_id}"), None).await.unwrap() {
+            Response::Http { status, .. } => assert_eq!(status, 204),
+            _ => panic!("expected preview revocation"),
+        }
+
         // The same QR-paired device resumes directly after pairing via relay.
         // No second code, user, or device is created for the alternate origin.
         let direct = Endpoint { hub_url: base.clone(), public_key: endpoint.public_key.clone() };

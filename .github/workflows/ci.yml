@@ -67,7 +67,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo check --workspace
-      - run: cargo test -p offdesk-secure -p offdesk-hub -p offdesk-protocol
+      - run: cargo test -p offdesk-secure -p offdesk-hub -p offdesk-protocol -p offdesk-machine -p offdesk-preview-transport
 
   native-check:
     needs: changes

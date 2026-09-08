@@ -7,6 +7,7 @@ mod osc_title;
 mod terminal_attention;
 mod codex_title;
 mod pty;
+mod preview;
 mod service;
 mod session_watcher;
 mod stats;

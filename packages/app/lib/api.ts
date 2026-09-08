@@ -369,6 +369,14 @@ export function eventsWsUrl(deviceId?: string, afterSeq?: number): string {
   return `${base}/ws/events${qs ? '?' + qs : ''}`;
 }
 
+
+export interface WebPreviewInfo { id: string; machine_id: string; port: number; url: string; expires_at: number }
+export function getBaseUrl(): string { return _baseUrl; }
+export const createWebPreview = (machineId: string, body: { port: number; address_family: "ipv4" | "ipv6"; target: string; terminal_id?: string }) =>
+  request<{ preview: WebPreviewInfo; launch_url: string }>("POST", `/api/machines/${encodeURIComponent(machineId)}/web-previews`, body);
+export const listWebPreviews = () => request<{ configured: boolean; previews: WebPreviewInfo[] }>("GET", "/api/web-previews");
+export const closeWebPreview = (id: string) => request<void>("DELETE", `/api/web-previews/${encodeURIComponent(id)}`);
+
 // E2EE device management; requests follow the current encrypted/direct transport.
 export interface SecureDevice {
   id: string; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null;

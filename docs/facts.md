@@ -9,6 +9,46 @@ rename mapping is at the bottom.
 
 ---
 
+## Web previews (implementation added 2026-09-05)
+
+These facts describe the web-preview feature in this branch, not a production
+activation or a published release.
+
+- The optional `OFFDESK_PREVIEW_DOMAIN` enables private HTTPS preview hostnames
+  with routing separate from the control Hub. Each lease uses a fresh random
+  hostname and expires after two hours; launch codes expire after sixty seconds
+  (`crates/hub/src/web_preview/registry.rs`, `mod.rs`). The suffix must not contain
+  the control Hub's hostname.
+- Launch codes redeem only for host-only Secure/HttpOnly preview cookies; Hub
+  Bearer credentials are not supplied to the upstream. Preview cookies are
+  stripped, upstream reserved-cookie writes are blocked, and each request/WS
+  handshake checks access (`crates/hub/src/web_preview/{mod,proxy}.rs`).
+- A node declaring `preview-tcp-v1` opens a separate, bounded WebSocket data
+  connection and connects only to the selected IPv4 or IPv6 loopback port
+  (`crates/protocol/src/preview.rs`, `crates/preview-transport/src/{client,lib}.rs`,
+  `crates/machine/src/hub_conn.rs`). This does not open an inbound machine port.
+- The Hub streams HTTP bodies and bridges WebSocket upgrades; each stream is
+  canceled when its owning request ends, the preview closes/expires or the
+  machine connection ends. Ordinary responses release their upstream even when
+  it uses keep-alive (`crates/hub/src/web_preview/{proxy,transport,registry}.rs`,
+  `crates/hub/src/machine_manager.rs`).
+- Limits are eight leases per user, 32 streams per machine, 64 per user, 1,024
+  globally; establishing a tunnel is limited to ten seconds, HTTP response headers
+  to sixty seconds (`crates/hub/src/web_preview/{registry,transport,proxy}.rs`).
+- The terminal context menu offers **Open web preview**, a local URL input and
+  active-preview closure. Loopback HTTP links invoke the same functionality;
+  Web uses a synchronous trusted Hub launcher and native shells use the browser
+  opener with a limited launch code (`packages/app/components/WebPreviewDialog.tsx`,
+  `TerminalWorkspace.web.tsx`, `TerminalView.xterm.tsx`, `packages/app/lib/webPreview.ts`).
+- The proxy supports a single HTTP loopback port. It does not rewrite arbitrary
+  JavaScript URLs, forward arbitrary TCP, transfer app storage across leases or
+  configure DNS/TLS. `/__offdesk_preview__/` is reserved; shared caches must be
+  disabled at the deployment's edge (`crates/hub/src/web_preview/{mod,proxy}.rs`).
+- Test fixtures pin Vite 8.0.8 and Next 15.5.15, with HTTPS terminated by the E2E
+  nginx edge. Browser emulation cannot establish real Android app or production
+  mobile-data reachability (`e2e/preview-fixture/package-lock.json`,
+  `e2e/preview-edge.conf`, `e2e/tests/web-preview.spec.ts`).
+
 ## 1. Workspace layout
 
 | Path | What it is | Source |
