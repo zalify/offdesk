@@ -21,9 +21,11 @@ const PROVIDERS: { value: OAuthProvider; label: string }[] = [
 
 export default function LoginScreen({
   onBecomeHub,
+  onBackToSetup,
 }: {
   /** Desktop app only: the other answer to the first-run question. */
   onBecomeHub?: () => void;
+  onBackToSetup?: () => void;
 } = {}) {
   const { login, loginWithToken } = useAuth();
   const [connecting, setConnecting] = useState(false);
@@ -462,7 +464,7 @@ export default function LoginScreen({
       <div
         style={{
           flex: 1,
-          minHeight: "100vh",
+          minHeight: "100%",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
@@ -473,8 +475,21 @@ export default function LoginScreen({
         }}
       >
         <Card style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 22, padding: 40 }}>
+          {onBackToSetup ? (
+            <Button kind="sky" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start" }} testId="login-back-to-setup">
+              ← Back to setup
+            </Button>
+          ) : null}
+          {onBecomeHub ? (
+            <div style={{ padding: 16, border: `1px solid ${colors.line}`, borderRadius: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+              <Body size={14}>Want to access this Mac from your phone?</Body>
+              <Button kind="sky" onClick={onBecomeHub} disabled={connecting} testId="login-become-hub">
+                Set up a Hub on this Mac
+              </Button>
+            </div>
+          ) : null}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Eyebrow color={colors.info}>Just connecting</Eyebrow>
+            <Eyebrow color={colors.info}>Connect to another Hub</Eyebrow>
             <Display size={34}>Point it at your hub</Display>
             <Body>Paste the link the hub printed. It has the sign-in on it, so nothing else to type.</Body>
           </div>
@@ -527,11 +542,6 @@ export default function LoginScreen({
           <div style={{ fontFamily: fontDisplay, fontSize: 12.5, fontWeight: 600, color: colors.fg3 }}>
             Only hubs reachable from outside your network have GitHub or Google sign-in. At home, the link is the sign-in.
           </div>
-          {onBecomeHub ? (
-            <Button kind="ghost" onClick={onBecomeHub} style={{ alignSelf: "center", height: 36, fontSize: 13 }} testId="login-become-hub">
-              This is the machine that stays on, actually
-            </Button>
-          ) : null}
         </Card>
       </div>
     );

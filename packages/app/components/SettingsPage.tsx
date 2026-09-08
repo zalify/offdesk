@@ -673,7 +673,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     <div
       style={{
         flex: 1,
-        overflow: "auto",
+        minHeight: 0,
+        overflow: "hidden",
         background: colors.background,
         display: "flex",
         flexDirection: "column",
@@ -724,10 +725,11 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         style={{
           flex: 1,
           overflow: "auto",
-          padding: "24px 24px 48px",
-          maxWidth: 560,
+          minHeight: 0,
+          width: "100%",
         }}
       >
+        <div data-testid="settings-column" style={{ width: "100%", maxWidth: 880, margin: "0 auto", padding: "24px 24px 48px", boxSizing: "border-box" }}>
         {/* Appearance Section */}
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Appearance</SectionTitle>
@@ -1342,6 +1344,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           }}
         >
           Font changes are saved on this device and apply without reloading.
+        </div>
         </div>
       </div>
     </div>

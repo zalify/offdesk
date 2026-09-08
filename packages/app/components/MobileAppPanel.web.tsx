@@ -106,10 +106,10 @@ export function MobileAppPanel() {
       <div
         style={{ fontSize: 11, color: colors.foregroundMuted, marginBottom: 12 }}
       >
-        Scan this code with your phone's camera and the hub opens in its
-        browser, signed in. In the iPhone or Android app, tap "Scan the code
-        instead" on its first screen and point it here — same result, with
-        the same terminal interface.
+        Browser sign-in · No app needed. Scan with your phone’s camera to
+        open this Hub in a browser. For end-to-end encrypted App pairing,
+        open the phone connection screen on the Mac running the Hub and
+        choose Offdesk App.
       </div>
 
       <div
