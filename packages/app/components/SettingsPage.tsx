@@ -79,7 +79,8 @@ const UI_FONTS = [
 
 // Common monospace / terminal fonts
 const TERMINAL_FONTS = [
-  "Auto Detect",
+  "App Default",
+  "Iosevka Term",
   "Maple Mono NF CN",
   "Noto Sans Mono CJK SC",
   "JetBrains Mono",
@@ -798,13 +799,13 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           <SettingRow
             label="Terminal Font"
-            description="Applies to open terminals immediately. JetBrains Mono is included; other fonts must be installed on this device. Chinese characters use a system fallback."
+            description="Iosevka Term is the built-in default on every device. Changes apply immediately. Other fonts must be installed locally; Chinese characters use a system fallback."
           >
             <FontSelect
               label="Terminal Font"
               value={terminalFont}
               options={TERMINAL_FONTS}
-              emptyLabel="Auto Detect"
+              emptyLabel="App Default"
               onChange={handleTerminalFontChange}
             />
           </SettingRow>
