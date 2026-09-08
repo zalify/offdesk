@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="offdesk" height="56">
+    <img src="docs/media/logo.svg" alt="Offdesk" height="56">
   </picture>
 </p>
 
@@ -173,7 +173,7 @@ Three roles. One outbound socket each. Nothing to keep awake but the hub.
    WebSocket open, so nothing on it needs an inbound port or a public IP: a
    laptop behind a hotel router and a NAS behind a home NAT both show up in
    one list. Every terminal is a tmux session on the machine that owns it. It
-   outlives the app, the network, and you walking away. Uninstall offdesk,
+   outlives the app, the network, and you walking away. Uninstall Offdesk,
    ssh in, `tmux attach`, and your sessions are still there.
 3. **Client** — anything that talks to the hub. A browser tab, the iPhone or
    Android app, the desktop app, the `offdesk` CLI, another agent on another
@@ -290,7 +290,7 @@ To build any of them yourself: [docs/building.md](docs/building.md).
 
 ### Bring your own agent
 
-offdesk does not wrap an agent or speak its protocol. It hands you the terminal
+Offdesk does not wrap an agent or speak its protocol. It hands you the terminal
 the agent is already running in, with your own subscription, your own config,
 your own dotfiles. Anything that runs in tmux runs here: Claude Code, Codex,
 OpenCode, Gemini CLI, Aider, vim, htop, a build that takes an hour. No
@@ -404,7 +404,7 @@ any row.
 
 | | Any terminal program | Machines per hub | Traffic goes through | Agents can drive it via CLI | Self-hosted |
 |---|---|---|---|---|---|
-| **offdesk** | Anything that runs in tmux | Any number, one URL | Your own hub | `open` / `send` / `wait` / `read` | Yes, MIT |
+| **Offdesk** | Anything that runs in tmux | Any number, one URL | Your own hub | `open` / `send` / `wait` / `read` | Yes, MIT |
 | Claude Code Remote Control | No — a Claude Code session, not a terminal | Sessions from several machines in one list | Anthropic's servers; transcript stored there | Not documented | No |
 | VibeTunnel | Yes — `vt <any command>`, `vt --shell` | One server per machine | Your choice: LAN, Tailscale, ngrok, Cloudflare | Launches commands only; no send/read/wait against a running session | Yes, MIT |
 | Happy Coder | No — wraps `claude` and `codex` | Several; `spawn --machine`, `machines` | slopus cloud by default, end-to-end encrypted | `create` / `send` / `history` / `wait` | Optional, MIT |
@@ -413,7 +413,7 @@ any row.
 
 <!-- Sources, checked 2026-09-01.
 
-offdesk: docs/facts.md in this repo.
+Offdesk: docs/facts.md in this repo.
 
 Claude Code Remote Control — https://code.claude.com/docs/en/remote-control
   Terminal: it connects claude.ai/code and the Claude app to "a Claude Code
@@ -483,13 +483,13 @@ you a genuine terminal. Both run one server per machine: VibeTunnel by design,
 Orca because a Remote Orca Server is tied to a single host and reaches other
 boxes over SSH.
 
-offdesk is the combination: walk away from any machine you own and pick up the
+Offdesk is the combination: walk away from any machine you own and pick up the
 real terminal from your phone, through a server you run. Each of the five drops
 one of those three — the agent, the machine, or the server.
 
 That is the only claim this table supports, and it is narrower than "better".
 If you want parallel git worktrees, diff review, and a browser and emulator
-harness around your agents, **Orca** does far more than offdesk and is also
+harness around your agents, **Orca** does far more than Offdesk and is also
 MIT. If you want one machine's terminal in a browser with the least possible
 setup, **VibeTunnel** is a smaller thing to run. If you only ever drive Claude
 Code and want zero setup, **Remote Control** is already in your CLI.
@@ -530,7 +530,7 @@ between the App and Hub; an ordinary browser sign-in link is a different mode.
 
 **Is it only for Claude Code?** It is a terminal. Claude Code, Codex, OpenCode,
 a build that takes an hour, or vim — whatever runs in tmux runs here, and
-offdesk does not know or care which.
+Offdesk does not know or care which.
 
 **What about iPhone?** There is an app, on TestFlight for now — see
 [On your phone](#on-your-phone). Without it, the browser is the whole client:

@@ -1,4 +1,4 @@
-// The brand, drawn: a coral donut with sprinkles, and "offdesk" in Fredoka
+// The brand, drawn: a coral donut with sprinkles, and "Offdesk" in Fredoka
 // Bold as outlines, so the wordmark renders anywhere without the font.
 //
 //   node site/scripts/brand.mjs        (from the repo root)
@@ -29,9 +29,9 @@ function donut(x, y, size) {
     `</g>`;
 }
 
-/** "offdesk" as one path at font size `size`, with its bounding box. */
+/** "Offdesk" as one path at font size `size`, with its bounding box. */
 function word(size) {
-  const path = font.getPath("offdesk", 0, 0, size, { kerning: false, features: false });
+  const path = font.getPath("Offdesk", 0, 0, size, { kerning: false, features: false });
   const bb = path.getBoundingBox();
   // opentype.js 2.0's toPathData() emits NaN for some quadratic control
   // points in this font; the commands themselves are fine, so serialise them
@@ -62,14 +62,14 @@ function wordmark(fill) {
   const x0 = -bb.x1;
   const w = mark + gap + (bb.x2 - bb.x1);
   const h = textH + 8;
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-4} ${(bb.y1 - 4).toFixed(2)} ${(w + 8).toFixed(2)} ${h.toFixed(2)}" width="${Math.round(w + 8)}" height="${Math.round(h)}" role="img" aria-label="offdesk"><title>offdesk</title>${donut(0, markY, mark)}<path transform="translate(${(mark + gap + x0).toFixed(2)} 0)" fill="${fill}" d="${d}"/></svg>\n`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${-4} ${(bb.y1 - 4).toFixed(2)} ${(w + 8).toFixed(2)} ${h.toFixed(2)}" width="${Math.round(w + 8)}" height="${Math.round(h)}" role="img" aria-label="Offdesk"><title>Offdesk</title>${donut(0, markY, mark)}<path transform="translate(${(mark + gap + x0).toFixed(2)} 0)" fill="${fill}" d="${d}"/></svg>\n`;
 }
 
 const out = join(root, "docs/media");
 mkdirSync(out, { recursive: true });
 writeFileSync(join(out, "logo.svg"), wordmark(INK));
 writeFileSync(join(out, "logo-dark.svg"), wordmark(CREAM));
-writeFileSync(join(out, "mark.svg"), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34" width="34" height="34" role="img" aria-label="offdesk"><title>offdesk</title>${donut(0, 0, 34)}</svg>\n`);
+writeFileSync(join(out, "mark.svg"), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34" width="34" height="34" role="img" aria-label="Offdesk"><title>Offdesk</title>${donut(0, 0, 34)}</svg>\n`);
 writeFileSync(join(out, "favicon.svg"), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 34 34" width="34" height="34"><rect width="34" height="34" rx="8" fill="${SAND}"/>${donut(0, 0, 34)}</svg>\n`);
 
 for (const [from, to] of [

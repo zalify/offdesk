@@ -3,7 +3,12 @@
 set -euo pipefail
 rc_dir="$1"
 archive="$rc_dir/offdesk.xcarchive"
-app="$archive/Products/Applications/offdesk.app"
+app_path=$(plutil -extract ApplicationProperties.ApplicationPath raw "$archive/Info.plist")
+case "$app_path" in
+  Applications/*.app) ;;
+  *) printf 'Unexpected archived application path: %s\n' "$app_path" >&2; exit 1 ;;
+esac
+app="$archive/Products/$app_path"
 test -d "$app"
 test "$(plutil -extract CFBundleIdentifier raw "$app/Info.plist")" = dev.offdesk.ios
 plutil -extract CFBundleVersion raw "$app/Info.plist" > "$rc_dir/build-number.txt"
