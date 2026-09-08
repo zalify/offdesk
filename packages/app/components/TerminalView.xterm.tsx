@@ -1,3 +1,4 @@
+import { DEFAULT_TERMINAL_FONT } from "@/lib/terminalFonts";
 import { openWebPreview, parseLocalPreview } from "@/lib/webPreview";
 import {
   useEffect,
@@ -1355,7 +1356,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const changed = fontFamily !== applied.fontFamily || fontSize !== applied.fontSize;
         // Load before measuring. Otherwise a newly downloaded webfont retains
         // the fallback font's cell metrics and clips/overlaps terminal output.
-        try { await document.fonts?.load(`${fontSize}px ${fontFamily}`); } catch { /* use fallback */ }
+        try {
+          await Promise.allSettled([
+            document.fonts?.load(`${fontSize}px ${fontFamily}`),
+            // Keep the bundled fallback ready even with a custom font.
+            // Clear cached missing glyphs after both fonts have settled.
+            document.fonts?.load(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`, "⏵"),
+          ]);
+        } catch { /* use system fallback if a bundled font cannot load */ }
         if (disposed || current !== revision || termRef.current !== term) return;
         // An equivalent spelling forces xterm's public option-change path to
         // remeasure even when the configured family was already set at mount.

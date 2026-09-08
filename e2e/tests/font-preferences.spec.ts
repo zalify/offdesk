@@ -10,7 +10,7 @@ async function mockTerminal(page: Page) {
     workspace_groups: [], workspace_layouts: [], machine_stats: [], control_leases: [],
   } }));
   await page.routeWebSocket(/\/ws\/events/, () => {});
-  await page.routeWebSocket(/\/ws\/terminal\//, socket => { socket.send(Buffer.from("Font sample ABC 0123 中文\r\n")); });
+  await page.routeWebSocket(/\/ws\/terminal\//, socket => { socket.send(Buffer.from("Font sample ABC 0123 中文 ⏵⏵\r\n")); });
 }
 async function settings(page: Page) {
   if (await page.getByTestId("mobile-workbench").isVisible()) await mobileOpenHostSheet(page);
@@ -64,26 +64,52 @@ for (const width of [390, 1280]) {
     await expect(page.locator("body")).toHaveCSS("font-family", /Fredoka Variable/);
     await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("JetBrains Mono");
     await preferences.getByRole("spinbutton", { name: "Terminal Font Size", exact: true }).fill("20");
-    await expect.poll(() => options(page)).toEqual({ family: "'JetBrains Mono', monospace", size: 20 });
-    expect(await page.evaluate(() => Array.from(document.fonts).some(font => font.family.replace(/["']/g, "") === "JetBrains Mono" && font.status === "loaded"))).toBe(true);
+    await expect.poll(() => options(page)).toEqual({ family: "'JetBrains Mono', 'Iosevka Term', monospace", size: 20 });
+    expect(await page.evaluate(() => Array.from(document.fonts).some(font => font.family.replace(/["']/g, "") === "Iosevka Term" && font.status === "loaded"))).toBe(true);
     expect(await page.evaluate(() => {
       const win = window as unknown as { __offdeskTerminals: Map<string, Terminal>; savedTerminal: Terminal };
       return win.savedTerminal === win.__offdeskTerminals.get("font-test");
     })).toBe(true);
     await preferences.getByTitle("Back", { exact: true }).click();
-    await expect.poll(() => options(preferences)).toEqual({ family: "'JetBrains Mono', monospace", size: 20 });
+    await expect.poll(() => options(preferences)).toEqual({ family: "'JetBrains Mono', 'Iosevka Term', monospace", size: 20 });
     await page.reload();
     await expect(page.locator("body")).toHaveCSS("font-family", /Fredoka Variable/);
-    await expect.poll(() => options(page)).toEqual({ family: "'JetBrains Mono', monospace", size: 20 });
+    await expect.poll(() => options(page)).toEqual({ family: "'JetBrains Mono', 'Iosevka Term', monospace", size: 20 });
     await settings(preferences);
     await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("System UI");
     await expect(preferences.locator("body")).toHaveCSS("font-family", /system-ui/);
     await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("App Default");
     await expect(page.locator("body")).toHaveCSS("font-family", /Nunito Variable/);
-    await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("Auto Detect");
+    await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("App Default");
     await preferences.getByRole("spinbutton", { name: "Terminal Font Size", exact: true }).fill("");
     await expect.poll(async () => (await options(page))?.size).toBe(14);
-    await expect.poll(async () => (await options(page))?.family).toMatch(/^'Maple Mono NF CN'/);
+    await expect.poll(async () => (await options(page))?.family).toBe("'Iosevka Term', monospace");
     await context.close();
   });
 }
+
+
+test("mobile terminal loads its bundled font and renders the reported playback symbol", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  await page.addInitScript(() => localStorage.setItem("offdesk:terminal-font-family", "JetBrains Mono"));
+  await mockTerminal(page);
+  await openApp(page);
+  await expect.poll(() => options(page)).not.toBeNull();
+  // Inspect natural startup, without loading the font from the test itself.
+  await expect.poll(() => page.evaluate(() => Array.from(document.fonts).some(face =>
+    face.family.replace(/["']/g, "") === "Iosevka Term" && face.status === "loaded",
+  ))).toBe(true);
+  expect((await options(page))?.family).toContain("Iosevka Term");
+  const different = await page.evaluate(() => {
+    const render = (text: string) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 80;
+      const ctx = canvas.getContext("2d")!;
+      ctx.font = '40px "Iosevka Term"';
+      ctx.fillText(text, 4, 52);
+      return canvas.toDataURL();
+    };
+    return render("⏵") !== render("\u{10ffff}") && render("⏵") !== render("");
+  });
+  expect(different).toBe(true);
+});
