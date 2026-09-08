@@ -74,6 +74,34 @@ for (const source of ["photos", "files"] as const) {
     const review = page.getByRole("dialog", { name: "Review attachments" });
     await pick();
     await expect(review).toContainText("Attachments · 2");
+    if (source === "files") {
+      // Large text and narrow/short windows must not clip the action buttons.
+      for (const viewport of [{ width: 320, height: 568 }, { width: 780, height: 360 }]) {
+        await page.setViewportSize(viewport);
+        await review.evaluate(el => { el.style.fontSize = "28px"; });
+        await expect.poll(() => review.evaluate(el => {
+          const bounds = el.getBoundingClientRect();
+          return el.scrollWidth <= el.clientWidth && Array.from(el.querySelectorAll("button")).filter(button => !button.getAttribute("aria-label")?.startsWith("Remove ")).every(button => {
+            const rect = button.getBoundingClientRect();
+            const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+            return rect.left >= bounds.left && rect.right <= bounds.right
+              && rect.top >= 0 && rect.bottom <= innerHeight
+              && button.scrollWidth <= button.clientWidth && !!hit && button.contains(hit);
+          });
+        })).toBe(true);
+      }
+      await page.setViewportSize({ width: 390, height: 844 });
+      await review.evaluate(el => { el.style.removeProperty("font-size"); });
+      const remove = review.getByRole("button", { name: "Remove file-1.txt", exact: true });
+      await remove.focus();
+      expect(await remove.evaluate(el => {
+        const button = el.getBoundingClientRect();
+        const list = el.closest("ul")!.getBoundingClientRect();
+        // The global focus ring extends four pixels beyond the button.
+        return button.left - 4 >= list.left && button.right + 4 <= list.right
+          && button.top - 4 >= list.top && button.bottom + 4 <= list.bottom;
+      })).toBe(true);
+    }
     expect(sent).toHaveLength(0);
     await review.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(review).toHaveCount(0);
