@@ -215,7 +215,7 @@ export function Wordmark({ size = 20 }: { size?: number }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
       <Logo size={size + 8} />
-      <span style={{ fontFamily: fontDisplay, fontSize: size, fontWeight: 700, color: colors.fg0 }}>offdesk</span>
+      <span style={{ fontFamily: fontDisplay, fontSize: size, fontWeight: 700, color: colors.fg0 }}>Offdesk</span>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 {
   "$schema": "../gen/schemas/android-schema.json",
-  "productName": "offdesk",
+  "productName": "Offdesk",
   "build": {
     "beforeBuildCommand": "",
     "beforeDevCommand": ""

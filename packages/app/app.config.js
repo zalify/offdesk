@@ -16,7 +16,7 @@ if (process.env.OFFDESK_ALLOW_CLEARTEXT === "1") {
 
 module.exports = ({ config }) => ({
   ...config,
-  name: "offdesk",
+  name: "Offdesk",
   slug: "offdesk",
   version: process.env.OFFDESK_APP_VERSION || "0.1.0",
   scheme: "offdesk",
