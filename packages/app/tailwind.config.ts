@@ -48,7 +48,7 @@ export default {
           "Roboto",
           "sans-serif",
         ],
-        mono: ["Iosevka Term", "monospace"],
+        mono: ["JetBrains Mono", "Offdesk Terminal Symbols", "monospace"],
       },
     },
   },
