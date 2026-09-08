@@ -41,9 +41,9 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>offdesk reads the sign-in code your hub shows, so you never type an address or a token on the phone.</string>
+	<string>Offdesk reads the sign-in code your hub shows, so you never type an address or a token on the phone.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Your hub is usually a Mac or a NAS on this Wi-Fi; offdesk connects to it directly.</string>
+	<string>Your hub is usually a Mac or a NAS on this Wi-Fi; Offdesk connects to it directly.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

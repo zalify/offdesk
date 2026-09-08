@@ -10,7 +10,7 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: offdesk
+      PRODUCT_NAME: Offdesk
       PRODUCT_BUNDLE_IDENTIFIER: dev.offdesk.ios
 targetTemplates:
   app:

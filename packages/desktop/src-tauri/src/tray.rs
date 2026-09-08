@@ -24,11 +24,11 @@ fn show_and_emit(app: &AppHandle, event: &str) {
 }
 
 pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open offdesk", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Offdesk", true, None::<&str>)?;
     let code = MenuItem::with_id(app, "code", "Show the phone code", true, None::<&str>)?;
     let add = MenuItem::with_id(app, "add", "Add a machine", true, None::<&str>)?;
     let copy = MenuItem::with_id(app, "copy", "Copy hub address", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit offdesk", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Offdesk", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,

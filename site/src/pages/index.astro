@@ -59,7 +59,7 @@ const columns = [
   "Self-hosted",
 ];
 const rows = [
-  { name: "offdesk", self: true, cells: ["Anything that runs in tmux", "Any number, one URL", "Your own hub", "open / send / wait / read", "Yes, MIT"] },
+  { name: "Offdesk", self: true, cells: ["Anything that runs in tmux", "Any number, one URL", "Your own hub", "open / send / wait / read", "Yes, MIT"] },
   { name: "Claude Code Remote Control", cells: ["No — a Claude Code session, not a terminal", "Sessions from several machines in one list", "Anthropic's servers; transcript stored there", "Not documented", "No"] },
   { name: "VibeTunnel", cells: ["Yes — vt <any command>, vt --shell", "One server per machine", "Your choice: LAN, Tailscale, ngrok, Cloudflare", "Launches commands only", "Yes, MIT"] },
   { name: "Happy Coder", cells: ["No — wraps claude and codex", "Several; spawn --machine", "slopus cloud by default, end-to-end encrypted", "create / send / history / wait", "Optional, MIT"] },
@@ -68,7 +68,7 @@ const rows = [
 ];
 ---
 
-<Site title="offdesk — vibe code from your phone" description={description}>
+<Site title="Offdesk — vibe code from your phone" description={description}>
   <!-- Hero: the whole first setup, on the machine at home. It has to fit
        one laptop screen with the three steps showing: the steps are the
        point, and a step below the fold is a step nobody takes. -->
@@ -160,7 +160,7 @@ const rows = [
             <div aria-hidden="true" class="absolute -top-8 -left-10 h-24 w-24 rounded-full bg-pink/60"></div>
             <div aria-hidden="true" class="absolute -right-8 bottom-16 h-16 w-16 rounded-full border-[10px] border-sun"></div>
             <div class="relative overflow-hidden rounded-[2.6rem] border-[6px] border-ink bg-term shadow-[14px_14px_0_0_#ffc857]">
-              <img src="/media/phone-ios.jpg" alt="Claude Code in the offdesk iPhone app, attached to the Mac at home" width="1179" height="2556" loading="eager" class="block w-full" />
+              <img src="/media/phone-ios.jpg" alt="Claude Code in the Offdesk iPhone app, attached to the Mac at home" width="1179" height="2556" loading="eager" class="block w-full" />
             </div>
             <figcaption class="mt-4 text-center font-display text-[14px] font-semibold text-muted">
               Real terminal. Real Mac at home. Real beach optional.
@@ -171,7 +171,7 @@ const rows = [
             <div aria-hidden="true" class="absolute -top-8 -left-10 h-24 w-24 rounded-full bg-pink/60"></div>
             <div aria-hidden="true" class="absolute -right-8 bottom-16 h-16 w-16 rounded-full border-[10px] border-sun"></div>
             <div class="relative overflow-hidden rounded-[2.4rem] border-[6px] border-ink bg-term shadow-[14px_14px_0_0_#ffc857]">
-              <img src="/media/phone-terminal.png" alt="An offdesk terminal on a phone: Claude Code on a Mac at home, attached from the phone's browser" width="390" height="844" loading="eager" class="block w-full" />
+              <img src="/media/phone-terminal.png" alt="An Offdesk terminal on a phone: Claude Code on a Mac at home, attached from the phone's browser" width="390" height="844" loading="eager" class="block w-full" />
             </div>
             <figcaption class="mt-4 text-center font-display text-[14px] font-semibold text-muted">
               Real terminal. Real Mac at home. Real beach optional.
@@ -293,7 +293,7 @@ const rows = [
             hub and keeps one socket open, so nothing needs a port or a public
             IP. Every terminal is a tmux session on the machine that owns it:
             it outlives the app, the network, and you walking away. Uninstall
-            offdesk and it's still there.
+            Offdesk and it's still there.
           </p>
           <code class="mt-4 block font-mono text-[12px] text-faint">offdesk-node · tmux</code>
         </div>
@@ -420,7 +420,7 @@ const rows = [
         <div class="card min-w-0">
           <h3 class="display text-2xl">Bring any agent</h3>
           <p class="prose-body mt-3">
-            offdesk doesn't wrap an agent or speak its protocol. It hands you the
+            Offdesk doesn't wrap an agent or speak its protocol. It hands you the
             terminal the agent already runs in — your subscription, your config,
             your dotfiles.
           </p>

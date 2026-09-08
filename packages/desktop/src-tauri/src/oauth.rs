@@ -40,11 +40,11 @@ pub async fn start_oauth_listener<R: Runtime>(app: AppHandle<R>) -> Result<u16, 
                 Html(
                     r#"<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>offdesk</title></head>
+<head><meta charset="utf-8"><title>Offdesk</title></head>
 <body style="font-family:system-ui;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;background:#faf9f5">
 <div style="text-align:center">
 <h2>Login successful</h2>
-<p style="color:#666">You can close this tab and return to offdesk.</p>
+<p style="color:#666">You can close this tab and return to Offdesk.</p>
 </div>
 </body>
 </html>"#,

@@ -1,6 +1,6 @@
 {
   "$schema": "../gen/schemas/ios-schema.json",
-  "productName": "offdesk",
+  "productName": "Offdesk",
   "identifier": "dev.offdesk.ios",
   "build": {
     "beforeBuildCommand": "",
