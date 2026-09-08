@@ -16,6 +16,10 @@ on:
         description: "Exact numeric build number from the successful iOS upload"
         type: string
         required: true
+      whats_new:
+        description: "Test instructions for a build without existing English notes"
+        type: string
+        required: false
       apply_distribution:
         description: "Reuse encryption classification and submit to the existing Testers group"
         type: boolean
@@ -55,6 +59,7 @@ jobs:
       - name: Check or apply TestFlight distribution
         env:
           BUILD_NUMBER: ${{ inputs.build_number }}
+          WHATS_NEW: ${{ inputs.whats_new }}
           APPLY_DISTRIBUTION: ${{ inputs.apply_distribution }}
           REPORT_PATH: ${{ runner.temp }}/testflight-release.json
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}

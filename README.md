@@ -47,19 +47,37 @@ Questions, setups that did not work, things you want it to do:
 Every link follows the newest release of that kind. Windows is a desktop client;
 Linux can also host a Hub with tmux installed separately.
 
-## September release
+## Offdesk 0.7.0 release
 
-Hub/CLI/node [0.20.4](https://github.com/zalify/offdesk/releases/tag/v0.20.4),
-desktop [0.6.4](https://github.com/zalify/offdesk/releases/tag/desktop-v0.6.4),
-and mobile 0.6.6 improve first-time setup, startup reconnection and Android
-system-navigation spacing. The Mac app checks that its Hub and machine are ready
-before phone pairing, recovers incomplete setup and fixes Chinese punctuation
-input. The macOS installer now includes a drag-to-Applications layout.
+Desktop [0.7.0](https://github.com/zalify/offdesk/releases/tag/desktop-v0.7.0),
+Android [0.7.0](https://github.com/zalify/offdesk/releases/tag/app-v0.7.0),
+and iOS [0.7.0](https://github.com/zalify/offdesk/releases/tag/ios-v0.7.0)
+ship alongside Hub/CLI/node [0.21.0](https://github.com/zalify/offdesk/releases/tag/v0.21.0).
 
-Direct input, text paste and photo/file attachments remain; local editor was
-removed in the previous release. Use the download links above for the latest
-published packages. iOS availability is managed through TestFlight and can lag
-behind while Apple reviews the build.
+- Select multiple photos or files, review and remove items before sending,
+  with an attachment dialog that adapts to narrow screens and larger text.
+- Keep mobile host metrics within their cards and restore missed confirmation
+  reminders after an event gap.
+- Use a clearer desktop setup return path, centered Settings, and separate
+  App-pairing / browser-sign-in instructions instead of competing QR codes.
+- Keep familiar JetBrains Mono terminal text with a tiny bundled fallback for
+  missing playback symbols such as `⏵⏵`.
+- Open private localhost web previews through an updated Hub and node, with
+  support for streaming and WebSocket hot updates. This is opt-in and requires
+  a dedicated preview domain and HTTPS ingress: see [setup and limits](docs/web-previews.md).
+  Website previews use HTTPS, not the terminal's end-to-end encrypted transport.
+
+App names and public branding now consistently use **Offdesk**. Existing direct
+input, paste, guided Mac setup and encrypted connections remain available.
+Upgrade the stable app in place to retain pairing; Offdesk RC is a separate test
+installation. Encrypted connections use the frontend bundled with the app, so
+update the app as well as the Hub. iOS is distributed through TestFlight and
+may become available later while Apple processes and reviews the build.
+
+Some Android scanner black-screen reports remain under investigation in
+[#448](https://github.com/zalify/offdesk/issues/448); this release does not claim
+to resolve every reported case. Preview pooling/cache optimization is a
+follow-up in [#456](https://github.com/zalify/offdesk/issues/456).
 
 ## Install
 
