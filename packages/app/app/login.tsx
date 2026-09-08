@@ -464,17 +464,17 @@ export default function LoginScreen({
       <div
         style={{
           flex: 1,
-          minHeight: "100%",
+          minHeight: 0,
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
-          justifyContent: "center",
           padding: 40,
           background: colors.bg0,
           boxSizing: "border-box",
           overflow: "auto",
         }}
       >
-        <Card style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 22, padding: 40 }}>
+        <Card style={{ width: "100%", maxWidth: 560, flexShrink: 0, margin: "auto", display: "flex", flexDirection: "column", gap: 22, padding: 40 }}>
           {onBackToSetup ? (
             <Button kind="sky" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start" }} testId="login-back-to-setup">
               ← Back to setup
