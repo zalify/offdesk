@@ -622,11 +622,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (!ws) {
           throw new Error("Connection unavailable. Try again.");
         }
+        // Multi-selection must not fill the native encrypted queue with
+        // several Base64 files at once. A timeout leaves this file unsent.
+        const deadline = Date.now() + 30_000;
+        while (ws.bufferedAmount > 0) {
+          if (ws.readyState !== WebSocket.OPEN || Date.now() >= deadline) {
+            throw new Error("Previous upload is still sending or disconnected. Wait and try the remaining files again.");
+          }
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
         const { base64, mime } = await readFileAsBase64(file);
+        if (!canTypeRef.current || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) {
+          throw new Error("Connection or control changed. Try the remaining files again.");
+        }
         const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : "";
         const filename = safeFilename(file.name ?? "", ext);
         inputBatcherRef.current?.flush();
         ws.send(JSON.stringify(buildImagePasteMessage(base64, mime, filename)));
+        if (ws.readyState !== WebSocket.OPEN) throw new Error("Upload could not be queued. Try a smaller file or reconnect.");
       },
       [],
     );

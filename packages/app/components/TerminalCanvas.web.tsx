@@ -563,6 +563,9 @@ function TerminalCanvasInner() {
     if (!bootstrapReady || !deviceId) return;
     const ws = openSocket(eventsWsUrl(deviceId, lastSeqRef.current));
     let disposed = false;
+    // Track receipt synchronously: React may defer or replay state updaters.
+    let receivedSeq = lastSeqRef.current;
+    let resyncRequested = false;
     let pingTimer: ReturnType<typeof window.setInterval> | null = null;
 
     const clearPingTimer = () => {
@@ -605,34 +608,34 @@ function TerminalCanvasInner() {
           }
           return;
         }
-        let needsResync = false;
-        setBrowserState((prev) => {
-          if (shouldResyncForEnvelope(prev, envelope)) {
-            needsResync = true;
-            return prev;
+        if (disposed || resyncRequested) return;
+        if (!Number.isSafeInteger(envelope.seq) || !envelope.event) return;
+        if (shouldResyncForEnvelope({ lastSeq: receivedSeq }, envelope)) {
+          // A missed event can contain an attention update. Do not wait for
+          // another message or a user reload to recover the snapshot.
+          resyncRequested = true;
+          ws.close();
+          reconnect();
+          return;
+        }
+        if (envelope.seq <= receivedSeq) return;
+        receivedSeq = envelope.seq;
+        setBrowserState((prev) => applyBrowserEventEnvelope(prev, envelope));
+        if (envelope.event?.type === "terminal_destroyed") {
+          const keepWorkspaceOpen =
+            keepWorkspaceOpenDestroyedTerminalIdsRef.current.delete(
+              envelope.event.terminal_id,
+            );
+          if (!keepWorkspaceOpen) {
+            dispatchLayout({
+              type: "TERMINAL_DESTROYED",
+              terminalId: envelope.event.terminal_id,
+            });
           }
-          const next = applyBrowserEventEnvelope(prev, envelope);
-          if (
-            next !== prev &&
-            envelope.event?.type === "terminal_destroyed"
-          ) {
-            const keepWorkspaceOpen =
-              keepWorkspaceOpenDestroyedTerminalIdsRef.current.delete(
-                envelope.event.terminal_id,
-              );
-            if (!keepWorkspaceOpen) {
-              dispatchLayout({
-                type: "TERMINAL_DESTROYED",
-                terminalId: envelope.event.terminal_id,
-              });
-            }
-            if (zoomedTerminalIdRef.current === envelope.event.terminal_id) {
-              window.history.replaceState(null, "", window.location.pathname);
-            }
+          if (zoomedTerminalIdRef.current === envelope.event.terminal_id) {
+            window.history.replaceState(null, "", window.location.pathname);
           }
-          return next;
-        });
-        if (needsResync) ws.close();
+        }
       } catch {
         /* ignore malformed events */
       }

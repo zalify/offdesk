@@ -71,7 +71,7 @@ export function applyBrowserEventEnvelope(
 }
 
 export function shouldResyncForEnvelope(
-  state: BrowserSessionState,
+  state: Pick<BrowserSessionState, "lastSeq">,
   envelope: BrowserEventEnvelope,
 ): boolean {
   return state.lastSeq > 0 && envelope.seq > state.lastSeq + 1;

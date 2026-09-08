@@ -1,5 +1,5 @@
 import { readClipboardText } from "@/lib/readClipboardText";
-import { AttachmentPicker, formatAttachmentSize } from "./AttachmentPicker";
+import { AttachmentPicker, AttachmentReview, formatAttachmentSize } from "./AttachmentPicker";
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
 import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, LoaderCircle } from "lucide-react";
 import "./ExtendedKeyBar.css";
@@ -54,6 +54,12 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
   const [choosingAttachment, setChoosingAttachment] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState<{ message: string; submitted: boolean } | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [reviewingAttachments, setReviewingAttachments] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const uploadPending = useRef(false);
+  const attachHandler = useRef(onAttachFile); attachHandler.current = onAttachFile;
+  const controller = useRef(isController); controller.current = isController;
   const [copying, setCopying] = useState(false);
   const selectionAvailable = !!(onEnterSelectMode && onExitSelectMode && onCopySelection);
   const selection = selectMode && selectionAvailable;
@@ -76,15 +82,38 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
     const timer = setTimeout(() => setAttachmentStatus(null), 5000);
     return () => clearTimeout(timer);
   }, [attachmentStatus]);
-  const attach = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]; event.target.value = "";
-    if (!file || !onAttachFile || !isController || uploading) return;
-    setUploading(true);
-    const description = `${file.name} (${formatAttachmentSize(file.size)})`;
-    setAttachmentStatus({ message: `Sending ${description}…`, submitted: false });
-    try { await onAttachFile(file); setAttachmentStatus({ message: `Submitted ${description}. Check the terminal for its path.`, submitted: true }); }
-    catch (error) { setAttachmentStatus({ message: error instanceof Error ? error.message : "Could not send the file. Try again.", submitted: false }); }
-    finally { setUploading(false); }
+  const attach = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []); event.target.value = "";
+    if (!files.length || !onAttachFile || !isController || uploadPending.current) return;
+    setPendingFiles(current => [...current, ...files]);
+    setUploadError(null);
+    setReviewingAttachments(true);
+  };
+  const sendAttachments = async () => {
+    if (uploadPending.current || !controller.current || !attachHandler.current || !pendingFiles.length) return;
+    uploadPending.current = true; setUploading(true); setUploadError(null);
+    const batch = pendingFiles.slice();
+    try {
+      // Read/encode one file at a time, so selecting many large photos does
+      // not allocate all their Base64 representations on the phone at once.
+      for (const file of batch) {
+        if (!mounted.current) return;
+        if (!controller.current || !attachHandler.current) throw new Error("Take control to send the remaining attachments.");
+        await attachHandler.current(file);
+        if (!mounted.current) return;
+        setPendingFiles(current => current.slice(1));
+      }
+      setReviewingAttachments(false);
+      const description = batch.length === 1
+        ? `${batch[0].name} (${formatAttachmentSize(batch[0].size)})`
+        : `${batch.length} attachments`;
+      setAttachmentStatus({ message: `Submitted ${description}. Check the terminal for its path.`, submitted: true });
+    } catch (error) {
+      if (mounted.current) setUploadError(error instanceof Error ? error.message : "Could not send the file. Try again.");
+    } finally {
+      uploadPending.current = false;
+      if (mounted.current) setUploading(false);
+    }
   };
   const key = (label: string, data: string, id?: string, icon?: ReactNode) => <KeyButton key={data} label={label} testid={id}
     disabled={!isController} repeat={!!icon} onPress={() => onKey(data)}>{icon}</KeyButton>;
@@ -131,8 +160,12 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
         {key("Arrow right", "\x1b[C", "extended-keybar-right", <ArrowRight size={18} aria-hidden />)}
       </div>
     </>}
-    <input ref={fileInput} type="file" accept="image/*" hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
-    <input ref={documentInput} type="file" hidden onChange={attach} data-testid="extended-keybar-document-input" disabled={!onAttachFile} />
+    <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
+    <input ref={documentInput} type="file" multiple hidden onChange={attach} data-testid="extended-keybar-document-input" disabled={!onAttachFile} />
+    {reviewingAttachments && <AttachmentReview files={pendingFiles} uploading={uploading} error={uploadError}
+      canSend={isController && !!onAttachFile} onSend={() => void sendAttachments()}
+      onRemove={index => setPendingFiles(current => current.filter((_, i) => i !== index))}
+      onCancel={() => { if (!uploadPending.current) { setPendingFiles([]); setReviewingAttachments(false); setUploadError(null); } }} />}
     {choosingAttachment && <AttachmentPicker onPhotos={() => fileInput.current?.click()} onFiles={() => documentInput.current?.click()} onClose={() => setChoosingAttachment(false)} />}
   </div>;
 }
