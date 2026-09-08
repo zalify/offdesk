@@ -46,9 +46,9 @@ export function SecurePairingPanel({ baseUrl, managed = false }: { baseUrl?: str
     } catch (cause) { if (id === requestId.current) setError(String(cause)); }
     finally { if (id === requestId.current) setBusy(false); }
   };
-  return <div data-testid="secure-pairing-panel" style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, borderTop: `1px solid ${colors.line}`, paddingTop: 16 }}>
+  return <div data-testid="secure-pairing-panel" style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, paddingTop: 4 }}>
     <Body size={15}>End-to-end encrypted connection</Body>
-    <Body size={13} style={{ textAlign: "center" }}>Open the Offdesk phone app and choose Scan QR Code on its connection screen. This encrypted code is for the app, not a browser or another scanner.</Body>
+    <Body size={13} style={{ textAlign: "center" }}>For the iPhone or Android app. Create a pairing code below, then choose Scan QR Code in Offdesk. Your terminal content is end-to-end encrypted. Use the app’s scanner, not your phone’s camera.</Body>
     {managed ? <Body size={13} style={{ textAlign: "center", overflowWrap: "anywhere" }}>Offdesk Cloud · {baseUrl}</Body> : null}
     {pairing && !expired && qr ? <>
       {pairing.connection_check?.identity_verified ? <div role="status" style={{ textAlign: "center" }}>
@@ -56,7 +56,7 @@ export function SecurePairingPanel({ baseUrl, managed = false }: { baseUrl?: str
         {!pairing.connection_check.legacy_routes_hidden ? <Body size={12}>This address may also serve ordinary web connections. Use a dedicated encrypted address for a managed tunnel.</Body> : null}
       </div> : null}
       <div ref={qrElement} style={{ width: 240, maxWidth: "100%", background: "#fffbf4", padding: 12, borderRadius: 12 }}><QrImage svg={qr} size={216} label="Encrypted device pairing QR code" /></div>
-      <Body size={12}>{pairing.hub_url}</Body>
+      <Body size={12} style={{ overflowWrap: "anywhere", maxWidth: "100%", textAlign: "center" }}>{pairing.hub_url}</Body>
       <Body size={12}>Expires in {Math.ceil((pairing.expires_at - now) / 1000)} seconds. Keep this code private.</Body>
       <Button kind="sky" onClick={() => void copyText(pairing.pairing_uri).catch(() => setError("Could not copy the pairing link"))}>Copy pairing link</Button>
     </> : null}

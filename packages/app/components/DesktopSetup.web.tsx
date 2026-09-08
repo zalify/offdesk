@@ -178,7 +178,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   }
 
   if (isLoading) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
-  if (!isAuthenticated) return <DesktopSetupFrame><LoginScreen onBecomeHub={() => void pick("hub")} /></DesktopSetupFrame>;
+  if (!isAuthenticated) return <DesktopSetupFrame><LoginScreen onBecomeHub={() => void pick("hub")} onBackToSetup={() => setRole(null)} /></DesktopSetupFrame>;
   return <>{children}</>;
 }
 
@@ -501,6 +501,7 @@ export function PhoneCodePanel({
   const [qrError, setQrError] = useState(false);
   const [copied, setCopied] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [purpose, setPurpose] = useState<"app" | "browser">("app");
 
   const encoded = link?.short ?? link?.link ?? link?.url ?? "";
   useEffect(() => {
@@ -551,7 +552,21 @@ export function PhoneCodePanel({
   // or a Settings section it sits flat, the surface around it is the card.
   const body = (
     <>
-      {!compact ? <Display size={22} style={{ textAlign: "center" }}>Scan this with your phone</Display> : null}
+      {!compact ? <Display size={22} style={{ textAlign: "center" }}>Connect your phone</Display> : null}
+      <div role="group" aria-label="Connect using" style={{ display: "flex", width: "100%", gap: 8 }}>
+        {(["app", "browser"] as const).map((value) => (
+          <button key={value} type="button" aria-pressed={purpose === value} onClick={() => setPurpose(value)}
+            data-testid={`phone-purpose-${value}`}
+            style={{ flex: 1, minHeight: 44, padding: "10px 12px", borderRadius: 12, cursor: "pointer",
+              fontFamily: fontDisplay, fontSize: 14, fontWeight: 600,
+              border: `1.5px solid ${purpose === value ? colors.accent : colors.line}`,
+              background: purpose === value ? colors.surface : colors.bg0, color: colors.fg0 }}>
+            {value === "app" ? "Offdesk App · Recommended" : "Web browser"}
+          </button>
+        ))}
+      </div>
+      {purpose === "browser" ? <>
+      <Body size={14} style={{ textAlign: "center" }}>No app needed. Scan with your phone’s camera to sign in in a browser. This does not pair an encrypted device.</Body>
       <div
         style={{
           width: compact ? 168 : 212,
@@ -568,11 +583,9 @@ export function PhoneCodePanel({
       >
         {qr ? <QrImage svg={qr} size={compact ? 142 : 186} label="Phone sign-in QR code" /> : <span role={qrError ? "alert" : "status"} style={{ fontSize: 12, color: colors.fg3 }}>{qrError ? "Could not generate the QR code. Use Copy link below instead." : link ? "Generating QR code…" : "Waiting for the hub…"}</span>}
       </div>
-      <Body size={14} style={{ textAlign: "center", maxWidth: 340 }}>
-        In the Offdesk phone app, choose Scan QR Code and point it here to sign in. Your phone’s camera can also open it in a browser.
-      </Body>
+      </> : null}
 
-      <label style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
+      {purpose === "browser" || !link?.secure_url ? <label style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
         <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg2 }}>Your phone can reach it at</span>
         <select
           value={link?.url ?? ""}
@@ -597,8 +610,10 @@ export function PhoneCodePanel({
           ))}
         </select>
         <span style={{ fontSize: 12.5, color: colors.fg2 }}>{link?.public_url === link?.url && link?.public_url ? "Internet address — keep this Mac awake and online." : "Local address — your phone must be on the same network."}</span>
-      </label>
+      </label> : null}
 
+      {purpose === "app" ? <>
+        {link ? <SecurePairingPanel baseUrl={link.secure_url ?? link.url} managed={Boolean(link.secure_url)} /> : <Body>Waiting for the hub…</Body>}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
         <Button kind="sky" onClick={() => void openOutside(IPHONE_URL)}>
           <PhoneIcon /> iPhone app
@@ -607,7 +622,7 @@ export function PhoneCodePanel({
           <PhoneIcon /> Android app
         </Button>
       </div>
-
+      </> : <>
       <div
         style={{
           display: "flex",
@@ -637,7 +652,6 @@ export function PhoneCodePanel({
           {copied ? "Copied" : "Copy link"}
         </Button>
       </div>
-      {link ? <SecurePairingPanel baseUrl={link.secure_url ?? link.url} managed={Boolean(link.secure_url)} /> : null}
       {link ? (
         <div style={{ fontFamily: fontDisplay, fontSize: 12.5, fontWeight: 600, color: colors.fg3, textAlign: "center" }}>
           {link.link
@@ -645,6 +659,7 @@ export function PhoneCodePanel({
             : "This hub signs in through GitHub or Google, so the code is just the address."}
         </div>
       ) : null}
+      </>}
     </>
   );
   const column = { display: "flex", flexDirection: "column", alignItems: "center", gap: 16 } as const;

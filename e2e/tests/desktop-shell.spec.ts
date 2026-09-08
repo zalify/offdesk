@@ -183,6 +183,9 @@ test("hub phone dialog offers tunnel and LAN QR codes without covering the deskt
   await expect(page.getByText("Waiting for the hub to reconnect…")).toBeVisible();
   const dialog = page.getByTestId("phone-dialog");
   const picker = dialog.getByTestId("hub-address-picker");
+  await expect(dialog.getByTestId("phone-purpose-app")).toHaveAttribute("aria-pressed", "true");
+  await expect(dialog.getByLabel("Phone sign-in QR code", { exact: true })).toHaveCount(0);
+  await dialog.getByTestId("phone-purpose-browser").click();
   await expect(picker).toHaveValue("https://hub.example.com:8443");
   await expectPaintedQr(dialog.getByRole("img", { name: "Phone sign-in QR code", exact: true }));
   await expect(page.getByTestId("hub-ready-open")).toHaveCount(0);
@@ -195,6 +198,8 @@ test("hub phone dialog offers tunnel and LAN QR codes without covering the deskt
   await expect.poll(() => page.evaluate(() => (window as any).__desktopTest.linkRequests.slice(-2))).toEqual([
     "http://192.168.1.10:4317", "https://hub.example.com:8443",
   ]);
+  await dialog.getByTestId("phone-purpose-app").click();
+  await expect(dialog.getByLabel("Phone sign-in QR code", { exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
   await expectPaintedQr(dialog.getByRole("img", { name: "Encrypted device pairing QR code", exact: true }));
   await expect.poll(async () => {
@@ -279,12 +284,18 @@ test("managed Cloud is used only for encrypted pairing while browser links retai
   const dialog = page.getByTestId("phone-dialog");
   const picker = dialog.getByTestId("hub-address-picker");
   const panel = dialog.getByTestId("secure-pairing-panel");
-  await expect(picker).toHaveValue("https://hub.example.com:8443");
+  await expect(picker).toHaveCount(0);
   await expect(panel.getByText("Offdesk Cloud · " + cloud, { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
   await expect(panel.getByText(cloud, { exact: true })).toBeVisible();
+  await dialog.getByTestId("phone-purpose-browser").click();
+  await expect(panel).toHaveCount(0);
   await picker.selectOption("http://192.168.1.10:4317");
   await expect(picker).toHaveValue("http://192.168.1.10:4317");
+  await expectPaintedQr(dialog.getByLabel("Phone sign-in QR code", { exact: true }));
+  await dialog.getByTestId("phone-purpose-app").click();
+  await expect(picker).toHaveCount(0);
+  await panel.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
   await expect(panel.getByText(cloud, { exact: true })).toBeVisible();
   await expect(panel.getByLabel("Encrypted device pairing QR code")).toBeVisible();
 });
@@ -341,10 +352,12 @@ test("WebKit paints ordinary and encrypted phone QR images at compact and wide s
     await openApp(page);
     await page.getByTestId("tab-bar-phone").click();
     const dialog = page.getByTestId("phone-dialog");
+    await dialog.getByTestId("phone-purpose-browser").click();
     for (const width of [800, 1280]) {
       await page.setViewportSize({ width, height: 900 });
       await expectPaintedQr(dialog.getByRole("img", { name: "Phone sign-in QR code", exact: true }));
     }
+    await dialog.getByTestId("phone-purpose-app").click();
     await dialog.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
     await expectPaintedQr(dialog.getByRole("img", { name: "Encrypted device pairing QR code", exact: true }));
   } finally { await browser.close(); }
@@ -356,6 +369,7 @@ test("phone QR generation failure keeps the full-link fallback and recovers on a
   await openApp(page);
   await page.getByTestId("tab-bar-phone").click();
   const dialog = page.getByTestId("phone-dialog");
+  await dialog.getByTestId("phone-purpose-browser").click();
   await expectPaintedQr(dialog.getByRole("img", { name: "Phone sign-in QR code", exact: true }));
   await page.evaluate(() => { (window as any).__desktopTest.qrOverflow = true; });
   await dialog.getByTestId("hub-address-picker").selectOption("http://192.168.1.10:4317");
@@ -415,4 +429,35 @@ test("first-run failure stays actionable and retries without manual terminal com
   });
   await page.getByTestId("hub-setup-retry").click();
   await expect(page.getByTestId("hub-ready-open")).toBeVisible();
+});
+
+
+test("desktop connection setup has a visible way back before any form fields", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 600 });
+  await desktopBridge(page, null);
+  await page.goto("/");
+  await page.getByTestId("first-run-client").click();
+  await expect(page.getByTestId("login-back-to-setup")).toBeInViewport();
+  await expect(page.getByTestId("login-become-hub")).toBeInViewport();
+  await page.getByTestId("login-back-to-setup").click();
+  await expect(page.getByTestId("first-run-hub")).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls)).not.toContain("hub_install");
+});
+
+test("settings centers desktop content and keeps the scrollbar at the window edge", async ({ page }, testInfo) => {
+  await desktopBridge(page, "hub");
+  await openApp(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  for (const width of [1440, 800, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const scroller = page.getByTestId("settings-content");
+    const column = page.getByTestId("settings-column");
+    const outer = (await scroller.boundingBox())!;
+    const inner = (await column.boundingBox())!;
+    expect(outer.width).toBeGreaterThan(width - 30);
+    expect(Math.abs(inner.x + inner.width / 2 - (outer.x + outer.width / 2))).toBeLessThan(12);
+    expect(inner.width).toBeLessThanOrEqual(880);
+    await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`settings-${width}.png`) });
+  }
 });
