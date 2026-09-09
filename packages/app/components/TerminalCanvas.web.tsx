@@ -1625,6 +1625,7 @@ function TerminalCanvasInner() {
               groups={tabGroups}
               activeTerminalId={workspaceTerminal?.id ?? null}
               canCreateTerminal={isActiveController}
+              canSendAttention={(machineId) => !eventsReconnecting && canTypeOnMachine(machineId)}
               onPickTerminal={handleZoomTerminal}
               onSelectGroup={(groupId) =>
                 workspaceCommandsRef.current.selectGroup?.(groupId)

@@ -31,7 +31,11 @@ test("mobile attention shortcuts switch tabs and machines and track live resolut
       }
     });
   });
+  const inputs: { path: string; message: { type: string; data?: string } }[] = [];
   await page.routeWebSocket(/\/ws\/terminal\//, socket => {
+    socket.onMessage(raw => {
+      if (typeof raw === "string") inputs.push({ path: new URL(socket.url()).pathname, message: JSON.parse(raw) });
+    });
     socket.send(Buffer.from("Terminal ready\r\n"));
   });
   await openApp(page);
@@ -42,6 +46,19 @@ test("mobile attention shortcuts switch tabs and machines and track live resolut
   await expect(page.getByTestId("mobile-session-switcher")).toHaveCount(0);
   await expect(page.getByText("Picked up where you left off", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("mobile-attention-light.png") });
+  const routeBefore = page.url();
+  const remoteEnter = page.getByTestId("mobile-attention-enter-remote");
+  await remoteEnter.click();
+  await expect(remoteEnter).toHaveText("Sent");
+  await expect(remoteEnter).toBeDisabled();
+  expect(page.url()).toBe(routeBefore);
+  await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Current task");
+  expect(inputs.filter(x => x.message.type === "command_input")).toEqual([
+    { path: "/ws/terminal/remote-host/remote", message: { type: "command_input", data: "\r" } },
+  ]);
+  expect(inputs.filter(x => x.path.endsWith("/remote") && x.message.type === "resize")).toEqual([]);
+  expect(await page.evaluate(() => document.activeElement?.matches("input, textarea, [contenteditable=true]"))).toBe(false);
+  await expect(page.getByTestId("mobile-attention-enter-other")).toBeEnabled();
   await page.getByTestId("mobile-attention-other").click();
   await expect(page).toHaveURL(/#\/t\/other$/);
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Fix checkout");
