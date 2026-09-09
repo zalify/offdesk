@@ -2,8 +2,14 @@
 //! completion from silence or copy terminal contents into the status protocol.
 use offdesk_protocol::TerminalAttention;
 
+/// Shared by the capture gate and screen adapter. Claude's native build can
+/// report `claude.exe` as pane_current_command even on macOS.
+pub fn supports_command(command: Option<&str>) -> bool {
+    matches!(command, Some("claude" | "claude.exe" | "codex" | "node"))
+}
+
 pub fn detect(command: Option<&str>, screen: &str) -> Option<TerminalAttention> {
-    if !matches!(command, Some("claude" | "codex" | "node")) {
+    if !supports_command(command) {
         return None;
     }
     let lines: Vec<_> = screen
@@ -46,6 +52,8 @@ pub fn detect(command: Option<&str>, screen: &str) -> Option<TerminalAttention> 
 mod tests {
     use super::*;
     const CLAUDE: &str = "Bash command\n  npm test\nDo you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No\nEsc to cancel · Tab to amend";
+    // Native Claude's two-choice read-permission prompt, as captured by tmux.
+    const CLAUDE_NATIVE: &str = "Bash command\n  sed -n '40,95p' component.tsx\nRead component source\n\n │ A command the shell parser cannot analyze asks the person\n\n Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend\n";
     const CODEX: &str = "Would you like to run the following command?\n$ cargo test\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\nPress enter to confirm or esc to cancel";
 
     #[test]
@@ -57,6 +65,52 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn native_claude_is_captured_and_detected() {
+        assert!(supports_command(Some("claude.exe")));
+        assert_eq!(
+            detect(Some("claude.exe"), CLAUDE_NATIVE),
+            Some(TerminalAttention::Confirmation)
+        );
+        let moved = CLAUDE_NATIVE
+            .replace("❯ 1.", "  1.")
+            .replace("  2.", "❯ 2.");
+        assert_eq!(
+            detect(Some("claude.exe"), &moved),
+            Some(TerminalAttention::Confirmation)
+        );
+        assert_eq!(detect(Some("claude.exe"), "❯ \nReady for input"), None);
+        assert_eq!(
+            detect(
+                Some("claude.exe"),
+                &format!("{CLAUDE_NATIVE}Running\nResult\nReady")
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn native_alias_keeps_the_capture_gate_and_prompt_checks_conservative() {
+        for command in [
+            None,
+            Some("zsh"),
+            Some("bash"),
+            Some("my-claude.exe"),
+            Some("claude.exe.bak"),
+        ] {
+            assert!(!supports_command(command));
+            assert_eq!(detect(command, CLAUDE_NATIVE), None);
+        }
+        for incomplete in [
+            CLAUDE_NATIVE.replace('❯', ""),
+            CLAUDE_NATIVE.replace("Do you want to proceed?", ""),
+            CLAUDE_NATIVE.replace("Esc to cancel · Tab to amend", ""),
+            CLAUDE_NATIVE.replace("2. No", ""),
+        ] {
+            assert_eq!(detect(Some("claude.exe"), &incomplete), None);
+        }
+    }
+
     #[test]
     fn moving_the_selection_does_not_clear_attention() {
         let moved = CODEX.replace("› 1.", "  1.").replace("  2.", "› 2.");
