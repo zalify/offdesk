@@ -64,6 +64,8 @@ debugging container startup only — say so explicitly if you use it.
 - `docs/facts.md` — verified facts about the shipping system, each citing the
   file it came from. README and site copy may only assert things on that list.
 - `docs/deployment/runbook.md` — operating the production deployment.
+- [Troubleshooting guides](docs/troubleshooting/README.md) — diagnostic steps,
+  recovery methods, and checks for common failures.
 
 ## Conventions
 
