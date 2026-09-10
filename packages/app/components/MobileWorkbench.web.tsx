@@ -791,7 +791,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         onCloseTerminal={onCloseTerminal}
       />
 
-      {hubPickerOpen && <Sheet title="Hubs & connections" backLabel="Back to Machines" onClose={() => { setHubPickerOpen(false); setHostSheetOpen(true); }}><HubPickerPanel /></Sheet>}
+      {hubPickerOpen && <Sheet title="Hubs & connections" backLabel="Back to Machines" onBack={() => { setHubPickerOpen(false); setHostSheetOpen(true); }} onClose={() => setHubPickerOpen(false)}><HubPickerPanel /></Sheet>}
 
       {/* Host sheet */}
       {hostSheetOpen && (
@@ -1215,6 +1215,7 @@ function Sheet({
   title,
   header,
   backLabel,
+  onBack,
   testid,
   onClose,
   children,
@@ -1222,6 +1223,7 @@ function Sheet({
   title?: string;
   header?: React.ReactNode;
   backLabel?: string;
+  onBack?: () => void;
   testid?: string;
   onClose: () => void;
   children: React.ReactNode;
@@ -1292,7 +1294,7 @@ function Sheet({
               gap: 8,
             }}
           >
-            {backLabel && <button type="button" aria-label={backLabel} onClick={onClose} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer" }}><ArrowLeft size={20} /></button>}
+            {backLabel && <button type="button" aria-label={backLabel} onClick={onBack} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer" }}><ArrowLeft size={20} /></button>}
             {title}
           </div>
         ))}

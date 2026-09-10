@@ -179,6 +179,28 @@ test("compact Hub menu checks availability and keeps the source Hub on failure",
   expect(ordinary).toEqual([]);
 });
 
+test("Hub picker dismiss closes all menus while its back arrow returns to Machines", async ({ page }) => {
+  await bundledPhone(page, "paired");
+  const open = async () => {
+    await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();
+    await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+    await expect(page.getByTestId("hub-picker")).toBeVisible();
+  };
+  await open();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("hub-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hub & connection", exact: true })).toHaveCount(0);
+  await open();
+  // Tap outside the bottom sheet, inside its backdrop.
+  await page.mouse.click(5, 50);
+  await expect(page.getByTestId("hub-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hub & connection", exact: true })).toHaveCount(0);
+  await open();
+  await page.getByRole("button", { name: "Back to Machines" }).click();
+  await expect(page.getByTestId("hub-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hub & connection", exact: true })).toBeVisible();
+});
+
 test("adding a Hub asks for identity confirmation and can be cancelled without losing existing pairings", async ({ page }) => {
   await bundledPhone(page, "paired");
   await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();

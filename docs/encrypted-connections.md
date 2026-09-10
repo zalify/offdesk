@@ -275,3 +275,18 @@ Tests also cover queue budgets, bulk fairness, per-socket order, fragment bounds
 raw binary wire size and first-pair recovery after identity/revocation/credential
 errors. Physical-device memory under concurrent previews and encrypted/plain
 throughput comparisons remain release-qualification work.
+
+### Recovering damaged local connection metadata
+
+If the saved Hub list is malformed, ordinary loading reports the error. An explicit
+“Forget connection and pair again” or pairing attempt preserves the damaged file
+as `secure-hubs.damaged-<random>.json` in the App config directory before rebuilding
+the list from any readable active connection. Other entries from the damaged list
+may need to be paired again; the backup contains connection metadata, not private keys.
+Filesystem access errors remain errors and do not reset the list.
+
+Forgetting clears the active credential and pending pairing credential. If the
+active marker is unreadable, it also clears the legacy credential unless another
+saved Hub still uses it. Credentials belonging to retained Hubs are preserved.
+A credential-store error leaves the metadata in place so forgetting can be retried
+after unlocking the device.

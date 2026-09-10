@@ -47,6 +47,11 @@ pub struct Status {
 fn legacy_slot() -> String {
     "connection".into()
 }
+fn random_id() -> Result<String, String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|_| "Could not generate a random identifier")?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
 fn valid_slot(slot: &str) -> bool {
     slot == "connection"
         || slot == "candidate"
@@ -66,12 +71,37 @@ fn registry<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String
     Ok(marker(app)?.with_file_name("secure-hubs.json"))
 }
 fn read_hubs<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedHub>, String> {
-    let mut hubs: Vec<SavedHub> = match std::fs::read(registry(app)?) {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "Saved Hubs are damaged")?,
+    load_hubs(&registry(app)?, read_status(app).ok().flatten(), false)
+}
+fn recover_hubs<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedHub>, String> {
+    load_hubs(&registry(app)?, read_status(app).ok().flatten(), true)
+}
+/// Only explicit pairing/forget actions may quarantine a malformed registry.
+/// Preserve the original bytes for recovery and merge any readable active Hub.
+/// Ordinary reads and filesystem failures must never silently reset the list.
+fn load_hubs(
+    path: &std::path::Path,
+    active: Option<Status>,
+    recover: bool,
+) -> Result<Vec<SavedHub>, String> {
+    let mut hubs: Vec<SavedHub> = match std::fs::read(path) {
+        Ok(bytes) => match serde_json::from_slice(&bytes) {
+            Ok(hubs) => hubs,
+            Err(_) if recover => {
+                let backup = path.with_extension(format!("damaged-{}.json", random_id()?));
+                std::fs::rename(path, backup)
+                    .map_err(|_| "Could not preserve the damaged Hub list")?;
+                Vec::new()
+            }
+            Err(_) => return Err(
+                "Saved Hubs are damaged. Forget the current connection or pair again to recover."
+                    .into(),
+            ),
+        },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(_) => return Err("Could not read saved Hubs".into()),
     };
-    if let Ok(Some(status)) = read_status(app) {
+    if let Some(status) = active {
         if let Some(hub) = hubs
             .iter_mut()
             .find(|h| h.status.endpoint.public_key == status.endpoint.public_key)
@@ -111,7 +141,9 @@ pub fn configured<R: Runtime>(app: &AppHandle<R>) -> bool {
         .unwrap_or(true)
 }
 fn read_status<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Status>, String> {
-    let path = marker(app)?;
+    read_status_at(&marker(app)?)
+}
+fn read_status_at(path: &std::path::Path) -> Result<Option<Status>, String> {
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map_err(|_| "Saved encrypted connection is damaged. Forget it and pair again.".into()),
@@ -141,14 +173,17 @@ fn atomic_json(path: &std::path::Path, value: &impl Serialize) -> Result<(), Str
     Ok(())
 }
 fn clear_active<R: Runtime>(app: &AppHandle<R>, hubs: &[SavedHub]) -> Result<(), String> {
+    clear_active_at(&marker(app)?, hubs)
+}
+fn clear_active_at(path: &std::path::Path, hubs: &[SavedHub]) -> Result<(), String> {
     if hubs.is_empty() {
-        match std::fs::remove_file(marker(app)?) {
+        match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(_) => Err("Could not forget the encrypted connection".into()),
         }
     } else {
-        atomic_json(&marker(app)?, &Option::<Status>::None)
+        atomic_json(path, &Option::<Status>::None)
     }
 }
 fn store_read<R: Runtime>(app: &AppHandle<R>, slot: &str) -> Result<Option<Credential>, String> {
@@ -340,7 +375,6 @@ pub async fn secure_pair<R: Runtime>(
         .1
         .try_write()
         .map_err(|_| "Finish the current transfer or connection check, then try again")?;
-    let mut hubs = read_hubs(&app)?;
     let uri = Zeroizing::new(uri);
     let descriptor = PairingDescriptor::parse(&uri)?;
     let mut session = state.0.lock().await;
@@ -350,6 +384,7 @@ pub async fn secure_pair<R: Runtime>(
     {
         return Err("Finish sending the current input or file, then try again".into());
     }
+    let mut hubs = recover_hubs(&app)?;
     if hubs.len() >= 16
         && !hubs
             .iter()
@@ -395,10 +430,7 @@ pub async fn secure_pair<R: Runtime>(
         endpoint: credential.endpoint.clone(),
         device_id: Some(device_id),
         routes: normalize(routes, &credential.endpoint.hub_url),
-        credential_slot: format!(
-            "hub-{}",
-            URL_SAFE_NO_PAD.encode(Identity::generate().map_err(|e| e.to_string())?.public())
-        ),
+        credential_slot: format!("hub-{}", random_id()?),
     };
     // Each pairing gets a separate OS slot. Persist the old registry before
     // writing the new marker: a failed pairing never replaces the active key.
@@ -535,6 +567,7 @@ pub async fn secure_routes<R: Runtime>(
 ) -> Result<RouteReport, String> {
     let _discovery = state.2.lock().await;
     let _gate = state.1.read().await;
+    let include_machines = public_key.is_some();
     let mut status = match public_key {
         Some(key) => find_hub(&read_hubs(&app)?, &key)?,
         None => read_status(&app)?.ok_or("Pair this device first")?,
@@ -555,9 +588,13 @@ pub async fn secure_routes<R: Runtime>(
             }
         }
     }
-    let machines = match results.iter().find_map(|(_, client)| client.as_ref()) {
-        Some(client) => discover_machines(client).await,
-        None => Vec::new(),
+    let machines = if include_machines {
+        match results.iter().find_map(|(_, client)| client.as_ref()) {
+            Some(client) => discover_machines(client).await,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
     };
     let discovery_available = advertised.is_some();
     status.routes = normalize(advertised.unwrap_or(saved), &status.endpoint.hub_url);
@@ -745,17 +782,37 @@ pub async fn secure_forget<R: Runtime>(
     if let Some(client) = session.take() {
         client.close();
     }
-    let active = read_status(&app).ok().flatten();
-    let mut hubs = read_hubs(&app)?;
-    if let Some(active) = active {
+    forget_saved_connection(&marker(&app)?, &registry(&app)?, |slot| {
+        store_write(&app, slot, None)
+    })
+}
+fn forget_saved_connection(
+    marker: &std::path::Path,
+    registry: &std::path::Path,
+    mut erase: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let active = read_status_at(marker).ok().flatten();
+    let mut hubs = load_hubs(registry, active.clone(), true)?;
+    if let Some(active) = &active {
         hubs.retain(|h| h.status.endpoint.public_key != active.endpoint.public_key);
-        save_hubs(&app, &hubs)?;
-        // Keep a null marker: startup stays bundled even with other saved Hubs.
-        clear_active(&app, &hubs)?;
-        store_write(&app, &active.credential_slot, None)?;
+        erase(&active.credential_slot)?;
     }
-    clear_active(&app, &hubs)?;
-    store_write(&app, "candidate", None)
+    // A damaged marker may not identify the legacy key. Delete it only when
+    // no retained Hub owns it; forgetting one Hub must not unpair another.
+    if !hubs
+        .iter()
+        .any(|h| h.status.credential_slot == "connection")
+        && active
+            .as_ref()
+            .is_none_or(|s| s.credential_slot != "connection")
+    {
+        erase("connection")?;
+    }
+    erase("candidate")?;
+    // Keep the slot references until erasure succeeds so a locked Keychain
+    // can be retried. Other saved Hubs retain the bundled-startup marker.
+    atomic_json(registry, &hubs)?;
+    clear_active_at(marker, &hubs)
 }
 #[tauri::command]
 pub async fn secure_request<R: Runtime>(
@@ -973,6 +1030,151 @@ mod route_tests {
         assert!(atomic_json(&path, &"target Hub").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "\"original Hub\"");
         std::fs::remove_dir_all(root).unwrap();
+    }
+    struct SavedFiles {
+        root: std::path::PathBuf,
+        marker: std::path::PathBuf,
+        registry: std::path::PathBuf,
+    }
+    impl SavedFiles {
+        fn new() -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("offdesk-recovery-test-{}", random_id().unwrap()));
+            std::fs::create_dir_all(&root).unwrap();
+            Self {
+                marker: root.join("secure-connection.json"),
+                registry: root.join("secure-hubs.json"),
+                root,
+            }
+        }
+    }
+    impl Drop for SavedFiles {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+    #[test]
+    fn explicit_recovery_preserves_a_corrupt_registry_and_the_readable_active_hub() {
+        let files = SavedFiles::new();
+        let corrupt = b"[{truncated registry";
+        std::fs::write(&files.registry, corrupt).unwrap();
+        let (active, _) = original();
+        assert!(load_hubs(&files.registry, Some(active.clone()), false).is_err());
+        assert_eq!(std::fs::read(&files.registry).unwrap(), corrupt);
+        let recovered = load_hubs(&files.registry, Some(active), true).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].status.credential_slot, "connection");
+        let backup = std::fs::read_dir(&files.root)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert!(backup
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("secure-hubs.damaged-"));
+        assert_eq!(std::fs::read(backup).unwrap(), corrupt);
+        atomic_json(&files.registry, &recovered).unwrap();
+        assert_eq!(load_hubs(&files.registry, None, false).unwrap().len(), 1);
+    }
+    #[test]
+    fn recovery_does_not_treat_filesystem_errors_as_a_corrupt_registry() {
+        let files = SavedFiles::new();
+        std::fs::create_dir(&files.registry).unwrap();
+        assert!(load_hubs(&files.registry, None, true).is_err());
+        assert!(files.registry.is_dir());
+        assert_eq!(std::fs::read_dir(&files.root).unwrap().count(), 1);
+    }
+    #[test]
+    fn forget_works_with_a_corrupt_registry_and_erases_the_active_slot() {
+        let files = SavedFiles::new();
+        let (mut active, _) = original();
+        active.credential_slot = format!("hub-{}", random_id().unwrap());
+        atomic_json(&files.marker, &active).unwrap();
+        std::fs::write(&files.registry, b"not valid JSON").unwrap();
+        let mut erased = Vec::new();
+        forget_saved_connection(&files.marker, &files.registry, |slot| {
+            erased.push(slot.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            erased,
+            vec![
+                active.credential_slot,
+                "connection".into(),
+                "candidate".into()
+            ]
+        );
+        assert!(!files.marker.exists());
+        assert!(load_hubs(&files.registry, None, false).unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(&files.root).unwrap().count(), 2); // empty registry + original backup
+    }
+    #[test]
+    fn damaged_marker_forget_erases_only_unclaimed_legacy_credentials() {
+        for keep_legacy in [false, true] {
+            let files = SavedFiles::new();
+            std::fs::write(&files.marker, b"damaged marker").unwrap();
+            let (mut retained, _) = original();
+            if !keep_legacy {
+                retained.credential_slot = format!("hub-{}", random_id().unwrap());
+            }
+            let hubs = vec![SavedHub {
+                name: "Other Hub".into(),
+                status: retained.clone(),
+            }];
+            atomic_json(&files.registry, &hubs).unwrap();
+            let mut credentials = std::collections::BTreeSet::from([
+                "connection".to_owned(),
+                "candidate".to_owned(),
+                retained.credential_slot.clone(),
+            ]);
+            forget_saved_connection(&files.marker, &files.registry, |slot| {
+                credentials.remove(slot);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(
+                credentials,
+                std::collections::BTreeSet::from([retained.credential_slot])
+            );
+            assert_eq!(
+                load_hubs(&files.registry, None, false).unwrap()[0].name,
+                "Other Hub"
+            );
+            assert!(files.marker.exists()); // other Hubs must still boot bundled
+            assert!(read_status_at(&files.marker).unwrap().is_none());
+        }
+    }
+    #[test]
+    fn credential_erasure_failure_keeps_references_for_retry() {
+        let files = SavedFiles::new();
+        let (active, _) = original();
+        atomic_json(&files.marker, &active).unwrap();
+        let hubs = vec![SavedHub {
+            name: "Home".into(),
+            status: active,
+        }];
+        atomic_json(&files.registry, &hubs).unwrap();
+        assert!(
+            forget_saved_connection(&files.marker, &files.registry, |_| Err(
+                "Keychain locked".into()
+            ))
+            .is_err()
+        );
+        assert!(read_status_at(&files.marker).unwrap().is_some());
+        assert_eq!(load_hubs(&files.registry, None, false).unwrap().len(), 1);
+        let mut erased = Vec::new();
+        forget_saved_connection(&files.marker, &files.registry, |slot| {
+            erased.push(slot.to_owned());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(erased, vec!["connection", "candidate"]);
+        assert!(!files.marker.exists());
     }
     #[test]
     fn changed_identity_and_unsaved_origins_are_rejected() {
