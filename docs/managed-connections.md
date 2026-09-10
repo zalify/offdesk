@@ -87,6 +87,16 @@ its terminals remain on the same Hub when switching networks. A public remote
 address serves only encrypted WebSockets, so opening it as an ordinary web page
 returns 404 by design. It is not a browser login link.
 
+## Troubleshooting remote access
+
+If the App shows **Remote connection → Unreachable** while LAN access still
+works, run a fresh `offdesk-hub cloud check`. `cloud status` reports provisioning
+and saved verification; it does not establish current end-to-end reachability.
+
+Follow the [remote connection troubleshooting guide](troubleshooting/remote-connection.md)
+to check local listeners, connector health, Cloudflare 1033, and stale Fake-IP
+DNS addresses, then verify recovery from the phone.
+
 ## Stop remote access
 
 ```

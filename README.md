@@ -275,6 +275,10 @@ already reach the hub's address.
   Tunnel, or on your tailnet. The guide compares them by who ends up able to
   read your traffic. → [docs/setup-public.md](docs/setup-public.md)
 
+## Troubleshooting
+
+- [Local network works, but Remote connection is Unreachable](docs/troubleshooting/remote-connection.md)
+
 ## On your phone
 
 The browser is the whole client. Open the hub's URL and you are there, on
