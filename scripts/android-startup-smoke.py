@@ -70,15 +70,29 @@ def check_webview_input():
     for _ in range(3):
         root = wait_for_screen("Scan the code")
         field = next(n for n in root.iter("node") if n.get("class") == "android.widget.EditText")
-        if "example.invalid" in field.get("text", ""):
+        if field.get("text") == "http://example.invalid":
             return
         left, top, right, bottom = map(int, re.findall(r"\d+", field.attrib["bounds"]))
         adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
-        adb("shell", "input", "text", "http://example.invalid")
+        # The first IME activation is asynchronous. Wait for the field to
+        # remain focused before typing at human speed; an immediate adb burst
+        # can race Gboard startup and drop characters on a busy CI emulator.
+        for attempt in range(15):
+            focused = hierarchy()
+            if any(n.get("class") == "android.widget.EditText"
+                   and n.get("focused") == "true" for n in focused.iter("node")):
+                time.sleep(2)
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError("WebView input did not receive focus")
+        for character in "http://example.invalid":
+            adb("shell", "input", "text", character)
+            time.sleep(0.1)
         root = hierarchy()
         if dismiss_update(root):
             continue  # Retry only an action interrupted by the known updater.
-        assert any("example.invalid" in n.get("text", "") for n in root.iter("node")), "WebView input is unresponsive"
+        assert any(n.get("text") == "http://example.invalid" for n in root.iter("node")), "WebView input is unresponsive"
         return
     raise AssertionError("Update prompts repeatedly interrupted WebView input")
 
@@ -100,6 +114,11 @@ def root_emulator():
 
 try:
     assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
+    # sys.boot_completed precedes first-boot package optimization and launcher
+    # initialization. Let the disposable emulator settle BEFORE starting the
+    # App's 60-second readiness deadline. Never dismiss an ANR to pass a test.
+    print("Waiting for first-boot system services to settle", flush=True)
+    time.sleep(45)
     adb("uninstall", "dev.offdesk.desktop", check=False)
     adb("install", str(args.apk.resolve()), timeout=120)
     adb("logcat", "-c")
