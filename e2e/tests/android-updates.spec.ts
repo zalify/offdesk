@@ -42,7 +42,7 @@ test("Android checks for updates before login and supports permission retry", as
 test("Android settings exposes manual checks and reports network failure", async ({ page }) => {
   await androidBridge(page);
   await openApp(page);
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await page.getByTestId("mobile-host-button").click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByTestId("android-update-settings");

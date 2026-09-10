@@ -431,6 +431,7 @@ export function HubReadyScreen({
 }) {
   const { link, setLink, error, setError } = useHubPhoneLink(initial);
   const [opening, setOpening] = useState(false);
+  const [showCloud, setShowCloud] = useState(false);
   const [verified, setVerified] = useState<HubStatus | null>(null);
   useEffect(() => {
     let cancelled = false;
@@ -451,6 +452,12 @@ export function HubReadyScreen({
             <SetupStep done={verified?.setup?.node_online ?? false} pending={!verified} title="This Mac is online" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
             <SetupStep done={verified?.setup?.tmux_available ?? false} pending={!verified} title="Terminal tools are available" sub="Your sessions outlive the app, the network, and you walking away." />
           </Card>
+          <div style={{ display: "grid", gap: 12 }}>
+            <strong>Where will you connect?</strong>
+            <Body size={13}>On the same network, you can pair now. To connect away from home, enable Offdesk Cloud first.</Body>
+            <Button kind="sky" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide Cloud setup" : "Set up remote access"}</Button>
+            {showCloud && <CloudConnectionPanel onPairPhone={() => { setLink(null); setShowCloud(false); }} />}
+          </div>
           {error ? <Body style={{ color: colors.err }}>{error}</Body> : null}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {onClose ? (
@@ -553,7 +560,7 @@ export function PhoneCodePanel({
   const body = (
     <>
       {!compact ? <Display size={22} style={{ textAlign: "center" }}>Connect your phone</Display> : null}
-      <div role="group" aria-label="Connect using" style={{ display: "flex", width: "100%", gap: 8 }}>
+      <div role="group" aria-label="Connect using" style={{ display: "flex", flexWrap: "wrap", width: "100%", gap: 8 }}>
         {(["app", "browser"] as const).map((value) => (
           <button key={value} type="button" aria-pressed={purpose === value} onClick={() => setPurpose(value)}
             data-testid={`phone-purpose-${value}`}
@@ -561,7 +568,7 @@ export function PhoneCodePanel({
               fontFamily: fontDisplay, fontSize: 14, fontWeight: 600,
               border: `1.5px solid ${purpose === value ? colors.accent : colors.line}`,
               background: purpose === value ? colors.surface : colors.bg0, color: colors.fg0 }}>
-            {value === "app" ? "Offdesk App · Recommended" : "Web browser"}
+            {value === "app" ? "Offdesk App · Recommended" : "Browser access"}
           </button>
         ))}
       </div>
@@ -685,7 +692,7 @@ export function HubPhoneCode() {
 // ── Settings → This machine ───────────────────────────────────────
 
 /** The desktop app's role, and the hub's state when it is the hub. */
-export function ThisMachineSection() {
+export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPairPhone?: () => void; onConnectionChanged?: () => void } = {}) {
   const { logout } = useAuth();
   const [role, setRole] = useState<DesktopRole | null | undefined>(undefined);
   const [status, setStatus] = useState<HubStatus | null>(null);
@@ -768,7 +775,7 @@ export function ThisMachineSection() {
         {row("Answering on this machine", status?.listening ?? null)}
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Button kind="sky" onClick={() => setShowCode((v) => !v)} style={{ height: 36, fontSize: 13 }} testId="settings-show-phone-code">
+        <Button kind="sky" onClick={() => onPairPhone ? onPairPhone() : setShowCode((v) => !v)} style={{ height: 36, fontSize: 13 }} testId="settings-show-phone-code">
           {showCode ? "Hide the phone code" : "Show the phone code"}
         </Button>
         {confirmStop ? (
@@ -790,8 +797,8 @@ export function ThisMachineSection() {
         <Body size={12}>The database and your tmux sessions stay. Only the two services go.</Body>
       ) : null}
       {error ? <Body size={12} style={{ color: colors.err }}>{error}</Body> : null}
-      <CloudConnectionPanel />
-      {showCode ? <HubPhoneCode /> : null}
+      <CloudConnectionPanel onPairPhone={onPairPhone ?? (() => setShowCode(true))} onConnectionChanged={() => { setShowCode(false); onConnectionChanged?.(); }} />
+      {showCode && !onPairPhone ? <HubPhoneCode /> : null}
     </div>
   );
 }

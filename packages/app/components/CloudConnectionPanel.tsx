@@ -19,7 +19,7 @@ async function openCloud(url: string) {
 }
 const message = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 
-export function CloudConnectionPanel() {
+export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onPairPhone?: () => void; onConnectionChanged?: () => void }) {
   const [status, setStatus] = useState<CloudStatus | null>(null);
   const [login, setLogin] = useState<CloudStatus | null>(null);
   const [busy, setBusy] = useState<string | null>("Loading…");
@@ -46,7 +46,7 @@ export function CloudConnectionPanel() {
       try {
         const result = await cloud("login-status");
         if (cancelled) return;
-        if (result.state === "approved") { const current = await cloud("status"); if (!cancelled) { setLogin(null); setError(null); setStatus(current); } return; }
+        if (result.state === "approved") { const current = await cloud("status"); if (!cancelled) { setLogin(null); setError(null); setStatus(current); void run("enable"); } return; }
         if (result.state === "expired") { setLogin({ ...login, state: "expired" }); return; }
       } catch (cause) { if (!cancelled) setError(message(cause)); }
       if (!cancelled) timer = setTimeout(() => void poll(), 5000);
@@ -58,7 +58,7 @@ export function CloudConnectionPanel() {
   const run = async (action: Action) => {
     const id = ++sequence.current;
     setError(null); setConfirmDisable(false);
-    if (["enable", "check", "disable"].includes(action)) setStale(true);
+    if (["enable", "check", "disable"].includes(action)) { setStale(true); onConnectionChanged?.(); }
     setBusy(action === "login" ? "Opening sign-in…" : action === "enable" ? "Setting up remote access…" : action === "check" ? "Verifying encryption…" : action === "disable" ? "Turning off remote access…" : "Checking…");
     try {
       const result = await cloud(action);
@@ -66,7 +66,7 @@ export function CloudConnectionPanel() {
       if (action === "login" && result.state === "pending") {
         setLogin(result);
         if (result.verification_uri) await openCloud(result.verification_uri);
-      } else if (action === "login") { setLogin(null); setStatus(await cloud("status")); }
+      } else if (action === "login") { setLogin(null); setStatus(await cloud("status")); void run("enable"); }
       else {
         setStatus(result); setStale(false);
         if (action === "enable") {
@@ -77,7 +77,8 @@ export function CloudConnectionPanel() {
             try {
               const verified = await cloud("check");
               if (mounted.current && id === sequence.current) { setStatus(verified); setStale(false); }
-              break;
+              if (verified.state === "active" && verified.local_enabled && verified.verified) break;
+              if (attempt === 11) throw new Error("Remote access is not verified yet. Keep this Mac online and try Verify connection again.");
             } catch (cause) { if (attempt === 11) throw cause; }
           }
         }
@@ -90,11 +91,18 @@ export function CloudConnectionPanel() {
   return <section data-testid="cloud-connection-panel" style={{ borderTop: `1px solid ${colors.line}`, paddingTop: 20, display: "flex", flexDirection: "column", gap: 12 }}>
     <strong style={{ fontSize: 16 }}>Offdesk Cloud</strong>
     <Body size={13}>Reach this computer from mobile data or another Wi-Fi network. Your terminal content stays end-to-end encrypted.</Body>
+    <ol aria-label="Cloud setup progress" style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px", listStyle: "none", padding: 0, margin: "8px 0" }}>
+      {["Sign in", "Verify connection", "Pair phone"].map((label, index) => {
+        const step = connected ? 2 : registered ? 1 : 0;
+        return <li key={label} aria-current={step === index ? "step" : undefined} style={{ fontSize: 13, fontWeight: step === index ? 700 : 400, color: step === index ? colors.fg0 : colors.fg3 }}>{index + 1}. {label}{index < step ? " ✓" : ""}</li>;
+      })}
+    </ol>
+    {!registered && !login && <Body size={13}>Invitation beta · one Hub per account. Sign in to enable remote access for this Mac. Local network access works without Cloud.</Body>}
     {busy ? <Body size={13}><span role="status">{busy}</span></Body> : null}
     {connected ? <>
       <Body size={13}><span role="status">Remote connection ready · Encryption verified</span></Body>
       <Body size={12} style={{ overflowWrap: "anywhere" }}>{status.url}</Body>
-      <SecurePairingPanel baseUrl={status.url} managed />
+      {onPairPhone ? <Button onClick={onPairPhone}>Connect your phone</Button> : <SecurePairingPanel baseUrl={status.url} managed />}
     </> : null}
     {status?.state === "revoking" ? <Body size={13}>Remote access is being removed. Check again to confirm it has finished.</Body> : null}
     {login?.state === "pending" ? <div style={{ padding: 16, background: colors.bg0, border: `1px solid ${colors.line}`, borderRadius: 12 }}>

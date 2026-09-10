@@ -1,3 +1,7 @@
+import { HubPickerPanel } from "./HubPickerPanel";
+import { isSecureConnection } from "../lib/secureTransport";
+import { isTauriMobile } from "../lib/platform";
+import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
 import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
 // Mobile workbench shell (P1). Rendered when the viewport is below 768px.
 // Permanent chrome is exactly two elements: the session title bar on top and
@@ -6,7 +10,7 @@ import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
 // 3-tab bottom nav (Hosts/Terminals/Stats), the app bar, the FAB and the
 // card-list landing are gone — the app opens straight into the last-active
 // terminal. Host switching, control toggling, reconnect and settings live
-// in the host sheet (reached through the session switcher header); per-session
+// in the host sheet (reached by tapping the title); the count opens sessions. Per-session
 // actions live in the long-press sheet. See SPEC-PHASE3.md and the design doc §4.
 
 import {
@@ -23,6 +27,7 @@ import type {
   TerminalInfo,
 } from "@offdesk/shared";
 import {
+  ArrowLeft,
   ChevronRight,
   CircuitBoard,
   Eye,
@@ -124,6 +129,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   } = props;
 
   const [hostSheetOpen, setHostSheetOpen] = useState(false);
+  const [hubPickerOpen, setHubPickerOpen] = useState(false);
+  const { switchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   const [chipSheet, setChipSheet] = useState<MobileSessionPane | null>(null);
@@ -354,9 +361,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       {/* Mobile V1 session title bar */}
       <div
         data-testid="mobile-title-bar"
-        role="button"
-        tabIndex={0}
-        aria-label="Open terminal switcher"
         onTouchStart={handleTitleBarTouchStart}
         onTouchMove={handleTitleBarTouchMove}
         onTouchEnd={handleTitleBarTouchEnd}
@@ -365,19 +369,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           titleBarTouchRef.current = null;
         }}
         onContextMenu={(event) => event.preventDefault()}
-        onClick={() => {
-          if (suppressTitleBarClickRef.current) {
-            suppressTitleBarClickRef.current = false;
-            return;
-          }
-          setSessionSwitcherOpen(true);
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setSessionSwitcherOpen(true);
-          }
-        }}
         style={{
           // 44px, the compact strip's height in DESIGN.md: taller than that and
           // a desktop-sized terminal no longer fits a phone at scale 1.
@@ -394,9 +385,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           WebkitUserSelect: "none",
         }}
       >
-        <div
+        <button
+          type="button"
           data-testid="mobile-title-bar-label"
+          aria-label="Open Machines and Hub menu"
+          onClick={() => {
+            if (suppressTitleBarClickRef.current) { suppressTitleBarClickRef.current = false; return; }
+            setHostSheetOpen(true);
+          }}
           style={{
+            background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", height: "100%",
             flex: 1,
             minWidth: 0,
             display: "flex",
@@ -442,7 +440,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               No terminal
             </span>
           )}
-        </div>
+        </button>
 
         {activeMachine ? (
           <span
@@ -512,11 +510,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           </button>
         </span>
 
-        <span
+        <button
+          type="button"
+          aria-label="Open terminal switcher"
           data-testid="mobile-title-bar-badge"
           data-title-bar-swipe="ignore"
-          onClick={(event) => event.stopPropagation()}
+          onClick={(event) => { event.stopPropagation(); setSessionSwitcherOpen(true); }}
+          onTouchStart={event => event.stopPropagation()}
+          onTouchEnd={event => event.stopPropagation()}
           style={{
+            border: 0, cursor: "pointer", minHeight: 34,
             flexShrink: 0,
             minWidth: 37,
             padding: "3px 6px",
@@ -529,7 +532,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           }}
         >
           {activePosition}/{chips.length}
-        </span>
+        </button>
         <span data-testid="mobile-title-bar-dot" style={{ display: "flex" }}>
           <HostDot
             online={activeMachine ? machineOnline(activeMachine) : false}
@@ -788,9 +791,20 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         onCloseTerminal={onCloseTerminal}
       />
 
+      {hubPickerOpen && <Sheet title="Hubs & connections" backLabel="Back to Machines" onClose={() => { setHubPickerOpen(false); setHostSheetOpen(true); }}><HubPickerPanel /></Sheet>}
+
       {/* Host sheet */}
       {hostSheetOpen && (
         <Sheet title="Machines" onClose={() => setHostSheetOpen(false)}>
+          {(isSecureConnection() || isTauriMobile()) && <MenuRow
+            icon={<ChevronRight size={18} />}
+            label={isSecureConnection() ? "Hub & connection" : switchingHub ? "Opening setup…" : "Switch Hub"}
+            onClick={() => {
+              if (isSecureConnection()) { setHostSheetOpen(false); setHubPickerOpen(true); }
+              else void switchHub();
+            }}
+          />}
+          {switchHubError && <p role="alert" style={{ color: colors.err, padding: 16 }}>{switchHubError}</p>}
           {machines.map((m) => {
             const isActive = m.id === activeMachine?.id;
             const controlling =
@@ -1200,12 +1214,14 @@ function HostDot({
 function Sheet({
   title,
   header,
+  backLabel,
   testid,
   onClose,
   children,
 }: {
   title?: string;
   header?: React.ReactNode;
+  backLabel?: string;
   testid?: string;
   onClose: () => void;
   children: React.ReactNode;
@@ -1271,8 +1287,12 @@ function Sheet({
               fontSize: 18,
               fontWeight: 700,
               color: colors.fg0,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
             }}
           >
+            {backLabel && <button type="button" aria-label={backLabel} onClick={onClose} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer" }}><ArrowLeft size={20} /></button>}
             {title}
           </div>
         ))}

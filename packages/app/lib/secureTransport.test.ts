@@ -147,3 +147,36 @@ describe("encrypted native transport", () => {
     expect(mock.invoke.mock.calls.filter(([c]) => c === "secure_request")).toHaveLength(1);
   });
 });
+
+it("keeps the current Hub on a failed switch and resumes input without forgetting its key", async () => {
+  vi.stubGlobal("window", { location: { replace: vi.fn() } });
+  mock.invoke.mockImplementation(async command => {
+    if (command === "secure_status") return paired;
+    if (command === "secure_switch_hub") throw new Error("Target is unreachable");
+    return { type: "http", status: 200, body: "{}" };
+  });
+  const transport = await import("./secureTransport");
+  await transport.restoreSecureConnection();
+  await expect(transport.openSavedHub("other-key", "https://other.example")).rejects.toThrow("unreachable");
+  expect(transport.secureConnectionStatus()).toEqual(paired);
+  expect((await transport.secureFetch("GET", "/api/machines")).status).toBe(200);
+  expect(window.location.replace).not.toHaveBeenCalled();
+  expect(mock.invoke.mock.calls.some(([command]) => command === "secure_forget" || command === "clear_mobile_hub_url")).toBe(false);
+});
+
+it("blocks old UI writes during and after a successful Hub switch until a fresh bootstrap", async () => {
+  vi.stubGlobal("window", { location: { replace: vi.fn() } });
+  let acknowledge: (value: unknown) => void = () => {};
+  mock.invoke.mockImplementation(command => command === "secure_status" ? Promise.resolve(paired) : new Promise(resolve => { acknowledge = resolve; }));
+  const transport = await import("./secureTransport");
+  await transport.restoreSecureConnection();
+  const pending = transport.openSavedHub("other-key", "https://other.example");
+  await tick();
+  await expect(transport.secureFetch("POST", "/api/terminals", "{}")).rejects.toThrow("Switching Hubs");
+  await expect(transport.openSavedHub("third-key", "https://third.example")).rejects.toThrow("already in progress");
+  acknowledge({ ...paired, endpoint: { public_key: "other-key", hub_url: "https://other.example" } });
+  await pending;
+  expect(window.location.replace).toHaveBeenCalledWith("/");
+  await expect(transport.secureFetch("POST", "/api/terminals", "{}")).rejects.toThrow("Switching Hubs");
+  expect(mock.invoke.mock.calls.some(([command]) => command === "secure_request" || command === "secure_forget")).toBe(false);
+});

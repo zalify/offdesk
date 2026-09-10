@@ -1,6 +1,7 @@
+import { HubPickerPanel } from "../components/HubPickerPanel";
 import { scanWithCleanup } from "../lib/scanLifecycle";
 import { ConnectionRoutesPanel } from "../components/ConnectionRoutesPanel";
-import { isPairingUri, pairSecureConnection, isSecureConnection, secureConnectionStatus, secureConnectionError, forgetSecureConnection } from "../lib/secureTransport";
+import { isPairingUri, isSecureConnection, secureConnectionStatus, secureConnectionError, forgetSecureConnection } from "../lib/secureTransport";
 import { useEffect, useState } from "react";
 import { Platform } from "react-native";
 import { getAuthProviders, redeemLoginCode, type AuthProviders } from "../lib/api";
@@ -88,13 +89,9 @@ export default function LoginScreen({
     };
   }, [isDesktop, needsHub, providersAttempt]);
 
-  const pair = async (uri: string) => {
-    setConnecting(true); setHubError(null); setDesktopLinkError(null);
-    try {
-      const status = await pairSecureConnection(uri);
-      await loginWithToken(status.endpoint.hub_url, "secure-session");
-    } catch (error) { setHubError(String(error)); setDesktopLinkError(String(error)); setConnecting(false); }
-  };
+  const [pairingUri, setPairingUri] = useState<string | null>(null);
+  const [showSavedHubs, setShowSavedHubs] = useState(false);
+  const pair = async (uri: string) => { setPairingUri(uri); };
   const handleHubConnect = () => {
     if (isPairingUri(serverUrlInput)) { void pair(serverUrlInput.trim()); return; }
     setConnecting(true);
@@ -321,6 +318,13 @@ export default function LoginScreen({
     handleHubConnect();
   };
 
+  if (pairingUri !== null || showSavedHubs) return frame(<>
+    <Wordmark />
+    <Display size={28}>Hubs & connections</Display>
+    <HubPickerPanel initialUri={pairingUri ?? ""} />
+    <Button kind="ghost" onClick={() => { setPairingUri(null); setShowSavedHubs(false); }}>Back</Button>
+  </>);
+
   if (isSecureConnection()) {
     return frame(<>
       <Wordmark />
@@ -332,6 +336,7 @@ export default function LoginScreen({
         if (url) void loginWithToken(url, "secure-session").catch(error => setHubError(String(error)));
       }} />
       <Button onClick={() => window.location.reload()}>Try again</Button>
+      <Button kind="sky" onClick={() => setShowSavedHubs(true)}>Choose another Hub</Button>
       <Button kind="ghost" disabled={connecting} onClick={() => {
         setConnecting(true);
         void forgetSecureConnection().then(async () => {
@@ -419,6 +424,7 @@ export default function LoginScreen({
             code. That's the sign-in, nothing to type.
           </Body>
         </div>
+        <Button kind="sky" onClick={() => setShowSavedHubs(true)}>Saved Hubs</Button>
         <Button onClick={() => void handleScanForHub()} disabled={connecting}>
           Scan the code
         </Button>

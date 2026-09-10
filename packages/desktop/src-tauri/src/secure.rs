@@ -41,6 +41,59 @@ pub struct Status {
     pub device_id: Option<String>,
     #[serde(default)]
     pub routes: Vec<Route>,
+    #[serde(default = "legacy_slot")]
+    pub credential_slot: String,
+}
+fn legacy_slot() -> String {
+    "connection".into()
+}
+fn valid_slot(slot: &str) -> bool {
+    slot == "connection"
+        || slot == "candidate"
+        || slot.strip_prefix("hub-").is_some_and(|id| {
+            id.len() == 43
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SavedHub {
+    pub name: String,
+    pub status: Status,
+}
+fn registry<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
+    Ok(marker(app)?.with_file_name("secure-hubs.json"))
+}
+fn read_hubs<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<SavedHub>, String> {
+    let mut hubs: Vec<SavedHub> = match std::fs::read(registry(app)?) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| "Saved Hubs are damaged")?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => return Err("Could not read saved Hubs".into()),
+    };
+    if let Ok(Some(status)) = read_status(app) {
+        if let Some(hub) = hubs
+            .iter_mut()
+            .find(|h| h.status.endpoint.public_key == status.endpoint.public_key)
+        {
+            hub.status = status;
+        } else {
+            hubs.push(SavedHub {
+                name: status.endpoint.hub_url.clone(),
+                status,
+            });
+        }
+    }
+    Ok(hubs)
+}
+fn save_hubs<R: Runtime>(app: &AppHandle<R>, hubs: &[SavedHub]) -> Result<(), String> {
+    atomic_json(&registry(app)?, &hubs)
+}
+fn find_hub(hubs: &[SavedHub], public_key: &str) -> Result<Status, String> {
+    hubs.iter()
+        .find(|h| h.status.endpoint.public_key == public_key)
+        .map(|h| h.status.clone())
+        .ok_or("This Hub is not saved on this device".into())
 }
 pub(crate) fn marker<R: Runtime>(app: &AppHandle<R>) -> Result<std::path::PathBuf, String> {
     Ok(app
@@ -61,32 +114,47 @@ fn read_status<R: Runtime>(app: &AppHandle<R>) -> Result<Option<Status>, String>
     let path = marker(app)?;
     match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
             .map_err(|_| "Saved encrypted connection is damaged. Forget it and pair again.".into()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err("Could not read the saved encrypted connection".into()),
     }
 }
 fn save_status<R: Runtime>(app: &AppHandle<R>, status: &Status) -> Result<(), String> {
-    let path = marker(app)?;
+    atomic_json(&marker(app)?, status)
+}
+fn atomic_json(path: &std::path::Path, value: &impl Serialize) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().ok_or("Missing config directory")?)
         .map_err(|_| "Could not create the config directory")?;
     let temporary = path.with_extension("pending");
     use std::io::Write;
     let mut file =
         std::fs::File::create(&temporary).map_err(|_| "Could not save the connection")?;
-    file.write_all(&serde_json::to_vec(status).map_err(|_| "Invalid connection")?)
+    file.write_all(&serde_json::to_vec(value).map_err(|_| "Invalid connection")?)
         .map_err(|_| "Could not save the connection")?;
     file.sync_all()
         .map_err(|_| "Could not persist the connection")?;
     std::fs::rename(temporary, &path).map_err(|_| "Could not save the connection")?;
     #[cfg(unix)]
-    std::fs::File::open(path.parent().ok_or("Missing config directory")?)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|_| "Could not persist the connection directory")?;
+    let _ = std::fs::File::open(path.parent().ok_or("Missing config directory")?)
+        .and_then(|dir| dir.sync_all());
+    // Rename is the commit point; never report rollback after it succeeded.
     Ok(())
 }
+fn clear_active<R: Runtime>(app: &AppHandle<R>, hubs: &[SavedHub]) -> Result<(), String> {
+    if hubs.is_empty() {
+        match std::fs::remove_file(marker(app)?) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(_) => Err("Could not forget the encrypted connection".into()),
+        }
+    } else {
+        atomic_json(&marker(app)?, &Option::<Status>::None)
+    }
+}
 fn store_read<R: Runtime>(app: &AppHandle<R>, slot: &str) -> Result<Option<Credential>, String> {
+    if !valid_slot(slot) {
+        return Err("Invalid credential slot".into());
+    }
     #[cfg(target_os = "android")]
     let bytes = app
         .state::<tauri_plugin_offdesk_keystore::Keystore<R>>()
@@ -133,6 +201,9 @@ fn store_write<R: Runtime>(
     slot: &str,
     value: Option<&Credential>,
 ) -> Result<(), String> {
+    if !valid_slot(slot) {
+        return Err("Invalid credential slot".into());
+    }
     let bytes = value
         .map(serde_json::to_vec)
         .transpose()
@@ -241,10 +312,10 @@ async fn connected<R: Runtime>(app: &AppHandle<R>, state: &SecureState) -> Resul
     if let Some(client) = session.as_ref().filter(|c| !c.is_closed()) {
         return Ok(client.clone());
     }
-    let credential =
-        store_read(app, "connection")?.ok_or("Pair this device from your Hub before connecting")?;
     let status =
         read_status(app)?.ok_or("Missing encrypted connection. Pair again from your Hub.")?;
+    let credential = store_read(app, &status.credential_slot)?
+        .ok_or("Pair this device from your Hub before connecting")?;
     let client = resume_at(&status, &credential, &status.endpoint.hub_url).await?;
     *session = Some(client.clone());
     Ok(client)
@@ -254,16 +325,38 @@ pub async fn secure_status<R: Runtime>(app: AppHandle<R>) -> Result<Option<Statu
     read_status(&app)
 }
 #[tauri::command]
+pub fn secure_pairing_identity(uri: String) -> Result<Endpoint, String> {
+    let uri = Zeroizing::new(uri);
+    Ok(PairingDescriptor::parse(&uri)?.endpoint)
+}
+#[tauri::command]
 pub async fn secure_pair<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, SecureState>,
     uri: String,
     device_name: String,
 ) -> Result<Status, String> {
-    let _gate = state.1.write().await;
+    let _gate = state
+        .1
+        .try_write()
+        .map_err(|_| "Finish the current transfer or connection check, then try again")?;
+    let mut hubs = read_hubs(&app)?;
     let uri = Zeroizing::new(uri);
     let descriptor = PairingDescriptor::parse(&uri)?;
     let mut session = state.0.lock().await;
+    if session
+        .as_ref()
+        .is_some_and(|client| !client.is_closed() && !client.outgoing_idle())
+    {
+        return Err("Finish sending the current input or file, then try again".into());
+    }
+    if hubs.len() >= 16
+        && !hubs
+            .iter()
+            .any(|h| h.status.endpoint.public_key == descriptor.endpoint.public_key)
+    {
+        return Err("You can save up to 16 Hubs. Remove an unused Hub first.".into());
+    }
     // Save the candidate before sending it. If the Pair acknowledgement is
     // lost, rescanning that QR reuses the same identity instead of consuming
     // a one-use code with a second device key.
@@ -302,14 +395,41 @@ pub async fn secure_pair<R: Runtime>(
         endpoint: credential.endpoint.clone(),
         device_id: Some(device_id),
         routes: normalize(routes, &credential.endpoint.hub_url),
+        credential_slot: format!(
+            "hub-{}",
+            URL_SAFE_NO_PAD.encode(Identity::generate().map_err(|e| e.to_string())?.public())
+        ),
     };
-    // Write the non-secret mode marker first. An interrupted credential-store
-    // write leaves a recoverable pairing screen, never a remote-page fallback.
-    if let Err(error) =
-        save_status(&app, &status).and_then(|_| store_write(&app, "connection", Some(&credential)))
+    // Each pairing gets a separate OS slot. Persist the old registry before
+    // writing the new marker: a failed pairing never replaces the active key.
+    let old = hubs
+        .iter()
+        .find(|h| h.status.endpoint.public_key == status.endpoint.public_key)
+        .cloned();
+    let name = old
+        .as_ref()
+        .map(|h| h.name.clone())
+        .unwrap_or_else(|| status.endpoint.hub_url.clone());
+    if let Err(error) = save_hubs(&app, &hubs)
+        .and_then(|_| store_write(&app, &status.credential_slot, Some(&credential)))
+        .and_then(|_| save_status(&app, &status))
     {
         client.close();
+        // This slot is unique to this attempt; the old pairing stays intact.
+        let _ = store_write(&app, &status.credential_slot, None);
         return Err(error);
+    }
+    hubs.retain(|h| h.status.endpoint.public_key != status.endpoint.public_key);
+    hubs.push(SavedHub {
+        name,
+        status: status.clone(),
+    });
+    // The committed active marker is also a registry entry (read_hubs merges
+    // it). Failure here does not undo a successful, durable pairing.
+    if save_hubs(&app, &hubs).is_ok() {
+        if let Some(old) = old {
+            let _ = store_write(&app, &old.status.credential_slot, None);
+        }
     }
     if let Some(previous) = session.replace(client) {
         previous.close();
@@ -346,6 +466,29 @@ pub struct RouteReport {
     status: Status,
     routes: Vec<RouteCheck>,
     discovery_available: bool,
+    machines: Vec<HubMachine>,
+}
+#[derive(Serialize, Deserialize)]
+struct HubMachine {
+    name: String,
+    os: String,
+}
+async fn discover_machines(client: &Client) -> Vec<HubMachine> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        client.request("GET".into(), "/api/machines".into(), None),
+    )
+    .await
+    {
+        Ok(Ok(Response::Http {
+            status: 200, body, ..
+        })) if body.len() <= 65_536 => serde_json::from_str::<Vec<HubMachine>>(&body)
+            .unwrap_or_default()
+            .into_iter()
+            .take(64)
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 fn validate_credential(status: &Status, credential: &Credential) -> Result<(), String> {
@@ -388,11 +531,15 @@ async fn resume_at(status: &Status, credential: &Credential, url: &str) -> Resul
 pub async fn secure_routes<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, SecureState>,
+    public_key: Option<String>,
 ) -> Result<RouteReport, String> {
     let _discovery = state.2.lock().await;
     let _gate = state.1.read().await;
-    let credential = store_read(&app, "connection")?.ok_or("Pair this device first")?;
-    let mut status = read_status(&app)?.ok_or("Pair this device first")?;
+    let mut status = match public_key {
+        Some(key) => find_hub(&read_hubs(&app)?, &key)?,
+        None => read_status(&app)?.ok_or("Pair this device first")?,
+    };
+    let credential = store_read(&app, &status.credential_slot)?.ok_or("Pair this device first")?;
     let saved = normalize(status.routes.clone(), &status.endpoint.hub_url);
     let results = futures::future::join_all(saved.iter().map(|route| async {
         let client = resume_at(&status, &credential, &route.hub_url).await;
@@ -408,6 +555,10 @@ pub async fn secure_routes<R: Runtime>(
             }
         }
     }
+    let machines = match results.iter().find_map(|(_, client)| client.as_ref()) {
+        Some(client) => discover_machines(client).await,
+        None => Vec::new(),
+    };
     let discovery_available = advertised.is_some();
     status.routes = normalize(advertised.unwrap_or(saved), &status.endpoint.hub_url);
     // Newly discovered addresses need their own identity check too.
@@ -432,11 +583,26 @@ pub async fn secure_routes<R: Runtime>(
             client.close();
         }
     }
-    save_status(&app, &status)?;
+    let mut hubs = read_hubs(&app)?;
+    if let Some(hub) = hubs
+        .iter_mut()
+        .find(|h| h.status.endpoint.public_key == status.endpoint.public_key)
+    {
+        hub.status = status.clone();
+    }
+    save_hubs(&app, &hubs)?;
+    if read_status(&app)
+        .ok()
+        .flatten()
+        .is_some_and(|active| active.endpoint.public_key == status.endpoint.public_key)
+    {
+        save_status(&app, &status)?;
+    }
     Ok(RouteReport {
         status,
         routes: checks,
         discovery_available,
+        machines,
     })
 }
 
@@ -454,8 +620,8 @@ pub async fn secure_switch_route<R: Runtime>(
         .try_write()
         .map_err(|_| "Finish the current transfer or connection check, then try again")?;
     let mut session = state.0.lock().await;
-    let credential = store_read(&app, "connection")?.ok_or("Pair this device first")?;
     let mut status = read_status(&app)?.ok_or("Pair this device first")?;
+    let credential = store_read(&app, &status.credential_slot)?.ok_or("Pair this device first")?;
     let route = saved_route(&status, &url)?;
     if session
         .as_ref()
@@ -476,6 +642,100 @@ pub async fn secure_switch_route<R: Runtime>(
 }
 
 #[tauri::command]
+pub async fn secure_hubs<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SecureState>,
+) -> Result<Vec<SavedHub>, String> {
+    let _gate = state.1.read().await;
+    read_hubs(&app)
+}
+#[tauri::command]
+pub async fn secure_rename_hub<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SecureState>,
+    public_key: String,
+    name: String,
+) -> Result<(), String> {
+    let _gate = state.1.write().await;
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
+        return Err("Use a name between 1 and 60 characters".into());
+    }
+    let mut hubs = read_hubs(&app)?;
+    let hub = hubs
+        .iter_mut()
+        .find(|h| h.status.endpoint.public_key == public_key)
+        .ok_or("This Hub is not saved on this device")?;
+    hub.name = name.into();
+    save_hubs(&app, &hubs)
+}
+#[tauri::command]
+pub async fn secure_remove_hub<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SecureState>,
+    public_key: String,
+) -> Result<(), String> {
+    let _gate = state.1.write().await;
+    let active = read_status(&app)?;
+    if active
+        .as_ref()
+        .is_some_and(|s| s.endpoint.public_key == public_key)
+    {
+        return Err("Switch to another Hub before removing this one".into());
+    }
+    let mut hubs = read_hubs(&app)?;
+    let removed = find_hub(&hubs, &public_key)?;
+    hubs.retain(|h| h.status.endpoint.public_key != public_key);
+    save_hubs(&app, &hubs)?;
+    if active.is_none() {
+        clear_active(&app, &hubs)?;
+    }
+    store_write(&app, &removed.credential_slot, None)
+}
+#[tauri::command]
+pub async fn secure_switch_hub<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, SecureState>,
+    public_key: String,
+    url: String,
+) -> Result<Status, String> {
+    let _gate = state
+        .1
+        .try_write()
+        .map_err(|_| "Finish the current transfer or connection check, then try again")?;
+    let mut session = state.0.lock().await;
+    if session
+        .as_ref()
+        .is_some_and(|c| !c.is_closed() && !c.outgoing_idle())
+    {
+        return Err("Finish sending the current input or file, then try again".into());
+    }
+    let mut hubs = read_hubs(&app)?;
+    let mut status = find_hub(&hubs, &public_key)?;
+    let route = saved_route(&status, &url)?;
+    let credential =
+        store_read(&app, &status.credential_slot)?.ok_or("Pair this device again from your Hub")?;
+    let client = resume_at(&status, &credential, &route.hub_url).await?;
+    status.endpoint.hub_url = route.hub_url;
+    // Preserve the source Hub's latest route before committing the target.
+    if let Err(error) = save_hubs(&app, &hubs).and_then(|_| save_status(&app, &status)) {
+        client.close();
+        return Err(error);
+    }
+    if let Some(previous) = session.replace(client) {
+        previous.close();
+    }
+    if let Some(hub) = hubs
+        .iter_mut()
+        .find(|h| h.status.endpoint.public_key == public_key)
+    {
+        hub.status = status.clone();
+    }
+    let _ = save_hubs(&app, &hubs);
+    Ok(status)
+}
+
+#[tauri::command]
 pub async fn secure_forget<R: Runtime>(
     app: AppHandle<R>,
     state: State<'_, SecureState>,
@@ -485,13 +745,17 @@ pub async fn secure_forget<R: Runtime>(
     if let Some(client) = session.take() {
         client.close();
     }
-    store_write(&app, "connection", None)?;
-    store_write(&app, "candidate", None)?;
-    match std::fs::remove_file(marker(&app)?) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err("Could not forget the encrypted connection".into()),
+    let active = read_status(&app).ok().flatten();
+    let mut hubs = read_hubs(&app)?;
+    if let Some(active) = active {
+        hubs.retain(|h| h.status.endpoint.public_key != active.endpoint.public_key);
+        save_hubs(&app, &hubs)?;
+        // Keep a null marker: startup stays bundled even with other saved Hubs.
+        clear_active(&app, &hubs)?;
+        store_write(&app, &active.credential_slot, None)?;
     }
+    clear_active(&app, &hubs)?;
+    store_write(&app, "candidate", None)
 }
 #[tauri::command]
 pub async fn secure_request<R: Runtime>(
@@ -651,6 +915,64 @@ mod route_tests {
                 .len(),
             2
         );
+    }
+    #[test]
+    fn saved_hubs_keep_distinct_keys_and_restore_legacy_slots() {
+        let (first, _) = original();
+        assert_eq!(first.credential_slot, "connection");
+        let mut second = first.clone();
+        second.endpoint.public_key = "other-pinned".into();
+        second.credential_slot = format!("hub-{}", URL_SAFE_NO_PAD.encode([7; 32]));
+        let hubs = vec![
+            SavedHub {
+                name: "Home".into(),
+                status: first,
+            },
+            SavedHub {
+                name: "Office".into(),
+                status: second,
+            },
+        ];
+        let encoded = serde_json::to_vec(&hubs).unwrap();
+        let restored: Vec<SavedHub> = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(
+            find_hub(&restored, "pinned").unwrap().credential_slot,
+            "connection"
+        );
+        assert!(valid_slot(
+            &find_hub(&restored, "other-pinned").unwrap().credential_slot
+        ));
+        assert!(find_hub(&restored, "not-paired").is_err());
+        assert!(!valid_slot("hub-../../connection"));
+        assert!(!valid_slot("another-application-secret"));
+    }
+    #[test]
+    fn identity_confirmation_does_not_return_pairing_secrets() {
+        let code = URL_SAFE_NO_PAD.encode([9; 32]);
+        let descriptor = PairingDescriptor {
+            endpoint: Endpoint {
+                hub_url: "https://hub.example".into(),
+                public_key: URL_SAFE_NO_PAD.encode([8; 32]),
+            },
+            code: code.clone(),
+        };
+        let public = secure_pairing_identity(descriptor.to_url().unwrap()).unwrap();
+        let encoded = serde_json::to_string(&public).unwrap();
+        assert!(!encoded.contains(&code));
+        assert!(!encoded.contains("private_key"));
+        assert!(secure_pairing_identity("https://hub.example/?token=secret".into()).is_err());
+    }
+    #[test]
+    fn a_failed_marker_write_keeps_the_previous_file() {
+        let root = std::env::temp_dir().join(format!("offdesk-hubs-test-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("active.json");
+        atomic_json(&path, &"original Hub").unwrap();
+        // Force staging to fail, without touching the committed marker.
+        std::fs::create_dir(path.with_extension("pending")).unwrap();
+        assert!(atomic_json(&path, &"target Hub").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "\"original Hub\"");
+        std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn changed_identity_and_unsaved_origins_are_rejected() {
