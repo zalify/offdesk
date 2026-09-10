@@ -47,6 +47,26 @@ Questions, setups that did not work, things you want it to do:
 Every link follows the newest release of that kind. Windows is a desktop client;
 Linux can also host a Hub with tmux installed separately.
 
+## Offdesk 0.7.1 desktop and Android release
+
+Desktop [0.7.1](https://github.com/zalify/offdesk/releases/tag/desktop-v0.7.1)
+and Android [0.7.1](https://github.com/zalify/offdesk/releases/tag/app-v0.7.1)
+add guided Cloud setup and easier Hub switching. Desktop packages include Hub
+and node 0.21.1. Standalone Hub/CLI/node downloads remain at 0.21.0; stable iOS
+distribution remains at 0.7.0 while 0.7.1 is in internal TestFlight testing.
+
+- Set up optional remote access from your Mac, verify the Cloud authorization,
+  then pair your phone. Cloud remains an invite-only beta; local use needs no account.
+- Open **Hub & connection** from the phone's title to switch saved Hubs without
+  discarding their encrypted pairings, and choose an available connection method.
+- Use **Offdesk App · Recommended** for encrypted App pairing or **Browser access**
+  for a browser sign-in link, with clearer recovery when a connection fails.
+
+Start from the [Mac setup guide](https://offdesk.dev/docs/mac) or
+[Cloud beta instructions](docs/managed-connections.md). Stable downloads use the
+production App identity and upgrade existing stable installations. **Offdesk RC**
+is separate; RC pairings do not automatically migrate to stable.
+
 ## Offdesk 0.7.0 release
 
 Desktop [0.7.0](https://github.com/zalify/offdesk/releases/tag/desktop-v0.7.0),
