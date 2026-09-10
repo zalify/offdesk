@@ -18,14 +18,17 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
   });
   await page.addInitScript(({ initial }) => {
     Object.defineProperty(navigator, "userAgent", { value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15" });
-    const status = { endpoint: { hub_url: "https://encrypted.example", public_key: "pinned" }, device_id: "phone" };
+    let status = JSON.parse(sessionStorage.getItem("test:status") || "null") ?? { endpoint: { hub_url: "https://encrypted.example", public_key: "pinned" }, device_id: "phone" };
     const routes = [
       { kind: "local", hub_url: "http://192.168.1.2:4317", available: initial !== "offline" },
       { kind: "remote", hub_url: "https://encrypted.example", available: true },
     ];
     if (initial === "offline") status.endpoint.hub_url = routes[0].hub_url;
+    const other = { endpoint: { hub_url: "https://office.example", public_key: "office-pinned" }, device_id: "office-phone" };
+    const storedHubs = [{ name: "Home Hub", status: { ...status, endpoint: { hub_url: "https://encrypted.example", public_key: "pinned" } } }, { name: "Office Hub", status: other }];
+    const firstPairError = sessionStorage.getItem("test:first-pair-error"); sessionStorage.removeItem("test:first-pair-error");
     const sockets: { id: string; events: any }[] = [];
-    const state = { routes, switchError: "", configured: (initial === "paired" || initial === "offline") || sessionStorage.getItem("test:paired") === "true", damaged: initial === "damaged", userError: initial === "offline" ? "Local network is unreachable" : "", userRequests: 0, calls: [] as string[], input: [] as unknown[] };
+    const state = { routes, switchError: "", configured: (initial === "paired" || initial === "offline") || sessionStorage.getItem("test:paired") === "true", damaged: initial === "damaged", userError: firstPairError ?? (initial === "offline" ? "Local network is unreachable" : ""), userRequests: 0, calls: JSON.parse(sessionStorage.getItem("test:calls") || "[]") as string[], input: [] as unknown[] };
     Object.assign(window, { __secureTest: state });
     Object.assign(window, { __TAURI_INTERNALS__: {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
@@ -33,10 +36,22 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
       unregisterCallback: () => {},
       invoke: async (command: string, args: any) => {
         state.calls.push(command);
+        sessionStorage.setItem("test:calls", JSON.stringify(state.calls));
+        if (command === "secure_hubs") return state.configured ? structuredClone(storedHubs) : [];
+        if (command === "secure_pairing_identity") return { hub_url: "https://encrypted.example", public_key: "pinned" };
+        if (command === "secure_switch_hub") {
+          if (state.switchError) throw new Error(state.switchError);
+          const target = storedHubs.find(hub => hub.status.endpoint.public_key === args.publicKey);
+          if (!target) throw new Error("Unknown Hub");
+          status = structuredClone(target.status); status.endpoint.hub_url = args.url;
+          sessionStorage.setItem("test:status", JSON.stringify(status)); state.userError = "";
+          return structuredClone(status);
+        }
         if (command === "secure_status") { if (state.damaged) throw new Error("Hub identity could not be verified"); return state.configured ? structuredClone(status) : null; }
         if (command === "secure_routes") {
           if (state.damaged) throw new Error("Cannot read saved connection routes");
-          return structuredClone({ status, routes: state.routes, discovery_available: true });
+          const target = args?.publicKey === "office-pinned" ? other : status;
+          return structuredClone({ status: target, routes: args?.publicKey === "office-pinned" ? [{ kind: "local", hub_url: "http://192.168.3.2:4317", available: false }, { kind: "remote", hub_url: other.endpoint.hub_url, available: true }] : state.routes, discovery_available: true, machines: [{ name: "Mac Mini", os: "macos" }] });
         }
         if (command === "secure_switch_route") {
           if (state.switchError) throw new Error(state.switchError);
@@ -48,7 +63,10 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
         if (command === "mobile_hub_url") return null;
         if (command === "secure_pair") {
           if (!args.uri.startsWith("offdesk://pair?")) throw new Error("Invalid code");
-          state.configured = true; sessionStorage.setItem("test:paired", "true"); return structuredClone(status);
+          state.configured = true; sessionStorage.setItem("test:paired", "true");
+          sessionStorage.setItem("test:status", JSON.stringify(status));
+          if (state.userError) sessionStorage.setItem("test:first-pair-error", state.userError);
+          return structuredClone(status);
         }
         if (command === "secure_forget") { state.configured = false; state.damaged = false; sessionStorage.removeItem("test:paired"); return; }
         if (command === "secure_request") {
@@ -82,6 +100,8 @@ test("pairing stays on bundled assets and sends all Hub requests through native 
   await expect(page.getByRole("button", { name: "Scan the code", exact: true })).toBeVisible();
   await page.getByPlaceholder("Hub address or offdesk://pair?…").fill("offdesk://pair?v=2&hub=https%3A%2F%2Fencrypted.example&key=pinned&code=code");
   await page.getByRole("button", { name: "Connect", exact: true }).click();
+  await expect(page.getByText("Confirm your Hub", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Pair and connect", exact: true }).click();
   await expect(page.getByTestId("mobile-workbench")).toBeVisible();
   expect(new URL(page.url()).origin).toBe("http://tauri.localhost");
   expect(ordinary).toEqual([]);
@@ -89,17 +109,17 @@ test("pairing stays on bundled assets and sends all Hub requests through native 
   expect(calls).toContain("secure_pair");
   expect(calls).toContain("secure_request");
   expect(calls).not.toContain("set_mobile_hub_url");
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await page.getByTestId("mobile-host-button").click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await expect(page.getByText("https://encrypted.example", { exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId("hub-picker").getByRole("button", { name: /Home Hub/ })).toContainText("Current Hub");
   await expect(page.getByText("End-to-end encrypted · https://encrypted.example")).toBeVisible();
   await page.getByText("End-to-end encrypted · https://encrypted.example").scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath("encrypted-settings.png") });
-  await page.getByRole("button", { name: "Switch hub", exact: true }).click();
-  await expect(page.locator("body")).toHaveAttribute("data-switched", "true");
-  expect(await page.evaluate(() => (window as any).__secureTest.calls.slice(-2))).toEqual(["secure_forget", "clear_mobile_hub_url"]);
-  expect(await page.evaluate(() => localStorage.getItem("offdesk:token"))).toBeNull();
+  await expect(page.getByTestId("hub-picker")).toBeVisible();
+  await page.getByRole("button", { name: /Office Hub/ }).click();
+  await expect(page.getByRole("button", { name: /192.168.3.2/ })).toBeDisabled();
+  expect(await page.evaluate(() => (window as any).__secureTest.calls.includes("secure_forget"))).toBe(false);
   expect(ordinary).toEqual([]);
 });
 
@@ -126,36 +146,74 @@ test("a saved remote route recovers an offline LAN connection without another QR
   expect(ordinary).toEqual([]);
 });
 
-test("connection selection verifies availability, preserves identity on failure and works on wide phones", async ({ page }, testInfo) => {
+test("compact Hub menu checks availability and keeps the source Hub on failure", async ({ page }, testInfo) => {
   const ordinary = await bundledPhone(page, "paired");
   await expect(page.getByTestId("mobile-workbench")).toBeVisible();
-  await page.getByTestId("mobile-title-bar").click();
-  await page.getByTestId("mobile-host-button").click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const panel = page.getByTestId("connection-routes");
-  const lan = panel.getByRole("button", { name: "Local network: http://192.168.1.2:4317", exact: true });
-  await expect(lan).toBeEnabled();
+  await page.setViewportSize({ width: 320, height: 740 });
+  await expect(page.getByTestId("mobile-title-bar")).toHaveCSS("height", "44px");
+  await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();
+  await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+  const panel = page.getByTestId("hub-picker");
+  await panel.getByRole("button", { name: /Office Hub/ }).click();
+  await expect(panel.getByRole("button", { name: /192.168.3.2/ })).toBeDisabled();
+  await expect(panel.getByText("Mac Mini · macos")).toBeVisible();
   await page.evaluate(() => { (window as any).__secureTest.switchError = "Hub identity could not be verified"; });
-  await lan.click();
-  await expect(panel.getByRole("alert")).toContainText("Hub identity could not be verified");
-  await expect(page.getByText("End-to-end encrypted · https://encrypted.example")).toBeVisible();
-  await page.evaluate(() => { (window as any).__secureTest.switchError = ""; });
-  await panel.getByRole("button", { name: "Check again" }).click();
-  await expect(lan).toBeEnabled();
-  await lan.click();
-  await expect(page.getByText("End-to-end encrypted · http://192.168.1.2:4317")).toBeVisible();
-  await expect(lan).toContainText("Current");
-  await page.setViewportSize({ width: 750, height: 850 });
-  await panel.scrollIntoViewIfNeeded();
+  await panel.getByRole("button", { name: /office.example/ }).click();
+  await expect(panel.getByRole("alert")).toContainText("current Hub is still selected");
+  await expect(panel.getByRole("button", { name: /office.example/ })).toBeEnabled();
+  await panel.getByRole("button", { name: "Saved Hubs", exact: true }).click();
+  await expect(panel.getByRole("button", { name: /Home Hub/ })).toContainText("Current Hub");
   expect(await panel.evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-  await page.screenshot({ path: testInfo.outputPath("connection-methods-wide.png") });
-  await page.evaluate(() => { (window as any).__secureTest.routes.forEach((route: any) => { route.available = false; }); });
-  await panel.getByRole("button", { name: "Check again" }).click();
-  await expect(lan).toContainText("Unreachable");
-  await expect(lan).toBeDisabled();
-  await expect(panel.getByRole("button", { name: "Remote connection: https://encrypted.example", exact: true })).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("hub-picker-320.png") });
+  await page.getByRole("button", { name: "Back to Machines" }).click();
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+  await page.evaluate(() => { (window as any).__secureTest.switchError = ""; });
+  await panel.getByRole("button", { name: /Office Hub/ }).click();
+  await panel.getByRole("button", { name: /office.example/ }).click();
+  await expect(page.getByTestId("mobile-workbench")).toBeVisible();
+  await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();
+  await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+  await expect(page.getByRole("button", { name: /Office Hub/ })).toContainText("Current Hub");
   expect(await page.evaluate(() => (window as any).__secureTest.calls.includes("secure_forget"))).toBe(false);
   expect(ordinary).toEqual([]);
+});
+
+test("Hub picker dismiss closes all menus while its back arrow returns to Machines", async ({ page }) => {
+  await bundledPhone(page, "paired");
+  const open = async () => {
+    await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();
+    await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+    await expect(page.getByTestId("hub-picker")).toBeVisible();
+  };
+  await open();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("hub-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hub & connection", exact: true })).toHaveCount(0);
+  await open();
+  // Tap outside the bottom sheet, inside its backdrop.
+  await page.mouse.click(5, 50);
+  await expect(page.getByTestId("hub-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hub & connection", exact: true })).toHaveCount(0);
+  await open();
+  await page.getByRole("button", { name: "Back to Machines" }).click();
+  await expect(page.getByTestId("hub-picker")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Hub & connection", exact: true })).toBeVisible();
+});
+
+test("adding a Hub asks for identity confirmation and can be cancelled without losing existing pairings", async ({ page }) => {
+  await bundledPhone(page, "paired");
+  await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();
+  await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+  const panel = page.getByTestId("hub-picker");
+  await panel.getByRole("button", { name: "Add a Hub", exact: true }).click();
+  await panel.getByPlaceholder("offdesk://pair?…").fill("offdesk://pair?v=2&hub=https%3A%2F%2Fencrypted.example&key=pinned&code=code");
+  await panel.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(panel.getByText("Confirm your Hub", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__secureTest.calls.includes("secure_pair"))).toBe(false);
+  await panel.getByRole("button", { name: "Saved Hubs", exact: true }).click();
+  await expect(panel.getByRole("button", { name: /Home Hub/ })).toContainText("Current Hub");
+  expect(await page.evaluate(() => (window as any).__secureTest.calls.includes("secure_forget"))).toBe(false);
 });
 
 for (const reason of ["Hub identity changed", "This device has been revoked", "Could not read device credentials"]) {
@@ -164,6 +222,8 @@ for (const reason of ["Hub identity changed", "This device has been revoked", "C
     await page.evaluate(reason => { (window as any).__secureTest.userError = reason; }, reason);
     await page.getByPlaceholder("Hub address or offdesk://pair?…").fill("offdesk://pair?v=2&hub=https%3A%2F%2Fencrypted.example&key=pinned&code=code");
     await page.getByRole("button", { name: "Connect", exact: true }).click();
+    await expect(page.getByText("Confirm your Hub", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Pair and connect", exact: true }).click();
     await expect(page.getByText(reason, { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Forget connection and pair again", exact: true })).toBeVisible();

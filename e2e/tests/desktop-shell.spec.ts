@@ -310,17 +310,19 @@ test("Cloud sign-in, automatic verification, pairing and disabling work without 
   await panel.getByRole("button", { name: "Sign in with GitHub", exact: true }).click();
   await expect(panel.getByText("ABCDEF123456", { exact: true })).toBeVisible();
   await page.evaluate(() => { (window as any).__desktopTest.cloudApproved = true; });
-  await panel.getByRole("button", { name: "Enable remote connection", exact: true }).click({ timeout: 15000 });
   await expect(panel.getByText("Remote connection ready · Encryption verified")).toBeVisible({ timeout: 15000 });
-  await panel.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
-  await expect(panel.getByLabel("Encrypted device pairing QR code")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Enable remote connection", exact: true })).toHaveCount(0);
+  await page.evaluate(() => { (window as any).__desktopTest.secureUrl = "https://0123456789abcdef0123456789abcdef.cloud.offdesk.dev"; });
+  await panel.getByRole("button", { name: "Connect your phone", exact: true }).click();
+  await page.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
+  await expect(page.getByLabel("Encrypted device pairing QR code")).toHaveCount(1);
   await panel.getByRole("button", { name: "Turn off remote access", exact: true }).click();
   await panel.getByRole("button", { name: "Keep connected", exact: true }).click();
   expect(await page.evaluate(() => (window as any).__desktopTest.cloudActions)).not.toContain("disable");
   await panel.getByRole("button", { name: "Turn off remote access", exact: true }).click();
   await panel.getByRole("button", { name: "Turn off", exact: true }).click();
   await expect(panel.getByText("Remote access is being removed. Check again to confirm it has finished.")).toBeVisible();
-  await expect(panel.getByLabel("Encrypted device pairing QR code")).toHaveCount(0);
+  await expect(page.getByLabel("Encrypted device pairing QR code")).toHaveCount(0);
 });
 
 

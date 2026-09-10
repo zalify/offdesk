@@ -36,7 +36,7 @@ class OffdeskKeystorePlugin(private val activity: Activity): Plugin(activity) {
         return generator.generateKey()
     }
     private fun preferences() = activity.getSharedPreferences("offdesk_secure", Context.MODE_PRIVATE)
-    private fun validate(slot: String) { require(slot == "connection" || slot == "candidate") }
+    private fun validate(slot: String) { require(slot == "connection" || slot == "candidate" || Regex("hub-[A-Za-z0-9_-]{43}").matches(slot)) }
     @Command
     fun read(invoke: Invoke) {
         try {

@@ -424,7 +424,7 @@ export async function readTerminalBuffer(
  * "Stop control" while controlling. Tapping it closes the sheet.
  */
 export async function mobileOpenHostSheet(page: Page): Promise<void> {
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
   await page.getByTestId("mobile-host-button").click();
   await expect(page.getByTestId("mobile-control-toggle")).toBeVisible();

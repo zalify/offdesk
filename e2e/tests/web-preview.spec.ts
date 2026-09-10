@@ -131,7 +131,7 @@ test('web preview: compact mobile menu opens and revokes a preview', async ({ pa
   await mobileTakeControl(page);
   const terminal = await createTerminalViaApi(page);
   await expandTerminalById(page, terminal);
-  await page.getByTestId('mobile-title-bar').click();
+  await page.getByTestId('mobile-title-bar-badge').click();
   await page.getByTestId('mobile-host-button').click();
   await page.getByRole('button', { name: 'Open web preview', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Open web preview' });
@@ -146,7 +146,7 @@ test('web preview: compact mobile menu opens and revokes a preview', async ({ pa
   const created = await (await page.request.post(`/api/machines/e2e-node/web-previews`, {
     headers, data: { port: 5127, target: '/', terminal_id: terminal },
   })).json();
-  await page.getByTestId('mobile-title-bar').click();
+  await page.getByTestId('mobile-title-bar-badge').click();
   await page.getByTestId('mobile-host-button').click();
   await page.getByRole('button', { name: 'Open web preview', exact: true }).click();
   await expect(page.getByText('Port 5127', { exact: true })).toBeVisible();

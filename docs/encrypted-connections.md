@@ -24,9 +24,12 @@ Ordinary browser and legacy App connections continue to work as before and do
    A multi-user OAuth Hub requires `--user-id <existing-user-id>`. JSON output is
    available with `pair --json` for the local native App; it contains a secret
    pairing URI and must not be logged or published.
-3. In the phone App's setup screen, scan this new code. If already connected by
-   the old method, use **Switch hub** first. A desktop client can paste the
-   `offdesk://pair?...` link into its sign-in link field.
+3. In the phone App's setup screen, scan this new code and compare the Hub
+   identity with the Mac before choosing **Pair and connect**. If already using
+   an encrypted Hub, tap the terminal title → **Hub & connection → Add a Hub**.
+   The existing pairing stays saved. If using the old ordinary connection,
+   choose **Switch hub** first. A desktop client can paste the `offdesk://pair?...`
+   link into its sign-in link field.
 4. Settings shows **End-to-end encrypted** and the paired Hub address. The App
    continues using its bundled UI, so UI updates now require an App update.
 
@@ -38,18 +41,32 @@ falls back to ordinary HTTP/WebSocket traffic.
 
 A paired mobile App keeps navigation on its bundled origin. System Back, history
 navigation, or links cannot return it to an ordinary Hub webpage left over from
-before pairing. Explicitly forgetting the connection restores the legacy setup
-flow. Network route changes continue through the encrypted native transport;
+before pairing. Explicitly forgetting the last saved connection restores the
+legacy setup flow; other saved encrypted Hubs keep the App on bundled assets. Network route changes continue through the encrypted native transport;
 they do not navigate the WebView to the selected address.
 
 ### Switch between local and remote connections
 
-After updating both Hub and App, encrypted pairing can save multiple addresses
-for the same Hub. In **Settings → Connection method**, choose **Local network**
-(on the computer's network) or **Remote connection** (mobile data or another
-Wi-Fi). The recovery screen offers the same selector if the selected address is
-unreachable. **Switch hub** still means forgetting this pairing and connecting
-to a different Hub; changing connection method does not.
+Tap the terminal title to open **Machines**, then **Hub & connection**. Choose
+one of your saved Hubs and select **Local network** (on the computer's network)
+or **Remote connection** (mobile data or another Wi-Fi). The terminal count in
+the title bar opens the session switcher; no extra toolbar row is needed.
+**Settings → Hubs & connections** offers the same picker. The recovery screen
+also offers **Choose another Hub**, even when the current Hub cannot connect.
+
+Up to 16 encrypted Hubs can be saved on one device, each with its own OS-stored
+credential. This is separate from Cloud beta's one-Hub-per-account allowance.
+Older single-Hub pairings appear automatically without rescanning. Hub names
+can be changed in the picker; adding a machine inside a Hub remains a separate
+operation in the Machines menu.
+
+A switch verifies the target's pinned identity before changing the active Hub.
+If it fails, the old Hub remains selected and its saved pairing is kept. A
+successful switch reloads the bundled interface to avoid carrying the previous
+Hub's machine IDs or pending callbacks into the new one. No terminal session is
+stopped and queued input is never replayed on a different Hub. **Remove saved
+Hub** is an explicit local action for an inactive Hub, and does not revoke other
+devices. Switch to another Hub before removing the currently selected one.
 
 Configure the running Hub service with `OFFDESK_BASE_URL=https://your-hub.example`
 (or `OFFDESK_SECURE_BASE_URL` for a separate encrypted origin). The Hub advertises
@@ -118,8 +135,9 @@ independent privacy audit or proof of phone-side reachability.
 **Encrypted devices** in Settings lists devices paired to the signed-in account.
 Revoking one closes its encrypted streams (polled once per second) and prevents
 reconnection. To revoke the device you are using, use the Hub's local Settings or
-another paired device. Switching hubs/forgetting a connection deletes this App's
-stored device credentials. Device revocation is not account-wide token revocation:
+another paired device. Switching Hubs preserves this App's stored credentials;
+explicitly removing or forgetting a saved connection deletes that pairing's
+local credential. Device revocation is not account-wide token revocation:
 legacy JWTs and separately created API tokens have their own lifecycle.
 
 ## An encrypted-only origin for a relay
@@ -257,3 +275,18 @@ Tests also cover queue budgets, bulk fairness, per-socket order, fragment bounds
 raw binary wire size and first-pair recovery after identity/revocation/credential
 errors. Physical-device memory under concurrent previews and encrypted/plain
 throughput comparisons remain release-qualification work.
+
+### Recovering damaged local connection metadata
+
+If the saved Hub list is malformed, ordinary loading reports the error. An explicit
+“Forget connection and pair again” or pairing attempt preserves the damaged file
+as `secure-hubs.damaged-<random>.json` in the App config directory before rebuilding
+the list from any readable active connection. Other entries from the damaged list
+may need to be paired again; the backup contains connection metadata, not private keys.
+Filesystem access errors remain errors and do not reset the list.
+
+Forgetting clears the active credential and pending pairing credential. If the
+active marker is unreadable, it also clears the legacy credential unless another
+saved Hub still uses it. Credentials belonging to retained Hubs are preserved.
+A credential-store error leaves the metadata in place so forgetting can be retried
+after unlocking the device.

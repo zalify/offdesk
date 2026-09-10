@@ -615,10 +615,34 @@
           "markdownDescription": "Enables the secure_forget command without any pre-configured scope."
         },
         {
+          "description": "Enables the secure_hubs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-hubs",
+          "markdownDescription": "Enables the secure_hubs command without any pre-configured scope."
+        },
+        {
           "description": "Enables the secure_pair command without any pre-configured scope.",
           "type": "string",
           "const": "allow-secure-pair",
           "markdownDescription": "Enables the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_pairing_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-pairing-identity",
+          "markdownDescription": "Enables the secure_pairing_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_remove_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-remove-hub",
+          "markdownDescription": "Enables the secure_remove_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_rename_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-rename-hub",
+          "markdownDescription": "Enables the secure_rename_hub command without any pre-configured scope."
         },
         {
           "description": "Enables the secure_request command without any pre-configured scope.",
@@ -655,6 +679,12 @@
           "type": "string",
           "const": "allow-secure-status",
           "markdownDescription": "Enables the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_switch_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-switch-hub",
+          "markdownDescription": "Enables the secure_switch_hub command without any pre-configured scope."
         },
         {
           "description": "Enables the secure_switch_route command without any pre-configured scope.",
@@ -741,10 +771,34 @@
           "markdownDescription": "Denies the secure_forget command without any pre-configured scope."
         },
         {
+          "description": "Denies the secure_hubs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-hubs",
+          "markdownDescription": "Denies the secure_hubs command without any pre-configured scope."
+        },
+        {
           "description": "Denies the secure_pair command without any pre-configured scope.",
           "type": "string",
           "const": "deny-secure-pair",
           "markdownDescription": "Denies the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_pairing_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-pairing-identity",
+          "markdownDescription": "Denies the secure_pairing_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_remove_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-remove-hub",
+          "markdownDescription": "Denies the secure_remove_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_rename_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-rename-hub",
+          "markdownDescription": "Denies the secure_rename_hub command without any pre-configured scope."
         },
         {
           "description": "Denies the secure_request command without any pre-configured scope.",
@@ -781,6 +835,12 @@
           "type": "string",
           "const": "deny-secure-status",
           "markdownDescription": "Denies the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_switch_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-switch-hub",
+          "markdownDescription": "Denies the secure_switch_hub command without any pre-configured scope."
         },
         {
           "description": "Denies the secure_switch_route command without any pre-configured scope.",

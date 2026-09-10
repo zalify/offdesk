@@ -29,7 +29,7 @@ async function mobileBridge(page: Page) {
     });
   });
   await openApp(page);
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await page.getByTestId("mobile-host-button").click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByText("Shell version: 0.4.12")).toBeVisible();

@@ -204,7 +204,7 @@ test("mobile terminal switch does not focus the new terminal automatically", asy
       document.activeElement.blur();
     }
   });
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await page.getByTestId(`mobile-session-row-${secondTerminalId}`).click();
   await expect(
     page.getByTestId(`workspace-pane-${secondTerminalId}`),
@@ -293,7 +293,7 @@ test("mobile title bar swipes between sessions and long-presses the current sess
     workspaceGroupId: secondGroup.id,
   });
 
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await page.getByTestId(`mobile-session-row-${firstTerminalId}`).click();
   await expect(
     page.getByTestId(`workspace-pane-${firstTerminalId}`),
@@ -342,7 +342,7 @@ test("session switcher opens with the active terminal row scrolled into view", a
   }
 
   await expandTerminalById(page, lastTerminalId);
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
   const activeRow = page.getByTestId(`mobile-session-row-${lastTerminalId}`);
   await expect(activeRow).toHaveAttribute("aria-current", "true");
@@ -367,7 +367,7 @@ test("session switcher row closes its terminal", async ({ page }) => {
   });
 
   await expandTerminalById(page, keptTerminalId);
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
 
   // The ✕ on a non-active row closes that session without leaving the sheet.
@@ -407,7 +407,7 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
     workspaceGroupId: secondGroup.id,
   });
 
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   const sheet = page.getByTestId("mobile-session-switcher");
   await expect(sheet).toBeVisible();
   await page.getByTestId(`mobile-session-row-${firstTerminalId}`).click();
@@ -419,7 +419,7 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
   );
   await expect(page.getByTestId("mobile-title-bar-badge")).toHaveText("1/2");
 
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await expect(sheet).toBeVisible();
   await expect(
     page.getByTestId(`mobile-session-group-${firstGroup.id}`),
@@ -490,7 +490,7 @@ test("mobile workspace manager provides full workspace controls", async ({ page 
   });
   await expandTerminalById(page, terminalId);
 
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await page.getByTestId("mobile-workspace-manager-button").click();
   const manager = page.getByTestId("workspace-manager");
   await expect(manager).toBeVisible();
@@ -565,7 +565,7 @@ test("mobile + overflows a full tab into a new tab instead of a fifth pane", asy
   await expect.poll(async () => (await listTerminals(page)).length).toBe(4);
 
   // Make the full tab the active session, so "＋" aims at it.
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
   await page.getByTestId(`mobile-session-row-${seeded[0]}`).click();
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText(
@@ -907,7 +907,7 @@ test("long session lists keep host metrics inside the card at narrow and short s
   await page.routeWebSocket(/\/ws\/events/, () => {});
   await page.routeWebSocket(/\/ws\/terminal\//, ws => ws.send(Buffer.from("ready\r\n")));
   await openApp(page);
-  await page.getByTestId("mobile-title-bar").click();
+  await page.getByTestId("mobile-title-bar-badge").click();
   for (const [width, height] of [[390, 844], [320, 480], [768, 600]]) {
     await page.setViewportSize({ width, height });
     const card = page.getByTestId("mobile-host-button");

@@ -57,6 +57,7 @@ export function SecurePairingPanel({ baseUrl, managed = false }: { baseUrl?: str
       </div> : null}
       <div ref={qrElement} style={{ width: 240, maxWidth: "100%", background: "#fffbf4", padding: 12, borderRadius: 12 }}><QrImage svg={qr} size={216} label="Encrypted device pairing QR code" /></div>
       <Body size={12} style={{ overflowWrap: "anywhere", maxWidth: "100%", textAlign: "center" }}>{pairing.hub_url}</Body>
+      <details style={{ maxWidth: "100%", textAlign: "center" }}><summary style={{ cursor: "pointer", minHeight: 44, padding: 10 }}>Compare Hub identity</summary><code style={{ display: "block", overflowWrap: "anywhere", fontSize: 12 }}>{new URL(pairing.pairing_uri).searchParams.get("key")}</code><Body size={12}>Check this identity on your phone before confirming the pairing.</Body></details>
       <Body size={12}>Expires in {Math.ceil((pairing.expires_at - now) / 1000)} seconds. Keep this code private.</Body>
       <Button kind="sky" onClick={() => void copyText(pairing.pairing_uri).catch(() => setError("Could not copy the pairing link"))}>Copy pairing link</Button>
     </> : null}

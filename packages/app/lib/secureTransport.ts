@@ -7,7 +7,7 @@ export interface SecureStatus {
   routes?: ConnectionRoute[];
 }
 export interface ConnectionRoute { kind: "local" | "remote"; hub_url: string }
-export interface RouteReport { discovery_available: boolean; status: SecureStatus; routes: (ConnectionRoute & { available: boolean })[] }
+export interface RouteReport { machines?: { name: string; os: string }[]; discovery_available: boolean; status: SecureStatus; routes: (ConnectionRoute & { available: boolean })[] }
 let routeReport: RouteReport | null = null;
 let routeRefresh: Promise<RouteReport> | null = null;
 const routeListeners = new Set<() => void>();
@@ -37,6 +37,7 @@ export async function switchConnectionRoute(url: string): Promise<void> {
 }
 
 type WireResponse = { type: string; id: string; data?: string; status?: number; body?: string; message?: string };
+let changingHub = false;
 let enabled = false;
 let status: SecureStatus | null = null;
 let initialization: Promise<SecureStatus | null> | null = null;
@@ -94,7 +95,29 @@ export async function forgetSecureConnection(): Promise<void> {
   lastError = null;
   initialization = Promise.resolve(null);
 }
+export interface SavedHub { name: string; status: SecureStatus }
+export const savedHubs = () => invoke<SavedHub[]>("secure_hubs");
+export const checkSavedHub = (publicKey: string) => invoke<RouteReport>("secure_routes", { publicKey });
+export const renameSavedHub = (publicKey: string, name: string) => invoke<void>("secure_rename_hub", { publicKey, name });
+export const removeSavedHub = (publicKey: string) => invoke<void>("secure_remove_hub", { publicKey });
+export const pairingIdentity = (uri: string) => invoke<SecureStatus["endpoint"]>("secure_pairing_identity", { uri });
+/** Freeze the old UI while native verifies/commits. A new Hub needs a fresh
+ * bootstrap: old machine IDs, sockets and pending callbacks must not cross it. */
+async function changeHub(action: () => Promise<SecureStatus>): Promise<void> {
+  if (changingHub) throw new Error("A Hub switch is already in progress");
+  if ([...sockets].some(socket => socket.bufferedAmount > 0)) throw new Error("Finish sending the current input or file, then try again");
+  changingHub = true;
+  try {
+    if (routeRefresh) await routeRefresh;
+    await action();
+  } catch (error) { changingHub = false; throw error; }
+  window.location.replace("/");
+}
+export const openSavedHub = (publicKey: string, url: string) => changeHub(() => invoke<SecureStatus>("secure_switch_hub", { publicKey, url }));
+export const pairAndOpenHub = (uri: string) => changeHub(() => pairSecureConnection(uri));
+
 export async function secureFetch(method: string, path: string, body?: string, signal?: AbortSignal): Promise<Response> {
+  if (changingHub) throw new Error("Switching Hubs. Wait for the new connection to open.");
   if (!enabled) throw new Error("No encrypted connection is configured");
   signal?.throwIfAborted();
   // Aborting the UI wait never implies the Hub did not execute a mutation.
@@ -137,6 +160,7 @@ class SecureSocket extends EventTarget {
     this.opened = this.open(url).catch((error: unknown) => { this.fail(error); });
   }
   private async open(raw: string) {
+    if (changingHub) throw new Error("Switching Hubs");
     const target = new URL(raw);
     const allowed = [socketOrigin, status?.endpoint.hub_url].filter(Boolean).some(rawOrigin => {
       const origin = new URL(rawOrigin!);
@@ -178,6 +202,7 @@ class SecureSocket extends EventTarget {
     const event = new CloseEvent("close", { code, wasClean: code === 1000 }); this.dispatchEvent(event); this.onclose?.(event);
   }
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
+    if (changingHub) throw new Error("Switching Hubs");
     if (this.readyState !== 1) throw new DOMException("Encrypted socket is not open", "InvalidStateError");
     const size = typeof data === "string" ? new TextEncoder().encode(data).byteLength : data instanceof Blob ? data.size : data.byteLength;
     if (this.bufferedAmount + size > 32 * 1024 * 1024) { this.fail("Encrypted input queue is full"); return; }

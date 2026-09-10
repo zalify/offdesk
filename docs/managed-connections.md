@@ -30,10 +30,17 @@ On the Mac, open **Settings → This machine → Offdesk Cloud**:
 
 1. Choose **Sign in with GitHub**. In the browser, sign in, activate your invitation
    if needed, and approve the matching code displayed by the Mac app.
-2. Choose **Enable remote connection**. The app installs the connector and checks
-   HTTPS, Hub identity, and encrypted-only routing. Failed checks offer a retry.
-3. Once **Encryption verified** appears, create a pairing code and scan it from
-   the phone app. An already paired phone can refresh its connection methods.
+2. After approval, the app continues automatically: it installs the connector
+   and checks HTTPS, Hub identity, and encrypted-only routing. An existing
+   disabled connection offers **Enable remote connection**; failed checks offer
+   **Verify connection** to retry.
+3. Once **Encryption verified** appears, choose **Connect your phone**. This
+   opens the same App pairing panel used by **Settings → Mobile app**. Scan its
+   code inside Offdesk, compare the Hub identity, then confirm. An already paired
+   phone can check its saved connection methods without another QR.
+
+First-time setup also offers **Set up remote access** after the Mac is ready.
+You can continue with local network pairing without a Cloud account.
 
 The **Cloud account** button opens account management in the browser. Browser
 sessions never grant access to local native commands, and GitHub credentials do

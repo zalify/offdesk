@@ -1,4 +1,4 @@
-import { ConnectionRoutesPanel } from "./ConnectionRoutesPanel";
+import { HubPickerPanel } from "./HubPickerPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
 import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTransport";
@@ -595,6 +595,12 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   // the app back to its own setup screen, where the next address is typed by
   // hand — this page is served by a hub, and a hub does not get to choose the
   // next one.
+  const [phonePanelVersion, setPhonePanelVersion] = useState(0);
+  const phonePanelRef = useRef<HTMLElement | null>(null);
+  const showPhonePairing = () => {
+    setPhonePanelVersion(version => version + 1);
+    requestAnimationFrame(() => phonePanelRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
+  };
   const { switchHub: handleSwitchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
 
   const handlePrefixRecordKeyDown = useCallback(
@@ -1023,14 +1029,14 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         </section>
 
         {!isTauriMobile() && (
-          <section style={{ marginBottom: 32 }}>
+          <section ref={phonePanelRef} style={{ marginBottom: 32 }}>
             <SectionTitle>Mobile app</SectionTitle>
-            <MobileAppPanel />
+            <MobileAppPanel key={phonePanelVersion} />
           </section>
         )}
 
         {/* Which hub the mobile app opens — mobile app only */}
-        {isTauriMobile() && (
+        {isTauriMobile() && !isSecureConnection() && (
           <section style={{ marginBottom: 32 }}>
             <SectionTitle>Hub</SectionTitle>
 
@@ -1072,7 +1078,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           </section>
         )}
 
-        {isSecureConnection() && <section style={{ marginBottom: 32 }}><ConnectionRoutesPanel /></section>}
+        {isSecureConnection() && <section style={{ marginBottom: 32 }}><SectionTitle>Hubs & connections</SectionTitle><HubPickerPanel /></section>}
 
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Encrypted devices</SectionTitle>
@@ -1083,7 +1089,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         {isTauri() && !isTauriMobile() && (
           <section style={{ marginBottom: 32 }}>
             <SectionTitle>This machine</SectionTitle>
-            <ThisMachineSection />
+            <ThisMachineSection onPairPhone={showPhonePairing} onConnectionChanged={() => setPhonePanelVersion(version => version + 1)} />
           </section>
         )}
 

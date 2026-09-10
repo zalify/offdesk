@@ -1,4 +1,4 @@
-import { isSecureConnection, forgetSecureConnection } from "./secureTransport";
+import { isSecureConnection } from "./secureTransport";
 import { useCallback, useRef, useState } from "react";
 
 /** Navigation belongs to the native shell, which also forgets the saved hub. */
@@ -15,7 +15,7 @@ export function useMobileHubSwitch() {
       // Browser confirm dialogs are not available in every mobile WebView.
       // The labelled Switch hub action already expresses the user's intent.
       const { invoke } = await import("@tauri-apps/api/core");
-      if (isSecureConnection()) await forgetSecureConnection();
+      if (isSecureConnection()) throw new Error("Choose a saved Hub from Hubs & connections");
       await invoke("clear_mobile_hub_url");
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : typeof cause === "string" ? cause : "Please try again.";
