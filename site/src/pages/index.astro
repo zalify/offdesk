@@ -16,7 +16,7 @@ const docs = "/docs/mac";
 const apk = "https://offdesk.dev/apk";
 const ios = "https://testflight.apple.com/join/rV4ktaGv";
 const description =
-  "Vibe code from your phone on the terminal you left at home. One line, one scan, and you're in.";
+  "Self-hosted remote terminal for Claude Code, Codex, and tmux. Access macOS and Linux machines from your phone or browser. Rust, WebSocket, SQLite. MIT licensed.";
 const install = "curl -fsSL https://offdesk.dev/install | sh";
 
 const tunnel = [
@@ -68,7 +68,7 @@ const rows = [
 ];
 ---
 
-<Site title="Offdesk — vibe code from your phone" description={description}>
+<Site title="Offdesk — Self-hosted remote terminal for tmux & AI agents" description={description}>
   <!-- Hero: the whole first setup, on the machine at home. It has to fit
        one laptop screen with the three steps showing: the steps are the
        point, and a step below the fold is a step nobody takes. -->
@@ -82,14 +82,15 @@ const rows = [
               <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" />
             </g>
           </svg>
-          Vibe code from the beach
+          Open source · tmux · WebSocket
         </p>
         <h1 class="display mt-2 text-[2.6rem] leading-[1.04] md:text-[3.25rem]">
-          Your terminal stays home. You don't have to.
+          Self-hosted remote terminal.
         </h1>
         <p class="prose-lead mt-3 max-w-xl text-[17px]">
-          The Mac at home keeps running Claude Code. Your phone opens the same
-          terminal, mid-scroll, from the sand. One line to set up, one scan to get in.
+          Run Claude Code, Codex, or any CLI in persistent tmux sessions on your
+          Mac or Linux server. Access the same terminal from your phone, browser,
+          or desktop. One Hub connects all your machines.
         </p>
 
         <ol class="mt-5 space-y-3">
@@ -97,7 +98,7 @@ const rows = [
             <span class="step mt-0.5">1</span>
             <div class="min-w-0 flex-1">
               <p class="font-display text-[17px] font-semibold text-ink">
-                On the Mac that stays on, install the app
+                Install the Hub on macOS or Linux
               </p>
               <div class="mt-2.5 flex flex-wrap items-center gap-3">
                 <a href="/mac" class="btn-coral px-5 py-2.5 text-[14px]">Download for Mac</a>
@@ -118,12 +119,13 @@ const rows = [
             <span class="step mt-0.5">2</span>
             <div class="min-w-0 flex-1">
               <p class="font-display text-[17px] font-semibold text-ink">
-                Scan the code it prints
+                Pair your phone or sign in from a browser
               </p>
               <p class="prose-body mt-1 text-[14.5px]">
-                With the iPhone or Android app, or just the phone's camera. That's the sign-in.
-                Need it again later? The app's menu bar item shows it, and so does
-                <span class="inline-code">offdesk link</span>.
+                Choose Offdesk App to generate an encrypted pairing code for
+                the in-app scanner. Choose Browser access for a browser sign-in
+                link. Find both in the Mac menu bar, or run
+                <span class="inline-code">offdesk link</span> for browser access.
               </p>
             </div>
           </li>
@@ -131,7 +133,7 @@ const rows = [
             <span class="step mt-0.5">3</span>
             <div class="min-w-0 flex-1">
               <p class="font-display text-[17px] font-semibold text-ink">
-                That's your terminal. Go outside.
+                Reconnect to the same tmux session
               </p>
               <p class="prose-body mt-1 text-[14.5px]">
                 Same tmux session as the desk, live. Keep the hub awake and online.
@@ -163,7 +165,7 @@ const rows = [
               <img src="/media/phone-ios.jpg" alt="Claude Code in the Offdesk iPhone app, attached to the Mac at home" width="1179" height="2556" loading="eager" class="block w-full" />
             </div>
             <figcaption class="mt-4 text-center font-display text-[14px] font-semibold text-muted">
-              Real terminal. Real Mac at home. Real beach optional.
+              Claude Code in a persistent remote tmux session.
             </figcaption>
           </figure>
         ) : hasStill ? (
@@ -174,7 +176,7 @@ const rows = [
               <img src="/media/phone-terminal.png" alt="An Offdesk terminal on a phone: Claude Code on a Mac at home, attached from the phone's browser" width="390" height="844" loading="eager" class="block w-full" />
             </div>
             <figcaption class="mt-4 text-center font-display text-[14px] font-semibold text-muted">
-              Real terminal. Real Mac at home. Real beach optional.
+              Claude Code in a persistent remote tmux session.
             </figcaption>
           </figure>
         ) : null
@@ -194,7 +196,7 @@ const rows = [
     <div class="mx-auto max-w-6xl px-6 py-16 md:py-24">
       <p class="eyebrow">Download</p>
       <h2 class="display mt-3 max-w-2xl text-4xl md:text-5xl">
-        One app for the desk, one for the phone.
+        Terminal clients for desktop, mobile, and web.
       </h2>
       <p class="prose-lead mt-4 max-w-2xl">
         The desktop app is the hub on a Mac, and a client everywhere. The phone
@@ -268,7 +270,7 @@ const rows = [
     <div class="mx-auto max-w-6xl px-6 py-16 md:py-24">
       <p class="eyebrow">How it works</p>
       <h2 class="display mt-3 max-w-2xl text-4xl md:text-5xl">
-        Three small things, and nothing in the middle.
+        Rust Hub. Outbound WebSockets. Persistent tmux.
       </h2>
       <div class="mt-12 grid gap-6 md:grid-cols-3">
         <div class="card">
@@ -277,9 +279,9 @@ const rows = [
             <h3 class="display text-2xl">Hub</h3>
           </div>
           <p class="prose-body mt-4">
-            One process on the machine that stays on. SQLite beside it, the web
-            UI baked in. It knows every machine you own, and it's the only
-            address a client ever needs.
+            A Rust server built with Axum, SQLite storage, and an embedded web
+            UI. It authenticates clients and routes terminal traffic to your
+            macOS and Linux nodes. Install a binary or deploy with Docker.
           </p>
           <code class="mt-4 block font-mono text-[12px] text-faint">offdesk-hub</code>
         </div>
@@ -290,7 +292,7 @@ const rows = [
           </div>
           <p class="prose-body mt-4">
             On every machine you want to reach. It dials <em>out</em> to the
-            hub and keeps one socket open, so nothing needs a port or a public
+            hub over WebSocket, so the node needs no inbound port or public
             IP. Every terminal is a tmux session on the machine that owns it:
             it outlives the app, the network, and you walking away. Uninstall
             Offdesk and it's still there.
@@ -303,44 +305,48 @@ const rows = [
             <h3 class="display text-2xl">Client</h3>
           </div>
           <p class="prose-body mt-4">
-            Anything that talks to the hub: a browser tab, the phone app, the
-            desktop app, the CLI, another agent on another machine. A client
-            never touches a node directly, so whoever typed last holds the
-            keyboard and everyone else watches live.
+            React and xterm.js render the interactive terminal in the browser.
+            Tauri apps add native encrypted pairing on desktop and mobile.
+            The Rust CLI provides scriptable access. Clients share terminal
+            output through the Hub; a control lease determines who can type.
           </p>
           <code class="mt-4 block font-mono text-[12px] text-faint">browser · phone · desktop · offdesk</code>
         </div>
       </div>
       <p class="prose-body mt-8 max-w-2xl">
         Two screens on one terminal are two clients of one hub, attached to
-        one tmux session. A phone attaching never resizes the desk; a phone
-        typing does, and the desk gets a one-click fit back.
+        one tmux session. Client disconnects do not terminate the session on
+        the node. Offdesk uses its own Hub/node transport, not SSH: install
+        offdesk-node on each machine you want to reach.
       </p>
     </div>
   </section>
 
   <section class="mx-auto max-w-6xl px-6 pb-12">
     <div class="card">
-      <p class="eyebrow">Offdesk 0.7.1 · Desktop &amp; Android</p>
-      <h2 class="display mt-3 text-2xl">Set up remote access. Keep your Hubs within reach.</h2>
+      <p class="eyebrow">Deployment and encryption</p>
+      <h2 class="display mt-3 text-2xl">Self-host on your LAN. Add remote access when you need it.</h2>
       <p class="prose-body mt-3">
-        Desktop and Android 0.7.1 bring guided Cloud setup and easier Hub switching.
-        Sign in from your Mac, verify the authorization and pair your phone.
-        On your phone, open Hub &amp; connection from the title to switch saved
-        Hubs while keeping their separate encrypted pairings.
+        Run the open-source Hub on macOS, Linux, a NAS, or a VPS. Nodes connect
+        outbound to that Hub; terminal sessions stay on the machines running
+        tmux. Your Hub and those machines must remain awake and online.
       </p>
       <p class="prose-body mt-3">
-        Choose Offdesk App for encrypted pairing, or Browser access for browser
-        sign-in. The desktop package includes Hub and node 0.21.1.
-        Stable iOS remains at 0.7.0; 0.7.1 is currently in internal TestFlight testing.
+        Use Tailscale or a self-managed Cloudflare Tunnel to reach your Hub
+        outside the LAN. Paired Offdesk Apps encrypt terminal traffic end to
+        end between the App and Hub. Ordinary browser access uses HTTPS and
+        its own authentication; it does not automatically gain App encryption.
       </p>
       <p class="prose-body mt-3">
-        Offdesk Cloud is an optional, invite-only beta under
-        <span class="inline-code">*.cloud.offdesk.dev</span>.
-        Local-network use needs no Cloud account. The Hub and Apps are open source;
-        the managed Cloud service is separate.
+        Optional Offdesk Cloud offers managed remote access as an invite-only
+        beta. Its service is closed source; the Hub, node, CLI, and clients in
+        the public repository remain MIT licensed. Local use needs no Cloud account.
       </p>
-      <a href={`${repo}/blob/main/docs/managed-connections.md`} class="btn-sky mt-5">Cloud beta setup</a>
+      <div class="mt-5 flex flex-wrap gap-3">
+        <a href={`${repo}/blob/main/docs/setup-lan.md`} class="btn-sky">LAN setup</a>
+        <a href={`${repo}/blob/main/docs/encrypted-connections.md`} class="btn-sky">Encrypted App pairing</a>
+        <a href={`${repo}/blob/main/docs/managed-connections.md`} class="btn-sky">Cloud setup</a>
+      </div>
     </div>
   </section>
 
@@ -350,13 +356,13 @@ const rows = [
       <div>
         <p class="eyebrow">Away from home</p>
         <h2 class="display mt-3 text-4xl md:text-5xl">
-          Not on the Wi-Fi? Tunnel home.
+          Remote access with Cloudflare Tunnel or Tailscale.
         </h2>
         <p class="prose-lead mt-6">
-          A Cloudflare Tunnel runs next to the hub and dials out, so the hub at
-          home gets an <span class="inline-code">https://</span> address with
-          no port opened, no DNS to babysit, and it works behind CGNAT. The free
-          plan is enough.
+          Run cloudflared next to your Hub to expose an HTTPS endpoint without
+          opening a router port, including behind NAT or CGNAT. Configure your
+          domain and tunnel ingress, or use Tailscale for private access to
+          the Hub across your devices.
         </p>
         <p class="prose-body mt-4">
           Pair in the App for end-to-end encryption: terminal content stays
@@ -392,20 +398,20 @@ const rows = [
     <div class="mx-auto max-w-6xl px-6 py-16 md:py-24">
       <p class="eyebrow">More</p>
       <h2 class="display mt-3 max-w-2xl text-4xl md:text-5xl">
-        A second machine, the phone, the agents.
+        Remote shells, mobile coding agents, and CLI automation.
       </h2>
       <div class="mt-12 grid gap-6 lg:grid-cols-3">
         <div class="card min-w-0">
-          <h3 class="display text-2xl">A second machine</h3>
+          <h3 class="display text-2xl">Manage macOS and Linux terminals</h3>
           <p class="prose-body mt-3">
             The NAS, the VPS, the laptop. Open the hub, choose <strong>Add
-            host</strong>, and it hands you one line with a token in it. Paste it
+            a machine</strong>, and it hands you one line with a token in it. Paste it
             on that machine; it shows up.
           </p>
           <pre class="term mt-5 overflow-x-auto p-4 text-[12.5px]"><code>{join}</code></pre>
         </div>
         <div id="phone" class="card min-w-0 scroll-mt-24">
-          <h3 class="display text-2xl">Your phone</h3>
+          <h3 class="display text-2xl">Use Claude Code and Codex from your phone</h3>
           <p class="prose-body mt-3">
             A key bar for Ctrl, Esc and the arrows, because agents ask questions
             and builds need a Ctrl‑C. The apps add a QR scanner and end-to-end
@@ -442,12 +448,12 @@ const rows = [
       <div>
         <p class="eyebrow">For agents</p>
         <h2 class="display mt-3 text-4xl md:text-5xl">
-          One token, and any agent can drive any machine you own.
+          Automate remote terminals with the Offdesk CLI.
         </h2>
         <p class="prose-lead mt-6">
-          Open a terminal on any registered machine, type into it, wait for it
-          to go quiet, read it back. Not an agent session — a terminal, so what
-          you drive is what you'd have run by hand.
+          Use open, send, wait, and read commands to control remote tmux
+          sessions from shell scripts or AI coding agents. JSON output lets
+          your scripts capture terminal IDs and pass results between steps.
         </p>
         <p class="prose-body mt-4">
           A token is remote code execution on every machine you registered.
@@ -467,7 +473,7 @@ const rows = [
     <div class="mx-auto max-w-6xl px-6 py-16 md:py-24">
       <p class="eyebrow">How it compares</p>
       <h2 class="display mt-3 max-w-3xl text-3xl md:text-4xl">
-        The ones that gather machines hand you a chat. The ones that hand you a terminal run one server per machine.
+        Compare remote terminal and AI agent tools.
       </h2>
       <p class="prose-body mt-4 max-w-2xl">
         Every cell is from that project's own documentation, checked
@@ -500,10 +506,10 @@ const rows = [
   <section class="mx-auto max-w-6xl px-6 py-20 md:py-28">
     <div class="relative max-w-3xl">
       <div aria-hidden="true" class="absolute -top-10 right-0 h-20 w-20 rounded-full border-[12px] border-coral/70 md:-right-24"></div>
-      <h2 class="display text-4xl md:text-6xl">Go on. Leave the desk.</h2>
+      <h2 class="display text-4xl md:text-6xl">Deploy your remote terminal Hub.</h2>
       <p class="prose-lead mt-6 max-w-xl">
-        The session keeps running at home. Your phone opens the same terminal,
-        mid-scroll.
+        Install the Hub on macOS or Linux, register your machines, and open
+        persistent tmux sessions from your browser or phone.
       </p>
       <div class="cmd mt-9 max-w-xl">
         <pre class="min-w-0 flex-1 overflow-x-auto whitespace-pre"><code><span class="cmd-prompt">$ </span>{install}</code></pre>

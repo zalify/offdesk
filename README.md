@@ -5,30 +5,35 @@
   </picture>
 </p>
 
-<!-- The banner is rendered by site/scripts/brand/render.mjs; the phone in it
-     is docs/media/phone-terminal.png, a real session. A GIF of the same —
-     desk and phone on one terminal, see docs/media/README.md — can take its
-     place when someone records one. -->
-<p align="center">
-  <img src="docs/media/hero-banner.png" width="800" alt="Your terminal stays home. You don't have to. A phone showing Claude Code running on a Mac at home, beside the one-line install.">
-</p>
+# Offdesk — self-hosted remote terminal for tmux and AI coding agents
 
-Vibe code from your phone, on the terminal you left at home.
-One self-hosted hub, every machine you own, any agent that runs in tmux.
+Access **Claude Code, Codex, OpenCode, or any terminal program** from a browser,
+iPhone, Android phone, or desktop app. Offdesk connects clients to persistent
+**tmux sessions** on your own macOS and Linux machines through one self-hosted
+Hub. Commands run on the remote machine; clients stream terminal input and
+output over WebSocket connections.
 
-Leave the desk and keep your hub awake and online. Your phone opens the same
-terminal on that machine, mid-scroll — not a summary of it.
+Use it to check an AI coding agent from your phone, resume a shell after a
+network disconnect, or manage terminals on a Mac, Linux server, NAS, and VPS
+from one interface. The machines running your Hub and sessions must stay online.
 
-- **0** accounts to create. The hub is yours; the first run prints a link that
-  signs you in.
-- **1** URL for every machine. A Mac at home, a NAS, a VPS — they all register
-  to one hub. The other tools that give you a real terminal run one server per
-  machine.
-- **3** binaries, nothing else. Rust; the hub is one binary plus a SQLite file.
-- **MIT**, including the hub and clients in this repository. Self-hosting needs
-  no vendor account. Optional Offdesk Cloud provides managed remote access;
-  its service is separate and closed source. Encrypted App connections keep
-  terminal content encrypted between your App and Hub.
+- **Persistent remote sessions:** reconnect to the same tmux terminal, including
+  interactive CLIs, editors, build output, and shell history.
+- **Multiple machines behind one Hub:** each `offdesk-node` connects outbound
+  to the Hub; nodes need no inbound port or public IP.
+- **Mobile terminal controls:** Esc, Tab, arrow keys, Ctrl+C, file attachments,
+  and encrypted App pairing via QR code.
+- **CLI automation:** open a terminal, send input, wait for output, and read
+  results with `offdesk open / send / wait / read` and JSON output.
+- **Self-hosted deployment:** Rust binaries or Docker on macOS/Linux, with
+  SQLite storage and the web UI embedded in the Hub binary.
+- **Encrypted App connections:** end-to-end encryption between paired Apps
+  and the Hub. Ordinary browser access uses a separate sign-in flow; public
+  browser access needs HTTPS and authentication.
+
+The Hub, node, CLI, and clients in this repository are **MIT licensed**.
+Self-hosting needs no vendor account. Optional **Offdesk Cloud** provides
+managed remote access as a separate, closed-source service.
 
 Questions, setups that did not work, things you want it to do:
 [Discord](https://discord.gg/aFUu6VMzc).
@@ -47,57 +52,17 @@ Questions, setups that did not work, things you want it to do:
 Every link follows the newest release of that kind. Windows is a desktop client;
 Linux can also host a Hub with tmux installed separately.
 
-## Offdesk 0.7.1 desktop and Android release
+## Documentation
 
-Desktop [0.7.1](https://github.com/zalify/offdesk/releases/tag/desktop-v0.7.1)
-and Android [0.7.1](https://github.com/zalify/offdesk/releases/tag/app-v0.7.1)
-add guided Cloud setup and easier Hub switching. Desktop packages include Hub
-and node 0.21.1. Standalone Hub/CLI/node downloads remain at 0.21.0; stable iOS
-distribution remains at 0.7.0 while 0.7.1 is in internal TestFlight testing.
-
-- Set up optional remote access from your Mac, verify the Cloud authorization,
-  then pair your phone. Cloud remains an invite-only beta; local use needs no account.
-- Open **Hub & connection** from the phone's title to switch saved Hubs without
-  discarding their encrypted pairings, and choose an available connection method.
-- Use **Offdesk App · Recommended** for encrypted App pairing or **Browser access**
-  for a browser sign-in link, with clearer recovery when a connection fails.
-
-Start from the [Mac setup guide](https://offdesk.dev/docs/mac) or
-[Cloud beta instructions](docs/managed-connections.md). Stable downloads use the
-production App identity and upgrade existing stable installations. **Offdesk RC**
-is separate; RC pairings do not automatically migrate to stable.
-
-## Offdesk 0.7.0 release
-
-Desktop [0.7.0](https://github.com/zalify/offdesk/releases/tag/desktop-v0.7.0),
-Android [0.7.0](https://github.com/zalify/offdesk/releases/tag/app-v0.7.0),
-and iOS [0.7.0](https://github.com/zalify/offdesk/releases/tag/ios-v0.7.0)
-ship alongside Hub/CLI/node [0.21.0](https://github.com/zalify/offdesk/releases/tag/v0.21.0).
-
-- Select multiple photos or files, review and remove items before sending,
-  with an attachment dialog that adapts to narrow screens and larger text.
-- Keep mobile host metrics within their cards and restore missed confirmation
-  reminders after an event gap.
-- Use a clearer desktop setup return path, centered Settings, and separate
-  App-pairing / browser-sign-in instructions instead of competing QR codes.
-- Keep familiar JetBrains Mono terminal text with a tiny bundled fallback for
-  missing playback symbols such as `⏵⏵`.
-- Open private localhost web previews through an updated Hub and node, with
-  support for streaming and WebSocket hot updates. This is opt-in and requires
-  a dedicated preview domain and HTTPS ingress: see [setup and limits](docs/web-previews.md).
-  Website previews use HTTPS, not the terminal's end-to-end encrypted transport.
-
-App names and public branding now consistently use **Offdesk**. Existing direct
-input, paste, guided Mac setup and encrypted connections remain available.
-Upgrade the stable app in place to retain pairing; Offdesk RC is a separate test
-installation. Encrypted connections use the frontend bundled with the app, so
-update the app as well as the Hub. iOS is distributed through TestFlight and
-may become available later while Apple processes and reviews the build.
-
-Some Android scanner black-screen reports remain under investigation in
-[#448](https://github.com/zalify/offdesk/issues/448); this release does not claim
-to resolve every reported case. Preview pooling/cache optimization is a
-follow-up in [#456](https://github.com/zalify/offdesk/issues/456).
+- [macOS installation and phone pairing](https://offdesk.dev/docs/mac)
+  ([中文图文指南](https://offdesk.dev/zh/docs/mac))
+- [LAN setup](docs/setup-lan.md) and [public access with HTTPS, OAuth, or Tailscale](docs/setup-public.md)
+- [End-to-end encrypted App connections](docs/encrypted-connections.md) and
+  [optional Offdesk Cloud setup](docs/managed-connections.md)
+- [Localhost web previews](docs/web-previews.md): opt-in forwarding with a
+  dedicated preview domain and HTTPS ingress, separate from terminal E2EE
+- [Build from source](docs/building.md) · [Security model](SECURITY.md)
+- [Release notes and version history](https://github.com/zalify/offdesk/releases)
 
 ## Install
 
@@ -201,7 +166,17 @@ it in the volume, and losing the volume signs everybody out.
 
 ## How it works
 
-Three roles. One outbound socket each. Nothing to keep awake but the hub.
+The Hub routes terminal traffic between clients and registered nodes. Each node
+keeps an outbound WebSocket connection to the Hub and runs tmux locally.
+Both the Hub and the nodes serving active sessions need to stay online.
+
+| Component | Technology | Responsibility |
+| --- | --- | --- |
+| Hub | Rust, Axum, SQLite | Authentication, machine registry, terminal routing, embedded web UI |
+| Node | Rust, tmux, WebSocket | Persistent terminals on each macOS or Linux machine |
+| Web client | React, TypeScript, xterm.js | Interactive terminal rendering in the browser |
+| Native apps | Tauri, shared web UI | Desktop/mobile client, QR pairing, encrypted native transport |
+| CLI | Rust, JSON output | Scriptable terminal control for developers and coding agents |
 
 1. **Hub** — `offdesk-hub`. One process on the machine that stays on, SQLite
    beside it, the web UI baked in. It knows every machine you own, and it is
@@ -559,6 +534,17 @@ Threat model, what the control lease does and does not prevent, and what the
 hub keeps in SQLite: [SECURITY.md](SECURITY.md).
 
 ## Questions, answered
+
+**Is Offdesk an SSH client?** Offdesk uses its own Hub/node WebSocket transport.
+Install `offdesk-node` on a machine to expose its tmux sessions through the Hub;
+Offdesk does not connect to an arbitrary SSH server. You can still use SSH
+separately to administer that machine or attach to its tmux sessions.
+
+**Do terminals survive a browser or phone disconnect?** tmux runs on the node,
+so closing a client or losing its network connection does not end the session.
+Reconnect to the same terminal when the Hub and node are reachable again.
+A host shutdown or reboot is different: tmux does not preserve running processes
+across a reboot.
 
 **Do I need an account?** Self-hosting needs no vendor account: installation
 creates a local user and a sign-in link. Optional Offdesk Cloud uses a separate
