@@ -230,7 +230,9 @@ test("Shift tap and two-finger hold modify commands and always release", async (
   await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first] });
   for (let i = 0; i < 2; i++) {
     await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first, second] });
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [first] });
+    // End only the Tab contact; ending the Shift contact would test a latch instead of a hold.
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [second] });
+    await expect(shift).toHaveAttribute("aria-pressed", "true");
   }
   await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await expect.poll(() => commands).toEqual(["\x1b[Z", "\t", "\x1b[Z", "\x1b[Z"]);
