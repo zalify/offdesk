@@ -1,3 +1,4 @@
+import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
@@ -829,6 +830,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           </SettingRow>
 
         </section>
+
+        <KeyBarSettings />
 
         {/* Prefix Shortcuts Section */}
         <section style={{ marginBottom: 32 }}>

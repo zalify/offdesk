@@ -93,10 +93,10 @@ describe("ExtendedKeyBar", () => {
     expect(html).toContain("Enter");
   });
 
-  it("keeps Tab pinned and removes Shift+Tab", () => {
+  it("keeps Tab and Shift+Tab available as separate keys", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).toContain('data-testid="extended-keybar-tab"');
-    expect(html).not.toContain('data-testid="extended-keybar-shift-tab"');
+    expect(html).toContain('data-testid="extended-keybar-shift-tab"');
     expect(html).toContain(">Tab<");
   });
 
