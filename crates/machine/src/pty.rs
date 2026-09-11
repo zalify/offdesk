@@ -358,7 +358,7 @@ impl PtyManager {
             .into_iter()
             .map(|id| {
                 let command = panes.get(&id).and_then(|p| p.current_command.as_deref());
-                let attention = if matches!(command, Some("claude" | "codex" | "node")) {
+                let attention = if crate::terminal_attention::supports_command(command) {
                     let target = format!("{}:0.0", tmux_session_name(&id));
                     tmux_cmd()
                         .args([
