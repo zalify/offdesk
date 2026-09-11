@@ -280,6 +280,12 @@ The browser is the whole client. Open the hub's URL and you are there, on
 any phone. A full terminal with a key bar for Ctrl, Esc and the arrows,
 because agents ask questions and builds need a Ctrl-C.
 
+A waiting banner lists detected Claude/Codex confirmation requests in other
+terminals. Open a request by its name, or use its Enter button to confirm the
+currently selected option while keeping your current view. See
+[terminal attention and input behavior](docs/terminal-attention.md) for detection
+limits and which components need updating.
+
 Three packaged clients also ship:
 
 - **iPhone / iPad** — join the [public TestFlight beta](https://testflight.apple.com/join/rV4ktaGv).
