@@ -78,9 +78,9 @@ const canonical = `https://offdesk.dev${path}`;
         <div class="hidden items-center gap-7 md:flex">
           <a href="/#download" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Download</a>
           <a href="/#how" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">How it works</a>
-          <a href="/#away" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Away from home</a>
+          <a href="/#away" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Remote access</a>
           <a href="/docs/mac" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Docs</a>
-          <a href="/#agents" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">For agents</a>
+          <a href="/#agents" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">CLI</a>
         </div>
         <div class="flex items-center gap-2">
           <a href={discord} class="btn-sky px-4 py-2 text-[14px]" aria-label="Offdesk on Discord">
@@ -100,12 +100,13 @@ const canonical = `https://offdesk.dev${path}`;
     <footer class="relative z-10 mt-10 border-t border-line">
       <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-8">
         <span class="font-display text-[14px] font-semibold text-muted">
-          MIT · made by <a href="https://zalify.com" class="text-ink hover:text-coral">Zalify</a> · go outside
+          MIT · made by <a href="https://zalify.com" class="text-ink hover:text-coral">Zalify</a> · self-hosted remote terminal
         </span>
         <span class="flex flex-wrap items-center gap-x-6 gap-y-3 font-display text-[14px] font-semibold text-muted">
           <a href="/docs/mac" class="hover:text-coral">Getting started</a>
           <a href="/tunnel" class="hover:text-coral">Tunnel guide</a>
           <a href={`${repo}/blob/main/SECURITY.md`} class="hover:text-coral">Security</a>
+          <a href={`${repo}/releases`} class="hover:text-coral">Release notes</a>
           <a href={discord} class="inline-flex items-center gap-1.5 hover:text-coral"><Icon name="discord" /> Discord</a>
           <a href={repo} class="inline-flex items-center gap-1.5 hover:text-coral"><Icon name="github" /> GitHub</a>
         </span>
