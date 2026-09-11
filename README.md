@@ -21,8 +21,9 @@ from one interface. The machines running your Hub and sessions must stay online.
   interactive CLIs, editors, build output, and shell history.
 - **Multiple machines behind one Hub:** each `offdesk-node` connects outbound
   to the Hub; nodes need no inbound port or public IP.
-- **Mobile terminal controls:** Esc, Tab, arrow keys, Ctrl+C, file attachments,
-  and encrypted App pairing via QR code.
+- **Mobile terminal controls:** customizable shortcut keys, Shift+Tab, Shift
+  combinations, Backspace repeat, file attachments, and encrypted App pairing
+  via QR code. Arrows, Enter and the keyboard toggle stay fixed.
 - **CLI automation:** open a terminal, send input, wait for output, and read
   results with `offdesk open / send / wait / read` and JSON output.
 - **Self-hosted deployment:** Rust binaries or Docker on macOS/Linux, with
@@ -61,6 +62,8 @@ Linux can also host a Hub with tmux installed separately.
   [optional Offdesk Cloud setup](docs/managed-connections.md)
 - [Localhost web previews](docs/web-previews.md): opt-in forwarding with a
   dedicated preview domain and HTTPS ingress, separate from terminal E2EE
+- [Customize terminal keys](docs/terminal-keys.md): key placement, Shift combinations
+  and backward deletion without reopening the system keyboard
 - [Build from source](docs/building.md) · [Security model](SECURITY.md)
 - [Release notes and version history](https://github.com/zalify/offdesk/releases)
 
