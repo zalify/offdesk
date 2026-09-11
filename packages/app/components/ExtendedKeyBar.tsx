@@ -1,10 +1,12 @@
+import { useKeyBarLayout, type KeyBarKey, type KeyBarLayout } from "@/lib/keyBarPreferences";
 import { readClipboardText } from "@/lib/readClipboardText";
 import { AttachmentPicker, AttachmentReview, formatAttachmentSize } from "./AttachmentPicker";
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, LoaderCircle } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, LoaderCircle, ArrowBigUp as Shift, Delete } from "lucide-react";
 import "./ExtendedKeyBar.css";
 
 export interface ExtendedKeyBarProps {
+  layout?: KeyBarLayout;
   onKey: (data: string) => void;
   onToggleKeyboard: () => void;
   onPasteText?: (text: string) => void;
@@ -17,11 +19,17 @@ export interface ExtendedKeyBarProps {
   isController: boolean;
   ctrlArmed?: boolean;
   onToggleCtrl?: () => void;
+  shiftArmed?: boolean;
+  onToggleShift?: () => void;
+  onShiftPress?: () => void;
+  onShiftRelease?: (cancelled: boolean) => void;
 }
 
-export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachFile,
+export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
-  ctrlArmed = false, onToggleCtrl }: ExtendedKeyBarProps) {
+  ctrlArmed = false, onToggleCtrl, shiftArmed = false, onToggleShift, onShiftPress, onShiftRelease }: ExtendedKeyBarProps) {
+  const savedLayout = useKeyBarLayout();
+  const layout = layoutOverride ?? savedLayout;
   const [pasteError, setPasteError] = useState<string | null>(null);
   const [pasting, setPasting] = useState(false);
   const pastePending = useRef(false);
@@ -115,8 +123,32 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
       if (mounted.current) setUploading(false);
     }
   };
-  const key = (label: string, data: string, id?: string, icon?: ReactNode) => <KeyButton key={data} label={label} testid={id}
-    disabled={!isController} repeat={!!icon} onPress={() => onKey(data)}>{icon}</KeyButton>;
+  const key = (label: string, data: string, id?: string, icon?: ReactNode, repeat: boolean | "hold" = false) => <KeyButton key={data} label={label} testid={id}
+    disabled={!isController} repeat={repeat} onPress={() => onKey(data)}>{icon}</KeyButton>;
+  const renderKey = (id: KeyBarKey): ReactNode => {
+    const simple: Partial<Record<KeyBarKey, [string, string]>> = {
+      esc: ["Esc", "\x1b"], tab: ["Tab", "\t"], slash: ["/", "/"], space: ["Space", " "],
+      at: ["@", "@"], tilde: ["~", "~"], pipe: ["|", "|"], dash: ["-", "-"], underscore: ["_", "_"],
+      home: ["Home", "\x1b[H"], end: ["End", "\x1b[F"], "ctrl-d": ["Ctrl+D", "\x04"],
+      "ctrl-z": ["Ctrl+Z", "\x1a"], "ctrl-l": ["Ctrl+L", "\x0c"],
+    };
+    const data = simple[id];
+    if (data) return key(data[0], data[1], `extended-keybar-${id}`);
+    switch (id) {
+      case "ctrl-c": return <KeyButton key={id} label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")} />;
+      case "shift-tab": return key("Shift+Tab", "\x1b[Z", "extended-keybar-shift-tab", <><Shift size={13} aria-hidden /><span>Tab</span></>);
+      case "backspace": return key("Backspace", "\x7f", "extended-keybar-backspace", <Delete size={18} aria-hidden />, "hold");
+      case "shift": return onToggleShift && onShiftPress && onShiftRelease && <ShiftButton key={id} disabled={!isController} pressed={shiftArmed}
+        onToggle={onToggleShift} onStart={onShiftPress} onEnd={onShiftRelease} />;
+      case "paste": return onPasteText && <KeyButton key={id} label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}><ClipboardPaste size={18} aria-hidden /></KeyButton>;
+      case "attach": return onAttachFile && <KeyButton key={id} label={uploading ? "Uploading attachment" : "Attach photo or file"} testid="extended-keybar-attach"
+        disabled={!isController || uploading} onPress={() => setChoosingAttachment(true)}>
+        {uploading ? <LoaderCircle size={18} aria-hidden className="offdesk-keybar-spinner" data-testid="extended-keybar-attach-spinner" /> : <Paperclip size={18} aria-hidden />}
+      </KeyButton>;
+      case "select-toggle": return selectionAvailable && <KeyButton key={id} label="Select text to copy" testid="extended-keybar-select-toggle" disabled={!isController} onPress={() => onEnterSelectMode?.()}><SquareDashed size={18} aria-hidden /></KeyButton>;
+      case "ctrl-latch": return onToggleCtrl && <KeyButton key={id} label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl} />;
+    }
+  };
   return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar" style={{ "--key-width": `${keyWidth}px` } as CSSProperties}>
     {selection ? <div className="offdesk-selection-bar" data-testid="extended-keybar-select-mode">
       <button onClick={onExitSelectMode} disabled={copying} data-testid="extended-keybar-select-done">Done</button>
@@ -132,10 +164,9 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
         <span>{attachmentStatus.message}</span><button aria-label="Dismiss attachment status" onClick={() => setAttachmentStatus(null)}>Dismiss</button>
       </div>}
       <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
-        <KeyButton label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")} />
-        {key("Esc", "\x1b", "extended-keybar-esc")}{key("Tab", "\t", "extended-keybar-tab")}{key("/", "/", "extended-keybar-slash")}
+        {layout.primary.map(renderKey)}
         <span className="offdesk-keybar-spacer" />
-        {key("Arrow up", "\x1b[A", "extended-keybar-up", <ArrowUp size={18} aria-hidden />)}
+        {key("Arrow up", "\x1b[A", "extended-keybar-up", <ArrowUp size={18} aria-hidden />, true)}
         {key("Enter", "\r", "extended-keybar-enter")}
       </div>
       <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
@@ -144,20 +175,13 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
         <div className="offdesk-keybar-scroll-wrap" data-left={edges.left} data-right={edges.right}>
           <div ref={scroller} className="offdesk-keybar-scroll" onScroll={updateEdges} data-testid="keybar-scroll" role="group" aria-label="Input tools and symbols, scroll horizontally">
             <div ref={track} className="offdesk-keybar-track">
-              {onPasteText && <KeyButton label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}><ClipboardPaste size={18} aria-hidden /></KeyButton>}
-              {onAttachFile && <KeyButton label={uploading ? "Uploading attachment" : "Attach photo or file"} testid="extended-keybar-attach"
-                disabled={!isController || uploading} onPress={() => setChoosingAttachment(true)}>
-                {uploading ? <LoaderCircle size={18} aria-hidden className="offdesk-keybar-spinner" data-testid="extended-keybar-attach-spinner" /> : <Paperclip size={18} aria-hidden />}
-              </KeyButton>}
-              {selectionAvailable && <KeyButton label="Select text to copy" testid="extended-keybar-select-toggle" disabled={!isController} onPress={() => onEnterSelectMode?.()}><SquareDashed size={18} aria-hidden /></KeyButton>}
-              {onToggleCtrl && <KeyButton label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl} />}
-              {["Space", "@", "~", "|", "-", "_"].map(label => key(label, label === "Space" ? " " : label, label === "Space" ? "extended-keybar-space" : undefined))}
+              {layout.secondary.map(renderKey)}
             </div>
           </div>
         </div>
-        {key("Arrow left", "\x1b[D", "extended-keybar-left", <ArrowLeft size={18} aria-hidden />)}
-        {key("Arrow down", "\x1b[B", "extended-keybar-down", <ArrowDown size={18} aria-hidden />)}
-        {key("Arrow right", "\x1b[C", "extended-keybar-right", <ArrowRight size={18} aria-hidden />)}
+        {key("Arrow left", "\x1b[D", "extended-keybar-left", <ArrowLeft size={18} aria-hidden />, true)}
+        {key("Arrow down", "\x1b[B", "extended-keybar-down", <ArrowDown size={18} aria-hidden />, true)}
+        {key("Arrow right", "\x1b[C", "extended-keybar-right", <ArrowRight size={18} aria-hidden />, true)}
       </div>
     </>}
     <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
@@ -171,13 +195,14 @@ export function ExtendedKeyBar({ onKey, onToggleKeyboard, onPasteText, onAttachF
 }
 
 function KeyButton({ label, children, onPress, testid, disabled = false, repeat = false, accent = false, pressed }: {
-  label: string; children?: ReactNode; onPress: () => void; testid?: string; disabled?: boolean; repeat?: boolean; accent?: boolean; pressed?: boolean;
+  label: string; children?: ReactNode; onPress: () => void; testid?: string; disabled?: boolean; repeat?: boolean | "hold"; accent?: boolean; pressed?: boolean;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const delay = useRef<ReturnType<typeof setTimeout> | null>(null);
   const interval = useRef<ReturnType<typeof setInterval> | null>(null);
   const press = useRef(onPress); press.current = onPress;
   const disabledRef = useRef(disabled); disabledRef.current = disabled;
+  const repeated = useRef(false);
   const gesture = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const stop = () => { if (delay.current) clearTimeout(delay.current); if (interval.current) clearInterval(interval.current); delay.current = null; interval.current = null; };
   useEffect(() => {
@@ -191,28 +216,37 @@ function KeyButton({ label, children, onPress, testid, disabled = false, repeat 
     if (!button) return;
     const touchEnd = (event: TouchEvent) => {
       const current = gesture.current;
-      if (!current || current.moved || event.touches.length > 0) return;
+      if (!current || current.moved || !Array.from(event.changedTouches).some(touch => button.contains(touch.target as Node))) return;
       // Cancelling pointerdown/mousedown does not cancel the touchend
       // default action in mobile WebViews. Consume the tap here so an
       // already-focused editable cannot reopen a dismissed OS keyboard.
       // React's touch listeners are passive: use a native non-passive one.
       event.preventDefault();
       stop();
-      if (!disabledRef.current && !repeat) press.current();
+      if (!disabledRef.current && (!repeat || (repeat === "hold" && !repeated.current))) press.current();
       gesture.current = null;
     };
     button.addEventListener("touchend", touchEnd, { passive: false });
     return () => button.removeEventListener("touchend", touchEnd);
   }, [repeat]);
   return <button ref={buttonRef} type="button" className="offdesk-terminal-key" disabled={disabled} data-testid={testid} aria-label={label} title={label}
-    aria-pressed={pressed} data-accent={accent} style={{ touchAction: repeat ? "none" : "pan-x" }}
+    aria-pressed={pressed} data-accent={accent} style={{ touchAction: repeat === true ? "none" : "pan-x" }}
     onPointerDown={event => {
       if (event.button !== 0 || disabled) return;
       gesture.current = { x: event.clientX, y: event.clientY, moved: false };
+      repeated.current = false;
       // Cancel focus, not the horizontal scrolling gesture. mousedown is
       // canceled too because iOS synthesizes its own compatibility events.
       event.preventDefault();
-      if (repeat) { stop(); press.current(); delay.current = setTimeout(() => { interval.current = setInterval(() => press.current(), 60); }, 350); }
+      if (repeat) {
+        stop();
+        if (repeat === true) press.current();
+        delay.current = setTimeout(() => {
+          repeated.current = true;
+          press.current();
+          interval.current = setInterval(() => press.current(), 60);
+        }, 350);
+      }
     }}
     onMouseDown={event => event.preventDefault()}
     onPointerMove={event => { const g = gesture.current; if (g && Math.hypot(event.clientX - g.x, event.clientY - g.y) > 8) { g.moved = true; stop(); } }}
@@ -222,9 +256,43 @@ function KeyButton({ label, children, onPress, testid, disabled = false, repeat 
     onClick={event => {
       // Keyboard / assistive activation has detail=0. Pointer clicks on
       // repeat keys were already sent on down; swipes never activate keys.
-      if (event.detail === 0 || (!repeat && !gesture.current?.moved)) onPress();
+      if (event.detail === 0 || ((!repeat || (repeat === "hold" && !repeated.current)) && !gesture.current?.moved)) onPress();
       gesture.current = null;
     }}>
     {children ?? label}
   </button>;
+}
+
+function ShiftButton({ disabled, pressed, onStart, onEnd, onToggle }: {
+  disabled: boolean; pressed: boolean; onStart: () => void; onEnd: (cancelled: boolean) => void; onToggle: () => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const pointer = useRef<number | null>(null);
+  const end = useRef(onEnd); end.current = onEnd;
+  useEffect(() => {
+    const cancel = () => { pointer.current = null; end.current(true); };
+    const hidden = () => { if (document.hidden) cancel(); };
+    const touchEnd = (event: TouchEvent) => event.preventDefault();
+    const button = ref.current;
+    button?.addEventListener("touchend", touchEnd, { passive: false });
+    window.addEventListener("blur", cancel); document.addEventListener("visibilitychange", hidden);
+    return () => {
+      cancel(); button?.removeEventListener("touchend", touchEnd);
+      window.removeEventListener("blur", cancel); document.removeEventListener("visibilitychange", hidden);
+    };
+  }, []);
+  useEffect(() => { if (disabled) { pointer.current = null; end.current(true); } }, [disabled]);
+  return <button ref={ref} type="button" className="offdesk-terminal-key" data-testid="extended-keybar-shift"
+    aria-label="Shift" title="Shift — tap for the next key, or hold to combine keys" aria-pressed={pressed} disabled={disabled}
+    style={{ touchAction: "none" }}
+    onPointerDown={event => {
+      if (disabled || event.button !== 0 || pointer.current !== null) return;
+      event.preventDefault(); pointer.current = event.pointerId;
+      event.currentTarget.setPointerCapture(event.pointerId); onStart();
+    }}
+    onPointerUp={event => { if (pointer.current === event.pointerId) { pointer.current = null; onEnd(false); } }}
+    onPointerCancel={() => { pointer.current = null; onEnd(true); }}
+    onLostPointerCapture={() => { if (pointer.current !== null) { pointer.current = null; onEnd(true); } }}
+    onMouseDown={event => event.preventDefault()} onContextMenu={event => event.preventDefault()}
+    onClick={event => { if (event.detail === 0) onToggle(); }}><Shift size={18} aria-hidden /></button>;
 }

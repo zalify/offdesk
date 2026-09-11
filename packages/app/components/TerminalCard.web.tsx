@@ -7,7 +7,7 @@ import { ExtendedKeyBar } from "./ExtendedKeyBar";
 import { TerminalPreviewText } from "./TerminalPreviewText.web";
 import { terminalWsUrl } from "@/lib/api";
 import { colors, terminalTheme } from "@/lib/colors";
-import { ctrlLatchTransform } from "@/lib/ctrlLatch";
+import { useTerminalModifiers } from "@/lib/useTerminalModifiers";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { useVisualViewportHeight } from "@/lib/hooks";
 import { useTerminalKeyboard } from "@/lib/useTerminalKeyboard";
@@ -85,35 +85,11 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   const isTab = displayMode === "tab";
   const keyBarSlot = useKeyBarSlot();
 
-  // ---- Ctrl latch (mobile key bar) ----
-  // The latch state lives here because TerminalCard owns both ends of the
-  // input path: key-bar keys (handleToolbarKey) and soft-keyboard input
-  // (via inputTransformRef, which TerminalView applies inside xterm's
-  // onData). While armed, the next character key from either path is sent
-  // as its control byte and the latch disarms.
-  const [ctrlArmed, setCtrlArmed] = useState(false);
-  const ctrlArmedRef = useRef(false);
+  // Share modifiers between command keys and direct/IME input. They never
+  // focus the terminal, and cannot leak across tabs, leases or reconnects.
+  const modifiers = useTerminalModifiers(terminal.id, canType && isActive && !selectMode && !eventsReconnecting && !terminalReconnecting);
   const inputTransformRef = useRef<((data: string) => string) | null>(null);
-  const setCtrlLatch = useCallback((armed: boolean) => {
-    ctrlArmedRef.current = armed;
-    setCtrlArmed(armed);
-  }, []);
-
-  useEffect(() => {
-    inputTransformRef.current = (data: string) => {
-      if (!ctrlArmedRef.current) return data;
-      setCtrlLatch(false);
-      return ctrlLatchTransform(data) ?? data;
-    };
-    return () => {
-      inputTransformRef.current = null;
-    };
-  }, [setCtrlLatch]);
-
-  // A new terminal or a lost lease starts with a clean latch.
-  useEffect(() => {
-    setCtrlLatch(false);
-  }, [setCtrlLatch, terminal.id, isController]);
+  inputTransformRef.current = modifiers.transform;
 
   const clearFitRefRetryTimer = useCallback(() => {
     if (fitRefRetryTimer.current !== null) {
@@ -228,19 +204,8 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   // reflects the last toggle, and refocusing would unexpectedly reopen it.
   const handleToolbarKey = useCallback((data: string) => {
     if (!canType) return;
-    if (ctrlArmedRef.current) {
-      setCtrlLatch(false);
-      termViewRef.current?.sendCommandInput(ctrlLatchTransform(data) ?? data);
-    } else {
-      termViewRef.current?.sendCommandInput(data);
-    }
-  }, [canType, setCtrlLatch]);
-
-  const handleToggleCtrl = useCallback(() => {
-    if (!canType) return;
-    // Tapping Ctrl again while armed disarms without sending anything.
-    setCtrlLatch(!ctrlArmedRef.current);
-  }, [canType, setCtrlLatch]);
+    termViewRef.current?.sendCommandInput(modifiers.transform(data));
+  }, [canType, modifiers.transform]);
 
   const handleAttachFile = useCallback(async (file: File) => {
     if (!canType) throw new Error("Unlock view only to attach a file.");
@@ -692,7 +657,9 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
               }} onAttachFile={handleAttachFile}
               onEnterSelectMode={handleEnterSelectMode} onExitSelectMode={handleExitSelectMode} onCopySelection={handleCopySelection}
               selectMode={selectMode} keyboardVisible={keyboardVisible} isController={canType}
-              ctrlArmed={ctrlArmed} onToggleCtrl={handleToggleCtrl} />
+              ctrlArmed={modifiers.ctrlArmed} onToggleCtrl={modifiers.toggleCtrl}
+              shiftArmed={modifiers.shiftArmed} onToggleShift={modifiers.toggleShift}
+              onShiftPress={modifiers.pressShift} onShiftRelease={modifiers.releaseShift} />
           </TerminalKeyBarPortal>
         )}
       </div>

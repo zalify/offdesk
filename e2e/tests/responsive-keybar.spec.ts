@@ -96,7 +96,7 @@ test("equal keys and fixed inverted-T survive scrolling, folding and rotation", 
     await expect(bar.getByTestId("extended-keybar-ctrl-c")).toBeInViewport();
     await expect(bar.getByTestId("extended-keybar-tab")).toBeInViewport();
     await expect(bar.getByTestId("extended-keybar-enter")).toBeInViewport();
-    await expect(bar.getByTestId("extended-keybar-shift-tab")).toHaveCount(0);
+    await expect(bar.getByTestId("extended-keybar-shift-tab")).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath(`keybar-${width}.png`) });
   }
 });
@@ -158,7 +158,7 @@ test("IME dismissal releases retained focus and every command key keeps it close
   const nativeVisibility = (visible: boolean) => page.evaluate(value => {
     window.dispatchEvent(new CustomEvent("offdesk:keyboard-visibility", { detail: value }));
   }, visible);
-  const keys = ["enter", "tab", "esc", "up", "down", "left", "right", "ctrl-c"];
+  const keys = ["enter", "tab", "esc", "up", "down", "left", "right", "ctrl-c", "shift-tab", "backspace"];
   for (const name of keys) {
     await keyboard.tap();
     await expect(direct).toBeFocused();
@@ -175,4 +175,99 @@ test("IME dismissal releases retained focus and every command key keeps it close
   await page.getByTestId("extended-keybar-enter").tap();
   await expect(direct).toBeFocused();
   await nativeVisibility(false);
+});
+
+test("custom terminal keys persist while fixed navigation stays aligned", async ({ page }) => {
+  const id = await setup(page);
+  const { mobileOpenHostSheet } = await import("./helpers");
+  await mobileOpenHostSheet(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByText("Customize terminal keys", { exact: true }).click();
+  const settings = page.getByTestId("keybar-settings");
+  await settings.getByRole("button", { name: "Hide /", exact: true }).click();
+  await settings.getByRole("button", { name: "Move Backspace to first row", exact: true }).click();
+  await expect(settings.getByRole("button", { name: "Move Shift earlier", exact: true })).toBeDisabled();
+  await settings.getByRole("combobox", { name: "Add key to second row" }).selectOption("home");
+  await page.reload();
+  await expandTerminalById(page, id);
+  const bar = page.getByTestId("extended-keybar");
+  await expect(bar.getByTestId("extended-keybar-slash")).toHaveCount(0);
+  await expect(bar.getByTestId("keybar-fixed-row").getByTestId("extended-keybar-backspace")).toBeVisible();
+  await expect(bar.getByTestId("extended-keybar-home")).toHaveCount(1);
+  await expect.poll(() => bar.evaluate(el => Math.abs(
+    el.querySelector('[data-testid="extended-keybar-up"]')!.getBoundingClientRect().x -
+    el.querySelector('[data-testid="extended-keybar-down"]')!.getBoundingClientRect().x))).toBeLessThan(1);
+  await mobileOpenHostSheet(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByText("Customize terminal keys", { exact: true }).click();
+  await settings.getByRole("button", { name: "Restore default keys" }).click();
+  await page.reload();
+  await expandTerminalById(page, id);
+  await expect(page.getByTestId("extended-keybar-slash")).toBeVisible();
+});
+
+test("Shift tap and two-finger hold modify commands and always release", async ({ page }) => {
+  const commands: string[] = [];
+  page.on("websocket", socket => socket.on("framesent", frame => {
+    try { const m = JSON.parse(String(frame.payload)); if (m.type === "command_input") commands.push(m.data); } catch {}
+  }));
+  await setup(page);
+  const shift = page.getByTestId("extended-keybar-shift");
+  const tab = page.getByTestId("extended-keybar-tab");
+  const textarea = page.locator(".xterm-helper-textarea").first();
+  await shift.scrollIntoViewIfNeeded();
+  await shift.tap();
+  await expect(shift).toHaveAttribute("aria-pressed", "true");
+  await tab.tap();
+  await expect.poll(() => commands).toEqual(["\x1b[Z"]);
+  await expect(shift).toHaveAttribute("aria-pressed", "false");
+  await tab.tap();
+  await expect.poll(() => commands).toEqual(["\x1b[Z", "\t"]);
+  const cdp = await page.context().newCDPSession(page);
+  const a = (await shift.boundingBox())!, b = (await tab.boundingBox())!;
+  const first = { id: 1, x: a.x + a.width / 2, y: a.y + a.height / 2 };
+  const second = { id: 2, x: b.x + b.width / 2, y: b.y + b.height / 2 };
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first] });
+  for (let i = 0; i < 2; i++) {
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [first, second] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [first] });
+  }
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await expect.poll(() => commands).toEqual(["\x1b[Z", "\t", "\x1b[Z", "\x1b[Z"]);
+  await expect(shift).toHaveAttribute("aria-pressed", "false");
+  await page.getByTestId("extended-keybar-up").tap();
+  await expect.poll(() => commands.at(-1)).toBe("\x1b[A");
+  await shift.tap();
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(shift).toHaveAttribute("aria-pressed", "false");
+  await expect(textarea).not.toBeFocused();
+  await cdp.detach();
+});
+
+test("Backspace taps once, holds to repeat, and scrolling never deletes", async ({ page }) => {
+  const commands: string[] = [];
+  page.on("websocket", socket => socket.on("framesent", frame => {
+    try { const m = JSON.parse(String(frame.payload)); if (m.type === "command_input") commands.push(m.data); } catch {}
+  }));
+  await setup(page);
+  const backspace = page.getByTestId("extended-keybar-backspace");
+  await backspace.tap();
+  await expect.poll(() => commands).toEqual(["\x7f"]);
+  const cdp = await page.context().newCDPSession(page);
+  const box = (await backspace.boundingBox())!;
+  const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+  await expect.poll(() => commands.length).toBeGreaterThan(3);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const count = commands.length;
+  await page.waitForTimeout(200);
+  expect(commands).toHaveLength(count);
+  expect(commands.every(key => key === "\x7f")).toBe(true);
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ ...point, x: point.x - 35 }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(400);
+  expect(commands).toHaveLength(count);
+  await expect(page.locator(".xterm-helper-textarea").first()).not.toBeFocused();
+  await cdp.detach();
 });

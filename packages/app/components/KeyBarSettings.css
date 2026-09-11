@@ -1,0 +1,14 @@
+.offdesk-keybar-settings{margin-bottom:32px;color:rgb(var(--color-foreground))}
+.offdesk-keybar-settings h2{font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:.08em;color:rgb(var(--color-foreground-muted));margin:0 0 16px}
+.offdesk-keybar-settings p{font-size:13px;line-height:1.6;color:rgb(var(--color-foreground-muted))}
+.offdesk-keybar-settings summary{cursor:pointer;padding:14px 0;font-size:14px}
+.offdesk-keybar-preview{border:1px solid rgb(var(--color-border));border-radius:12px;overflow:hidden;max-width:420px;margin:16px 0}
+.offdesk-keybar-editor h3{font-size:14px;font-weight:500;margin:24px 0 8px}
+.offdesk-keybar-editor ol{list-style:none;padding:0;margin:0}
+.offdesk-keybar-editor li{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid rgb(var(--color-border));min-height:44px;font-size:14px}
+.offdesk-keybar-edit-actions{display:flex;flex-shrink:0}
+.offdesk-keybar-settings button{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 8px;background:transparent;border:0;color:inherit;cursor:pointer;font:inherit;font-size:13px}
+.offdesk-keybar-settings button:disabled{opacity:.35;cursor:default}
+.offdesk-keybar-settings button:not(:disabled):hover{background:rgb(var(--color-surface-hover))}
+.offdesk-keybar-editor select,.offdesk-keybar-settings .offdesk-keybar-reset{margin-top:12px;max-width:100%;min-height:44px;border:1px solid rgb(var(--color-border));border-radius:8px;padding:8px 12px;background:rgb(var(--color-background));color:inherit;font-size:14px}
+@media(max-width:380px){.offdesk-keybar-editor li{flex-wrap:wrap;gap:0}.offdesk-keybar-editor li>span{flex:1 1 90px}}
