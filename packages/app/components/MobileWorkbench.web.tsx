@@ -68,6 +68,7 @@ interface MobileWorkbenchProps {
   groups: WorkspaceGroup[];
   activeTerminalId: string | null;
   canCreateTerminal: boolean;
+  canSendAttention: (machineId: string) => boolean;
   onPickTerminal: (id: string) => void;
   onSelectGroup: (groupId: string) => void;
   // null group = machine home directory (empty state / no active group).
@@ -107,6 +108,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     groups,
     activeTerminalId,
     canCreateTerminal,
+    canSendAttention,
     onPickTerminal,
     onSelectGroup,
     onNewTerminal,
@@ -543,6 +545,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
 
       {/* Terminal area (edge swipes switch terminals in strip order) */}
       <MobileTerminalAttention terminals={terminals} machines={machines}
+        deviceId={deviceId} canSend={canSendAttention}
         activeTerminalId={activeTerminalId}
         groupLabels={new Map(chips.map(({ terminal, group }) => [terminal.id, group.label]))}
         onPick={(id) => {

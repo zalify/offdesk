@@ -31,7 +31,11 @@ test("mobile attention shortcuts switch tabs and machines and track live resolut
       }
     });
   });
+  const inputs: { path: string; message: { type: string; data?: string } }[] = [];
   await page.routeWebSocket(/\/ws\/terminal\//, socket => {
+    socket.onMessage(raw => {
+      if (typeof raw === "string") inputs.push({ path: new URL(socket.url()).pathname, message: JSON.parse(raw) });
+    });
     socket.send(Buffer.from("Terminal ready\r\n"));
   });
   await openApp(page);
@@ -42,6 +46,21 @@ test("mobile attention shortcuts switch tabs and machines and track live resolut
   await expect(page.getByTestId("mobile-session-switcher")).toHaveCount(0);
   await expect(page.getByText("Picked up where you left off", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("mobile-attention-light.png") });
+  const routeBefore = page.url();
+  const focusBefore = await page.evaluateHandle(() => document.activeElement);
+  const remoteEnter = page.getByTestId("mobile-attention-enter-remote");
+  await remoteEnter.click();
+  await expect(remoteEnter).toHaveText("Sent");
+  await expect(remoteEnter).toBeDisabled();
+  expect(page.url()).toBe(routeBefore);
+  await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Current task");
+  expect(inputs.filter(x => x.message.type === "command_input")).toEqual([
+    { path: "/ws/terminal/remote-host/remote", message: { type: "command_input", data: "\r" } },
+  ]);
+  expect(inputs.filter(x => x.path.endsWith("/remote") && x.message.type === "resize")).toEqual([]);
+  expect(await page.evaluate(element => document.activeElement === element, focusBefore)).toBe(true);
+  await focusBefore.dispose();
+  await expect(page.getByTestId("mobile-attention-enter-other")).toBeEnabled();
   await page.getByTestId("mobile-attention-other").click();
   await expect(page).toHaveURL(/#\/t\/other$/);
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Fix checkout");
@@ -110,4 +129,46 @@ test("missed attention events recover without another message or manual reconnec
   await page.getByTestId("mobile-attention-waiting").click();
   await expect(page).toHaveURL(/#\/t\/waiting$/);
   await expect(strip).toHaveCount(0);
+});
+
+
+test("mobile attention Enter respects view-only and a prompt resolved while attaching", async ({ page }) => {
+  const current = { id: "current", title: "Current", machine_id: "e2e-node", cwd: "/tmp", cols: 80, rows: 24, reachable: true };
+  const waiting = { ...current, id: "waiting", title: "Waiting", attention: "confirmation" };
+  let events: WebSocketRoute;
+  let waitingSocket: WebSocketRoute | undefined;
+  const inputs: string[] = [];
+  await page.addInitScript(() => {
+    if (localStorage.getItem("offdesk:view-only-lock") === null) localStorage.setItem("offdesk:view-only-lock", "1");
+  });
+  await page.route("**/api/bootstrap", route => route.fulfill({ json: {
+    snapshot_seq: 100, last_focused_terminal_id: "current",
+    machines: [{ id: "e2e-node", name: "Mac", os: "macos", home_dir: "/tmp" }],
+    terminals: [current, waiting], workspace_groups: [], workspace_layouts: [], machine_stats: [], control_leases: [],
+  } }));
+  await page.routeWebSocket(/\/ws\/events/, socket => { events = socket; });
+  await page.routeWebSocket(/\/ws\/terminal\//, socket => {
+    if (new URL(socket.url()).pathname.endsWith("/waiting")) {
+      waitingSocket = socket;
+      socket.onMessage(raw => inputs.push(String(raw)));
+    } else socket.send(Buffer.from("Ready\r\n"));
+  });
+  await openApp(page);
+  await expect(page.getByTestId("mobile-attention-enter-waiting")).toBeDisabled();
+  expect(waitingSocket).toBeUndefined();
+  // Unlock for the next load without changing the selected terminal.
+  await page.evaluate(() => localStorage.setItem("offdesk:view-only-lock", "0"));
+  await page.reload();
+  const button = page.getByTestId("mobile-attention-enter-waiting");
+  await expect(button).toBeEnabled();
+  await button.click();
+  await expect.poll(() => !!waitingSocket).toBe(true);
+  await expect(button).toBeDisabled();
+  events!.send(JSON.stringify({ seq: 101, event: { type: "terminal_updated", terminal: { ...waiting, attention: null } } }));
+  await expect(page.getByTestId("mobile-terminal-attention")).toHaveCount(0);
+  const closed = new Promise<void>(resolve => waitingSocket!.onClose(() => resolve()));
+  waitingSocket!.send(Buffer.from("Now at an ordinary shell prompt\r\n"));
+  await closed;
+  expect(inputs).toEqual([]);
+  await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Current");
 });
