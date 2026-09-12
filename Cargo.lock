@@ -1362,7 +1362,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-cli"
-version = "0.21.3"
+version = "0.21.4"
 dependencies = [
  "clap",
  "dirs",
@@ -1383,7 +1383,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-hub"
-version = "0.21.3"
+version = "0.21.4"
 dependencies = [
  "axum",
  "base64",
@@ -1433,7 +1433,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-machine"
-version = "0.21.3"
+version = "0.21.4"
 dependencies = [
  "base64",
  "bytes",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-preview-transport"
-version = "0.21.3"
+version = "0.21.4"
 dependencies = [
  "futures",
  "offdesk-protocol",
@@ -1472,7 +1472,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-protocol"
-version = "0.21.3"
+version = "0.21.4"
 dependencies = [
  "bytes",
  "dirs",
@@ -1484,7 +1484,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-secure"
-version = "0.21.3"
+version = "0.21.4"
 dependencies = [
  "base64",
  "futures",

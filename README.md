@@ -23,7 +23,8 @@ from one interface. The machines running your Hub and sessions must stay online.
   to the Hub; nodes need no inbound port or public IP.
 - **Mobile terminal controls:** customizable shortcut keys, Shift+Tab, Shift
   combinations, Backspace repeat, file attachments, and encrypted App pairing
-  via QR code. Arrows, Enter and the keyboard toggle stay fixed.
+  via QR code. Arrows, Enter and the keyboard toggle stay fixed. Tap the task
+  title to switch sessions, or the monitor icon to open Machines & Hub.
 - **CLI automation:** open a terminal, send input, wait for output, and read
   results with `offdesk open / send / wait / read` and JSON output.
 - **Self-hosted deployment:** Rust binaries or Docker on macOS/Linux, with
@@ -34,7 +35,9 @@ from one interface. The machines running your Hub and sessions must stay online.
 
 The Hub, node, CLI, and clients in this repository are **MIT licensed**.
 Self-hosting needs no vendor account. Optional **Offdesk Cloud** provides
-managed remote access as a separate, closed-source service.
+managed remote access as a separate, closed-source service. Its open-source
+local connector checks encrypted reachability and automatically restarts after
+sustained tunnel failures, with backoff for extended outages.
 
 Questions, setups that did not work, things you want it to do:
 [Discord](https://discord.gg/aFUu6VMzc).

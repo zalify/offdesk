@@ -326,6 +326,37 @@ test("Cloud sign-in, automatic verification, pairing and disabling work without 
 });
 
 
+test("Cloud status stops claiming readiness after outage and recovers on refresh", async ({ page }) => {
+  await desktopBridge(page, "hub");
+  await page.clock.install();
+  await openApp(page);
+  await page.evaluate(() => {
+    (window as any).__desktopTest.cloudState = { state: "active", local_enabled: true, verified: true,
+      url: "https://0123456789abcdef0123456789abcdef.cloud.offdesk.dev" };
+  });
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const panel = page.getByTestId("cloud-connection-panel");
+  const ready = panel.getByText("Remote connection ready · Encryption verified");
+  await expect(ready).toBeVisible();
+  await page.evaluate(() => { (window as any).__desktopTest.cloudState.verified = false; });
+  await panel.getByRole("button", { name: "Check again", exact: true }).click();
+  await expect(ready).toHaveCount(0);
+  await expect(panel.getByText("Remote connection is not verified. Keep this Mac online; Offdesk retries automatically.")).toBeVisible();
+  await expect(panel.getByRole("button", { name: "Connect your phone", exact: true })).toHaveCount(0);
+  // Failure to fetch status must also invalidate the old success.
+  await page.evaluate(() => { (window as any).__desktopTest.cloudState.verified = true; });
+  await panel.getByRole("button", { name: "Check again", exact: true }).click();
+  await expect(ready).toBeVisible();
+  await page.evaluate(() => { (window as any).__desktopTest.cloudError = "Network unavailable"; });
+  await page.clock.fastForward(31000);
+  await expect(ready).toHaveCount(0);
+  await expect(panel.getByRole("alert")).toHaveText("Network unavailable");
+  await page.evaluate(() => { (window as any).__desktopTest.cloudError = ""; });
+  await page.clock.fastForward(31000);
+  await expect(ready).toBeVisible();
+  await expect(panel.getByRole("alert")).toHaveCount(0);
+});
+
 // Checking a wrapper's visibility did not prove that its SVG painted. Exercise
 // real image decoding and pixels in both Chromium and the desktop's WebKit engine.
 async function expectPaintedQr(image: Locator) {

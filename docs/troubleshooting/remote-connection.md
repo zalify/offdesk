@@ -25,10 +25,11 @@ offdesk-hub cloud status
 | Cloud is disabled or provisioning is incomplete | Follow [managed connection setup](../managed-connections.md). |
 | Local identity passes and Cloud is enabled and active | Check the connector below. |
 
-`cloud status` reports provisioning and saved verification. Even
-`verified: true` does not establish current reachability: the value uses the
-persisted `verified-url` in [`cloud.rs`](../../crates/hub/src/cloud.rs).
-Use a fresh `cloud check` to verify the network path.
+Updated Hubs check live encrypted reachability before `cloud status` reports
+`verified: true`. `active` refers only to provisioned resources. Older versions
+used saved verification and could report success during an outage; use a fresh
+`cloud check` on those versions. Every check is a snapshot, not a guarantee
+that the network will remain available.
 
 ## 2. Check whether the connector has working connections
 
@@ -76,8 +77,11 @@ An address mismatch together with zero healthy connections suggests that the
 connector retained old Fake-IP mappings. Fake-IP use or a DNS difference alone
 does not establish the cause.
 
-For this symptom, restart the managed connector so it resolves edge addresses
-again:
+Updated Hubs automatically restart their connector after three consecutive
+failed remote probes with a healthy local listener, using increasing delays for
+repeated outages. Allow a few minutes for detection and recovery. On older
+versions, or for an immediate retry, restart this connector to resolve edge
+addresses again:
 
 ```sh
 launchctl kickstart -k "gui/$(id -u)/dev.offdesk.cloud"

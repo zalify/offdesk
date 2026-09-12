@@ -55,10 +55,36 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
     return () => { cancelled = true; clearTimeout(timer); };
   }, [login]);
 
+  // Recheck while this panel stays open. Never let an old success survive a
+  // failed refresh, and don't race sign-in, disable or an explicit check.
+  useEffect(() => {
+    if (busy !== null || login?.state === "pending") return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const id = sequence.current;
+    const poll = async () => {
+      if (document.visibilityState === "visible") {
+        try {
+          const result = await cloud("status");
+          if (!cancelled && mounted.current && id === sequence.current) {
+            setStatus(result); setStale(false); setError(null);
+          }
+        } catch (cause) {
+          if (!cancelled && mounted.current && id === sequence.current) {
+            setStale(true); setError(message(cause));
+          }
+        }
+      }
+      if (!cancelled) timer = setTimeout(() => void poll(), 30000);
+    };
+    timer = setTimeout(() => void poll(), 30000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [busy, login?.state]);
+
   const run = async (action: Action) => {
     const id = ++sequence.current;
     setError(null); setConfirmDisable(false);
-    if (["enable", "check", "disable"].includes(action)) { setStale(true); onConnectionChanged?.(); }
+    if (["status", "enable", "check", "disable"].includes(action)) { setStale(true); onConnectionChanged?.(); }
     setBusy(action === "login" ? "Opening sign-in…" : action === "enable" ? "Setting up remote access…" : action === "check" ? "Verifying encryption…" : action === "disable" ? "Turning off remote access…" : "Checking…");
     try {
       const result = await cloud(action);
@@ -104,6 +130,7 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
       <Body size={12} style={{ overflowWrap: "anywhere" }}>{status.url}</Body>
       {onPairPhone ? <Button onClick={onPairPhone}>Connect your phone</Button> : <SecurePairingPanel baseUrl={status.url} managed />}
     </> : null}
+    {!busy && !connected && status?.state === "active" && status.local_enabled ? <Body size={13}><span role="status">Remote connection is not verified. Keep this Mac online; Offdesk retries automatically.</span></Body> : null}
     {status?.state === "revoking" ? <Body size={13}>Remote access is being removed. Check again to confirm it has finished.</Body> : null}
     {login?.state === "pending" ? <div style={{ padding: 16, background: colors.bg0, border: `1px solid ${colors.line}`, borderRadius: 12 }}>
       <Body size={13}>Continue in your browser. Check that it shows this same code before approving:</Body>
