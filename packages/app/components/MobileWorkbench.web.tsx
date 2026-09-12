@@ -10,7 +10,7 @@ import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
 // 3-tab bottom nav (Hosts/Terminals/Stats), the app bar, the FAB and the
 // card-list landing are gone — the app opens straight into the last-active
 // terminal. Host switching, control toggling, reconnect and settings live
-// in the host sheet (reached by tapping the title); the count opens sessions. Per-session
+// in the host sheet (reached through the monitor icon); the title opens sessions. Per-session
 // actions live in the long-press sheet. See SPEC-PHASE3.md and the design doc §4.
 
 import {
@@ -36,6 +36,7 @@ import {
   Keyboard as KeyboardIcon,
   Lock,
   LockOpen,
+  Monitor,
   Plus,
   RefreshCw,
   Settings as SettingsIcon,
@@ -390,10 +391,12 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         <button
           type="button"
           data-testid="mobile-title-bar-label"
-          aria-label="Open Machines and Hub menu"
+          aria-label="Open terminal switcher"
+          aria-description={`Session ${activePosition} of ${chips.length}`}
+          aria-expanded={sessionSwitcherOpen}
           onClick={() => {
             if (suppressTitleBarClickRef.current) { suppressTitleBarClickRef.current = false; return; }
-            setHostSheetOpen(true);
+            setSessionSwitcherOpen(true);
           }}
           style={{
             background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", height: "100%",
@@ -514,17 +517,22 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
 
         <button
           type="button"
-          aria-label="Open terminal switcher"
-          data-testid="mobile-title-bar-badge"
+          aria-label="Open Machines and Hub menu"
+          title="Machines & Hub"
+          aria-expanded={hostSheetOpen}
+          data-testid="mobile-title-bar-machines"
           data-title-bar-swipe="ignore"
-          onClick={(event) => { event.stopPropagation(); setSessionSwitcherOpen(true); }}
+          onClick={(event) => { event.stopPropagation(); setHostSheetOpen(true); }}
           onTouchStart={event => event.stopPropagation()}
           onTouchEnd={event => event.stopPropagation()}
           style={{
-            border: 0, cursor: "pointer", minHeight: 34,
+            border: 0, cursor: "pointer", height: 34,
             flexShrink: 0,
-            minWidth: 37,
-            padding: "3px 6px",
+            width: 37,
+            padding: 0,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
             borderRadius: 999,
             background: colors.bg2,
             color: colors.fg2,
@@ -533,7 +541,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             textAlign: "center",
           }}
         >
-          {activePosition}/{chips.length}
+          <Monitor size={18} aria-hidden="true" />
         </button>
         <span data-testid="mobile-title-bar-dot" style={{ display: "flex" }}>
           <HostDot
@@ -608,21 +616,37 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       {sessionSwitcherOpen && (
         <Sheet
           header={
-            <SessionSwitcherHeader
-              machine={activeMachine}
-              machines={machines}
-              machineOnline={machineOnline}
-              online={activeMachine ? machineOnline(activeMachine) : false}
-              stats={activeStats}
-              rttMs={rttMs}
-              onSelectMachine={(id) => {
-                onSelectMachine(id);
-              }}
-              onOpenHostSheet={() => {
-                setSessionSwitcherOpen(false);
-                setHostSheetOpen(true);
-              }}
-            />
+            <div style={{ flexShrink: 0 }}>
+              <SessionSwitcherHeader
+                machine={activeMachine}
+                machines={machines}
+                machineOnline={machineOnline}
+                online={activeMachine ? machineOnline(activeMachine) : false}
+                stats={activeStats}
+                rttMs={rttMs}
+                onSelectMachine={(id) => {
+                  onSelectMachine(id);
+                }}
+                onOpenHostSheet={() => {
+                  setSessionSwitcherOpen(false);
+                  setHostSheetOpen(true);
+                }}
+              />
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "4px 22px 10px",
+                color: colors.fg2,
+                fontFamily: fontDisplay,
+                fontSize: 13,
+              }}>
+                <span>Sessions</span>
+                <span data-testid="mobile-session-position" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                  {activePosition}/{chips.length}
+                </span>
+              </div>
+            </div>
           }
           testid="mobile-session-switcher"
           onClose={() => setSessionSwitcherOpen(false)}
