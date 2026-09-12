@@ -616,39 +616,41 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       {sessionSwitcherOpen && (
         <Sheet
           header={
-            <SessionSwitcherHeader
-              machine={activeMachine}
-              machines={machines}
-              machineOnline={machineOnline}
-              online={activeMachine ? machineOnline(activeMachine) : false}
-              stats={activeStats}
-              rttMs={rttMs}
-              onSelectMachine={(id) => {
-                onSelectMachine(id);
-              }}
-              onOpenHostSheet={() => {
-                setSessionSwitcherOpen(false);
-                setHostSheetOpen(true);
-              }}
-            />
+            <div style={{ flexShrink: 0 }}>
+              <SessionSwitcherHeader
+                machine={activeMachine}
+                machines={machines}
+                machineOnline={machineOnline}
+                online={activeMachine ? machineOnline(activeMachine) : false}
+                stats={activeStats}
+                rttMs={rttMs}
+                onSelectMachine={(id) => {
+                  onSelectMachine(id);
+                }}
+                onOpenHostSheet={() => {
+                  setSessionSwitcherOpen(false);
+                  setHostSheetOpen(true);
+                }}
+              />
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "4px 22px 10px",
+                color: colors.fg2,
+                fontFamily: fontDisplay,
+                fontSize: 13,
+              }}>
+                <span>Sessions</span>
+                <span data-testid="mobile-session-position" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                  {activePosition}/{chips.length}
+                </span>
+              </div>
+            </div>
           }
           testid="mobile-session-switcher"
           onClose={() => setSessionSwitcherOpen(false)}
         >
-          <div style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            padding: "4px 22px 10px",
-            color: colors.fg2,
-            fontFamily: fontDisplay,
-            fontSize: 13,
-          }}>
-            <span>Sessions</span>
-            <span data-testid="mobile-session-position" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
-              {activePosition}/{chips.length}
-            </span>
-          </div>
           <div style={{ display: "flex", gap: 10, padding: "4px 16px 10px" }}>
             <Button
               kind="coral"
