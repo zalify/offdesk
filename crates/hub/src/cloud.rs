@@ -364,12 +364,12 @@ async fn decode_response<T: DeserializeOwned>(
     serde_json::from_slice(&bytes)
         .map_err(|_| "The managed service returned an invalid response".into())
 }
+fn status_json(status: &Status, enabled: bool, verified: bool) -> serde_json::Value {
+    serde_json::json!({ "id": status.id, "url": status.url, "state": status.state,
+        "local_enabled": enabled, "verified": verified && enabled && status.state == "active", "needs_attention": status.last_error.is_some() || (enabled && status.state == "active" && !verified) })
+}
 fn print_status(status: &Status, enabled: bool, verified: bool) {
-    println!(
-        "{}",
-        serde_json::json!({ "id": status.id, "url": status.url, "state": status.state,
-        "local_enabled": enabled, "verified": verified && enabled && status.state == "active", "needs_attention": status.last_error.is_some() })
-    );
+    println!("{}", status_json(status, enabled, verified));
 }
 fn service(database: &str, id: &str) -> Result<offdesk_protocol::service::ServiceSpec, String> {
     // Preserve a database symlink's filename: the Hub encryption key and cloud
@@ -465,6 +465,21 @@ pub fn advertised_url(database: &str) -> Option<String> {
         .strip_suffix(".cloud.offdesk.dev")?;
     hex_token(label, 32).then_some(value)
 }
+// The advertised address records a previously validated endpoint, not current
+// liveness. Keep it during outages so paired phones can reconnect; never use it
+// alone to label a Cloud connection as ready.
+async fn connection_verified(database: &str, registration: &Registration, status: &Status) -> bool {
+    if !registration.enabled || status.state != "active"
+        || advertised_url(database).as_deref() != Some(status.url.as_str()) {
+        return false;
+    }
+    let Ok(endpoint) = crate::tunnel_check::local_endpoint(database, &status.url) else {
+        return false;
+    };
+    endpoint.public_key == registration.public_key
+        && crate::tunnel_check::check(&endpoint).await.passed(true)
+}
+
 async fn check_local(database: &str, registration: &Registration) -> Result<(), String> {
     let endpoint = crate::tunnel_check::local_endpoint(database, ORIGIN)?;
     if endpoint.public_key != registration.public_key {
@@ -536,7 +551,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
         print_status(
             &status,
             registration.enabled,
-            advertised_url(database).is_some(),
+            connection_verified(database, &registration, &status).await,
         );
         return Ok(());
     }
@@ -562,7 +577,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             print_status(
                 &status,
                 registration.enabled,
-                advertised_url(database).is_some(),
+                connection_verified(database, &registration, &status).await,
             );
         }
         Action::Install => {
@@ -611,7 +626,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             let report = crate::tunnel_check::check(&endpoint).await;
             if !report.passed(true) {
                 crate::tunnel_check::print_report(&report, true);
-                return Err("Managed connection failed its encrypted-only network check".into());
+                return Err("Cloud connection is currently unavailable or could not be verified. Keep this Mac online while the connector retries, then check again".into());
             }
             store.write("verified-url", status.url.as_bytes())?;
             print_status(&status, true, true);
@@ -651,16 +666,40 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             if let Some(home) = std::env::var_os("HOME") {
                 command.env("HOME", home);
             }
-            // Retain the runtime lock across exec so manually starting a
-            // second connector cannot race the installed service.
-            use std::os::fd::AsRawFd;
-            if unsafe { libc::fcntl(_runtime_lock.as_raw_fd(), libc::F_SETFD, 0) } == -1 {
-                return Err("Could not retain the connector process lock".into());
+            // Also retain the lock in the child if the supervisor is killed
+            // abruptly. A second service cannot start over an orphaned child.
+            use std::os::{fd::AsRawFd, unix::process::CommandExt};
+            let lock_fd = _runtime_lock.as_raw_fd();
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::fcntl(lock_fd, libc::F_SETFD, 0) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
             }
-            // exec keeps the service manager responsible for the actual
-            // connector PID. Stopping the service cannot orphan cloudflared.
-            use std::os::unix::process::CommandExt;
-            return Err(format!("Could not start cloudflared: {}", command.exec()));
+            // The supervisor owns the lock and the child. Signals stop and
+            // reap the child before returning; a stuck but living connector
+            // is restarted after sustained failed encrypted probes.
+            let remote = crate::tunnel_check::local_endpoint(database, &format!("https://{}", config.hostname))?;
+            let local = crate::tunnel_check::local_endpoint(database, ORIGIN)?;
+            use crate::cloud_connector::{Health, Policy};
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut terminate = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
+            let mut interrupt = signal(SignalKind::interrupt()).map_err(|e| e.to_string())?;
+            let shutdown = async move {
+                tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {} }
+            };
+            crate::cloud_connector::supervise(command, || async {
+                if crate::tunnel_check::check(&remote).await.passed(true) {
+                    Health::Connected
+                } else if crate::tunnel_check::check(&local).await.identity_verified {
+                    Health::TunnelUnavailable
+                } else {
+                    // Restarting the relay cannot repair a stopped local Hub.
+                    Health::OriginUnavailable
+                }
+            }, shutdown, Policy::default()).await?;
         }
         Action::Enroll | Action::Login => unreachable!(),
     }
@@ -674,6 +713,21 @@ pub async fn execute(_action: &Action, _database: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn active_provisioning_does_not_mask_failed_live_verification() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let status = Status { hostname: hostname(&id), url: format!("https://{}", hostname(&id)),
+            id, state: "active".into(), last_error: None, updated_at: 0, protocol_version: 1 };
+        let failed = status_json(&status, true, false);
+        assert_eq!(failed["state"], "active");
+        assert_eq!(failed["verified"], false);
+        assert_eq!(failed["needs_attention"], true);
+        let recovered = status_json(&status, true, true);
+        assert_eq!(recovered["verified"], true);
+        assert_eq!(recovered["needs_attention"], false);
+        assert_eq!(status_json(&status, false, true)["verified"], false);
+    }
+
     #[test]
     fn browser_sign_in_never_opens_a_service_supplied_foreign_url() {
         let id = uuid::Uuid::new_v4().to_string();
@@ -806,7 +860,13 @@ mod tests {
         let first = store.lock("operation.lock").unwrap();
         assert!(store.lock("operation.lock").is_err());
         drop(first);
-        assert!(store.lock("operation.lock").is_ok());
+        // Concurrent process tests can briefly inherit this descriptor
+        // between fork and exec (where CLOEXEC closes it).
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while store.lock("operation.lock").is_err() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(10));
+        }
         fs::write(root.join("other"), "not registration").unwrap();
         symlink(root.join("other"), &db).unwrap();
         assert!(service(db.to_str().unwrap(), &id).unwrap().args[1].ends_with("hub.db"));

@@ -2,6 +2,8 @@ mod connections;
 mod secure;
 mod tunnel_check;
 mod cloud;
+#[cfg(unix)]
+mod cloud_connector;
 mod cloud_download;
 mod composer;
 mod attach_router;

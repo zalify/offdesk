@@ -97,8 +97,17 @@ returns 404 by design. It is not a browser login link.
 ## Troubleshooting remote access
 
 If the App shows **Remote connection → Unreachable** while LAN access still
-works, run a fresh `offdesk-hub cloud check`. `cloud status` reports provisioning
-and saved verification; it does not establish current end-to-end reachability.
+works, run a fresh `offdesk-hub cloud check`. `cloud status` checks the current
+encrypted connection before reporting `verified: true`; `active` alone still
+refers to provisioning. The desktop panel refreshes while it is visible and
+marks a failed refresh as unconfirmed.
+
+The local Cloud service probes every 30 seconds, after each previous probe
+finishes. Three consecutive failures with a reachable local Hub restart only
+its connector, refreshing edge discovery. Repeated restarts back off from 15
+seconds to 10 minutes; five minutes of healthy probes reset the delay. A stopped
+local Hub does not trigger relay restart loops. Existing paired devices and the
+saved address are retained so phones can reconnect after recovery.
 
 Follow the [remote connection troubleshooting guide](troubleshooting/remote-connection.md)
 to check local listeners, connector health, Cloudflare 1033, and stale Fake-IP

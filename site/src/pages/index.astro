@@ -340,7 +340,9 @@ const rows = [
       <p class="prose-body mt-3">
         Optional Offdesk Cloud offers managed remote access as an invite-only
         beta. Its service is closed source; the Hub, node, CLI, and clients in
-        the public repository remain MIT licensed. Local use needs no Cloud account.
+        the public repository remain MIT licensed. The local connector checks
+        encrypted reachability and automatically retries sustained tunnel failures
+        with backoff. Local use needs no Cloud account.
       </p>
       <div class="mt-5 flex flex-wrap gap-3">
         <a href={`${repo}/blob/main/docs/setup-lan.md`} class="btn-sky">LAN setup</a>
