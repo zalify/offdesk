@@ -26,7 +26,8 @@ Ordinary browser and legacy App connections continue to work as before and do
    pairing URI and must not be logged or published.
 3. In the phone App's setup screen, scan this new code and compare the Hub
    identity with the Mac before choosing **Pair and connect**. If already using
-   an encrypted Hub, tap the terminal title → **Hub & connection → Add a Hub**.
+   an encrypted Hub, tap the monitor icon in the top-right →
+   **Hub & connection → Add a Hub**.
    The existing pairing stays saved. If using the old ordinary connection,
    choose **Switch hub** first. A desktop client can paste the `offdesk://pair?...`
    link into its sign-in link field.
@@ -47,10 +48,11 @@ they do not navigate the WebView to the selected address.
 
 ### Switch between local and remote connections
 
-Tap the terminal title to open **Machines**, then **Hub & connection**. Choose
-one of your saved Hubs and select **Local network** (on the computer's network)
-or **Remote connection** (mobile data or another Wi-Fi). The terminal count in
-the title bar opens the session switcher; no extra toolbar row is needed.
+Tap the monitor icon in the top-right to open **Machines**, then
+**Hub & connection**. Choose one of your saved Hubs and select **Local network**
+(on the computer's network) or **Remote connection** (mobile data or another
+Wi-Fi). Tap the terminal title to open the session switcher, where the current
+position and session count are shown; no extra toolbar row is needed.
 **Settings → Hubs & connections** offers the same picker. The recovery screen
 also offers **Choose another Hub**, even when the current Hub cannot connect.
 

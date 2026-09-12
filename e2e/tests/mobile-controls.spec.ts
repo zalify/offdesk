@@ -43,7 +43,7 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
   await expect(page.getByText(/No terminals yet/)).toBeVisible();
   await expect(page.getByTestId("empty-new-terminal")).toHaveCount(0);
 
-  // Take control from the host sheet through the switcher header.
+  // Take control from the host sheet through the monitor icon.
   await mobileTakeControl(page);
   await expect(page.getByTestId("empty-new-terminal")).toBeVisible();
 
@@ -204,7 +204,7 @@ test("mobile terminal switch does not focus the new terminal automatically", asy
       document.activeElement.blur();
     }
   });
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await page.getByTestId(`mobile-session-row-${secondTerminalId}`).click();
   await expect(
     page.getByTestId(`workspace-pane-${secondTerminalId}`),
@@ -293,25 +293,25 @@ test("mobile title bar swipes between sessions and long-presses the current sess
     workspaceGroupId: secondGroup.id,
   });
 
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await page.getByTestId(`mobile-session-row-${firstTerminalId}`).click();
   await expect(
     page.getByTestId(`workspace-pane-${firstTerminalId}`),
   ).toBeVisible();
-  await expect(page.getByTestId("mobile-title-bar-badge")).toHaveText("1/2");
+  await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 1 of 2");
 
   await swipeTitleBar(page, "left");
   await expect(
     page.getByTestId(`workspace-pane-${secondTerminalId}`),
   ).toBeVisible();
-  await expect(page.getByTestId("mobile-title-bar-badge")).toHaveText("2/2");
+  await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 2 of 2");
 
   // Long-press the bar → sheet → Close terminal (no foreground process, so
   // no confirm dialog). The shell falls back to the remaining terminal.
   await longPressTitleBar(page);
   await page.getByTestId("mobile-chip-close-terminal").click();
   await expect.poll(async () => (await listTerminals(page)).length).toBe(1);
-  await expect(page.getByTestId("mobile-title-bar-badge")).toHaveText("1/1");
+  await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 1 of 1");
   await expect(
     page.getByTestId(`workspace-pane-${firstTerminalId}`),
   ).toBeVisible();
@@ -342,7 +342,7 @@ test("session switcher opens with the active terminal row scrolled into view", a
   }
 
   await expandTerminalById(page, lastTerminalId);
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
   const activeRow = page.getByTestId(`mobile-session-row-${lastTerminalId}`);
   await expect(activeRow).toHaveAttribute("aria-current", "true");
@@ -367,7 +367,7 @@ test("session switcher row closes its terminal", async ({ page }) => {
   });
 
   await expandTerminalById(page, keptTerminalId);
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
 
   // The ✕ on a non-active row closes that session without leaving the sheet.
@@ -407,7 +407,7 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
     workspaceGroupId: secondGroup.id,
   });
 
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   const sheet = page.getByTestId("mobile-session-switcher");
   await expect(sheet).toBeVisible();
   await page.getByTestId(`mobile-session-row-${firstTerminalId}`).click();
@@ -417,9 +417,9 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText(
     "shell",
   );
-  await expect(page.getByTestId("mobile-title-bar-badge")).toHaveText("1/2");
+  await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 1 of 2");
 
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await expect(sheet).toBeVisible();
   await expect(
     page.getByTestId(`mobile-session-group-${firstGroup.id}`),
@@ -490,7 +490,7 @@ test("mobile workspace manager provides full workspace controls", async ({ page 
   });
   await expandTerminalById(page, terminalId);
 
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await page.getByTestId("mobile-workspace-manager-button").click();
   const manager = page.getByTestId("workspace-manager");
   await expect(manager).toBeVisible();
@@ -565,7 +565,7 @@ test("mobile + overflows a full tab into a new tab instead of a fifth pane", asy
   await expect.poll(async () => (await listTerminals(page)).length).toBe(4);
 
   // Make the full tab the active session, so "＋" aims at it.
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
   await page.getByTestId(`mobile-session-row-${seeded[0]}`).click();
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText(
@@ -907,7 +907,7 @@ test("long session lists keep host metrics inside the card at narrow and short s
   await page.routeWebSocket(/\/ws\/events/, () => {});
   await page.routeWebSocket(/\/ws\/terminal\//, ws => ws.send(Buffer.from("ready\r\n")));
   await openApp(page);
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   for (const [width, height] of [[390, 844], [320, 480], [768, 600]]) {
     await page.setViewportSize({ width, height });
     const card = page.getByTestId("mobile-host-button");
@@ -922,5 +922,54 @@ test("long session lists keep host metrics inside the card at narrow and short s
     await page.getByTestId("mobile-session-row-layout-11").scrollIntoViewIfNeeded();
     await expect(card).toBeInViewport();
     await page.screenshot({ path: testInfo.outputPath(`host-metrics-${width}.png`) });
+  }
+});
+
+test("mobile navigation uses the title for sessions and the monitor for machines", async ({ page }, testInfo) => {
+  const terminals = Array.from({ length: 7 }, (_, i) => ({
+    id: `navigation-${i}`, title: `Task ${i + 1}: a long session title that must stay on one line`,
+    machine_id: "e2e-node", cwd: "/tmp/workspace", cols: 80, rows: 24, reachable: true,
+  }));
+  await page.route("**/api/bootstrap", route => route.fulfill({ json: {
+    snapshot_seq: 100, last_focused_terminal_id: terminals[2].id,
+    machines: [{ id: "e2e-node", name: "MacBook-Pro.local", os: "macos", home_dir: "/tmp" }],
+    terminals, workspace_groups: [], workspace_layouts: [], control_leases: [], machine_stats: [],
+  } }));
+  await page.routeWebSocket(/\/ws\/events/, () => {});
+  await page.routeWebSocket(/\/ws\/terminal\//, ws => ws.send(Buffer.from("ready\r\n")));
+  await openApp(page);
+  const title = page.getByRole("button", { name: "Open terminal switcher", exact: true });
+  const machines = page.getByRole("button", { name: "Open Machines and Hub menu", exact: true });
+  const switcher = page.getByTestId("mobile-session-switcher");
+  let position = 3;
+  for (const width of [320, 390, 768]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
+    await expect(machines).toHaveText("");
+    const bar = await page.getByTestId("mobile-title-bar").boundingBox();
+    const label = await title.boundingBox();
+    const icon = await machines.boundingBox();
+    expect(bar && label && icon && bar.height === 44 && label.width > 40 &&
+      label.y >= bar.y && label.y + label.height <= bar.y + bar.height &&
+      icon.y >= bar.y && icon.y + icon.height <= bar.y + bar.height &&
+      icon.x >= label.x + label.width && icon.x + icon.width <= width).toBeTruthy();
+    await page.screenshot({ path: testInfo.outputPath(`mobile-navigation-${width}.png`) });
+
+    await title.tap();
+    await expect(switcher).toBeVisible();
+    await expect(title).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("mobile-control-toggle")).toHaveCount(0);
+    await expect(page.getByTestId("mobile-session-position")).toHaveText(`${position}/7`);
+    await page.getByTestId("mobile-session-row-navigation-0").click();
+    await expect(switcher).toHaveCount(0);
+    await expect(title).toContainText("Task 1:");
+    position = 1;
+
+    await machines.tap();
+    await expect(page.getByTestId("mobile-control-toggle")).toBeVisible();
+    await expect(machines).toHaveAttribute("aria-expanded", "true");
+    await expect(switcher).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await expect(machines).toHaveAttribute("aria-expanded", "false");
   }
 });

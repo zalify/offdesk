@@ -109,7 +109,7 @@ test("pairing stays on bundled assets and sends all Hub requests through native 
   expect(calls).toContain("secure_pair");
   expect(calls).toContain("secure_request");
   expect(calls).not.toContain("set_mobile_hub_url");
-  await page.getByTestId("mobile-title-bar-badge").click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await page.getByTestId("mobile-host-button").click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await expect(page.getByTestId("hub-picker").getByRole("button", { name: /Home Hub/ })).toContainText("Current Hub");
