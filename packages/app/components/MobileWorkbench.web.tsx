@@ -137,17 +137,25 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   const [chipSheet, setChipSheet] = useState<MobileSessionPane | null>(null);
+  const sessionSwitcherScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Center the active terminal's row when the switcher opens: with a dozen
   // terminals across several tabs the highlighted row is usually off-screen
-  // and the user had to scroll hunting for it.
+  // and the user had to scroll hunting for it. Scroll the sheet's own list
+  // instead of scrollIntoView: the panel is still translated 16px by its
+  // slide-up animation, and centering through the browser also scrolled the
+  // overflow-hidden workbench, shifting the whole app.
   useEffect(() => {
     if (!sessionSwitcherOpen) return;
-    document
-      .querySelector(
-        '[data-testid="mobile-session-switcher"] [aria-current="true"]',
-      )
-      ?.scrollIntoView({ block: "center" });
+    const container = sessionSwitcherScrollRef.current;
+    const row = container?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!container || !row) return;
+    const containerRect = container.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    container.scrollTop +=
+      rowRect.top -
+      containerRect.top -
+      (container.clientHeight - rowRect.height) / 2;
   }, [sessionSwitcherOpen]);
 
   const activeMachine =
@@ -649,6 +657,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             </div>
           }
           testid="mobile-session-switcher"
+          scrollRef={sessionSwitcherScrollRef}
           onClose={() => setSessionSwitcherOpen(false)}
         >
           <div style={{ display: "flex", gap: 10, padding: "4px 16px 10px" }}>
@@ -1245,6 +1254,7 @@ function Sheet({
   onBack,
   testid,
   onClose,
+  scrollRef,
   children,
 }: {
   title?: string;
@@ -1253,6 +1263,7 @@ function Sheet({
   onBack?: () => void;
   testid?: string;
   onClose: () => void;
+  scrollRef?: React.RefObject<HTMLDivElement | null>;
   children: React.ReactNode;
 }) {
   useEffect(() => {
@@ -1325,7 +1336,7 @@ function Sheet({
             {title}
           </div>
         ))}
-        <div style={{ overflow: "auto", minHeight: 0, paddingBottom: 4 }}>{children}</div>
+        <div ref={scrollRef} style={{ overflow: "auto", minHeight: 0, paddingBottom: 4 }}>{children}</div>
       </div>
     </div>
   );
