@@ -21,7 +21,14 @@ test("desktop control handoff stays in sync across browser sessions", async ({ b
   // Session A starts viewing. Take control and create a terminal via the
   // empty-state CTA.
   await expectControlState(pageA, "viewing");
-  await takeControlFromHeader(pageA);
+  await expect(pageA.getByText("You’re viewing this machine. Take control to create a terminal.")).toBeVisible();
+  await expect(pageA.getByTestId("tab-bar-new-group")).toHaveAttribute("title", "Take control to create a terminal");
+  await pageA.route("**/api/mode/control", route => route.fulfill({ status: 503, body: "Temporarily unavailable" }));
+  await pageA.getByTestId("empty-take-control").click();
+  await expect(pageA.getByRole("alert")).toContainText("Could not take control");
+  await expect(pageA.getByTestId("tab-bar-new-group")).toBeDisabled();
+  await pageA.unroute("**/api/mode/control");
+  await pageA.getByTestId("empty-take-control").click();
   await selectHomeWorkpath(pageA);
   await pageA.getByTestId("empty-new-terminal").click();
 

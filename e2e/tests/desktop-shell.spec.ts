@@ -494,3 +494,61 @@ test("settings centers desktop content and keeps the scrollbar at the window edg
     await page.screenshot({ path: testInfo.outputPath(`settings-${width}.png`) });
   }
 });
+
+
+test("desktop saved-address recovery reconnects locally without reinstalling", async ({ page }) => {
+  await desktopBridge(page, "hub");
+  await openApp(page);
+  const token = await page.evaluate(() => localStorage.getItem("offdesk:token"));
+  await page.evaluate(() => localStorage.setItem("offdesk:server_url", "http://192.168.1.223:4317"));
+  await page.route("**/api/auth/me", async route => {
+    const local = await page.evaluate(() => localStorage.getItem("offdesk:server_url") === "http://127.0.0.1:4317");
+    return local ? route.continue() : route.fulfill({ status: 503, body: "Old address unavailable" });
+  });
+  await page.reload();
+  await expect(page.getByRole("status")).toContainText("Could not reconnect", { timeout: 15000 });
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:token"))).toBe(token);
+  await page.evaluate(() => { (window as any).__desktopTest.linkFailures = 1; });
+  await page.getByRole("button", { name: "Reconnect to this Mac", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Hub restarting");
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:token"))).toBe(token);
+  // A freshly minted local link can carry the same token. It must still
+  // restart validation and use the native bridge's local address.
+  await page.evaluate((token) => {
+    const bridge = (window as any).__TAURI_INTERNALS__;
+    const invoke = bridge.invoke;
+    bridge.invoke = async (command: string, args: unknown) => command === "hub_link"
+      ? { url: "http://192.168.2.154:4317", local_url: "http://127.0.0.1:4317", link: "http://127.0.0.1:4317/?token=" + token, candidates: [] }
+      : invoke(command, args);
+  }, token);
+  await page.getByRole("button", { name: "Reconnect to this Mac", exact: true }).click();
+  await expect(page.getByTestId("tab-bar")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:server_url"))).toBe("http://127.0.0.1:4317");
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls.includes("hub_install"))).toBe(false);
+});
+
+
+test("desktop setup recovery also replaces the stale desktop address", async ({ page }) => {
+  await desktopBridge(page, "hub");
+  await openApp(page);
+  const token = await page.evaluate(() => localStorage.getItem("offdesk:token"));
+  await page.evaluate(() => localStorage.setItem("offdesk:server_url", "http://192.168.1.223:4317"));
+  await page.route("**/api/auth/me", async route => {
+    const local = await page.evaluate(() => localStorage.getItem("offdesk:server_url") === "http://127.0.0.1:4317");
+    return local ? route.continue() : route.fulfill({ status: 503, body: "Old address unavailable" });
+  });
+  await page.reload();
+  await expect(page.getByRole("status")).toContainText("Reconnecting");
+  await page.evaluate((token) => {
+    const bridge = (window as any).__TAURI_INTERNALS__;
+    const invoke = bridge.invoke;
+    bridge.invoke = async (command: string, args: unknown) => command === "hub_link"
+      ? { url: "http://192.168.2.154:4317", local_url: "http://127.0.0.1:4317", link: "http://127.0.0.1:4317/?token=" + token, candidates: [] }
+      : invoke(command, args);
+  }, token);
+  await page.getByRole("button", { name: "Check this Mac’s setup", exact: true }).click();
+  await expect(page.getByTestId("tab-bar")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:server_url"))).toBe("http://127.0.0.1:4317");
+  // A healthy Hub/node only needs the desktop connection repaired.
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls.includes("hub_install"))).toBe(false);
+});

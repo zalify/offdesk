@@ -467,7 +467,7 @@ function TabBarComponent({
           data-testid="tab-bar-new-group"
           onClick={onNewGroup}
           disabled={!isController}
-          title="New tab"
+          title={isController ? "New tab" : "Take control to create a terminal"}
           aria-label="New tab"
           style={{
             alignSelf: "center",

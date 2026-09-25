@@ -69,7 +69,18 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<HubStatus | null>(null);
   const [link, setLink] = useState<HubLink | null>(null);
   const [settingUp, setSettingUp] = useState(false);
+  const [reconnectAfterSetup, setReconnectAfterSetup] = useState(false);
   const [statusError, setStatusError] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const [reconnectExpired, setReconnectExpired] = useState(false);
+
+  useEffect(() => {
+    setReconnectExpired(false);
+    if (!isLoading) return;
+    const timer = setTimeout(() => setReconnectExpired(true), 10_000);
+    return () => clearTimeout(timer);
+  }, [isLoading, recovering]);
 
   useEffect(() => {
     // A bridge that does not know the command (an older shell, or a test's
@@ -118,6 +129,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     await setDesktopRole(picked);
     setStatus(null);
     setSettingUp(picked === "hub");
+    setReconnectAfterSetup(false);
     setRole(picked);
   }, []);
 
@@ -137,6 +149,22 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     [login, loginWithToken],
   );
 
+  const reconnectLocalHub = async () => {
+    // Obtain a fresh login from the native local Hub. Never send a saved
+    // remote token to a guessed address or replace a pinned encrypted Hub.
+    if (isSecureConnection()) return;
+    setRecovering(true);
+    setRecoveryError(null);
+    try {
+      const local = await hubLink();
+      if (!isSecureConnection()) await openTerminal(local);
+    } catch (error) {
+      setRecoveryError(String(error));
+    } finally {
+      setRecovering(false);
+    }
+  };
+
   if (isSecureConnection() && !isLoading) return isAuthenticated ? <>{children}</> : <DesktopSetupFrame><LoginScreen /></DesktopSetupFrame>;
   if (role === undefined) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
   if (role === null) return <DesktopSetupFrame><FirstRun onPick={pick} /></DesktopSetupFrame>;
@@ -152,8 +180,13 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     // and reinstall services while the existing Hub is recovering.
     if (!settingUp && status.hub_installed && status.node_installed && isLoading) {
       return <DesktopSetupFrame><Screen>
-        <div role="status"><Spinner /><Body>Reconnecting to your hub…</Body></div>
-        <Button kind="sky" onClick={() => setSettingUp(true)}>Check this Mac’s setup</Button>
+        <div role="status">{!reconnectExpired && <Spinner />}<Body>{reconnectExpired ? "Could not reconnect to your saved Hub address." : "Reconnecting to your hub…"}</Body></div>
+        {!isSecureConnection() && <>
+          <Body>This Mac’s network address may have changed. Reconnect using its local Hub to keep working.</Body>
+          <Button disabled={recovering || !status.listening} onClick={() => void reconnectLocalHub()}>{recovering ? "Connecting…" : "Reconnect to this Mac"}</Button>
+        </>}
+        {recoveryError && <div role="alert">{recoveryError}</div>}
+        <Button kind="sky" disabled={recovering} onClick={() => { setReconnectAfterSetup(true); setSettingUp(true); }}>Check this Mac’s setup</Button>
       </Screen></DesktopSetupFrame>;
     }
     if (settingUp || !hubIsReady(status)) {
@@ -165,6 +198,10 @@ export function DesktopGate({ children }: { children: ReactNode }) {
             setLink(ready);
             setSettingUp(false);
             setStatus(verified);
+            if (reconnectAfterSetup) {
+              setReconnectAfterSetup(false);
+              void reconnectLocalHub();
+            }
           }}
           onGiveUp={() => void pick("client")}
         /></DesktopSetupFrame>

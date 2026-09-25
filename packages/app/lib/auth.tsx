@@ -177,6 +177,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loginAttempt, setLoginAttempt] = useState(0);
 
   const isAuthenticated = !!user && !!token;
   const currentServerUrl = useCallback(() => getServerUrl(Platform.OS), []);
@@ -342,7 +343,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearTimeout(retry);
       controller?.abort();
     };
-  }, [currentServerUrl, token]);
+  }, [currentServerUrl, token, loginAttempt]);
 
   const login = useCallback(async (provider?: "github" | "google") => {
     if (
@@ -378,6 +379,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     configure(currentServerUrl(), newToken);
     setIsLoading(true);
     setToken(newToken);
+    // A local recovery can return the same token within one second. Restart
+    // validation even then, and cancel requests to the previous address.
+    setLoginAttempt(attempt => attempt + 1);
   }, [currentServerUrl]);
 
   const logout = useCallback(async () => {

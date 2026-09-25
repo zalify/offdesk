@@ -1783,6 +1783,10 @@ function TerminalCanvasInner() {
                 <EmptyState
                   scopeLabel={scopeLabel}
                   canCreate={isActiveController}
+                  onTakeControl={activeMachine ? async () => {
+                    await handleRequestControl(activeMachine.id);
+                    updateViewOnlyLock(false);
+                  } : undefined}
                   onNewTerminal={handleNewTerminalFromHeader}
                 />
               ) : (
@@ -1952,12 +1956,23 @@ function TerminalCanvasInner() {
 function EmptyState({
   scopeLabel,
   canCreate,
+  onTakeControl,
   onNewTerminal,
 }: {
   scopeLabel: string;
   canCreate: boolean;
+  onTakeControl?: () => Promise<void>;
   onNewTerminal: () => void;
 }) {
+  const [requesting, setRequesting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const takeControl = async () => {
+    setRequesting(true);
+    setError(null);
+    try { await onTakeControl?.(); }
+    catch { setError("Could not take control. Check the connection and try again."); }
+    finally { setRequesting(false); }
+  };
   return (
     <div
       style={{
@@ -1976,6 +1991,20 @@ function EmptyState({
             ? "No terminals yet"
             : `No terminals in ${scopeLabel}`}
         </div>
+        {!canCreate && onTakeControl && (
+          <div>
+            <p>You’re viewing this machine. Take control to create a terminal.</p>
+            <button
+              data-testid="empty-take-control"
+              disabled={requesting}
+              onClick={() => void takeControl()}
+              style={{ background: colors.accent, color: colors.onAccent, border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: requesting ? "wait" : "pointer" }}
+            >
+              {requesting ? "Taking control…" : "Take control"}
+            </button>
+            {error && <p role="alert">{error}</p>}
+          </div>
+        )}
         {canCreate && (
           <button
             data-testid="empty-new-terminal"
