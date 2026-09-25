@@ -549,5 +549,6 @@ test("desktop setup recovery also replaces the stale desktop address", async ({ 
   await page.getByRole("button", { name: "Check this Mac’s setup", exact: true }).click();
   await expect(page.getByTestId("tab-bar")).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem("offdesk:server_url"))).toBe("http://127.0.0.1:4317");
-  expect(await page.evaluate(() => (window as any).__desktopTest.calls.includes("hub_install"))).toBe(true);
+  // A healthy Hub/node only needs the desktop connection repaired.
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls.includes("hub_install"))).toBe(false);
 });

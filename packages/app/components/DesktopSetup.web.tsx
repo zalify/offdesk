@@ -69,6 +69,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<HubStatus | null>(null);
   const [link, setLink] = useState<HubLink | null>(null);
   const [settingUp, setSettingUp] = useState(false);
+  const [reconnectAfterSetup, setReconnectAfterSetup] = useState(false);
   const [statusError, setStatusError] = useState(false);
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
@@ -128,6 +129,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     await setDesktopRole(picked);
     setStatus(null);
     setSettingUp(picked === "hub");
+    setReconnectAfterSetup(false);
     setRole(picked);
   }, []);
 
@@ -184,7 +186,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
           <Button disabled={recovering || !status.listening} onClick={() => void reconnectLocalHub()}>{recovering ? "Connecting…" : "Reconnect to this Mac"}</Button>
         </>}
         {recoveryError && <div role="alert">{recoveryError}</div>}
-        <Button kind="sky" disabled={recovering} onClick={() => setSettingUp(true)}>Check this Mac’s setup</Button>
+        <Button kind="sky" disabled={recovering} onClick={() => { setReconnectAfterSetup(true); setSettingUp(true); }}>Check this Mac’s setup</Button>
       </Screen></DesktopSetupFrame>;
     }
     if (settingUp || !hubIsReady(status)) {
@@ -196,7 +198,10 @@ export function DesktopGate({ children }: { children: ReactNode }) {
             setLink(ready);
             setSettingUp(false);
             setStatus(verified);
-            if (isLoading && !isSecureConnection()) void reconnectLocalHub();
+            if (reconnectAfterSetup) {
+              setReconnectAfterSetup(false);
+              void reconnectLocalHub();
+            }
           }}
           onGiveUp={() => void pick("client")}
         /></DesktopSetupFrame>
