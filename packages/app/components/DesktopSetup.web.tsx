@@ -75,10 +75,11 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   const [reconnectExpired, setReconnectExpired] = useState(false);
 
   useEffect(() => {
-    if (!isLoading) { setReconnectExpired(false); return; }
+    setReconnectExpired(false);
+    if (!isLoading) return;
     const timer = setTimeout(() => setReconnectExpired(true), 10_000);
     return () => clearTimeout(timer);
-  }, [isLoading]);
+  }, [isLoading, recovering]);
 
   useEffect(() => {
     // A bridge that does not know the command (an older shell, or a test's
