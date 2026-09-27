@@ -94,8 +94,20 @@ try:
     field = next(n for n in root.iter("node") if n.get("class") == "android.widget.EditText")
     left, top, right, bottom = map(int, re.findall(r"\d+", field.attrib["bounds"]))
     adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
-    adb("shell", "input", "text", "http://example.invalid")
-    assert any("example.invalid" in n.get("text", "") for n in hierarchy().iter("node")), "WebView input is unresponsive"
+    focus_deadline = time.monotonic() + 15
+    while time.monotonic() < focus_deadline:
+        if any(n.get("class") == "android.widget.EditText" and n.get("focused") == "true"
+               for n in hierarchy().iter("node")):
+            break
+        time.sleep(0.25)
+    else:
+        raise AssertionError("WebView input did not receive focus")
+    # `input text` emits a burst of key events; the emulator can lose characters
+    # while its IME opens. Individual commands pace real keyboard input without
+    # bypassing the WebView or weakening the exact rendered-value assertion.
+    for character in "http://example.invalid":
+        adb("shell", "input", "text", character)
+    wait_for_screen("http://example.invalid")
     adb("shell", "input", "keyevent", "3")
     adb("shell", "am", "start", "-W", "-n", f"{args.package}/dev.offdesk.desktop.MainActivity")
     # Cross both the JavaScript and native automatic-update timers.
