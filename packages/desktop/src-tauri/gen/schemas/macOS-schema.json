@@ -711,6 +711,30 @@
           "markdownDescription": "Enables the start_oauth_listener command without any pre-configured scope."
         },
         {
+          "description": "Enables the ui_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-check",
+          "markdownDescription": "Enables the ui_check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ui_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-ready",
+          "markdownDescription": "Enables the ui_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ui_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-recover",
+          "markdownDescription": "Enables the ui_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ui_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-status",
+          "markdownDescription": "Enables the ui_status command without any pre-configured scope."
+        },
+        {
           "description": "Denies the clear_mobile_hub_url command without any pre-configured scope.",
           "type": "string",
           "const": "deny-clear-mobile-hub-url",
@@ -865,6 +889,30 @@
           "type": "string",
           "const": "deny-start-oauth-listener",
           "markdownDescription": "Denies the start_oauth_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-check",
+          "markdownDescription": "Denies the ui_check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-ready",
+          "markdownDescription": "Denies the ui_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-recover",
+          "markdownDescription": "Denies the ui_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-status",
+          "markdownDescription": "Denies the ui_status command without any pre-configured scope."
         },
         {
           "description": "No features are enabled by default, as we believe\nthe clipboard can be inherently dangerous and it is \napplication specific if read and/or write access is needed.\n\nClipboard interaction needs to be explicitly enabled.\n",

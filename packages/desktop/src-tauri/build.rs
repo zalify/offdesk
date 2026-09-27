@@ -1,4 +1,6 @@
 fn main() {
+    println!("cargo:rerun-if-env-changed=OFFDESK_UI_PUBLIC_KEY");
+    println!("cargo:rerun-if-env-changed=OFFDESK_UI_CHANNEL");
     // The mobile hub URL is only a first-launch preset now (the app asks for
     // one, and stores what it is given), but it is still baked in by
     // option_env!, so a change to it has to force a recompile.
@@ -10,6 +12,10 @@ fn main() {
     // another hub without the user typing an address. With it, each command
     // reaches only the origins a capability names.
     let app_manifest = tauri_build::AppManifest::new().commands(&[
+        "ui_status",
+        "ui_check",
+        "ui_ready",
+        "ui_recover",
         "start_oauth_listener",
         "hub_pair",
         "cloud_action",

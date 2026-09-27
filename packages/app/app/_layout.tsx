@@ -1,4 +1,6 @@
 import "../global.css";
+import { UiUpdateLifecycle } from "../components/UiUpdateNotification";
+import { getUiUpdateState, recoverUi } from "../lib/uiUpdates";
 import "../lib/legacyStorageMigration";
 import { Component, useLayoutEffect, type ErrorInfo, type ReactNode } from "react";
 import { applyUiFontPreferences, subscribeFontPreferences } from "../lib/fontPreferences";
@@ -62,6 +64,9 @@ class AppErrorBoundary extends Component<
           >
             <Text className="font-semibold text-on-accent">Reload</Text>
           </Pressable>
+          {getUiUpdateState().status?.enabled && <Pressable accessibilityRole="button" onPress={() => void recoverUi().catch(() => this.reload())}>
+            <Text className="text-foreground">Restore previous interface</Text>
+          </Pressable>}
           <View className="mt-4 w-full rounded-md bg-surface p-4">
             <Text className="font-mono text-xs text-foreground-muted">
               {error.message}
@@ -114,6 +119,7 @@ export default function RootLayout() {
           <AuthProvider>
             <AuthGate />
             <AndroidUpdateNotification />
+            <UiUpdateLifecycle />
           </AuthProvider>
         </ThemeProvider>
       </SafeAreaProvider>

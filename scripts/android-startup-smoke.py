@@ -12,6 +12,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("apk", type=Path)
 parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL", "emulator-5554"))
 parser.add_argument("--output", type=Path, default=Path("/tmp/offdesk-android-startup"))
+parser.add_argument("--package", choices=["dev.offdesk.desktop", "dev.offdesk.desktop.rc"], default="dev.offdesk.desktop")
 args = parser.parse_args()
 # This test deliberately installs fresh. Never let it clear a person's phone.
 if not args.serial.startswith("emulator-"):
@@ -34,6 +35,26 @@ def hierarchy():
     xml = adb("shell", "cat", "/sdcard/offdesk-startup.xml")
     (args.output / "ui.xml").write_text(xml)
     return ET.fromstring(xml)
+
+
+def require_rooted_emulator():
+    # Restarting adbd may close its transport before `adb root` receives the
+    # reply. Reconnect and verify the actual uid instead of trusting that exit
+    # status. Fail closed if this is not a root-capable disposable emulator.
+    for attempt in range(3):
+        result = subprocess.run(
+            ["adb", "-s", args.serial, "root"], capture_output=True, text=True,
+            timeout=30,
+        )
+        print(f"adb root attempt {attempt + 1}: {result.stdout}{result.stderr}", flush=True)
+        try:
+            adb("wait-for-device")
+            if adb("shell", "id", "-u").strip() == "0":
+                return
+        except subprocess.SubprocessError:
+            pass
+        time.sleep(1)
+    raise AssertionError("Use a rooted disposable emulator; adbd did not become root")
 
 
 def wait_for_screen(text):
@@ -63,29 +84,40 @@ def wait_for_screen(text):
 
 try:
     assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
-    adb("uninstall", "dev.offdesk.desktop.rc", check=False)
+    require_rooted_emulator()
+    adb("uninstall", args.package, check=False)
     adb("install", str(args.apk.resolve()), timeout=120)
     adb("logcat", "-c")
     adb("shell", "input", "keyevent", "82")
-    adb("shell", "am", "start", "-W", "-n", "dev.offdesk.desktop.rc/dev.offdesk.desktop.MainActivity")
+    adb("shell", "am", "start", "-W", "-n", f"{args.package}/dev.offdesk.desktop.MainActivity")
     root = wait_for_screen("Scan the code")
     field = next(n for n in root.iter("node") if n.get("class") == "android.widget.EditText")
     left, top, right, bottom = map(int, re.findall(r"\d+", field.attrib["bounds"]))
     adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
-    adb("shell", "input", "text", "http://example.invalid")
-    assert any("example.invalid" in n.get("text", "") for n in hierarchy().iter("node")), "WebView input is unresponsive"
+    focus_deadline = time.monotonic() + 15
+    while time.monotonic() < focus_deadline:
+        if any(n.get("class") == "android.widget.EditText" and n.get("focused") == "true"
+               for n in hierarchy().iter("node")):
+            break
+        time.sleep(0.25)
+    else:
+        raise AssertionError("WebView input did not receive focus")
+    # `input text` emits a burst of key events; the emulator can lose characters
+    # while its IME opens. Individual commands pace real keyboard input without
+    # bypassing the WebView or weakening the exact rendered-value assertion.
+    for character in "http://example.invalid":
+        adb("shell", "input", "text", character)
+    wait_for_screen("http://example.invalid")
     adb("shell", "input", "keyevent", "3")
-    adb("shell", "am", "start", "-W", "-n", "dev.offdesk.desktop.rc/dev.offdesk.desktop.MainActivity")
+    adb("shell", "am", "start", "-W", "-n", f"{args.package}/dev.offdesk.desktop.MainActivity")
     # Cross both the JavaScript and native automatic-update timers.
     time.sleep(10)
     wait_for_screen("Scan the code")
     # Upgrade the same installation with a damaged pairing marker. Startup
     # must keep trusted bundled assets and offer recovery, not the old Hub.
-    adb("shell", "am", "force-stop", "dev.offdesk.desktop.rc")
-    adb("root")
-    adb("wait-for-device")
+    adb("shell", "am", "force-stop", args.package)
     assert adb("shell", "id", "-u").strip() == "0", "Use a rooted disposable emulator"
-    data = "/data/user/0/dev.offdesk.desktop.rc"
+    data = f"/data/user/0/{args.package}"
     adb("shell", f"printf '{{}}' > {data}/secure-connection.json")
     adb("shell", f"printf '%s' '{{\"hub_url\":\"http://127.0.0.1:9\"}}' > {data}/hub.json")
     uid = adb("shell", "stat", "-c", "%u", data).strip()
@@ -95,8 +127,8 @@ try:
     adb("install", "-r", str(args.apk.resolve()), timeout=120)
     assert adb("shell", "cat", f"{data}/secure-connection.json").strip() == "{}"
     for attempt in range(2):
-        adb("shell", "am", "force-stop", "dev.offdesk.desktop.rc")
-        adb("shell", "am", "start", "-W", "-n", "dev.offdesk.desktop.rc/dev.offdesk.desktop.MainActivity")
+        adb("shell", "am", "force-stop", args.package)
+        adb("shell", "am", "start", "-W", "-n", f"{args.package}/dev.offdesk.desktop.MainActivity")
         # The missing credential and damaged marker are checked asynchronously.
         # Android can finish on "Pair this device first", whereas iOS can show
         # a Keychain error. Assert usable recovery, not one transient message.
@@ -108,6 +140,11 @@ try:
         (args.output / f"recovery-{attempt}.xml").write_text(ET.tostring(recovery, encoding="unicode"))
     print("PASS: APK cold start, WebView input, foreground, retained pairing upgrade and recovery", flush=True)
 finally:
-    (args.output / "logcat.txt").write_text(adb("logcat", "-d", check=False))
+    log = adb("logcat", "-d", check=False)
+    (args.output / "logcat.txt").write_text(log)
+    relevant = [line for line in log.splitlines() if any(term in line.lower() for term in ["offdesk", "fatal", "panic", "androidruntime", "tauri", "deadlock"])]
+    print("Native startup diagnostics:\n" + "\n".join(relevant[-100:]), flush=True)
+    if (args.output / "ui.xml").exists():
+        print("Last UI hierarchy:\n" + (args.output / "ui.xml").read_text()[:12000], flush=True)
     with (args.output / "screen.png").open("wb") as screenshot:
         subprocess.run(["adb", "-s", args.serial, "exec-out", "screencap", "-p"], stdout=screenshot, timeout=15, check=False)

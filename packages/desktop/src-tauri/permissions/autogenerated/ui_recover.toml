@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ui-recover"
+description = "Enables the ui_recover command without any pre-configured scope."
+commands.allow = ["ui_recover"]
+
+[[permission]]
+identifier = "deny-ui-recover"
+description = "Denies the ui_recover command without any pre-configured scope."
+commands.deny = ["ui_recover"]
