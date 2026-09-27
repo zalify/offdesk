@@ -37,6 +37,26 @@ def hierarchy():
     return ET.fromstring(xml)
 
 
+def require_rooted_emulator():
+    # Restarting adbd may close its transport before `adb root` receives the
+    # reply. Reconnect and verify the actual uid instead of trusting that exit
+    # status. Fail closed if this is not a root-capable disposable emulator.
+    for attempt in range(3):
+        result = subprocess.run(
+            ["adb", "-s", args.serial, "root"], capture_output=True, text=True,
+            timeout=30,
+        )
+        print(f"adb root attempt {attempt + 1}: {result.stdout}{result.stderr}", flush=True)
+        try:
+            adb("wait-for-device")
+            if adb("shell", "id", "-u").strip() == "0":
+                return
+        except subprocess.SubprocessError:
+            pass
+        time.sleep(1)
+    raise AssertionError("Use a rooted disposable emulator; adbd did not become root")
+
+
 def wait_for_screen(text):
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -64,6 +84,7 @@ def wait_for_screen(text):
 
 try:
     assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
+    require_rooted_emulator()
     adb("uninstall", args.package, check=False)
     adb("install", str(args.apk.resolve()), timeout=120)
     adb("logcat", "-c")
@@ -83,8 +104,6 @@ try:
     # Upgrade the same installation with a damaged pairing marker. Startup
     # must keep trusted bundled assets and offer recovery, not the old Hub.
     adb("shell", "am", "force-stop", args.package)
-    adb("root")
-    adb("wait-for-device")
     assert adb("shell", "id", "-u").strip() == "0", "Use a rooted disposable emulator"
     data = f"/data/user/0/{args.package}"
     adb("shell", f"printf '{{}}' > {data}/secure-connection.json")
