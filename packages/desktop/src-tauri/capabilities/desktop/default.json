@@ -47,7 +47,11 @@
     "allow-secure-socket-send",
     "allow-secure-socket-close",
     "allow-hub-pair",
-    "allow-cloud-action"
+    "allow-cloud-action",
+    "allow-ui-status",
+    "allow-ui-check",
+    "allow-ui-ready",
+    "allow-ui-recover"
   ],
   "local": true
 }

@@ -38,6 +38,10 @@
     "opener:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
-    "process:default"
+    "process:default",
+    "allow-ui-status",
+    "allow-ui-check",
+    "allow-ui-ready",
+    "allow-ui-recover"
   ]
 }

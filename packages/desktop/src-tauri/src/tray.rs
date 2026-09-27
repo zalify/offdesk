@@ -30,6 +30,13 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let copy = MenuItem::with_id(app, "copy", "Copy hub address", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Offdesk", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let recover = MenuItem::with_id(
+        app,
+        "recover-ui",
+        "Restore previous interface",
+        true,
+        None::<&str>,
+    )?;
     let menu = Menu::with_items(
         app,
         &[
@@ -39,6 +46,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             &add,
             &copy,
             &settings,
+            &recover,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -50,11 +58,14 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     // square.
     #[cfg(target_os = "macos")]
     let builder = TrayIconBuilder::new()
-        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?)
+        .icon(tauri::image::Image::from_bytes(include_bytes!(
+            "../icons/tray.png"
+        ))?)
         .icon_as_template(true);
     #[cfg(not(target_os = "macos"))]
-    let builder = TrayIconBuilder::new()
-        .icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray-color.png"))?);
+    let builder = TrayIconBuilder::new().icon(tauri::image::Image::from_bytes(include_bytes!(
+        "../icons/tray-color.png"
+    ))?);
     builder
         .menu(&menu)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -71,6 +82,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                         let _ = app.clipboard().write_text(link.url);
                     }
                 });
+            }
+            "recover-ui" => {
+                let _ = crate::ui_updates::ui_recover(app.clone());
+                show_window(app);
             }
             "quit" => app.exit(0),
             _ => {}
