@@ -52,11 +52,19 @@ jobs:
           node scripts/ui-updates/prepare-smoke.mjs packages/app/dist /tmp/offdesk-ui-fixtures
           echo "OFFDESK_UI_PUBLIC_KEY=$(cat /tmp/offdesk-ui-fixtures/public-key.txt)" >> "$GITHUB_ENV"
           echo 'OFFDESK_UI_CHANNEL=rc' >> "$GITHUB_ENV"
+      - name: Sign optimized test APK with the disposable debug key
+        run: |
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          p=Path('packages/desktop/src-tauri/gen/android/app/build.gradle.kts')
+          s=p.read_text().replace('getByName("release") {', 'getByName("release") {\n            signingConfig = signingConfigs.getByName("debug")')
+          p.write_text(s)
+          PYTEST
       - name: Build the single test APK
         working-directory: packages/desktop
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
-        run: cargo tauri android build --debug --apk -t x86_64
+        run: cargo tauri android build --apk -t x86_64
       - name: Enable emulator acceleration
         run: sudo chmod a+rw /dev/kvm
       - uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808
@@ -66,7 +74,7 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           disable-animations: true
-          script: python3 scripts/ui-updates/android-smoke.py $(find packages/desktop/src-tauri/gen/android/app/build/outputs/apk -name '*debug.apk' | head -1) /tmp/offdesk-ui-fixtures
+          script: python3 scripts/ui-updates/android-smoke.py $(find packages/desktop/src-tauri/gen/android/app/build/outputs/apk -name '*release.apk' | head -1) /tmp/offdesk-ui-fixtures
       - uses: actions/upload-artifact@v4
         if: always()
         with:

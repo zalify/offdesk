@@ -256,13 +256,14 @@ jobs:
           script: python3 scripts/android-startup-smoke.py artifacts/offdesk-${{ steps.version.outputs.version }}-x86_64.apk --package dev.offdesk.desktop.rc
 
       - name: Upload startup evidence
-        if: always() && startsWith(github.ref, 'refs/tags/')
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-release-startup-evidence
           path: /tmp/offdesk-android-startup
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: offdesk-android-apks

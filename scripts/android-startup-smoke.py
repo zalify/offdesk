@@ -109,6 +109,11 @@ try:
         (args.output / f"recovery-{attempt}.xml").write_text(ET.tostring(recovery, encoding="unicode"))
     print("PASS: APK cold start, WebView input, foreground, retained pairing upgrade and recovery", flush=True)
 finally:
-    (args.output / "logcat.txt").write_text(adb("logcat", "-d", check=False))
+    log = adb("logcat", "-d", check=False)
+    (args.output / "logcat.txt").write_text(log)
+    relevant = [line for line in log.splitlines() if any(term in line.lower() for term in ["offdesk", "fatal", "panic", "androidruntime", "tauri", "deadlock"])]
+    print("Native startup diagnostics:\n" + "\n".join(relevant[-100:]), flush=True)
+    if (args.output / "ui.xml").exists():
+        print("Last UI hierarchy:\n" + (args.output / "ui.xml").read_text()[:12000], flush=True)
     with (args.output / "screen.png").open("wb") as screenshot:
         subprocess.run(["adb", "-s", args.serial, "exec-out", "screencap", "-p"], stdout=screenshot, timeout=15, check=False)
