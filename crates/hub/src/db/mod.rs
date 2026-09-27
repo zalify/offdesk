@@ -11,6 +11,7 @@ pub mod bookmarks;
 pub mod hub_state;
 pub mod machines;
 pub mod settings;
+pub mod session_handoffs;
 pub mod terminal_sessions;
 pub mod tokens;
 pub mod types;
@@ -30,6 +31,7 @@ pub fn create_pool(path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
 }
 
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
+    session_handoffs::init(conn)?;
     crate::composer::init(conn)?;
     crate::secure::store::init(conn)?;
     conn.execute_batch(

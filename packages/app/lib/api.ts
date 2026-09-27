@@ -13,6 +13,7 @@ import type {
 } from "@offdesk/shared";
 
 import { generateDeviceId } from "./deviceIdShared";
+import type { HandoffContent, SessionHandoff } from "./sessionHandoff";
 
 let _baseUrl = "";
 let _token: string | null = null;
@@ -166,6 +167,13 @@ export const checkForegroundProcess = (
   );
 
 // Directory
+export const listSessionHandoffs = (machineId: string, terminalId: string, signal?: AbortSignal) =>
+  request<SessionHandoff[]>("GET", `/api/machines/${encodeURIComponent(machineId)}/session-handoffs?terminal_id=${encodeURIComponent(terminalId)}`, undefined, signal);
+export const saveSessionHandoff = (machineId: string, id: string, deviceId: string, content: HandoffContent) =>
+  request<SessionHandoff>("POST", `/api/machines/${encodeURIComponent(machineId)}/session-handoffs`, { id, device_id: deviceId, ...content });
+export const confirmSessionHandoff = (machineId: string, id: string, deviceId: string) =>
+  request<SessionHandoff>("POST", `/api/machines/${encodeURIComponent(machineId)}/session-handoffs/${encodeURIComponent(id)}/confirm`, { device_id: deviceId });
+
 export const listDirectory = (machineId: string, path: string) =>
   request<DirEntry[]>(
     "GET",

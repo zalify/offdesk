@@ -131,6 +131,7 @@ const CANVAS_PREFIX_ACTIONS: PrefixActionId[] = [
 interface CreateTerminalOptions {
   selectWorkpath?: boolean;
   workspaceGroupId?: string | null;
+  focus?: boolean;
 }
 
 interface DestroyTerminalOptions {
@@ -875,7 +876,9 @@ function TerminalCanvasInner() {
           /* the workspace_group_created event still fills the tab in */
         }
       }
-      if (options.selectWorkpath === false) {
+      if (options.focus === false) {
+        // Preparing a handoff must keep its source dialog open.
+      } else if (options.selectWorkpath === false) {
         dispatchLayout({
           type: "ZOOM_TERMINAL",
           terminalId: newTerminal.id,
@@ -889,7 +892,7 @@ function TerminalCanvasInner() {
               ?.id ?? layout.selectedWorkpathId,
         });
       }
-      window.history.pushState(null, "", `#/t/${newTerminal.id}`);
+      if (options.focus !== false) window.history.pushState(null, "", `#/t/${newTerminal.id}`);
       return newTerminal;
     },
     [
@@ -1070,6 +1073,16 @@ function TerminalCanvasInner() {
         workspaceGroupId: input.workspaceGroupId,
       });
     },
+    [handleCreateTerminal],
+  );
+
+  const handleCreateHandoffTerminal = useCallback(
+    (source: TerminalInfo, agent: "claude" | "codex") =>
+      handleCreateTerminal(source.machine_id, source.cwd, agent === "codex" ? "codex" : "claude", {
+        selectWorkpath: false,
+        focus: false,
+        workspaceGroupId: null,
+      }),
     [handleCreateTerminal],
   );
 
@@ -1648,6 +1661,7 @@ function TerminalCanvasInner() {
                   isCompact
                   isTouch={isTouch}
                   onPick={handleZoomTerminal}
+                  onCreateHandoffTerminal={handleCreateHandoffTerminal}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
                   onCreatePane={handleCreateWorkspacePane}
@@ -1791,6 +1805,7 @@ function TerminalCanvasInner() {
                   isCompact={isCompact}
                   isTouch={isTouch}
                   onPick={handleZoomTerminal}
+                  onCreateHandoffTerminal={handleCreateHandoffTerminal}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
                   onCreatePane={handleCreateWorkspacePane}
