@@ -1,14 +1,8 @@
 name: Build Android APK (Tauri)
 
 on:
-  push:
-    tags:
-      - "app-v*"
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Rebuild an existing app-vX.Y.Z tag with this workflow's verification; leaves the source tag unchanged."
-        required: false
       hub_url:
         description: "Optional: preset this hub instead of asking on first launch. Leave empty for a public build."
         required: false
@@ -28,46 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Preserve workflow smoke test
-        run: cp scripts/android-startup-smoke.py "$RUNNER_TEMP/android-startup-smoke.py"
-
-      - name: Validate release source
-        id: source
-        env:
-          REQUESTED_TAG: ${{ inputs.release_tag }}
-          PRESET_HUB: ${{ inputs.hub_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${REQUESTED_TAG:-}"
-          if [[ "$GITHUB_REF" == refs/tags/app-v* ]]; then tag="$GITHUB_REF_NAME"; fi
-          if [ -n "$tag" ]; then
-            [[ "$tag" =~ ^app-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag" >&2; exit 1; }
-            [ -z "$PRESET_HUB" ] || { echo "Public releases cannot preset a Hub" >&2; exit 1; }
-            if [ -n "$REQUESTED_TAG" ]; then
-              [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ] || { echo "Rebuilds require an unpublished draft release" >&2; exit 1; }
-            fi
-            git fetch origin "refs/tags/$tag:refs/tags/$tag"
-            git checkout --detach "refs/tags/$tag"
-          fi
-          git rev-parse HEAD
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
       - name: Decide which ABIs to build
         id: abi
         run: |
-          # A tag ships arm64 for phones and x86_64 for emulators. armeabi-v7a
-          # and x86 are 32-bit, each costs a quarter of the Rust build, and
-          # ad-hoc builds need only arm64. Rebuilding a release tag keeps both
-          # release ABIs and the emulator verification.
-          if [ -n "${{ steps.source.outputs.tag }}" ]; then
-            echo 'rust=aarch64-linux-android,x86_64-linux-android' >> "$GITHUB_OUTPUT"
-            echo 'tauri=-t aarch64 -t x86_64' >> "$GITHUB_OUTPUT"
-            echo 'gradle="arm64-v8a", "x86_64"' >> "$GITHUB_OUTPUT"
-          else
-            echo 'rust=aarch64-linux-android' >> "$GITHUB_OUTPUT"
-            echo 'tauri=-t aarch64' >> "$GITHUB_OUTPUT"
-            echo 'gradle="arm64-v8a"' >> "$GITHUB_OUTPUT"
-          fi
+          # Build phones and an emulator APK so this RC is startup-tested.
+          echo 'rust=aarch64-linux-android,x86_64-linux-android' >> "$GITHUB_OUTPUT"
+          echo 'tauri=-t aarch64 -t x86_64' >> "$GITHUB_OUTPUT"
+          echo 'gradle="arm64-v8a", "x86_64"' >> "$GITHUB_OUTPUT"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -123,18 +84,13 @@ jobs:
       - name: Build trusted web bundle (retained for encrypted connections)
         run: |
           pnpm --filter @offdesk/app build
-          node scripts/stamp-build.mjs packages/app/dist "${{ steps.source.outputs.tag || github.ref_name }}"
+          node scripts/stamp-build.mjs packages/app/dist "android-v0.7.5-rc.2"
 
-      - name: Set release version from tag
+      - name: Set RC version
         id: version
         run: |
-          tag="${{ steps.source.outputs.tag }}"
-          if [ -n "$tag" ]; then
-            version="${tag#app-v}"
-          else
-            tag="app-vlocal"
-            version="0.1.0"
-          fi
+          tag="rc-android-v0.7.5-rc.2"
+          version="0.7.5-rc.2"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -166,6 +122,10 @@ jobs:
           import re, pathlib
           path = pathlib.Path("app/build.gradle.kts")
           src = path.read_text()
+          src = src.replace('applicationId = "dev.offdesk.desktop"', 'applicationId = "dev.offdesk.desktop.rc"')
+          labels = pathlib.Path("app/src/main/res/values/strings.xml")
+          labels.write_text(labels.read_text().replace(">offdesk<", ">Offdesk RC<"))
+
 
           signing_block = """
               signingConfigs {
@@ -240,7 +200,7 @@ jobs:
           # (0.4.0 -> 4000), so upgrades stay monotonic.
           cargo tauri android build --apk \
             ${{ steps.abi.outputs.tauri }} \
-            --config "{\"version\": \"${{ steps.version.outputs.version }}\"}"
+            --config "{\"productName\": \"Offdesk RC\", \"version\": \"${{ steps.version.outputs.version }}\"}"
 
       - name: Collect APKs
         id: apks
@@ -265,18 +225,17 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: offdesk-android-apks
-          path: artifacts/*.apk
+      - name: Verify APK identity and signature
+        run: |
+          for apk in artifacts/*.apk; do
+            "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$apk"
+            "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$apk" | sed -n '1,6p'
+          done
 
       - name: Enable emulator acceleration
-        if: steps.source.outputs.tag != ''
         run: sudo chmod a+rw /dev/kvm
 
       - name: Verify signed release APK starts before publishing
-        if: steps.source.outputs.tag != ''
         uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
         with:
           api-level: 35
@@ -284,26 +243,30 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           disable-animations: true
-          script: python3 "$RUNNER_TEMP/android-startup-smoke.py" artifacts/offdesk-${{ steps.version.outputs.version }}-x86_64.apk
+          script: python3 scripts/android-startup-smoke.py artifacts/offdesk-${{ steps.version.outputs.version }}-x86_64.apk
 
       - name: Upload startup evidence
-        if: always() && steps.source.outputs.tag != ''
+        if: always() && startsWith(github.ref, 'refs/tags/')
         uses: actions/upload-artifact@v4
         with:
           name: android-release-startup-evidence
           path: /tmp/offdesk-android-startup
 
-      - name: Create or update release
-        if: steps.source.outputs.tag != ''
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: offdesk-android-apks
+          path: artifacts/*.apk
+
+
+      - name: Publish Android RC
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${{ steps.version.outputs.tag }}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --title "Mobile ${tag}" \
-              --notes "Tauri-based Android client. Sideload via 'install from unknown sources'. Pick the **arm64-v8a** APK on modern phones; the **universal** APK works on any architecture but is larger. On first launch the app asks for your hub's address; legacy connections load their UI from the Hub; encrypted pairing retains the trusted App bundle and requires an App update for UI changes."
-          fi
-          for apk in artifacts/*.apk; do
-            gh release upload "$tag" "$apk" --clobber
-          done
+          cd artifacts
+          sha256sum offdesk-0.7.5-rc.2-arm64-v8a.apk > SHA256SUMS
+          gh release create rc-android-v0.7.5-rc.2 \
+            offdesk-0.7.5-rc.2-arm64-v8a.apk SHA256SUMS \
+            --target "$GITHUB_SHA" --prerelease --latest=false \
+            --title "Android 0.7.5-rc.2 — Automatic handoff matching" \
+            --notes "Offdesk RC (dev.offdesk.desktop.rc), ARM64. Updates rc.1. Handoff now identifies Claude/Codex from live processes, matches a destination, and includes recent terminal context. Normally only the next step is required. Multiple matching sessions require a choice. Use encrypted pairing and a Hub with handoff support. Signature and emulator cold-start/input/recovery checks passed before publishing."

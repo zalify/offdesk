@@ -894,7 +894,8 @@ function TerminalWorkspaceComponent({
       >
         {activeTerminal && <SessionHandoffBar terminal={activeTerminal} terminals={siblings}
           canWrite={isController && canType && !eventsReconnecting} deviceId={deviceId}
-          onPick={onPick} onCreate={onCreateHandoffTerminal} openRequest={handoffOpenRequest} />}
+          onPick={onPick} onCreate={onCreateHandoffTerminal} openRequest={handoffOpenRequest}
+          readContext={() => activeCardRef.current?.getHandoffContext() ?? ""} />}
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
           {activeTerminal ? (
             <WorkspacePaneLeaf
@@ -1049,7 +1050,8 @@ function TerminalWorkspaceComponent({
     >
       {activeTerminal && <SessionHandoffBar terminal={activeTerminal} terminals={siblings}
         canWrite={isController && canType && !eventsReconnecting} deviceId={deviceId}
-        onPick={onPick} onCreate={onCreateHandoffTerminal} openRequest={handoffOpenRequest} />}
+        onPick={onPick} onCreate={onCreateHandoffTerminal} openRequest={handoffOpenRequest}
+          readContext={() => activeCardRef.current?.getHandoffContext() ?? ""} />}
       <div
         style={{
           flex: 1,

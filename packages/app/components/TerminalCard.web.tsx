@@ -30,6 +30,7 @@ const FIT_REF_RETRY_DELAY_MS = 100;
 const MOBILE_VIEWPORT_SETTLE_MS = 150;
 
 export interface TerminalCardRef {
+  getHandoffContext: () => string;
   fitToContainer: (opts?: {
     skipIfUnchanged?: boolean;
     focusAfterFit?: boolean;
@@ -178,6 +179,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   }, [fitToContainer, isController, onRequestControl, terminal.machine_id]);
 
   useImperativeHandle(ref, () => ({
+    getHandoffContext: () => termViewRef.current?.getHandoffContext() ?? "",
     fitToContainer: (opts) => {
       fitToContainer(opts);
     },
