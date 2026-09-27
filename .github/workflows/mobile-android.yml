@@ -3,6 +3,10 @@ name: Build Android APK (Tauri)
 on:
   workflow_dispatch:
     inputs:
+      publish_existing:
+        description: "Publish the verified handoff RC from run 36296646553"
+        type: boolean
+        default: false
       hub_url:
         description: "Optional: preset this hub instead of asking on first launch. Leave empty for a public build."
         required: false
@@ -12,6 +16,7 @@ permissions:
 
 jobs:
   build-apk:
+    if: ${{ !inputs.publish_existing }}
     runs-on: ubuntu-22.04
     env:
       # Empty on purpose for released builds: the app asks for a hub on first
@@ -258,3 +263,23 @@ jobs:
           name: offdesk-android-apks
           path: artifacts/*.apk
 
+
+  publish-rc:
+    if: ${{ inputs.publish_existing }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: offdesk-android-apks
+          run-id: 36296646553
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifacts
+      - name: Attach verified APK to the RC draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd artifacts
+          sha256sum offdesk-0.7.5-rc.1-arm64-v8a.apk > SHA256SUMS
+          gh release upload rc-android-v0.7.5-rc.1 \
+            offdesk-0.7.5-rc.1-arm64-v8a.apk SHA256SUMS \
+            --repo zalify/offdesk
