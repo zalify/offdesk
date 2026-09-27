@@ -783,7 +783,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           for (let i = Math.max(0, buffer.length - 200); i < buffer.length; i++) {
             lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
           }
-          return lines.join("\n").trim().slice(-4000);
+          return Array.from(lines.join("\n").trim()).slice(-4000).join("");
         },
       }),
       [fitToContainer, measureLayout, sendImageFile, setMouseTrackingEnabled, getSelection, getSelectionSnapshot],

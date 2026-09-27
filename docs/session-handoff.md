@@ -19,7 +19,7 @@ you review or change the agent, terminal, original goal, recent terminal text,
 and artifact paths. The original goal and artifact paths come from the previous
 handoff; the first handoff uses your next step as its goal. Context uses a
 bounded excerpt from the mounted terminal buffer (last 200 lines, at most
-4,000 UTF-16 code units), falling back to the previous context or a factual
+4,000 Unicode characters), falling back to the previous context or a factual
 source-terminal reference. It is a potentially incomplete excerpt, not an
 AI-written summary or native agent transcript. No terminal text is saved until
 you prepare the handoff.
