@@ -1,9 +1,6 @@
 name: Desktop Build
 
 on:
-  push:
-    tags:
-      - "desktop-v*"
   workflow_dispatch:
 
 permissions:
@@ -20,13 +17,8 @@ jobs:
         # plain `tauri dev` needs none of them. Windows is a client only.
         include:
           - platform: macos-latest
-            args: "--target universal-apple-darwin --config src-tauri/tauri.sidecars.macos.conf.json"
-            sidecars: "--universal"
-          - platform: ubuntu-22.04
-            args: "--config src-tauri/tauri.sidecars.linux.conf.json"
+            args: "--target aarch64-apple-darwin --config src-tauri/tauri.sidecars.macos.conf.json"
             sidecars: ""
-          - platform: windows-latest
-            args: ""
 
     runs-on: ${{ matrix.platform }}
 
@@ -133,12 +125,12 @@ jobs:
           releaseName: "Desktop v__VERSION__"
           releaseBody: "See the assets to download the desktop app for your platform."
           releaseDraft: true
-          prerelease: false
+          prerelease: true
           args: ${{ matrix.args }}
 
       - name: Verify macOS drag-to-install layout
         if: matrix.platform == 'macos-latest'
         run: |
-          for dmg in packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg; do
+          for dmg in packages/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg; do
             scripts/verify-dmg-layout.sh "$dmg"
           done
