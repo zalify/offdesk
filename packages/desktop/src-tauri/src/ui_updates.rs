@@ -34,7 +34,7 @@ pub struct RuntimeState {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
-    enabled: bool,
+    pub(crate) enabled: bool,
     checking: bool,
     current_version: String,
     pending_version: Option<String>,

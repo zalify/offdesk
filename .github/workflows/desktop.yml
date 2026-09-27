@@ -21,9 +21,20 @@ jobs:
             sidecars: ""
 
     runs-on: ${{ matrix.platform }}
+    env:
+      OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
+      OFFDESK_UI_CHANNEL: rc
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require the UI release public key
+        shell: bash
+        run: |
+          if [ -z "$OFFDESK_UI_PUBLIC_KEY" ]; then
+            echo "OFFDESK_UI_PUBLIC_KEY repository variable is required for the migration RC." >&2
+            exit 1
+          fi
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

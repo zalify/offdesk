@@ -14,6 +14,8 @@ jobs:
   build-apk:
     runs-on: ubuntu-22.04
     env:
+      OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
+      OFFDESK_UI_CHANNEL: rc
       # Empty on purpose for released builds: the app asks for a hub on first
       # launch, so one APK works for everyone. A dispatch can preset a hub for
       # a private build.
@@ -21,6 +23,14 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require the UI release public key
+        shell: bash
+        run: |
+          if [ -z "$OFFDESK_UI_PUBLIC_KEY" ]; then
+            echo "OFFDESK_UI_PUBLIC_KEY repository variable is required for the migration RC." >&2
+            exit 1
+          fi
 
       - name: Decide which ABIs to build
         id: abi
@@ -84,13 +94,13 @@ jobs:
       - name: Build trusted web bundle (retained for encrypted connections)
         run: |
           pnpm --filter @offdesk/app build
-          node scripts/stamp-build.mjs packages/app/dist "android-v0.7.5-rc.2"
+          node scripts/stamp-build.mjs packages/app/dist "android-v0.7.6-rc.3"
 
       - name: Set RC version
         id: version
         run: |
-          tag="rc-android-v0.7.5-rc.2"
-          version="0.7.5-rc.2"
+          tag="rc-android-v0.7.6-rc.3"
+          version="0.7.6-rc.3"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
@@ -243,7 +253,7 @@ jobs:
           arch: x86_64
           profile: Nexus 6
           disable-animations: true
-          script: python3 scripts/android-startup-smoke.py artifacts/offdesk-${{ steps.version.outputs.version }}-x86_64.apk
+          script: python3 scripts/android-startup-smoke.py artifacts/offdesk-${{ steps.version.outputs.version }}-x86_64.apk --package dev.offdesk.desktop.rc
 
       - name: Upload startup evidence
         if: always() && startsWith(github.ref, 'refs/tags/')
@@ -264,9 +274,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd artifacts
-          sha256sum offdesk-0.7.5-rc.2-arm64-v8a.apk > SHA256SUMS
-          gh release create rc-android-v0.7.5-rc.2 \
-            offdesk-0.7.5-rc.2-arm64-v8a.apk SHA256SUMS \
+          sha256sum offdesk-0.7.6-rc.3-arm64-v8a.apk > SHA256SUMS
+          gh release create rc-android-v0.7.6-rc.3 \
+            offdesk-0.7.6-rc.3-arm64-v8a.apk SHA256SUMS \
             --target "$GITHUB_SHA" --prerelease --latest=false \
-            --title "Android 0.7.5-rc.2 — Automatic handoff matching" \
-            --notes "Offdesk RC (dev.offdesk.desktop.rc), ARM64. Updates rc.1. Handoff now identifies Claude/Codex from live processes, matches a destination, and includes recent terminal context. Normally only the next step is required. Multiple matching sessions require a choice. Use encrypted pairing and a Hub with handoff support. Signature and emulator cold-start/input/recovery checks passed before publishing."
+            --title "Android 0.7.6-rc.3 — Independent Web UI updates" \
+            --notes "Offdesk RC (dev.offdesk.desktop.rc), ARM64. One-time migration to a shell supporting signed Web UI updates. Compatible interface updates download in the background and apply on the next cold start; no APK replacement is needed for UI-only changes. Pairing is preserved. Existing handoff auto-detection is included. Native changes still require app updates."

@@ -1,6 +1,11 @@
 name: Publish Web UI
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/ui-release.yml'
+      - 'scripts/ui-updates/package*'
+      - 'scripts/ui-updates/rollback.mjs'
   workflow_dispatch:
     inputs:
       channel:
@@ -43,6 +48,7 @@ jobs:
       - name: Build Web UI
         run: pnpm build
       - name: Sign immutable UI release
+        if: github.event_name == 'workflow_dispatch'
         env:
           OFFDESK_UI_SIGNING_KEY: ${{ secrets.OFFDESK_UI_SIGNING_KEY }}
           EXPECTED_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
@@ -54,6 +60,7 @@ jobs:
           node --input-type=module -e 'import fs from "node:fs"; const m=JSON.parse(fs.readFileSync("ui-release-meta.json")); if (!process.env.EXPECTED_KEY || m.publicKey !== process.env.EXPECTED_KEY) throw new Error("UI signing key does not match the shell key");'
           echo "UI_VERSION=$version" >> "$GITHUB_ENV"
       - name: Publish immutable release then channel pointer
+        if: github.event_name == 'workflow_dispatch'
         run: |
           gh release create "ui-$UI_VERSION" ui-release/bundle.json ui-release/latest.json \
             --target "$GITHUB_SHA" --prerelease --latest=false --title "Web UI $UI_VERSION" \

@@ -34,7 +34,7 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
         app,
         "recover-ui",
         "Restore previous interface",
-        true,
+        crate::ui_updates::ui_status(app.clone()).map(|s| s.enabled).unwrap_or(false),
         None::<&str>,
     )?;
     let menu = Menu::with_items(

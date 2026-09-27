@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {generateKeyPairSync,verify,createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 import {packageUi} from './package.mjs';
 test('signed release matches exact asset bytes and injects runtime version',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'offdesk-ui-package-'));
@@ -21,6 +22,14 @@ test('signed release matches exact asset bytes and injects runtime version',()=>
     assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));assert.equal(manifest.size,bytes.length);
     assert.match(Buffer.from(bundle.files['index.html'],'base64').toString(),/__OFFDESK_UI_VERSION__="rc-1"/);
     assert.equal(bundle.files['entry.js.map'],undefined);
+    const old=path.join(root,'old.json');fs.copyFileSync(path.join(output,'latest.json'),old);
+    packageUi({...options,version:'rc-2',sequence:2});
+    const rollback=path.join(root,'rollback.json');
+    const command=spawnSync(process.execPath,[new URL('./rollback.mjs',import.meta.url).pathname,old,path.join(output,'latest.json'),rollback],{encoding:'utf8',env:{...process.env,OFFDESK_UI_SIGNING_KEY:options.privateKey}});
+    assert.equal(command.status,0,command.stderr);
+    const restored=JSON.parse(fs.readFileSync(rollback)), target=JSON.parse(restored.payload);
+    assert.equal(target.sequence,3);assert.equal(target.version,'rc-1');
+    assert(verify(null,Buffer.from(restored.payload),publicKey,Buffer.from(restored.signature,'base64')));
     assert.throws(()=>packageUi({...options,version:'../evil'}));
     fs.symlinkSync(path.join(dist,'entry.js'),path.join(dist,'link.js'));
     assert.throws(()=>packageUi(options),/symlinks/);

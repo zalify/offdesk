@@ -166,9 +166,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Build Android debug APK including native updater
+        working-directory: packages/desktop
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.1.12297006"
-          pnpm --filter @offdesk/desktop exec tauri android build --debug --apk -t aarch64 -t x86_64 --config src-tauri/tauri.android.conf.json
+          cargo tauri android build --debug --apk -t aarch64 -t x86_64 --config src-tauri/tauri.android.conf.json
       - name: Test Android release selection
         working-directory: packages/desktop/src-tauri/gen/android
         run: ./gradlew :tauri-plugin-offdesk-android-updater:testDebugUnitTest

@@ -5,6 +5,13 @@ on:
     paths:
       - 'crates/ui-updates/**'
       - 'packages/desktop/src-tauri/src/ui_updates.rs'
+      - 'packages/desktop/src-tauri/src/lib.rs'
+      - 'packages/desktop/src-tauri/Cargo.*'
+      - 'packages/desktop/src-tauri/build.rs'
+      - 'packages/desktop/src-tauri/capabilities/**'
+      - 'packages/app/lib/uiUpdates*'
+      - 'packages/app/components/UiUpdateNotification.tsx'
+      - 'packages/app/app/_layout.tsx'
       - 'scripts/ui-updates/**'
       - '.github/workflows/ui-native-check.yml'
 permissions:
