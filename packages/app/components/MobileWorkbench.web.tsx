@@ -398,11 +398,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           WebkitUserSelect: "none",
         }}
       >
-        <button type="button" aria-label="Open conversations" data-testid="mobile-conversations" data-title-bar-swipe="ignore"
-          onTouchStart={event => event.stopPropagation()}
-          onClick={props.onOpenConversations} style={{ border: 0, background: "none", color: colors.fg2, minWidth: 36, height: 40, display: "grid", placeItems: "center", cursor: "pointer" }}>
-          <MessageSquare size={18}/>
-        </button>
         <button
           type="button"
           data-testid="mobile-title-bar-label"
@@ -990,6 +985,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             icon={<RefreshCw size={17} />}
             label="Reconnect"
             onClick={() => window.location.reload()}
+          />
+          {/* Lives here rather than in the 44px title bar, which has no room
+              for another control on small phones. */}
+          <MenuRow
+            icon={<MessageSquare size={17} />}
+            label="Conversations"
+            onClick={() => {
+              setHostSheetOpen(false);
+              props.onOpenConversations();
+            }}
           />
           {activeTerminalId && <MenuRow
             icon={<ExternalLink size={17} />}

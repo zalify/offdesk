@@ -53,12 +53,13 @@ test('agent history retains previously loaded sessions after a failed refresh an
 test('agent history mobile drawer filters and closes without changing the terminal layout',async({page})=>{
   await page.setViewportSize({width:390,height:844}); await openApp(page);
   await expect(page.getByTestId('agent-session-sidebar')).not.toBeVisible();
-  await page.getByRole('button',{name:'Open conversations',exact:true}).click();
+  await page.getByTestId('mobile-title-bar-machines').click();
+  await page.getByRole('button',{name:'Conversations',exact:true}).click();
   const sidebar=page.getByTestId('agent-session-sidebar'); await expect(sidebar).toBeVisible();
   await expect(sidebar.getByTestId('history-session')).toHaveCount(3);
   await sidebar.getByRole('button',{name:'Codex',exact:true}).click(); await expect(sidebar.getByTestId('history-session')).toHaveCount(1);
   await page.screenshot({path:'e2e/artifacts/agent-sidebar-mobile.png'});
   await page.keyboard.press('Escape'); await expect(sidebar).not.toBeVisible();
   await expect(page.getByTestId('mobile-title-bar')).toBeVisible();
-  await expect(page.getByRole('button',{name:'Open conversations',exact:true})).toBeFocused();
+  await expect(page.getByTestId('mobile-conversations')).toHaveCount(0);
 });

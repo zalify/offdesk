@@ -3,7 +3,9 @@
 The sidebar lists saved Claude and Codex conversations from every connected
 machine. It does not confuse terminal tabs with native agent conversation IDs.
 Desktop has a collapsible left column; mobile opens the same list as a modal drawer
-from the conversation icon in the title bar.
+from **Conversations** in the Machines & Hub menu (monitor icon). The 44px title
+bar keeps its five controls so the session title stays readable and swipeable on
+small phones.
 
 - Default: folders grouped by machine and exact working-directory path, with the
   most recently updated conversation first. Folder groups follow their newest
@@ -65,4 +67,4 @@ at a time, with Show more; search/filter/sort operate over all returned sessions
 - `E2E_TEST_GREP='agent history' pnpm e2e:test` runs Chromium in the runner
   container. The Node image contains synthetic histories only. Browser tests
   exercise the real metadata endpoint and authorization, desktop sorting/filtering,
-  mobile modal focus restoration, failed refresh retention and exact resume IDs.
+  mobile drawer open/close, failed refresh retention and exact resume IDs.
