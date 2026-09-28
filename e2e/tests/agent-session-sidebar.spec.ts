@@ -3,6 +3,9 @@ import { openApp, getAuthHeaders, requestMachineControl, expectControlState } fr
 
 test('agent history reads real node metadata and supports folder/date sorting and agent filters', async ({page}) => {
   await page.setViewportSize({width:1280,height:820}); await openApp(page);
+  // Below 1440px the sidebar starts as a rail so the header keeps room for tabs.
+  await expect(page.getByTestId('agent-session-sidebar')).toHaveCount(0);
+  await page.getByRole('button',{name:'Open conversations',exact:true}).click();
   const sidebar = page.getByTestId('agent-session-sidebar');
   const rows = sidebar.getByTestId('history-session');
   await expect(rows).toHaveCount(3);
@@ -29,6 +32,7 @@ test('agent history reads real node metadata and supports folder/date sorting an
 
 test('agent history retains previously loaded sessions after a failed refresh and resumes explicit session IDs', async ({page}) => {
   await page.setViewportSize({width:1280,height:820}); await openApp(page);
+  await page.getByRole('button',{name:'Open conversations',exact:true}).click();
   const sidebar=page.getByTestId('agent-session-sidebar'); await expect(sidebar.getByTestId('history-session')).toHaveCount(3);
   await page.route('**/conversation-history',route=>route.fulfill({status:503,body:'Node offline'}));
   await sidebar.getByRole('button',{name:'Refresh conversations'}).click();

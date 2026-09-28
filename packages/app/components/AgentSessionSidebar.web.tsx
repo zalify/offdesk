@@ -5,6 +5,10 @@ import { listConversationHistory } from '@/lib/api';
 import { conversationKey, displayPath, folderName, historyGroups, readHistoryPreferences, rowTimeLabel, type ConversationRow, type HistoryPreferences } from '@/lib/conversationHistory';
 
 const PREFERENCES_KEY = 'offdesk:conversation-history-preferences';
+const COLLAPSED_KEY = 'offdesk:conversation-history-collapsed';
+// The desktop header shares its row with tabs and machine stats; below this
+// width an open sidebar squeezes the tab strip, so it starts as a rail.
+const AUTO_OPEN_MIN_WIDTH = 1440;
 interface Props {
   machines: MachineInfo[];
   isCompact: boolean;
@@ -18,7 +22,11 @@ export function AgentSessionSidebar({ machines, isCompact, mobileOpen, onClose, 
     try { return readHistoryPreferences(localStorage.getItem(PREFERENCES_KEY)); } catch { return readHistoryPreferences(null); }
   });
   const [search, setSearch] = useState('');
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsedState] = useState(() => {
+    try { const saved = localStorage.getItem(COLLAPSED_KEY); if (saved !== null) return saved === 'true'; } catch { /* storage is optional */ }
+    return window.innerWidth < AUTO_OPEN_MIN_WIDTH;
+  });
+  const setCollapsed = (value: boolean) => { setCollapsedState(value); try { localStorage.setItem(COLLAPSED_KEY, String(value)); } catch { /* storage is optional */ } };
   const [closedGroups, setClosedGroups] = useState<Set<string>>(new Set());
   const [limit, setLimit] = useState(200);
   const [refresh, setRefresh] = useState(0);
