@@ -17,19 +17,41 @@ export function readHistoryPreferences(raw: string | null): HistoryPreferences {
   } catch { return DEFAULT_HISTORY_PREFERENCES; }
 }
 export const conversationKey = (row: ConversationRow) => JSON.stringify([row.machineId, row.agent, row.id]);
-export function historyGroups(rows: ConversationRow[], preferences: HistoryPreferences, search: string) {
+export interface HistoryGroup { key: string; label: string; machineName: string; cwd: string; rows: ConversationRow[] }
+const startOfDay = (ms: number) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const DAY = 86_400_000;
+export const folderName = (cwd: string) => cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd;
+// Home directories are noise in a narrow sidebar; the full path stays in the tooltip.
+export const displayPath = (cwd: string) => cwd.replace(/^(?:\/Users|\/home)\/[^/]+(?=\/|$)/, '~').replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, '~');
+export function dayLabel(ms: number, now = Date.now()) {
+  const days = Math.round((startOfDay(now) - startOfDay(ms)) / DAY);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  const date = new Date(ms);
+  if (days > 1 && days < 7) return date.toLocaleDateString(undefined, { weekday: 'long' });
+  return date.toLocaleDateString(undefined, date.getFullYear() === new Date(now).getFullYear()
+    ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
+}
+// Date groups already name the day, so rows show the time; folder groups show recency.
+export function rowTimeLabel(ms: number, grouping: HistoryPreferences['grouping'], now = Date.now()) {
+  if (grouping === 'date') return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const minutes = Math.floor((now - ms) / 60_000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (startOfDay(ms) === startOfDay(now)) return `${Math.floor(minutes / 60)}h ago`;
+  return dayLabel(ms, now);
+}
+export function historyGroups(rows: ConversationRow[], preferences: HistoryPreferences, search: string, now = Date.now()): HistoryGroup[] {
   const query = search.trim().toLocaleLowerCase();
   const filtered = rows.filter(row => (preferences.agent === 'all' || row.agent === preferences.agent) &&
     (!query || `${row.title} ${row.cwd} ${row.machineName}`.toLocaleLowerCase().includes(query)));
   filtered.sort((a,b) => (preferences.order === 'newest' ? -1 : 1) * (a.updated_at_ms - b.updated_at_ms) || conversationKey(a).localeCompare(conversationKey(b)));
-  const groups = new Map<string, { key: string; label: string; detail: string; rows: ConversationRow[] }>();
+  const groups = new Map<string, HistoryGroup>();
   for (const row of filtered) {
-    const date = new Date(row.updated_at_ms);
-    const dateKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
-    const key = preferences.grouping === 'folder' ? JSON.stringify([row.machineId,row.cwd]) : dateKey;
-    if (!groups.has(key)) groups.set(key, { key,
-      label: preferences.grouping === 'folder' ? row.cwd.replace(/[\\/]$/, '').split(/[\\/]/).pop() || row.cwd : date.toLocaleDateString(undefined, { year:'numeric', month:'short', day:'numeric' }),
-      detail: preferences.grouping === 'folder' ? `${row.machineName} · ${row.cwd}` : '', rows: [] });
+    const byFolder = preferences.grouping === 'folder';
+    const key = byFolder ? JSON.stringify([row.machineId,row.cwd]) : String(startOfDay(row.updated_at_ms));
+    if (!groups.has(key)) groups.set(key, { key, label: byFolder ? folderName(row.cwd) : dayLabel(row.updated_at_ms, now),
+      machineName: byFolder ? row.machineName : '', cwd: byFolder ? row.cwd : '', rows: [] });
     groups.get(key)!.rows.push(row);
   }
   return [...groups.values()];

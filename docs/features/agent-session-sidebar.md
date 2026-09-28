@@ -8,7 +8,10 @@ from the conversation icon in the title bar.
 - Default: folders grouped by machine and exact working-directory path, with the
   most recently updated conversation first. Folder groups follow their newest
   matching conversation (or oldest when that sort is selected).
-- Optional calendar-day grouping and oldest-first sorting.
+- Optional calendar-day grouping (Today, Yesterday, weekday, then dates) and
+  oldest-first sorting, via the folder/calendar toggle and the sort button next
+  to the agent filter. Date groups show each row's time and folder; folder groups
+  show relative recency. Home directories are shortened to `~` for display only.
 - All / Claude / Codex filters, title/path/machine search, collapsible folders.
 - Sort and filter preferences persist locally. Search and conversation metadata do
   not persist in browser storage. List refreshes every minute while visible;

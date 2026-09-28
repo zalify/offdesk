@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyGroups, readHistoryPreferences, resumeConversationCommand, DEFAULT_HISTORY_PREFERENCES as defaults, type ConversationRow } from './conversationHistory';
+import { dayLabel, displayPath, folderName, historyGroups, rowTimeLabel, readHistoryPreferences, resumeConversationCommand, DEFAULT_HISTORY_PREFERENCES as defaults, type ConversationRow } from './conversationHistory';
 const row = (id: string, time: number, extra: Partial<ConversationRow> = {}): ConversationRow => ({ id, agent: 'claude', cwd: '/a/project', title: id, updated_at_ms: time, machineId: 'one', machineName: 'Mac', ...extra });
 describe('conversation history', () => {
   it('sorts folder groups and their sessions by date, not input order', () => {
@@ -27,5 +27,24 @@ describe('conversation history', () => {
     expect(resumeConversationCommand(row(id,1))).toBe(`claude --resume ${id}`);
     expect(resumeConversationCommand(row(id,1,{agent:'codex'}))).toBe(`codex resume ${id}`);
     expect(()=>resumeConversationCommand(row('$(touch /tmp/no)',1))).toThrow();
+  });
+  it('labels recent days relatively and keeps rows compact',()=>{
+    const now=new Date(2026,8,28,15,0).getTime();
+    expect(dayLabel(new Date(2026,8,28,1).getTime(),now)).toBe('Today');
+    expect(dayLabel(new Date(2026,8,27,23).getTime(),now)).toBe('Yesterday');
+    expect(dayLabel(new Date(2026,8,24,9).getTime(),now)).toBe(new Date(2026,8,24).toLocaleDateString(undefined,{weekday:'long'}));
+    expect(dayLabel(new Date(2025,0,2).getTime(),now)).toContain('2025');
+    expect(rowTimeLabel(now-30_000,'folder',now)).toBe('Just now');
+    expect(rowTimeLabel(now-5*60_000,'folder',now)).toBe('5m ago');
+    expect(rowTimeLabel(now-3*3_600_000,'folder',now)).toBe('3h ago');
+    expect(rowTimeLabel(new Date(2026,8,27,10).getTime(),'folder',now)).toBe('Yesterday');
+    expect(historyGroups([row('a',now)],{...defaults,grouping:'date'},'',now)[0].label).toBe('Today');
+  });
+  it('shortens home directories for display only',()=>{
+    expect(displayPath('/Users/ryan/work/app')).toBe('~/work/app');
+    expect(displayPath('/home/ryan')).toBe('~');
+    expect(displayPath('C:\\Users\\ryan\\app')).toBe('~\\app');
+    expect(displayPath('/tmp/alpha')).toBe('/tmp/alpha');
+    expect(folderName('/tmp/alpha/')).toBe('alpha');
   });
 });
