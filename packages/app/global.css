@@ -203,21 +203,78 @@ body {
   50.01%, 100%  { opacity: 0; }
 }
 
-.session-handoff button:disabled {
-  opacity: 0.45;
-  cursor: not-allowed !important;
-}
-.session-handoff :is(button, input, select, textarea, summary):focus-visible {
-  outline: 2px solid rgb(var(--color-accent));
-  outline-offset: 2px;
-}
-.session-handoff-dialog::backdrop {
-  background: rgb(43 35 64 / 0.45);
-}
+/* Session handoff: a slim status bar above the terminal and a focused dialog. */
+.session-handoff { --agent-claude: var(--color-accent); --agent-codex: var(--color-info); }
+.session-handoff button { font: inherit; cursor: pointer; }
+.session-handoff button:disabled { opacity: 0.45; cursor: not-allowed !important; }
+.session-handoff :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid rgb(var(--color-accent)); outline-offset: 2px; }
+.handoff-bar { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 3px 8px; border-bottom: 1px solid rgb(var(--color-line-soft)); flex-shrink: 0; font-size: 12px; background: rgb(var(--color-bg-1)); overflow-x: auto; scrollbar-width: none; }
+.handoff-spacer { flex: 1; }
+.handoff-muted { color: rgb(var(--color-fg-3)); }
+.handoff-status { display: inline-flex; flex: none; }
+.handoff-agent { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; font-weight: 600; font-size: 12px; white-space: nowrap; color: rgb(var(--agent-claude)); background: rgb(var(--agent-claude) / .1); }
+.handoff-agent i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.handoff-agent.codex { color: rgb(var(--agent-codex)); background: rgb(var(--agent-codex) / .1); }
+.handoff-agent.muted { opacity: .55; }
+.handoff-chip { display: inline-flex; align-items: center; gap: 5px; flex: none; height: 26px; padding: 0 9px; border-radius: 6px; border: 1px solid rgb(var(--color-line-soft)); background: transparent; color: rgb(var(--color-fg-1)); white-space: nowrap; }
+.handoff-chip:hover:not(:disabled) { background: rgb(var(--color-bg-3)); color: rgb(var(--color-fg-0)); }
+.handoff-chip.primary { border-color: transparent; background: rgb(var(--color-accent)); color: rgb(var(--color-on-accent)); }
+.handoff-chip.primary:hover:not(:disabled) { background: rgb(var(--color-accent) / .88); color: rgb(var(--color-on-accent)); }
+.handoff-chip.attention { border-color: rgb(var(--color-warn) / .5); background: rgb(var(--color-warn) / .12); color: rgb(var(--color-fg-0)); font-weight: 600; }
+.handoff-history { display: inline-flex; align-items: center; gap: 4px; flex: none; color: rgb(var(--color-fg-3)); }
+.handoff-history select { height: 26px; max-width: 150px; border: 0; background: transparent; color: rgb(var(--color-fg-2)); font: inherit; cursor: pointer; }
+.session-handoff-dialog { width: min(600px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow-y: auto; padding: 0; border: 1px solid rgb(var(--color-line)); border-radius: 14px; background: rgb(var(--color-bg-2)); color: rgb(var(--color-fg-1)); box-shadow: 0 24px 80px rgb(0 0 0 / .35); font-size: 13px; }
+.session-handoff-dialog > :not(.handoff-footer):not(.handoff-head) { margin-left: 20px; margin-right: 20px; }
+.session-handoff-dialog::backdrop { background: rgb(43 35 64 / 0.45); }
+.handoff-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 14px 0 20px; }
+.handoff-head h2 { margin: 0; font-size: 16px; color: rgb(var(--color-fg-0)); }
+.handoff-icon { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 7px; background: transparent; color: rgb(var(--color-fg-2)); }
+.handoff-icon:hover:not(:disabled) { background: rgb(var(--color-bg-3)); color: rgb(var(--color-fg-0)); }
+.handoff-route { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 12px; margin-bottom: 16px; padding: 10px 12px; border-radius: 10px; background: rgb(var(--color-bg-0)); color: rgb(var(--color-fg-3)); }
+.handoff-route-detail { color: rgb(var(--color-fg-1)); }
+.handoff-route code { flex-basis: 100%; font-size: 11px; color: rgb(var(--color-fg-3)); overflow-wrap: anywhere; }
+.handoff-form { border: 0; padding: 0; margin: 0; display: grid; gap: 14px; min-width: 0; }
+.handoff-field { display: grid; gap: 6px; font-weight: 600; color: rgb(var(--color-fg-0)); min-width: 0; }
+.handoff-field small { font-weight: 400; font-size: 11px; color: rgb(var(--color-fg-3)); }
+.handoff-field :is(textarea, select) { width: 100%; box-sizing: border-box; border: 1px solid rgb(var(--color-line)); border-radius: 8px; background: rgb(var(--color-bg-0)); color: rgb(var(--color-fg-0)); padding: 9px 10px; font: inherit; font-weight: 400; line-height: 1.5; }
+.handoff-field textarea { resize: vertical; }
+.handoff-field :is(textarea, select):focus { border-color: rgb(var(--color-accent) / .6); }
+.handoff-field textarea[readonly] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: rgb(var(--color-fg-1)); }
+.handoff-row { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; }
+.handoff-details { margin-top: 2px; }
+.handoff-details > summary { cursor: pointer; color: rgb(var(--color-fg-2)); padding: 4px 0; width: fit-content; }
+.handoff-details > summary:hover { color: rgb(var(--color-fg-0)); }
+.handoff-details-body { display: grid; gap: 12px; margin-top: 10px; }
+.handoff-details pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 240px; overflow: auto; padding: 10px; border-radius: 8px; background: rgb(var(--color-bg-0)); }
+.handoff-details + .handoff-details { margin-top: 10px; }
+.handoff-footer { position: sticky; bottom: 0; display: flex; align-items: center; gap: 8px; margin-top: 18px; padding: 12px 20px; border-top: 1px solid rgb(var(--color-line-soft)); background: rgb(var(--color-bg-2)); }
+.handoff-hint { font: 11px ui-monospace, monospace; color: rgb(var(--color-fg-3)); }
+.handoff-button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid rgb(var(--color-line)); background: rgb(var(--color-bg-2)); color: rgb(var(--color-fg-0)); font-weight: 500; }
+.handoff-button:hover:not(:disabled) { background: rgb(var(--color-bg-3)); }
+.handoff-button.primary { border-color: transparent; background: rgb(var(--color-accent)); color: rgb(var(--color-on-accent)); font-weight: 600; }
+.handoff-button.primary:hover:not(:disabled) { background: rgb(var(--color-accent) / .88); }
+.handoff-link { border: 0; background: transparent; padding: 6px 4px; color: rgb(var(--color-fg-2)); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgb(var(--color-line)); }
+.handoff-link:hover:not(:disabled) { color: rgb(var(--color-fg-0)); }
+.handoff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+.handoff-steps { display: flex; gap: 6px; list-style: none; padding: 0; margin-top: 0; margin-bottom: 10px; font-size: 12px; }
+.handoff-steps li { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; color: rgb(var(--color-fg-3)); }
+.handoff-steps li + li::before { content: ""; flex: 0 0 12px; height: 1px; background: rgb(var(--color-line)); }
+.handoff-steps li > span { flex: none; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgb(var(--color-line)); font-size: 10px; }
+.handoff-steps li[data-state="done"] { color: rgb(var(--color-ok)); }
+.handoff-steps li[data-state="done"] > span { border-color: transparent; background: rgb(var(--color-ok) / .15); }
+.handoff-steps li[data-state="current"] { color: rgb(var(--color-fg-0)); font-weight: 600; }
+.handoff-steps li[data-state="current"] > span { border-color: rgb(var(--color-accent)); color: rgb(var(--color-accent)); }
+.handoff-lede { line-height: 1.5; margin-top: 0; }
+.handoff-confirm { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; margin-bottom: 20px; padding: 12px; border-radius: 10px; border: 1px dashed rgb(var(--color-line)); color: rgb(var(--color-fg-2)); font-size: 12px; }
+.handoff-actions:last-child, .handoff-note:last-child, .handoff-error:last-child { margin-bottom: 20px; }
+.handoff-note { font-size: 12px; line-height: 1.5; color: rgb(var(--color-fg-2)); margin: 0; }
+.handoff-error { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: rgb(var(--color-err) / .1); color: rgb(var(--color-fg-0)); }
 @media (max-width: 767px) {
-  .session-handoff-dialog :is(input, select, textarea) {
-    font-size: 16px !important;
-  }
+  .session-handoff-dialog :is(input, select, textarea) { font-size: 16px !important; }
+  .handoff-row { grid-template-columns: 1fr; }
+  .handoff-hint { display: none; }
+  .handoff-footer .handoff-button { flex: 1; justify-content: center; }
+  .handoff-steps { font-size: 11px; }
 }
 @keyframes offdeskSpin {
   to { transform: rotate(360deg); }
@@ -245,3 +302,73 @@ body {
   src: url('/fonts/OffdeskTerminalSymbols.woff2') format('woff2');
   unicode-range: U+23F4-23FA;
 }
+
+/* Agent history uses the same local-origin UI on desktop and mobile. */
+.agent-history { --agent-claude: var(--color-accent); --agent-codex: var(--color-info); width: 292px; flex: 0 0 292px; min-height: 0; display: flex; flex-direction: column; background: rgb(var(--color-bg-1)); color: rgb(var(--color-fg-1)); border-right: 1px solid rgb(var(--color-line-soft)); font-size: 12px; }
+.agent-history button, .history-collapsed button { color: inherit; cursor: pointer; border: 0; background: transparent; font: inherit; }
+.agent-history button:disabled { cursor: wait; opacity: .55; }
+.agent-history button:focus-visible, .agent-history input:focus-visible, .history-collapsed button:focus-visible { outline: 2px solid rgb(var(--color-accent)); outline-offset: -2px; }
+.agent-history header { height: 44px; padding: 0 8px 0 12px; display: flex; gap: 6px; align-items: center; flex-shrink: 0; color: rgb(var(--color-fg-0)); }
+.agent-history header strong { flex: 1; font-size: 13px; }
+.agent-history header button { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 6px; color: rgb(var(--color-fg-2)); }
+.agent-history header button:hover { background: rgb(var(--color-accent) / .08); color: rgb(var(--color-fg-0)); }
+.history-filters { padding: 0 10px 6px; display: grid; gap: 8px; }
+.history-search { display: flex; align-items: center; gap: 6px; padding: 0 4px 0 9px; border: 1px solid rgb(var(--color-line-soft)); border-radius: 7px; background: rgb(var(--color-bg-0)); color: rgb(var(--color-fg-3)); }
+.history-search:focus-within { border-color: rgb(var(--color-accent) / .6); }
+.history-search input { flex: 1; min-width: 0; padding: 7px 0; border: 0; outline: 0 !important; background: transparent; color: rgb(var(--color-fg-0)); font: inherit; }
+.history-search button { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; }
+.history-toolbar { display: flex; gap: 6px; align-items: center; }
+.history-agents, .history-view { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: rgb(var(--color-bg-0)); }
+.history-agents { flex: 1; }
+.history-agents button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px; border-radius: 5px; padding: 5px 0; color: rgb(var(--color-fg-2)); }
+.history-view button, .history-sort { display: grid; place-items: center; width: 28px; height: 26px; border-radius: 5px; color: rgb(var(--color-fg-2)); }
+.history-sort { background: rgb(var(--color-bg-0)) !important; height: 30px; width: 30px; border-radius: 7px; }
+.history-agents button[aria-pressed="true"], .history-view button[aria-pressed="true"] { background: rgb(var(--color-bg-2)); color: rgb(var(--color-fg-0)); font-weight: 600; box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+.history-agents button:not([aria-pressed="true"]):hover, .history-view button:not([aria-pressed="true"]):hover, .history-sort:hover { color: rgb(var(--color-fg-0)); }
+.history-agent-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--agent-claude)); }
+.history-agent-dot.codex { background: rgb(var(--agent-codex)); }
+.history-summary { padding: 2px 12px 6px; color: rgb(var(--color-fg-3)); font-size: 11px; }
+.history-list { flex: 1; min-height: 0; overflow: auto; padding: 0 6px 12px; overscroll-behavior: contain; }
+.history-group { margin-bottom: 6px; }
+.history-folder { position: sticky; top: 0; z-index: 1; width: 100%; display: flex; gap: 6px; align-items: center; padding: 7px 6px; text-align: left; font-weight: 600; color: rgb(var(--color-fg-0)); background: rgb(var(--color-bg-1)) !important; border-radius: 6px; }
+.history-folder:hover { background: rgb(var(--color-bg-3)) !important; }
+.history-folder > svg { flex: none; color: rgb(var(--color-fg-3)); }
+.history-chevron { transition: transform .12s ease; transform: rotate(90deg); }
+.history-folder[aria-expanded="false"] .history-chevron { transform: none; }
+.history-folder-text { flex: 1; min-width: 0; display: grid; }
+.history-folder-text > span, .history-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-path { color: rgb(var(--color-fg-3)); font-size: 10px; font-weight: 400; margin-top: 1px; }
+.history-count { flex: none; min-width: 18px; padding: 1px 5px; border-radius: 9px; text-align: center; font-weight: 500; font-size: 10px; color: rgb(var(--color-fg-2)); background: rgb(var(--color-bg-0)); }
+.agent-history .history-session { position: relative; display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; border-radius: 7px; padding: 7px 8px 7px 26px; margin-bottom: 1px; }
+.history-session .history-agent-dot { position: absolute; left: 13px; top: 13px; }
+.history-session:hover:not(:disabled) { background: rgb(var(--color-accent) / .07); }
+.history-session[aria-busy="true"] { background: rgb(var(--color-accent) / .1); opacity: 1 !important; }
+.history-body { flex: 1; min-width: 0; }
+.history-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; overflow-wrap: anywhere; color: rgb(var(--color-fg-0)); }
+.history-meta { display: flex; gap: 8px; justify-content: space-between; color: rgb(var(--color-fg-3)); font-size: 10.5px; margin-top: 2px; }
+.history-meta > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-meta time, .history-opening { flex: none; font-variant-numeric: tabular-nums; }
+.history-opening { display: inline-flex; gap: 4px; align-items: center; color: rgb(var(--color-accent)); }
+.history-loading { animation: offdeskSpin .9s linear infinite; }
+.history-notice, .history-empty { line-height: 1.55; padding: 10px; margin: 4px 4px 8px; color: rgb(var(--color-fg-2)); overflow-wrap: anywhere; }
+.history-notice { background: rgb(var(--color-warn) / .1); border-radius: 7px; }
+.history-notice.error { background: rgb(var(--color-err) / .1); color: rgb(var(--color-fg-0)); }
+.history-empty { display: grid; gap: 6px; justify-items: start; padding: 18px 10px; }
+.history-empty small { color: rgb(var(--color-fg-3)); font-size: 11px; }
+.agent-history .history-empty button { color: rgb(var(--color-accent)); padding: 0; font-weight: 600; }
+.history-skeleton { display: grid; gap: 10px; padding: 8px; }
+.history-skeleton span { height: 30px; border-radius: 6px; background: rgb(var(--color-bg-3) / .6); animation: historyPulse 1.2s ease-in-out infinite alternate; }
+@keyframes historyPulse { to { opacity: .4; } }
+.agent-history .history-more { width: 100%; padding: 12px; color: rgb(var(--color-accent)); }
+.history-collapsed { width: 38px; padding-top: 8px; display: flex; justify-content: center; align-items: flex-start; border-right: 1px solid rgb(var(--color-line-soft)); }
+.history-collapsed button { padding: 7px; border-radius: 6px; color: rgb(var(--color-fg-2)); }
+.history-collapsed button:hover { background: rgb(var(--color-accent) / .08); }
+.history-dialog { padding: 0; border: 0; margin: 0 auto 0 0; max-width: 90vw; width: 320px; max-height: 100dvh; height: 100dvh; background: rgb(var(--color-bg-1)); color: rgb(var(--color-fg-1)); }
+.history-dialog .agent-history { width: 100%; height: 100%; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+.history-dialog::backdrop { background: rgb(0 0 0 / .4); }
+.history-dialog input { font-size: 16px; }
+.history-dialog .history-session { padding-top: 10px; padding-bottom: 10px; }
+.history-dialog .history-session .history-agent-dot { top: 16px; }
+.history-dialog .history-agents button { padding: 8px 0; }
+.history-dialog .history-view button, .history-dialog .history-sort { width: 36px; height: 34px; }
+@media (prefers-reduced-motion: reduce) { .history-loading, .history-skeleton span, .history-chevron { animation: none; transition: none; } }

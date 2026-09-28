@@ -43,7 +43,7 @@ jobs:
       - run: node --test scripts/ui-updates/package.test.mjs
       - name: Container browser regression
         env:
-          E2E_TEST_GREP: 'UI updates|handoff|auto detection captures|ambiguous destinations|lost save response'
+          E2E_TEST_GREP: 'UI updates|agent history|handoff|auto detection captures|ambiguous destinations|lost save response'
         run: pnpm e2e:ci
       - name: Build Web UI
         run: pnpm build
