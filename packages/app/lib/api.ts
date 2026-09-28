@@ -391,3 +391,6 @@ export interface SecureDevice {
 }
 export const listSecureDevices = () => request<SecureDevice[]>("GET", "/api/security/devices");
 export const revokeSecureDevice = (id: string) => request<void>("DELETE", `/api/security/devices/${encodeURIComponent(id)}`);
+
+export const listConversationHistory = (machineId: string, signal?: AbortSignal) =>
+  request<import('./conversationHistory').ConversationHistory>('GET', `/api/machines/${encodeURIComponent(machineId)}/conversation-history`, undefined, signal);

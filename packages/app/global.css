@@ -245,3 +245,39 @@ body {
   src: url('/fonts/OffdeskTerminalSymbols.woff2') format('woff2');
   unicode-range: U+23F4-23FA;
 }
+
+/* Agent history uses the same local-origin UI on desktop and mobile. */
+.agent-history { width: 292px; flex: 0 0 292px; min-height: 0; display: flex; flex-direction: column; background: rgb(var(--color-bg-1)); color: rgb(var(--color-fg-1)); border-right: 1px solid rgb(var(--color-line-soft)); font-size: 12px; }
+.agent-history button, .history-collapsed button { color: inherit; cursor: pointer; border: 0; background: transparent; }
+.agent-history button:disabled { cursor: wait; opacity: .55; }
+.agent-history button:focus-visible, .agent-history input:focus-visible, .agent-history select:focus-visible, .history-collapsed button:focus-visible { outline: 2px solid rgb(var(--color-accent)); outline-offset: -2px; }
+.agent-history header { height: 48px; padding: 0 12px; display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+.agent-history header strong { flex: 1; font-size: 13px; }
+.agent-history header button { display: grid; place-items: center; width: 28px; height: 32px; }
+.history-filters { padding: 0 12px 8px; display: grid; gap: 9px; }
+.history-agents { display: flex; gap: 4px; padding: 3px; border-radius: 8px; background: rgb(var(--color-bg-0)); }
+.history-agents button { flex: 1; border-radius: 6px; padding: 7px 0; }
+.history-agents button[aria-pressed="true"] { background: rgb(var(--color-accent) / .14); color: rgb(var(--color-accent)); font-weight: 600; }
+.history-filters input, .history-options select { min-width: 0; width: 100%; padding: 8px; border: 1px solid rgb(var(--color-line-soft)); border-radius: 6px; color: inherit; background: rgb(var(--color-bg-0)); font: inherit; }
+.history-options { display: flex; gap: 6px; }
+.history-summary { padding: 4px 12px 10px; color: rgb(var(--color-fg-3)); font-size: 11px; }
+.history-list { flex: 1; min-height: 0; overflow: auto; padding: 0 7px 12px; overscroll-behavior: contain; }
+.history-group { margin-bottom: 12px; }
+.history-folder { width: 100%; display: flex; gap: 7px; align-items: center; padding: 7px 5px; text-align: left; font-weight: 600; }
+.history-folder span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-folder small { font-weight: 400; color: rgb(var(--color-fg-3)); }
+.history-path { color: rgb(var(--color-fg-3)); font-size: 10px; padding: 0 5px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-history .history-session { display: block; width: 100%; text-align: left; border-radius: 7px; padding: 9px 10px; margin-bottom: 2px; }
+.history-session:hover, .history-folder:hover { background: rgb(var(--color-accent) / .07); }
+.history-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.45; overflow-wrap: anywhere; }
+.history-meta { display: flex; justify-content: space-between; color: rgb(var(--color-fg-3)); font-size: 10px; margin-top: 5px; }
+.history-notice, .history-empty { line-height: 1.6; padding: 10px; color: rgb(var(--color-fg-2)); overflow-wrap: anywhere; }
+.history-notice { background: rgb(var(--color-accent) / .07); border-radius: 7px; }
+.agent-history .history-more { width: 100%; padding: 12px; color: rgb(var(--color-accent)); }
+.agent-history footer { padding: 10px 12px; font-size: 10px; color: rgb(var(--color-fg-3)); border-top: 1px solid rgb(var(--color-line-soft)); }
+.history-collapsed { width: 38px; padding-top: 12px; display: flex; justify-content: center; align-items: flex-start; border-right: 1px solid rgb(var(--color-line-soft)); }
+.history-collapsed button { padding: 7px; }
+.history-dialog { padding: 0; border: 0; margin: 0 auto 0 0; max-width: 90vw; width: 320px; max-height: 100dvh; height: 100dvh; background: rgb(var(--color-bg-1)); color: rgb(var(--color-fg-1)); }
+.history-dialog .agent-history { width: 100%; height: 100%; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+.history-dialog::backdrop { background: rgb(0 0 0 / .4); }
+.history-dialog input, .history-dialog select { font-size: 16px; }

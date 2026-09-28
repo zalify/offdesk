@@ -28,6 +28,7 @@ pub struct EventEnvelope {
 type PendingResponse = oneshot::Sender<Result<PendingResult, String>>;
 
 pub enum PendingResult {
+    ConversationHistory(offdesk_protocol::session_history::ConversationHistory),
     Composer(offdesk_protocol::ComposerReceipt),
     TerminalCreated {
         terminal_id: String,
@@ -1007,6 +1008,52 @@ impl MachineManager {
         }
     }
 
+    /// Read metadata from the node-owned agent history directories.
+    pub async fn conversation_history(
+        &self,
+        machine_id: &str,
+    ) -> Result<offdesk_protocol::session_history::ConversationHistory, String> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+
+        let rx = self.register_pending(&request_id).await;
+
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err(format!("Machine {} not found", machine_id));
+            };
+            conn.cmd_tx.clone()
+        };
+        if let Err(_error) = cmd_tx
+            .send(HubToMachine::ConversationHistory {
+                request_id: request_id.clone(),
+            })
+            .await
+        {
+            self.remove_pending(&request_id).await;
+            return Err("Machine disconnected".to_string());
+        }
+
+        let result = match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                return Err("Machine disconnected".to_string());
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                return Err("Timeout".to_string());
+            }
+        };
+
+        match result? {
+            PendingResult::ConversationHistory(history) => Ok(history),
+            _ => Err("Unexpected response".to_string()),
+        }
+    }
+
     /// Request directory listing from a machine
     pub async fn list_directory(
         &self,
@@ -1258,6 +1305,11 @@ impl MachineManager {
                             );
                         }
                     }
+                }
+            }
+            MachineToHub::ConversationHistoryResult { request_id, history } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::ConversationHistory(history)));
                 }
             }
             MachineToHub::FsListResult {

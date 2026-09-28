@@ -152,6 +152,7 @@ impl HubConnection {
             home_dir: dirs_home(),
             capabilities: vec![
                 DEFLATE_RAW_V1.to_string(),
+                offdesk_protocol::session_history::CAPABILITY.to_string(),
                 offdesk_protocol::composer::COMPOSER_V1.to_string(),
                 offdesk_protocol::preview::CAPABILITY.to_string(),
             ],
@@ -616,6 +617,18 @@ async fn handle_hub_message(
                     terminal_id,
                 }))
                 .await;
+        }
+        HubToMachine::ConversationHistory { request_id } => {
+            let sender = send_tx.clone();
+            tokio::spawn(async move {
+                let history = tokio::task::spawn_blocking(crate::session_history::scan)
+                    .await.unwrap_or_else(|_| offdesk_protocol::session_history::ConversationHistory {
+                        sessions: vec![], warnings: vec!["History scan failed; refresh to retry".into()],
+                    });
+                let _ = sender.send(OutboundHubMessage::Json(
+                    MachineToHub::ConversationHistoryResult { request_id, history }
+                )).await;
+            });
         }
         HubToMachine::FsListDir { request_id, path } => {
             let resolved = expand_tilde(&path);

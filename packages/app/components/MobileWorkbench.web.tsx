@@ -37,6 +37,7 @@ import {
   Lock,
   LockOpen,
   Monitor,
+  MessageSquare,
   Plus,
   RefreshCw,
   Settings as SettingsIcon,
@@ -92,6 +93,7 @@ interface MobileWorkbenchProps {
   onEngageViewOnly: (machineId: string) => void;
   onDisengageViewOnly: () => void;
   onOpenSettings: () => void;
+  onOpenConversations: () => void;
   onOpenWebPreview: () => void;
   // The inline TerminalWorkspace (null while the machine has no terminals).
   children: React.ReactNode;
@@ -396,6 +398,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           WebkitUserSelect: "none",
         }}
       >
+        <button type="button" aria-label="Open conversations" data-testid="mobile-conversations" data-title-bar-swipe="ignore"
+          onTouchStart={event => event.stopPropagation()}
+          onClick={props.onOpenConversations} style={{ border: 0, background: "none", color: colors.fg2, minWidth: 36, height: 40, display: "grid", placeItems: "center", cursor: "pointer" }}>
+          <MessageSquare size={18}/>
+        </button>
         <button
           type="button"
           data-testid="mobile-title-bar-label"
