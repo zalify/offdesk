@@ -251,6 +251,45 @@ export function rotateWorkspaceLayout(
   };
 }
 
+// ⌃B E: rebalance every split in the active group so sibling subtrees take
+// space in proportion to their column/row counts — tmux `select-layout -E`.
+// Tree structure, pane order and directions are preserved; only ratios move.
+export function equalizeWorkspaceLayout(
+  workspace: TerminalWorkspace,
+): TerminalWorkspace {
+  const group = workspace.groups.find(
+    (candidate) => candidate.id === workspace.activeGroupId,
+  );
+  if (!group || !group.root || group.root.type !== "split") return workspace;
+
+  const root = equalizeSplitRatios(group.root);
+  const groups = workspace.groups.map((candidate) =>
+    candidate.id === group.id
+      ? {
+          ...candidate,
+          root,
+          paneCount: collectPaneTerminalIds(root).length,
+        }
+      : candidate,
+  );
+
+  return {
+    ...workspace,
+    groups,
+  };
+}
+
+function equalizeSplitRatios(node: WorkspacePaneNode): WorkspacePaneNode {
+  if (node.type !== "split") return node;
+  const first = equalizeSplitRatios(node.first);
+  const second = equalizeSplitRatios(node.second);
+  const ratio =
+    node.direction === "horizontal"
+      ? columnCount(first) / (columnCount(first) + columnCount(second))
+      : rowCount(first) / (rowCount(first) + rowCount(second));
+  return { ...node, ratio: normalizeSplitRatio(ratio), first, second };
+}
+
 export function reconcileTerminalWorkspace(
   workspace: TerminalWorkspace,
   terminals: TerminalInfo[],
@@ -748,6 +787,23 @@ function normalizeSplitRatio(ratio: number): number {
   return Math.min(0.95, Math.max(0.05, ratio));
 }
 
+// Number of side-by-side columns a subtree occupies: a horizontal split
+// stacks its children's columns; anything else is a single column.
+function columnCount(node: WorkspacePaneNode): number {
+  if (node.type === "split" && node.direction === "horizontal") {
+    return columnCount(node.first) + columnCount(node.second);
+  }
+  return 1;
+}
+
+// Symmetric to columnCount for stacked rows.
+function rowCount(node: WorkspacePaneNode): number {
+  if (node.type === "split" && node.direction === "vertical") {
+    return rowCount(node.first) + rowCount(node.second);
+  }
+  return 1;
+}
+
 // Horizontal chain where every pane gets width 1/n: the outermost split
 // takes 1/n of the width, the next 1/(n-1) of what remains, … innermost 1/2.
 function tileTerminals(ids: string[]): WorkspacePaneNode | null {
@@ -1001,10 +1057,13 @@ function appendNode(
   inserted: WorkspacePaneNode,
 ): WorkspacePaneNode {
   if (!root) return inserted;
+  // The new pane gets 1/(c+1) of the width and the c existing columns scale
+  // down uniformly (their internal ratios are untouched), so appending
+  // panes one by one converges on even columns instead of 1/2, 1/4, 1/8…
   return {
     type: "split",
     direction: "horizontal",
-    ratio: 0.5,
+    ratio: normalizeSplitRatio(columnCount(root) / (columnCount(root) + 1)),
     first: root,
     second: inserted,
   };

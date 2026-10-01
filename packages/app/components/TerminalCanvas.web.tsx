@@ -1518,6 +1518,15 @@ function TerminalCanvasInner() {
         action: () =>
           workspaceCommandsRef.current.runPrefixAction?.("rotateLayout"),
       },
+      {
+        id: "equalize-panes",
+        section: "actions",
+        label: "Equalize panes",
+        hint: formatPrefixBinding("equalizePanes", bindings),
+        disabled: !isActiveController,
+        action: () =>
+          workspaceCommandsRef.current.runPrefixAction?.("equalizePanes"),
+      },
       ...tabGroups.map((group, index): PaletteRow => {
         const tabAction = `selectTab${index + 1}` as PrefixActionId;
         return {

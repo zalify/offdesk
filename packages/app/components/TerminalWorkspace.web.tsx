@@ -32,6 +32,7 @@ import {
   buildReorderPersistentGroupIds,
   closeWorkspacePane,
   createTerminalWorkspace,
+  equalizeWorkspaceLayout,
   findAdjacentWorkspacePane,
   flattenWorkspacePanes,
   getActiveWorkspaceGroup,
@@ -131,6 +132,7 @@ const WORKSPACE_PREFIX_ACTIONS: PrefixActionId[] = [
   "splitRight",
   "splitDown",
   "rotateLayout",
+  "equalizePanes",
   "paneLeft",
   "paneRight",
   "paneUp",
@@ -573,6 +575,23 @@ function TerminalWorkspaceComponent({
     void persistGroupLayout(nextWorkspace, groupId);
   }, [isController, persistGroupLayout, requestPaneFit, updateWorkspace]);
 
+  // ⌃B E: rebalance the active group's splits so every pane gets an even
+  // share (tmux select-layout -E) — heals layouts saved by the old
+  // halving append.
+  const handleEqualizeLayout = useCallback(() => {
+    if (!isController) return;
+    const group = getActiveWorkspaceGroup(workspaceRef.current);
+    if (!group || collectIds(group.root).length < 2) return;
+    const groupId = group.id;
+    const nextWorkspace = updateWorkspace((current) =>
+      equalizeWorkspaceLayout(current),
+    );
+    requestPaneFit(collectIds(getActiveWorkspaceGroup(nextWorkspace)?.root ?? null), {
+      focusTerminalId: nextWorkspace.activeTerminalId,
+    });
+    void persistGroupLayout(nextWorkspace, groupId);
+  }, [isController, persistGroupLayout, requestPaneFit, updateWorkspace]);
+
   const handleReorderGroups = useCallback(
     async (
       sourceGroupId: string,
@@ -774,6 +793,7 @@ function TerminalWorkspaceComponent({
     splitRight: () => void handleSplit("right"),
     splitDown: () => void handleSplit("down"),
     rotateLayout: handleRotateLayout,
+    equalizePanes: handleEqualizeLayout,
     paneLeft: () => focusPaneByDirection("left"),
     paneRight: () => focusPaneByDirection("right"),
     paneUp: () => focusPaneByDirection("up"),
@@ -952,6 +972,12 @@ function TerminalWorkspaceComponent({
           shortcut: formatPrefixBinding("rotateLayout"),
           disabled: !isController || activeGroupPaneCount < 2,
           onClick: handleRotateLayout,
+        },
+        {
+          label: "Equalize panes",
+          shortcut: formatPrefixBinding("equalizePanes"),
+          disabled: !isController || activeGroupPaneCount < 2,
+          onClick: handleEqualizeLayout,
         },
         {
           label: "Zoom",

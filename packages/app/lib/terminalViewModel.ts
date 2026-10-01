@@ -96,6 +96,28 @@ export function estimateInitialTerminalDimensions(
   return { cols, rows };
 }
 
+/**
+ * Banner predicate for "Sized by another device": is the terminal well under
+ * what would fit in this pane? Unlike initial terminal creation the estimate
+ * must not floor at 80×24 — in a narrow pane that floor alone (80 cols) is
+ * wider than the terminal (e.g. 26 cols in a ~250px pane), which made the
+ * banner fire on correctly fitted panes.
+ */
+export function isSizedElsewhere(
+  terminalCols: number,
+  terminalRows: number,
+  paneWidthPx: number,
+  paneHeightPx: number,
+): boolean {
+  const wouldFit = estimateInitialTerminalDimensions(paneWidthPx, paneHeightPx, {
+    minCols: 1,
+    minRows: 1,
+  });
+  return (
+    terminalCols < wouldFit.cols * 0.6 || terminalRows < wouldFit.rows * 0.6
+  );
+}
+
 export function estimateMobileInitialTerminalDimensions(
   viewportWidthPx: number,
   viewportHeightPx: number,

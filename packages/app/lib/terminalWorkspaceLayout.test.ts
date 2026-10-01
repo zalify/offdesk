@@ -9,6 +9,7 @@ import {
   collectGroupPaneTerminalIds,
   collectPaneTerminalIds,
   createTerminalWorkspace,
+  equalizeWorkspaceLayout,
   getActiveWorkspaceGroup,
   findAdjacentWorkspacePane,
   flattenWorkspacePanes,
@@ -291,7 +292,7 @@ describe("terminalWorkspaceLayout", () => {
     }
   });
 
-  it("keeps surviving saved geometry and appends leftovers with a 50/50 split", () => {
+  it("keeps surviving saved geometry and appends leftovers with a proportional split", () => {
     const workspace = createTerminalWorkspace(
       [terminal("a", "/repo"), terminal("b", "/repo"), terminal("c", "/repo")],
       "a",
@@ -322,7 +323,7 @@ describe("terminalWorkspaceLayout", () => {
     expect(root).toEqual({
       type: "split",
       direction: "horizontal",
-      ratio: 0.5,
+      ratio: 2 / 3,
       first: {
         type: "split",
         direction: "horizontal",
@@ -345,6 +346,198 @@ describe("terminalWorkspaceLayout", () => {
     for (const id of ["a", "b", "c"]) {
       expect(widths[id]).toBeCloseTo(1 / 3);
     }
+  });
+
+  it("appends panes as even columns instead of halving the whole row", () => {
+    let workspace = createTerminalWorkspace([terminal("a", "/repo")], "a");
+    for (const id of ["b", "c", "d"]) {
+      workspace = appendWorkspacePaneToGroup(workspace, {
+        groupId: workspace.groups[0].id,
+        newTerminalId: id,
+      });
+    }
+
+    const root = getActiveWorkspaceGroup(workspace)?.root ?? null;
+    expect(collectPaneTerminalIds(root)).toEqual(["a", "b", "c", "d"]);
+    const widths = leafWidths(root);
+    for (const id of ["a", "b", "c", "d"]) {
+      expect(widths[id]).toBeCloseTo(0.25);
+    }
+  });
+
+  it("reconcile appends newly arrived terminals as even columns", () => {
+    const previous = createTerminalWorkspace([terminal("a", "/repo")], "a");
+    const workspace = reconcileTerminalWorkspace(
+      previous,
+      [
+        terminal("a", "/repo"),
+        terminal("b", "/repo"),
+        terminal("c", "/repo"),
+        terminal("d", "/repo"),
+      ],
+      "a",
+    );
+
+    const root = getActiveWorkspaceGroup(workspace)?.root ?? null;
+    expect(collectPaneTerminalIds(root)).toEqual(["a", "b", "c", "d"]);
+    const widths = leafWidths(root);
+    for (const id of ["a", "b", "c", "d"]) {
+      expect(widths[id]).toBeCloseTo(0.25);
+    }
+  });
+
+  it("equalizes a degenerate append chain back to even columns", () => {
+    // The old appendNode shape: ((A|B)|C)|D, every split 0.5 → 1/8,1/8,1/4,1/2.
+    const workspace = createTerminalWorkspace(
+      [
+        terminal("a", "/repo"),
+        terminal("b", "/repo"),
+        terminal("c", "/repo"),
+        terminal("d", "/repo"),
+      ],
+      "a",
+      [],
+      [
+        {
+          machine_id: "m1",
+          group_key: "cwd:/repo",
+          updated_at: 10,
+          root: {
+            type: "split",
+            direction: "horizontal",
+            ratio: 0.5,
+            first: {
+              type: "split",
+              direction: "horizontal",
+              ratio: 0.5,
+              first: {
+                type: "split",
+                direction: "horizontal",
+                ratio: 0.5,
+                first: { type: "leaf", terminalId: "a" },
+                second: { type: "leaf", terminalId: "b" },
+              },
+              second: { type: "leaf", terminalId: "c" },
+            },
+            second: { type: "leaf", terminalId: "d" },
+          },
+        },
+      ],
+    );
+
+    const next = equalizeWorkspaceLayout(workspace);
+    const root = getActiveWorkspaceGroup(next)?.root ?? null;
+    expect(collectPaneTerminalIds(root)).toEqual(["a", "b", "c", "d"]);
+    const widths = leafWidths(root);
+    for (const id of ["a", "b", "c", "d"]) {
+      expect(widths[id]).toBeCloseTo(0.25);
+    }
+    // Structure and direction are preserved: still a left-leaning
+    // horizontal chain with ratios 1/2, 2/3, 3/4 inside-out.
+    expect(root).toMatchObject({
+      type: "split",
+      direction: "horizontal",
+      ratio: 0.75,
+      first: {
+        type: "split",
+        direction: "horizontal",
+        ratio: 2 / 3,
+        first: { type: "split", direction: "horizontal", ratio: 0.5 },
+        second: { type: "leaf", terminalId: "c" },
+      },
+      second: { type: "leaf", terminalId: "d" },
+    });
+  });
+
+  it("equalizes a mixed horizontal/vertical tree without changing its structure", () => {
+    const workspace = createTerminalWorkspace(
+      [terminal("a", "/repo"), terminal("b", "/repo"), terminal("c", "/repo")],
+      "a",
+      [],
+      [
+        {
+          machine_id: "m1",
+          group_key: "cwd:/repo",
+          updated_at: 10,
+          root: {
+            type: "split",
+            direction: "horizontal",
+            ratio: 0.8,
+            first: { type: "leaf", terminalId: "a" },
+            second: {
+              type: "split",
+              direction: "vertical",
+              ratio: 0.3,
+              first: { type: "leaf", terminalId: "b" },
+              second: { type: "leaf", terminalId: "c" },
+            },
+          },
+        },
+      ],
+    );
+
+    const next = equalizeWorkspaceLayout(workspace);
+    expect(getActiveWorkspaceGroup(next)?.root).toEqual({
+      type: "split",
+      direction: "horizontal",
+      ratio: 0.5,
+      first: { type: "leaf", terminalId: "a" },
+      second: {
+        type: "split",
+        direction: "vertical",
+        ratio: 0.5,
+        first: { type: "leaf", terminalId: "b" },
+        second: { type: "leaf", terminalId: "c" },
+      },
+    });
+  });
+
+  it("equalizes rows when the outer split is vertical", () => {
+    const workspace = createTerminalWorkspace(
+      [terminal("a", "/repo"), terminal("b", "/repo"), terminal("c", "/repo")],
+      "a",
+      [],
+      [
+        {
+          machine_id: "m1",
+          group_key: "cwd:/repo",
+          updated_at: 10,
+          root: {
+            type: "split",
+            direction: "vertical",
+            ratio: 0.9,
+            first: {
+              type: "split",
+              direction: "horizontal",
+              ratio: 0.1,
+              first: { type: "leaf", terminalId: "a" },
+              second: { type: "leaf", terminalId: "b" },
+            },
+            second: { type: "leaf", terminalId: "c" },
+          },
+        },
+      ],
+    );
+
+    const next = equalizeWorkspaceLayout(workspace);
+    expect(getActiveWorkspaceGroup(next)?.root).toEqual({
+      type: "split",
+      direction: "vertical",
+      ratio: 0.5,
+      first: {
+        type: "split",
+        direction: "horizontal",
+        ratio: 0.5,
+        first: { type: "leaf", terminalId: "a" },
+        second: { type: "leaf", terminalId: "b" },
+      },
+      second: { type: "leaf", terminalId: "c" },
+    });
+  });
+
+  it("leaves a single-pane group untouched when equalizing", () => {
+    const workspace = createTerminalWorkspace([terminal("a", "/repo")], "a");
+    expect(equalizeWorkspaceLayout(workspace)).toBe(workspace);
   });
 
   it("groups panes by persisted workspace tab before falling back to cwd", () => {
