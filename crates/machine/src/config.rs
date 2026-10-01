@@ -6,6 +6,10 @@ pub fn default_prevent_idle_sleep() -> bool {
     true
 }
 
+pub fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MachineConfig {
     pub machine_id: String,
@@ -15,6 +19,14 @@ pub struct MachineConfig {
     /// Other causes of sleep (such as closing a laptop lid) are unaffected.
     #[serde(default = "default_prevent_idle_sleep")]
     pub prevent_idle_sleep: bool,
+    /// Recreate tmux sessions (with their original terminal ids) after a full
+    /// machine reboot, using the metadata snapshot in sessions.json.
+    #[serde(default = "default_true")]
+    pub restore_on_reboot: bool,
+    /// After reviving a terminal on boot, re-launch the claude/codex session
+    /// that was running in it (via a sanitized resume command).
+    #[serde(default = "default_true")]
+    pub resume_agents: bool,
     /// Optional spawn-command overrides for agent sessions, keyed by agent
     /// kind ("claude" | "codex" | "grok" | "kimi"); values are argv vectors.
     /// Missing entries fall back to the built-in defaults.
@@ -78,5 +90,13 @@ mod tests {
         let config: MachineConfig = serde_json::from_str(OPT_OUT_CONFIG).unwrap();
 
         assert!(!config.prevent_idle_sleep);
+    }
+
+    #[test]
+    fn legacy_config_restores_on_reboot_and_resumes_agents_by_default() {
+        let config: MachineConfig = serde_json::from_str(LEGACY_CONFIG).unwrap();
+
+        assert!(config.restore_on_reboot);
+        assert!(config.resume_agents);
     }
 }

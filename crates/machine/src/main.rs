@@ -8,6 +8,7 @@ mod terminal_attention;
 mod codex_title;
 mod pty;
 mod preview;
+mod revive;
 mod service;
 mod session_watcher;
 mod stats;
@@ -241,6 +242,8 @@ async fn run_register(hub_url: String, token: String, name: Option<String>) {
         machine_secret: register_resp.machine_secret,
         hub_url: ws_url,
         prevent_idle_sleep: config::default_prevent_idle_sleep(),
+        restore_on_reboot: config::default_true(),
+        resume_agents: config::default_true(),
         acp_agents: Default::default(),
     };
 
@@ -375,6 +378,14 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
         .as_ref()
         .map(|config| config.prevent_idle_sleep)
         .unwrap_or_else(config::default_prevent_idle_sleep);
+    let restore_on_reboot = loaded_config
+        .as_ref()
+        .map(|config| config.restore_on_reboot)
+        .unwrap_or_else(config::default_true);
+    let resume_agents = loaded_config
+        .as_ref()
+        .map(|config| config.resume_agents)
+        .unwrap_or_else(config::default_true);
 
     let (machine_id, machine_secret, ws_url) = if let Some(cfg) = &loaded_config {
         // Use config values, but allow CLI overrides for hub_url and name
@@ -410,7 +421,7 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
     let pty_manager = Arc::new(pty::PtyManager::new());
 
     // Recover tmux-backed terminals from previous run
-    let recovered = pty_manager.recover_sessions();
+    let recovered = pty_manager.recover_sessions(restore_on_reboot, resume_agents);
     if !recovered.is_empty() {
         tracing::info!(
             "Recovered {} terminals from previous session",
