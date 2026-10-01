@@ -63,7 +63,7 @@ jobs:
           workspaces: packages/desktop/src-tauri
 
       - name: Tauri CLI
-        run: cargo install cargo-binstall --locked && cargo binstall -y tauri-cli --version "^2.0"
+        run: cargo install cargo-binstall --locked && cargo binstall -y tauri-cli --version "=2.10.1"
 
       - name: Build shared package
         run: pnpm --filter @offdesk/shared build

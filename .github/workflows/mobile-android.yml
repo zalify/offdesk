@@ -98,13 +98,15 @@ jobs:
       # not have to be compiled from source every run, which is what
       # `cargo install tauri-cli` was doing for 3.8 of this workflow's 10
       # minutes. binstall fetches the release binary; the fallback is there
-      # because a slow build beats a broken one.
+      # because a slow build beats a broken one. The version must match the
+      # @tauri-apps/cli in pnpm-lock.yaml that runs the outer build: 2.12.1
+      # reads a handoff file 2.10.1 never writes. Bump both together.
       - uses: cargo-bins/cargo-binstall@main
 
       - name: Install the Tauri CLI
         run: |
-          cargo binstall -y tauri-cli --version "^2.0" \
-            || cargo install tauri-cli --version "^2.0" --locked
+          cargo binstall -y tauri-cli --version "=2.10.1" \
+            || cargo install tauri-cli --version "=2.10.1" --locked
 
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
