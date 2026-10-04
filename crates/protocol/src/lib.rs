@@ -1,3 +1,4 @@
+pub mod session_history;
 pub mod composer;
 use bytes::Bytes;
 pub use composer::{ComposerAttachment, ComposerMessage, ComposerReceipt, ComposerStatus};
@@ -311,6 +312,8 @@ pub enum HubToMachine {
     DestroyTerminal { terminal_id: String },
     #[serde(rename = "fs_list")]
     FsListDir { request_id: String, path: String },
+    #[serde(rename = "conversation_history")]
+    ConversationHistory { request_id: String },
     #[serde(rename = "auth_result")]
     AuthResult { ok: bool, message: Option<String> },
     #[serde(rename = "check_foreground_process")]
@@ -442,6 +445,8 @@ pub enum MachineToHub {
     },
     #[serde(rename = "fs_list_error")]
     FsListError { request_id: String, error: String },
+    #[serde(rename = "conversation_history_result")]
+    ConversationHistoryResult { request_id: String, history: session_history::ConversationHistory },
     #[serde(rename = "existing_terminals")]
     ExistingTerminals { terminals: Vec<TerminalInfo> },
     #[serde(rename = "resource_stats")]

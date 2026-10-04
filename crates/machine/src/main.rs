@@ -1,4 +1,5 @@
 mod acp;
+mod session_history;
 mod attach;
 mod config;
 mod hub_conn;

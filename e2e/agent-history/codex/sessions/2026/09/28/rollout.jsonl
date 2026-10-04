@@ -1,0 +1,2 @@
+{"type":"session_meta","timestamp":"2026-09-28T10:00:00Z","payload":{"id":"33333333-3333-4333-8333-333333333333","cwd":"/tmp/alpha"}}
+{"type":"event_msg","timestamp":"2026-09-28T10:01:00Z","payload":{"type":"user_message","message":"Codex implement sidebar"}}
