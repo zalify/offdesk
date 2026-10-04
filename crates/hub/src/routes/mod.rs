@@ -7,6 +7,7 @@ mod focus;
 mod mode;
 mod registration;
 mod settings;
+mod session_handoffs;
 mod terminals;
 
 use axum::Router;
@@ -26,4 +27,5 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(mode::router())
         .merge(settings::router())
+        .merge(session_handoffs::router())
 }

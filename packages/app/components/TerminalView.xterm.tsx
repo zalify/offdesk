@@ -783,6 +783,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         setMouseTrackingEnabled,
         getSelection,
         getSelectionSnapshot,
+        getHandoffContext: () => {
+          const buffer = termRef.current?.buffer.active;
+          if (!buffer) return "";
+          const lines: string[] = [];
+          for (let i = Math.max(0, buffer.length - 200); i < buffer.length; i++) {
+            lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+          }
+          return Array.from(lines.join("\n").trim()).slice(-4000).join("");
+        },
       }),
       [fitToContainer, measureLayout, sendImageFile, setMouseTrackingEnabled, getSelection, getSelectionSnapshot],
     );

@@ -1,6 +1,7 @@
 import type { MutableRefObject } from "react";
 
 export interface TerminalViewRef {
+  getHandoffContext: () => string;
   sendInput: (data: string) => void;
   /** Paste through xterm without submitting or moving focus. */
   pasteText: (text: string) => void;

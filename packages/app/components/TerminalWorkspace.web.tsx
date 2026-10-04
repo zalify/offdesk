@@ -47,6 +47,8 @@ import { formatPrefixBinding, type PrefixActionId } from "@/lib/prefixKey";
 import { usePrefixKey } from "@/lib/prefixKeyContext";
 import { useLongPress } from "@/lib/longPress";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
+import { SessionHandoffBar } from "./SessionHandoff.web";
+import type { HandoffAgent } from "@/lib/sessionHandoff";
 
 interface TerminalWorkspaceProps {
   terminal: TerminalInfo;
@@ -60,6 +62,7 @@ interface TerminalWorkspaceProps {
   isCompact: boolean;
   isTouch: boolean;
   onPick: (id: string) => void;
+  onCreateHandoffTerminal: (source: TerminalInfo, agent: HandoffAgent) => Promise<TerminalInfo | null>;
   onDestroy: (
     terminal: TerminalInfo,
     options?: WorkspaceDestroyOptions,
@@ -175,6 +178,7 @@ function TerminalWorkspaceComponent({
   isCompact,
   isTouch,
   onPick,
+  onCreateHandoffTerminal,
   onDestroy,
   onSplit,
   onCreatePane,
@@ -225,6 +229,7 @@ function TerminalWorkspaceComponent({
     x: number;
     y: number;
   } | null>(null);
+  const [handoffOpenRequest, setHandoffOpenRequest] = useState(0);
   const terminalsById = useMemo(() => {
     const map = new Map<string, TerminalInfo>();
     for (const sibling of siblings) map.set(sibling.id, sibling);
@@ -932,6 +937,10 @@ function TerminalWorkspaceComponent({
           overflow: "hidden",
         }}
       >
+        {activeTerminal && <SessionHandoffBar terminal={activeTerminal} terminals={siblings}
+          canWrite={isController && canType && !eventsReconnecting} deviceId={deviceId}
+          onPick={onPick} onCreate={onCreateHandoffTerminal} openRequest={handoffOpenRequest}
+          readContext={() => activeCardRef.current?.getHandoffContext() ?? ""} />}
         <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
           {activeTerminal ? (
             <WorkspacePaneLeaf
@@ -980,6 +989,12 @@ function TerminalWorkspaceComponent({
   const paneMenuItems: ContextMenuEntry[] = paneMenuTerminal
     ? [
         { label: "Open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
+        {
+          label: "Hand off session…",
+          disabled: !isController || !canType || eventsReconnecting || !paneMenuTerminal.reachable,
+          onClick: () => setHandoffOpenRequest(value => value + 1),
+        },
+        { type: "separator" },
         {
           label: "Split right",
           shortcut: formatPrefixBinding("splitRight"),
@@ -1084,6 +1099,10 @@ function TerminalWorkspaceComponent({
         overflow: "hidden",
       }}
     >
+      {activeTerminal && <SessionHandoffBar terminal={activeTerminal} terminals={siblings}
+        canWrite={isController && canType && !eventsReconnecting} deviceId={deviceId}
+        onPick={onPick} onCreate={onCreateHandoffTerminal} openRequest={handoffOpenRequest}
+          readContext={() => activeCardRef.current?.getHandoffContext() ?? ""} />}
       <div
         style={{
           flex: 1,
