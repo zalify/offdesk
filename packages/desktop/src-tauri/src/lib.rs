@@ -2,24 +2,33 @@
 // app has a hub address to parse.
 #[allow(dead_code)]
 mod hub_url;
-mod secure;
-#[cfg(any(mobile, test))]
-mod mobile_shell;
 #[cfg(mobile)]
 mod mobile_hub;
+#[cfg(any(mobile, test))]
+mod mobile_shell;
 #[cfg(desktop)]
 mod oauth;
 #[cfg(desktop)]
 mod role;
+mod secure;
 #[cfg(desktop)]
 mod tray;
+mod ui_updates;
 
 #[cfg(desktop)]
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let updates = ui_updates::RuntimeState::default();
+    let mut context = tauri::generate_context!();
+    context.assets = Box::new(ui_updates::UpdatingAssets::new(
+        context.assets,
+        updates.clone(),
+    ));
     let builder = tauri::Builder::default()
+        .manage(updates.clone())
+        .plugin(ui_updates::plugin(updates))
         .manage(secure::SecureState::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
@@ -28,7 +37,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init());
 
     #[cfg(target_os = "android")]
-    let builder = builder.plugin(tauri_plugin_offdesk_keystore::init())
+    let builder = builder
+        .plugin(tauri_plugin_offdesk_keystore::init())
         .plugin(tauri_plugin_offdesk_android_updater::init());
 
     #[cfg(desktop)]
@@ -41,6 +51,10 @@ pub fn run() {
         .plugin(mobile_hub::encrypted_navigation_guard())
         .plugin(tauri_plugin_barcode_scanner::init())
         .invoke_handler(tauri::generate_handler![
+            ui_updates::ui_status,
+            ui_updates::ui_check,
+            ui_updates::ui_ready,
+            ui_updates::ui_recover,
             mobile_hub::mobile_hub_url,
             mobile_hub::set_mobile_hub_url,
             mobile_hub::clear_mobile_hub_url,
@@ -69,24 +83,23 @@ pub fn run() {
             let _ = app;
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
 
 #[cfg(desktop)]
-fn configure_desktop<R: tauri::Runtime>(
-    builder: tauri::Builder<R>,
-) -> tauri::Builder<R> {
+fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
-    let shortcut = Shortcut::new(
-        Some(Modifiers::CONTROL | Modifiers::SHIFT),
-        Code::Backquote,
-    );
+    let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Backquote);
 
     builder
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            ui_updates::ui_status,
+            ui_updates::ui_check,
+            ui_updates::ui_ready,
+            ui_updates::ui_recover,
             oauth::start_oauth_listener,
             role::desktop_role,
             role::set_desktop_role,
@@ -156,7 +169,9 @@ fn setup_mobile(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // bundled assets are never more than a launch shell. Without one the
     // shell *is* the app until the user enters an address, so staying put is
     // the setup screen rather than a failure.
-    if secure::configured(handle) { return Ok(()); }
+    if secure::configured(handle) {
+        return Ok(());
+    }
     let Some(hub_url) = mobile_hub::configured_hub_url(handle) else {
         return Ok(());
     };
