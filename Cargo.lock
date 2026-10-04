@@ -1491,6 +1491,7 @@ version = "0.21.4"
 dependencies = [
  "base64",
  "bytes",
+ "chrono",
  "clap",
  "dirs",
  "futures",

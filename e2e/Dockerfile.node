@@ -11,6 +11,9 @@ COPY --from=builder /app/target/release/offdesk-node /usr/local/bin/
 # kind at it (its machine_id must match the compose `--id e2e-node`).
 COPY e2e/fake-acp-agent.py /opt/offdesk/fake-acp-agent.py
 COPY e2e/machine.json /root/.config/offdesk/machine.json
+# Read-only synthetic history: never use developer conversation files in tests.
+COPY e2e/agent-history/claude /root/.claude
+COPY e2e/agent-history/codex /root/.codex
 COPY e2e/preview-fixture /opt/offdesk/preview-fixture
 RUN cd /opt/offdesk/preview-fixture && npm ci --no-audit --no-fund
 

@@ -39,11 +39,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: pnpm exec vitest run packages/app/lib/mobileViewportFitScheduler.test.ts packages/app/lib/mobileViewportTerminal.test.ts
       - run: cargo test -p offdesk-ui-updates --locked
       - run: node --test scripts/ui-updates/package.test.mjs
       - name: Container browser regression
         env:
-          E2E_TEST_GREP: 'UI updates|handoff|auto detection captures|ambiguous destinations|lost save response'
+          E2E_TEST_GREP: 'mobile fixed UI|UI updates|agent history|handoff|auto detection captures|ambiguous destinations|lost save response'
         run: pnpm e2e:ci
       - name: Build Web UI
         run: pnpm build

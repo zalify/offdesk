@@ -16,6 +16,8 @@ import type {
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
 } from "@offdesk/shared";
+import { AgentSessionSidebar } from "./AgentSessionSidebar.web";
+import { conversationKey, resumeConversationCommand } from "@/lib/conversationHistory";
 import { AppTitleBar } from "./AppTitleBar.web";
 import { TabBar } from "./TabBar.web";
 import {
@@ -255,6 +257,8 @@ function TerminalCanvasInner() {
   const [reconnectGeneration, setReconnectGeneration] = useState(0);
   const [activeMachineId, setActiveMachineId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [sessionHistoryOpen, setSessionHistoryOpen] = useState(false);
+  const resumedConversations = useRef(new Map<string, string>());
   const [addMachineOpen, setAddMachineOpen] = useState(false);
   const [phoneOpen, setPhoneOpen] = useState(false);
 
@@ -1627,6 +1631,23 @@ function TerminalCanvasInner() {
             position: "relative",
           }}
         >
+          {!showSettings && machines.length > 0 && <AgentSessionSidebar
+            machines={machines} isCompact={isCompact} mobileOpen={sessionHistoryOpen}
+            onClose={() => setSessionHistoryOpen(false)} canResume={machineId => isMachineController(machineId) && !viewOnlyLocked}
+            onResume={async row => {
+              const key = conversationKey(row);
+              const existingId = resumedConversations.current.get(key);
+              if (terminals.some(terminal => terminal.id === existingId && terminal.reachable)) {
+                setActiveMachineId(row.machineId);
+                handleZoomTerminal(existingId!);
+                return;
+              }
+              const terminal = await handleCreateTerminal(row.machineId, row.cwd, resumeConversationCommand(row), { selectWorkpath: false });
+              if (!terminal) throw new Error("Take control of this machine before resuming a conversation");
+              resumedConversations.current.set(key, terminal.id);
+              setActiveMachineId(row.machineId);
+            }}
+          />}
           {showSettings ? (
             <Suspense fallback={<LazyLoadingFallback />}>
               <SettingsPage onClose={() => setShowSettings(false)} />
@@ -1637,6 +1658,7 @@ function TerminalCanvasInner() {
             </Suspense>
           ) : isCompact ? (
             <MobileWorkbench
+              onOpenConversations={() => setSessionHistoryOpen(true)}
               machines={machines}
               activeMachineId={activeMachineId}
               controlLeases={controlLeases}
