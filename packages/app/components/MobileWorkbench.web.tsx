@@ -37,6 +37,7 @@ import {
   Lock,
   LockOpen,
   Monitor,
+  MessageSquare,
   Plus,
   RefreshCw,
   Settings as SettingsIcon,
@@ -92,6 +93,7 @@ interface MobileWorkbenchProps {
   onEngageViewOnly: (machineId: string) => void;
   onDisengageViewOnly: () => void;
   onOpenSettings: () => void;
+  onOpenConversations: () => void;
   onOpenWebPreview: () => void;
   // The inline TerminalWorkspace (null while the machine has no terminals).
   children: React.ReactNode;
@@ -983,6 +985,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             icon={<RefreshCw size={17} />}
             label="Reconnect"
             onClick={() => window.location.reload()}
+          />
+          {/* Lives here rather than in the 44px title bar, which has no room
+              for another control on small phones. */}
+          <MenuRow
+            icon={<MessageSquare size={17} />}
+            label="Conversations"
+            onClick={() => {
+              setHostSheetOpen(false);
+              props.onOpenConversations();
+            }}
           />
           {activeTerminalId && <MenuRow
             icon={<ExternalLink size={17} />}

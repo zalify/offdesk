@@ -1,3 +1,4 @@
+import { createMobileViewportFitScheduler } from "@/lib/mobileViewportFitScheduler";
 import { DEFAULT_TERMINAL_FONT, TERMINAL_SYMBOL_FONT } from "@/lib/terminalFonts";
 import { openWebPreview, parseLocalPreview } from "@/lib/webPreview";
 import {
@@ -718,6 +719,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       scheduleMeasure,
     });
 
+    // Keep the long-lived ResizeObserver connected to the current fit handler.
+    const fitToContainerRef = useRef(fitToContainer);
+    useEffect(() => {
+      fitToContainerRef.current = fitToContainer;
+    }, [fitToContainer]);
+
     // Expose imperative API
     useImperativeHandle(
       ref,
@@ -1301,8 +1308,28 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       container.addEventListener("touchend", onTouchEnd, { passive: true });
 
       const viewport = viewportRef.current;
+      const viewportFit = createMobileViewportFitScheduler({
+        canFit: () =>
+          prefixKeyRef.current.isCompact &&
+          isControllerRef.current &&
+          canResizeTerminalRef.current,
+        fit: () => {
+          // Read final container bounds after fixed bars and the keyboard have
+          // settled; do not reuse a measurement from the window resize event.
+          measureLayout();
+          fitToContainerRef.current({ skipIfUnchanged: true });
+        },
+        schedule: (callback, delay) => window.setTimeout(callback, delay),
+        cancel: (timer) => window.clearTimeout(timer),
+      });
       const resizeObserver = new ResizeObserver(() => {
         scheduleMeasure();
+        if (viewport) {
+          viewportFit.observe({
+            width: viewport.clientWidth,
+            height: viewport.clientHeight,
+          });
+        }
       });
       if (viewport) {
         resizeObserver.observe(viewport);
@@ -1314,6 +1341,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           inputBatcherRef.current = null;
         }
         resizeObserver.disconnect();
+        viewportFit.dispose();
         if (measureRafRef.current) {
           cancelAnimationFrame(measureRafRef.current);
           measureRafRef.current = null;

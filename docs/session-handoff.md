@@ -1,7 +1,9 @@
 # Hand off between Claude and Codex
 
-Click **Hand off to Codex** or **Hand off to Claude** above the terminal, enter
-what the other agent should do next, then choose **Prepare handoff**.
+The bar above the terminal shows the detected agent. Click **Hand off to Codex**
+or **Hand off to Claude**, enter what the other agent should do next, then choose
+**Prepare handoff** (or press ⌘/Ctrl+Enter). After saving, the dialog tracks
+three steps: prepared, paste into the target, confirm.
 
 Offdesk checks the live foreground process instead of relying on the terminal
 title. It recognizes Claude/Codex executable names, including their `.exe`

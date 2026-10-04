@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
-import { ArrowRightLeft, X } from "lucide-react";
-import { colors } from "@/lib/colors";
+import { ArrowRight, ArrowRightLeft, Check, ClipboardCopy, History, X } from "lucide-react";
 import { writeClipboardText } from "@/lib/writeClipboardText";
 import { checkForegroundProcess, confirmSessionHandoff, listSessionHandoffs, saveSessionHandoff } from "@/lib/api";
 import { agentLabel, agentFromProcess, suggestedHandoffTarget, formatHandoff, handoffTargets, newHandoffId, otherAgent,
@@ -18,11 +17,10 @@ interface Props {
   readContext: () => string;
 }
 
-const button: CSSProperties = { border: `1px solid ${colors.border}`, borderRadius: 6,
-  background: colors.surface, color: colors.foreground, padding: "8px 12px", cursor: "pointer", fontSize: 13 };
-const input: CSSProperties = { width: "100%", boxSizing: "border-box", border: `1px solid ${colors.border}`,
-  borderRadius: 6, background: colors.background, color: colors.foreground, padding: 9, font: "inherit" };
-const label: CSSProperties = { display: "grid", gap: 6, fontSize: 13 };
+function AgentChip({ agent, muted }: { agent: HandoffAgent; muted?: boolean }) {
+  return <span className={`handoff-agent ${agent}${muted ? " muted" : ""}`}><i aria-hidden />{agentLabel(agent)}</span>;
+}
+const shortPath = (cwd: string) => cwd.replace(/^(?:\/Users|\/home)\/[^/]+(?=\/|$)/, "~");
 
 export function SessionHandoffBar(props: Props) {
   const { terminal } = props;
@@ -72,25 +70,32 @@ export function SessionHandoffBar(props: Props) {
   const openDraft = (target: HandoffAgent) => { setDraftTarget(target); setView("draft"); };
   const changed = (record: SessionHandoff) => setRecords(previous =>
     [record, ...previous.filter(item => item.id !== record.id)].sort((a, b) => b.created_at - a.created_at));
+  const ready = props.canWrite && terminal.reachable && loadedTerminal === terminal.id;
   return <>
-    <div className="session-handoff" data-testid="session-handoff-bar" style={{ display: "flex", alignItems: "center", gap: 8,
-      flexWrap: "wrap", padding: "5px 10px", borderBottom: `1px solid ${colors.border}`, flexShrink: 0, fontSize: 12 }}>
+    <div className="session-handoff handoff-bar" data-testid="session-handoff-bar">
+      <span className="handoff-status" title={detectedAgent ? "Detected from the terminal's foreground process" : "No Claude or Codex process detected in this terminal"}>
+        {detectedAgent ? <AgentChip agent={detectedAgent} /> : <span className="handoff-muted">No agent detected</span>}
+      </span>
+      {pending && <button type="button" className="handoff-chip attention" onClick={() => setView(pending)}>
+        <ClipboardCopy size={13} aria-hidden />Handoff ready to paste</button>}
+      <span className="handoff-spacer" />
+      {loadError && <button type="button" className="handoff-chip" title={loadError} onClick={() => void refresh()}>Retry loading handoffs</button>}
+      {records.length > 0 && <label className="handoff-history" title="Handoff history">
+        <History size={13} aria-hidden />
+        <select aria-label="Handoff history" value=""
+          onChange={event => { const record = records.find(item => item.id === event.target.value); if (record) setView(record); }}>
+          <option value="">History ({records.length})</option>
+          {records.map(record => <option key={record.id} value={record.id}>
+            {agentLabel(record.source_agent)} → {agentLabel(record.target_agent)} · {record.submitted_at ? "Submitted by you" : "Ready to paste"} · {new Date(record.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+          </option>)}
+        </select>
+      </label>}
       {(["codex", "claude"] as const).filter(agent => agent !== detectedAgent).map(agent => <button key={agent} type="button"
-        style={{ ...button, minHeight: 36, display: "flex", gap: 6, alignItems: "center",
-          ...(returnAgent === agent ? { background: colors.accent, color: colors.onAccent } : {}) }}
-        disabled={!props.canWrite || !terminal.reachable || loadedTerminal !== terminal.id}
-        onClick={() => openDraft(agent)}>
-        <ArrowRightLeft size={14} /> {returnAgent === agent ? "Hand back to" : "Hand off to"} {agentLabel(agent)}
+        className={`handoff-chip${returnAgent === agent ? " primary" : ""}`}
+        title={ready ? undefined : "Take control of this machine to hand off"}
+        disabled={!ready} onClick={() => openDraft(agent)}>
+        <ArrowRightLeft size={13} aria-hidden />{returnAgent === agent ? "Hand back to" : "Hand off to"} {agentLabel(agent)}
       </button>)}
-      {pending && <button type="button" style={{ ...button, padding: "5px 9px" }} onClick={() => setView(pending)}>Handoff ready to paste</button>}
-      {records.length > 0 && <select aria-label="Handoff history" value="" style={{ ...input, width: "auto", maxWidth: 210, padding: 5 }}
-        onChange={event => { const record = records.find(item => item.id === event.target.value); if (record) setView(record); }}>
-        <option value="">Handoff history ({records.length})</option>
-        {records.map(record => <option key={record.id} value={record.id}>
-          {agentLabel(record.source_agent)} → {agentLabel(record.target_agent)} · {record.submitted_at ? "Submitted by you" : "Ready to paste"} · {new Date(record.created_at).toLocaleTimeString()}
-        </option>)}
-      </select>}
-      {loadError && <button type="button" title={loadError} style={{ ...button, padding: "5px 9px" }} onClick={() => void refresh()}>Retry loading handoffs</button>}
     </div>
     {view && loadedTerminal === terminal.id && <HandoffDialog {...props} key={view === "draft" ? terminal.id : view.id}
       record={view === "draft" ? undefined : view} initialTarget={draftTarget}
@@ -207,86 +212,111 @@ ${excerpt}`
   });
   const openTerminal = (id: string) => { onClose(); onPick(id); };
 
-  return <dialog className="session-handoff session-handoff-dialog" ref={dialog} aria-labelledby="session-handoff-title" onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
-    style={{ width: "min(600px, calc(100vw - 24px))", maxHeight: "calc(100dvh - 32px)", boxSizing: "border-box", overflowY: "auto",
-      border: `1px solid ${colors.border}`, borderRadius: 12, padding: 20, background: colors.surface, color: colors.foreground, boxShadow: "0 20px 70px #0008" }}>
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-      <h2 id="session-handoff-title" style={{ fontSize: 18, margin: 0 }}>{saved ? `${agentLabel(saved.source_agent)} → ${agentLabel(saved.target_agent)}` : "Hand off this session"}</h2>
-      <button type="button" aria-label="Close handoff" style={button} disabled={busy} onClick={onClose}><X size={16} /></button>
+  const targetReachable = !!saved && terminals.some(t => t.id === saved.target_terminal_id && t.reachable);
+  const sourceReachable = !!saved && terminals.some(t => t.id === saved.source_terminal_id && t.reachable);
+  const destination = targetId === "new" ? "A new terminal will open"
+    : targetId ? `Existing ${agentLabel(targetAgent)} session · ${targets.find(t => t.id === targetId)?.title || targetId.slice(0, 8)}` : "Choose a destination";
+  const step = !saved ? 0 : saved.submitted_at ? 3 : 1;
+
+  return <dialog className="session-handoff session-handoff-dialog" ref={dialog} aria-labelledby="session-handoff-title"
+    onCancel={event => { event.preventDefault(); if (!busy) onClose(); }}
+    onKeyDown={event => { if (!saved && (event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); save(); } }}>
+    <header className="handoff-head">
+      <h2 id="session-handoff-title">{saved ? `${agentLabel(saved.source_agent)} → ${agentLabel(saved.target_agent)}` : "Hand off this session"}</h2>
+      <button type="button" className="handoff-icon" aria-label="Close handoff" disabled={busy} onClick={onClose}><X size={16} /></button>
+    </header>
+    <div className="handoff-route">
+      <AgentChip agent={saved?.source_agent ?? sourceAgent} muted={detecting} />
+      <ArrowRight size={14} aria-hidden />
+      <AgentChip agent={saved?.target_agent ?? targetAgent} muted={detecting} />
+      <span className="handoff-route-detail">{detecting ? "Finding your agent and destination…" : saved ? (targetReachable ? "Destination terminal ready" : "Destination unavailable") : destination}</span>
+      <code title={terminal.cwd}>{shortPath(saved?.cwd ?? terminal.cwd)}</code>
     </div>
     {saved ? <>
-      <p role="status" style={{ fontSize: 13 }}>{saved.submitted_at ? "Submitted by you. Agent execution is not verified." : "Ready to paste. The instructions have been saved; they have not been sent to the agent."}</p>
-      <label style={label}>Handoff instructions
-        <textarea ref={text} readOnly value={packet} rows={12} style={{ ...input, resize: "vertical" }} />
+      <ol className="handoff-steps" aria-label="Handoff progress">
+        {["Prepared", `Paste into ${agentLabel(saved.target_agent)}`, "Confirm"].map((name, index) =>
+          <li key={name} data-state={index < step || step === 3 ? "done" : index === step ? "current" : "todo"}>
+            <span aria-hidden>{index < step || step === 3 ? <Check size={11} /> : index + 1}</span>{name}
+          </li>)}
+      </ol>
+      <p role="status" className="handoff-lede">{saved.submitted_at ? "Submitted by you. Agent execution is not verified."
+        : `Ready to paste. Saved to your Hub, not sent to the agent. Wait until ${agentLabel(saved.target_agent)} is idle, then paste and submit.`}</p>
+      <label className="handoff-field">Handoff instructions
+        <textarea ref={text} readOnly value={packet} rows={10} />
       </label>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 16 }}>
-        <button type="button" style={{ ...button, background: colors.accent, color: colors.onAccent }}
-          disabled={busy || !terminals.some(t => t.id === saved.target_terminal_id && t.reachable)}
-          onClick={() => copy(true)}>Copy & open {agentLabel(saved.target_agent)}</button>
-        <button type="button" style={button} disabled={busy} onClick={() => copy()}>Copy instructions</button>
-        <button type="button" style={button} disabled={busy || !terminals.some(t => t.id === saved.target_terminal_id && t.reachable)}
+      {!targetReachable && <p className="handoff-note">The target terminal is unavailable. Your saved instructions are still here.</p>}
+      <div className="handoff-actions">
+        <button type="button" className="handoff-button primary" disabled={busy || !targetReachable} onClick={() => copy(true)}>
+          <ClipboardCopy size={14} aria-hidden />Copy & open {agentLabel(saved.target_agent)}</button>
+        <button type="button" className="handoff-button" disabled={busy} onClick={() => copy()}>Copy instructions</button>
+        <span className="handoff-spacer" />
+        <button type="button" className="handoff-link" disabled={busy || !targetReachable}
           onClick={() => openTerminal(saved.target_terminal_id)}>Open {agentLabel(saved.target_agent)} terminal</button>
-        <button type="button" style={button} disabled={busy || !terminals.some(t => t.id === saved.source_terminal_id && t.reachable)}
+        <button type="button" className="handoff-link" disabled={busy || !sourceReachable}
           onClick={() => openTerminal(saved.source_terminal_id)}>View source terminal</button>
-        {!saved.submitted_at && <button type="button" style={{ ...button, background: colors.accent, color: colors.onAccent }} disabled={busy || !canWrite}
+      </div>
+      {!saved.submitted_at && <div className="handoff-confirm">
+        <span>After pasting, record it so your other devices know this handoff was sent.</span>
+        <button type="button" className="handoff-button" disabled={busy || !canWrite}
           onClick={() => void run(async () => {
             const result = await confirmSessionHandoff(saved.machine_id, saved.id, deviceId);
             setSaved(result); onChanged(result);
-          })}>I’ve submitted it to the agent</button>}
-      </div>
-      {!terminals.some(t => t.id === saved.target_terminal_id && t.reachable) && <p style={{ fontSize: 13 }}>The target terminal is unavailable. Your saved instructions are still here.</p>}
+          })}><Check size={14} aria-hidden />I’ve submitted it to the agent</button>
+      </div>}
     </> : <>
-      <p style={{ fontSize: 13, lineHeight: 1.5 }}>
-        {detecting ? "Finding your agent and destination…" : <><strong>{agentLabel(sourceAgent)} → {agentLabel(targetAgent)}</strong>
-          {" · "}{targetId === "new" ? "A new terminal will open" : targetId ? `Existing ${agentLabel(targetAgent)} session · ${targets.find(t => t.id === targetId)?.title || targetId.slice(0, 8)}` : "Choose a destination"}</>}
-        <br /><span style={{ overflowWrap: "anywhere" }}>{terminal.cwd}</span>
-      </p>
-      <fieldset disabled={busy || detecting || !canWrite || !!attempt.current} style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 14 }}>
-        <label style={label}>What should {agentLabel(targetAgent)} do next?
+      <fieldset className="handoff-form" disabled={busy || detecting || !canWrite || !!attempt.current}>
+        <label className="handoff-field">What should {agentLabel(targetAgent)} do next?
           <textarea aria-label="Next step" autoFocus value={intent} onChange={event => setIntent(event.target.value)}
-            rows={3} maxLength={8000} style={input} placeholder="Finish the API and run the tests…" />
+            rows={3} maxLength={8000} placeholder="Finish the API and run the tests…" />
         </label>
-        {!detecting && !targetId && <label style={label}>Which {agentLabel(targetAgent)} session?
-          <select aria-label="Choose destination" value={targetId} onChange={event => setTargetId(event.target.value)} style={input}>
+        {!detecting && !targetId && <label className="handoff-field">Which {agentLabel(targetAgent)} session?
+          <select aria-label="Choose destination" value={targetId} onChange={event => setTargetId(event.target.value)}>
             <option value="">Choose a session</option>
             {targets.map(t => <option key={t.id} value={t.id}>{t.title || "Terminal"} · {t.id.slice(0, 8)}{agents[t.id] ? ` · ${agentLabel(agents[t.id]!)}` : ""}</option>)}
             <option value="new">Open a new {agentLabel(targetAgent)} terminal</option>
           </select>
         </label>}
-        {detectionNote && <p style={{ fontSize: 12, margin: 0 }}>{detectionNote}</p>}
-        <details open={detailsOpen} onToggle={event => setDetailsOpen(event.currentTarget.open)}>
-          <summary style={{ cursor: "pointer", fontSize: 13 }}>Context and destination</summary>
-          <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
-            <label style={label}>Source agent
-              <select value={sourceAgent} onChange={event => {
-                const agent = event.target.value as HandoffAgent;
-                setSourceAgent(agent);
-                setTargetId(suggestedHandoffTarget(targets, agents, otherAgent(agent), priorTarget));
-              }} style={input}>
-                <option value="claude">Claude</option><option value="codex">Codex</option>
-              </select>
-            </label>
-            <label style={label}>Destination
-              <select aria-label="Target terminal" value={targetId} onChange={event => setTargetId(event.target.value)} style={input}>
-                <option value="">Choose a session</option>
-                {targets.map(t => <option key={t.id} value={t.id}>{t.title || "Terminal"} · {t.id.slice(0, 8)}{agents[t.id] ? ` · ${agentLabel(agents[t.id]!)}` : ""}</option>)}
-                <option value="new">Open a new {agentLabel(targetAgent)} terminal</option>
-              </select>
-            </label>
-            <label style={label}>Original goal<textarea value={goal} onChange={event => setGoal(event.target.value)} rows={2} maxLength={8000} style={input} placeholder="Uses your next step if this is the first handoff" /></label>
-            <label style={label}>Progress and context<textarea value={summary} onChange={event => setSummary(event.target.value)} rows={5} maxLength={16000} style={input} /></label>
-            <label style={label}>Artifact paths (optional)<textarea value={artifacts} onChange={event => setArtifacts(event.target.value)} rows={2} maxLength={4000} style={input} /></label>
+        {detectionNote && <p className="handoff-note">{detectionNote}</p>}
+        <details className="handoff-details" open={detailsOpen} onToggle={event => setDetailsOpen(event.currentTarget.open)}>
+          <summary>Context and destination</summary>
+          <div className="handoff-details-body">
+            <div className="handoff-row">
+              <label className="handoff-field">Source agent
+                <select value={sourceAgent} onChange={event => {
+                  const agent = event.target.value as HandoffAgent;
+                  setSourceAgent(agent);
+                  setTargetId(suggestedHandoffTarget(targets, agents, otherAgent(agent), priorTarget));
+                }}>
+                  <option value="claude">Claude</option><option value="codex">Codex</option>
+                </select>
+              </label>
+              <label className="handoff-field">Destination
+                <select aria-label="Target terminal" value={targetId} onChange={event => setTargetId(event.target.value)}>
+                  <option value="">Choose a session</option>
+                  {targets.map(t => <option key={t.id} value={t.id}>{t.title || "Terminal"} · {t.id.slice(0, 8)}{agents[t.id] ? ` · ${agentLabel(agents[t.id]!)}` : ""}</option>)}
+                  <option value="new">Open a new {agentLabel(targetAgent)} terminal</option>
+                </select>
+              </label>
+            </div>
+            <label className="handoff-field">Original goal<textarea value={goal} onChange={event => setGoal(event.target.value)} rows={2} maxLength={8000} placeholder="Uses your next step if this is the first handoff" /></label>
+            <label className="handoff-field">Progress and context<textarea value={summary} onChange={event => setSummary(event.target.value)} rows={5} maxLength={16000} />
+              <small>Recent terminal text is included when available. Nothing is saved until you prepare the handoff.</small></label>
+            <label className="handoff-field">Artifact paths (optional)<textarea value={artifacts} onChange={event => setArtifacts(event.target.value)} rows={2} maxLength={4000} /></label>
           </div>
         </details>
       </fieldset>
-      <p style={{ fontSize: 12, lineHeight: 1.5 }}>Recent terminal text is included when available. Review details before saving to your Hub.</p>
-      <details style={{ marginTop: 14, fontSize: 13 }}><summary>Preview instructions</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{packet}</pre></details>
-      {exceedsLimit && <p role="alert">Keep the combined instructions under 32 KB.</p>}
-      <button type="button" style={{ ...button, marginTop: 4, background: colors.accent, color: colors.onAccent }} disabled={busy || !canSave} onClick={save}>
-        {busy ? "Working…" : attempt.current ? "Retry saving handoff" : `Prepare handoff to ${agentLabel(targetAgent)}`}
-      </button>
+      <details className="handoff-details"><summary>Preview instructions</summary><pre>{packet}</pre></details>
+      {exceedsLimit && <p role="alert" className="handoff-error">Keep the combined instructions under 32 KB.</p>}
+      <footer className="handoff-footer">
+        <kbd className="handoff-hint" aria-hidden>{/Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl"} ↵</kbd>
+        <span className="handoff-spacer" />
+        <button type="button" className="handoff-button" disabled={busy} onClick={onClose}>Cancel</button>
+        <button type="button" className="handoff-button primary" disabled={busy || !canSave} onClick={save}>
+          {busy ? "Working…" : attempt.current ? "Retry saving handoff" : `Prepare handoff to ${agentLabel(targetAgent)}`}
+        </button>
+      </footer>
     </>}
-    {error && <p role="alert" style={{ fontSize: 13, overflowWrap: "anywhere" }}>{error}</p>}
-    {notice && <p role="status" style={{ fontSize: 13 }}>{notice}</p>}
+    {error && <p role="alert" className="handoff-error">{error}</p>}
+    {notice && <p role="status" className="handoff-note">{notice}</p>}
   </dialog>;
 }
