@@ -5,6 +5,7 @@ import type {
   MachineInfo,
   ResourceStats,
   TerminalInfo,
+  TodoInfo,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
 } from "@offdesk/shared";
@@ -18,6 +19,7 @@ export interface BrowserSessionState {
   workspaceLayouts: WorkspaceLayoutInfo[];
   machineStats: Record<string, ResourceStats>;
   controlLeases: Record<string, string>;
+  todos: TodoInfo[];
 }
 
 export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
@@ -29,6 +31,7 @@ export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
   workspaceLayouts: [],
   machineStats: {},
   controlLeases: {},
+  todos: [],
 };
 
 export function applyBootstrapSnapshot(
@@ -49,7 +52,19 @@ export function applyBootstrapSnapshot(
         controller_device_id ? [[machine_id, controller_device_id]] : [],
       ),
     ),
+    todos: snapshot.todos ?? [],
   };
+}
+
+/** Replace or add one to-do, keeping the list's identity when unchanged. */
+export function upsertTodo(todos: TodoInfo[], todo: TodoInfo): TodoInfo[] {
+  const index = todos.findIndex((item) => item.id === todo.id);
+  if (index === -1) return [...todos, todo];
+  // An older copy (a late echo of this device's own write) never wins.
+  if (todos[index].updated_at > todo.updated_at) return todos;
+  const next = todos.slice();
+  next[index] = todo;
+  return next;
 }
 
 export function applyBrowserEventEnvelope(
@@ -208,6 +223,10 @@ function applyBrowserEvent(
           [event.machine_id]: event.controller_device_id,
         },
       };
+    case "todo_upserted":
+      return { ...state, todos: upsertTodo(state.todos, event.todo) };
+    case "todo_deleted":
+      return { ...state, todos: state.todos.filter((todo) => todo.id !== event.id) };
     default:
       return state;
   }

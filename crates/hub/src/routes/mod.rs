@@ -9,6 +9,7 @@ mod registration;
 mod relays;
 mod settings;
 mod terminals;
+mod todos;
 
 use axum::Router;
 
@@ -19,6 +20,7 @@ pub fn router() -> Router<AppState> {
         .merge(crate::secure::management_router())
         .merge(auth::router())
         .merge(terminals::router())
+        .merge(todos::router())
         .merge(relays::router())
         .merge(agent_sessions::router())
         .merge(bootstrap::router())

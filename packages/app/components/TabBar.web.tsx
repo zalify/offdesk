@@ -26,7 +26,7 @@ import type {
   ResourceStats,
   TerminalInfo,
 } from "@offdesk/shared";
-import { FolderTree, Lock, Plus, Settings, Smartphone } from "lucide-react";
+import { FolderTree, ListChecks, Lock, Plus, Settings, Smartphone } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
@@ -75,6 +75,8 @@ interface TabBarProps {
   onAddMachine: () => void;
   onOpenPhone?: () => void;
   onOpenSettings: () => void;
+  onOpenTodos: () => void;
+  openTodoCount: number;
   onRemoveHost: (machineId: string) => void;
   onRequestControl: () => void;
   onEngageViewOnly: () => void;
@@ -110,6 +112,8 @@ function TabBarComponent({
   onAddMachine,
   onOpenPhone,
   onOpenSettings,
+  onOpenTodos,
+  openTodoCount,
   onRemoveHost,
   onRequestControl,
   onEngageViewOnly,
@@ -544,6 +548,53 @@ function TabBarComponent({
           onRemoveHost={onRemoveHost}
         />
         <MicroMeters stats={stats} />
+        <button
+          type="button"
+          data-testid="tab-bar-todos"
+          onClick={onOpenTodos}
+          title="To-dos"
+          aria-label={openTodoCount > 0 ? `To-dos, ${openTodoCount} open` : "To-dos"}
+          style={{
+            position: "relative",
+            width: isTouch ? 40 : 30,
+            height: isTouch ? 40 : 30,
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            border: `1px solid ${colors.line}`,
+            borderRadius: 6,
+            background: "transparent",
+            color: colors.fg2,
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          <ListChecks size={15} />
+          {openTodoCount > 0 && (
+            <span
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                top: -6,
+                right: -6,
+                minWidth: 16,
+                height: 16,
+                padding: "0 4px",
+                boxSizing: "border-box",
+                borderRadius: 8,
+                background: colors.accent,
+                color: colors.onAccent,
+                fontSize: 10,
+                fontWeight: 700,
+                lineHeight: "16px",
+                textAlign: "center",
+              }}
+            >
+              {openTodoCount > 99 ? "99+" : openTodoCount}
+            </span>
+          )}
+        </button>
         <button
           type="button"
           data-testid="tab-bar-settings"

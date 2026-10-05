@@ -628,6 +628,14 @@ impl MachineManager {
         }
     }
 
+    pub fn publish_todo_upserted(&self, user_id: &str, todo: offdesk_protocol::todos::TodoInfo) {
+        self.send_event(Some(user_id.to_string()), BrowserEvent::TodoUpserted { todo });
+    }
+
+    pub fn publish_todo_deleted(&self, user_id: &str, id: String) {
+        self.send_event(Some(user_id.to_string()), BrowserEvent::TodoDeleted { id });
+    }
+
     pub fn publish_workspace_group_created(&self, user_id: &str, group: WorkspaceGroupInfo) {
         self.send_event(
             Some(user_id.to_string()),
@@ -2087,6 +2095,12 @@ impl MachineManager {
                 (sessions, seen)
             })
             .unwrap_or_default();
+        let todos = self
+            .db
+            .get()
+            .ok()
+            .and_then(|conn| crate::db::todos::list(&conn, user_id).ok())
+            .unwrap_or_default();
 
         BrowserStateSnapshot {
             snapshot_seq,
@@ -2103,6 +2117,7 @@ impl MachineManager {
                 .collect(),
             agent_sessions,
             agent_session_seen,
+            todos,
         }
     }
 

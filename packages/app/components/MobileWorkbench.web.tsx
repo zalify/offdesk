@@ -39,6 +39,7 @@ import {
   Monitor,
   Plus,
   RefreshCw,
+  ListChecks,
   Settings as SettingsIcon,
   Terminal as TerminalIcon,
   X,
@@ -92,6 +93,8 @@ interface MobileWorkbenchProps {
   onEngageViewOnly: (machineId: string) => void;
   onDisengageViewOnly: () => void;
   onOpenSettings: () => void;
+  onOpenTodos: () => void;
+  openTodoCount: number;
   onOpenWebPreview: () => void;
   // The inline TerminalWorkspace (null while the machine has no terminals).
   children: React.ReactNode;
@@ -127,6 +130,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     onEngageViewOnly,
     onDisengageViewOnly,
     onOpenSettings,
+    onOpenTodos,
+    openTodoCount,
     onOpenWebPreview,
     children,
   } = props;
@@ -993,6 +998,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             }}
           />}
           <MenuRow
+            icon={<ListChecks size={17} />}
+            label="To-dos"
+            badge={openTodoCount > 0 ? String(openTodoCount) : undefined}
+            testid="mobile-menu-todos"
+            onClick={() => {
+              setHostSheetOpen(false);
+              onOpenTodos();
+            }}
+          />
+          <MenuRow
             icon={<SettingsIcon size={17} />}
             label="Settings"
             onClick={() => {
@@ -1345,6 +1360,7 @@ function Sheet({
 function MenuRow({
   icon,
   label,
+  badge,
   disabled,
   danger,
   testid,
@@ -1352,6 +1368,7 @@ function MenuRow({
 }: {
   icon: React.ReactNode;
   label: string;
+  badge?: string;
   disabled?: boolean;
   danger?: boolean;
   testid?: string;
@@ -1382,6 +1399,11 @@ function MenuRow({
       {icon}
       <span style={{ fontFamily: fontDisplay, fontSize: 15, fontWeight: 600 }}>{label}</span>
       <span style={{ flex: 1 }} />
+      {badge && (
+        <span style={{ minWidth: 22, height: 22, padding: "0 7px", boxSizing: "border-box", borderRadius: 11, background: colors.accent, color: colors.onAccent, fontSize: 12, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
