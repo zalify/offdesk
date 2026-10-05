@@ -9,7 +9,8 @@
 use crate::codex_title::{find_named_descendants, Process};
 use crate::pty::PaneInfo;
 use offdesk_protocol::relay::{
-    RelayAgent, RelayBrief, RelayGit, RelayTask, RelayTaskStatus, StartupPrompt, TerminalAgent,
+    AgentActivity, AgentTasks, RelayAgent, RelayBrief, RelayGit, RelayTask, RelayTaskStatus,
+    StartupPrompt, TerminalAgent,
 };
 use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
@@ -37,6 +38,10 @@ pub struct PaneAgent {
     pub session_id: Option<String>,
     /// Codex only: the open rollout file of its thread.
     pub rollout: Option<PathBuf>,
+    /// Claude only, from its session file.
+    pub activity: Option<AgentActivity>,
+    /// Claude only: its task list, while it has one.
+    pub tasks: Option<AgentTasks>,
 }
 
 impl PaneAgent {
@@ -45,6 +50,8 @@ impl PaneAgent {
             kind: self.kind,
             session_id: self.session_id.clone(),
             usage_limit,
+            activity: self.activity,
+            tasks: self.tasks.clone(),
         }
     }
 }
@@ -61,6 +68,7 @@ pub fn resolve_agents(panes: &HashMap<String, PaneInfo>) -> HashMap<String, Pane
     }
     let processes = crate::codex_title::snapshot_processes();
     let claude_files = crate::revive::scan_claude_sessions();
+    let claude_config = claude_config_dir();
     panes
         .iter()
         .filter_map(|(id, pane)| {
@@ -69,6 +77,7 @@ pub fn resolve_agents(panes: &HashMap<String, PaneInfo>) -> HashMap<String, Pane
                 pane,
                 &processes,
                 &claude_files,
+                &claude_config,
                 crate::codex_title::open_files,
             )
             .map(|agent| (id.clone(), agent))
@@ -81,6 +90,7 @@ fn pane_agent(
     pane: &PaneInfo,
     processes: &[Process],
     claude_files: &[crate::revive::ClaudeSessionFile],
+    claude_config: &Path,
     open_files: impl Fn(u32) -> Vec<PathBuf>,
 ) -> Option<PaneAgent> {
     if !crate::terminal_attention::supports_command(pane.current_command.as_deref()) {
@@ -101,13 +111,23 @@ fn pane_agent(
                     // live session id is in the job's state file.
                     [pid] => process_args(*pid)
                         .and_then(|args| attach_job_id(&args))
-                        .and_then(|job| attached_session_id(&claude_config_dir(), &job)),
+                        .and_then(|job| attached_session_id(claude_config, &job)),
                     _ => None,
-                });
+                })
+                // Session ids become paths below; only UUIDs qualify.
+                .filter(|id| uuid::Uuid::parse_str(id).is_ok());
+        let activity = session_id
+            .as_deref()
+            .and_then(|id| claude_activity(claude_config, id));
+        let tasks = session_id.as_deref().and_then(|id| {
+            AgentTasks::summarize(&claude_tasks(&claude_config.join("tasks").join(id)))
+        });
         return Some(PaneAgent {
             kind: RelayAgent::Claude,
             session_id,
             rollout: None,
+            activity,
+            tasks,
         });
     }
     if find_named_descendants(processes, root, "codex").is_empty() {
@@ -118,7 +138,31 @@ fn pane_agent(
         kind: RelayAgent::Codex,
         session_id: rollout.as_ref().map(|(_, thread, _)| thread.clone()),
         rollout: rollout.map(|(_, _, path)| path),
+        activity: None,
+        tasks: None,
     })
+}
+
+/// Claude's own status for a live session, from `sessions/<pid>.json`
+/// (interactive and background sessions both write one).
+fn claude_activity(config: &Path, session_id: &str) -> Option<AgentActivity> {
+    std::fs::read_dir(config.join("sessions"))
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|e| e.to_str()) == Some("json"))
+        .find_map(|entry| {
+            let value: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(entry.path()).ok()?).ok()?;
+            if value.get("sessionId")?.as_str()? != session_id {
+                return None;
+            }
+            match value.get("status")?.as_str()? {
+                "busy" => Some(AgentActivity::Busy),
+                "idle" => Some(AgentActivity::Idle),
+                "waiting" => Some(AgentActivity::Waiting),
+                _ => None,
+            }
+        })
 }
 
 /// The full command line of one process (`ps` works on macOS and Linux).
@@ -647,22 +691,62 @@ mod tests {
             process(31, Some(30), "vim"),
         ];
         let id = "11111111-1111-4111-8111-111111111111";
+        let session = "66666666-6666-4666-8666-666666666666";
+        let config = temp_dir("agent-config");
+        std::fs::create_dir_all(config.join("sessions")).unwrap();
+        std::fs::write(
+            config.join("sessions").join("11.json"),
+            format!(r#"{{"pid":11,"sessionId":"{session}","status":"busy"}}"#),
+        )
+        .unwrap();
+        let tasks = config.join("tasks").join(session);
+        std::fs::create_dir_all(&tasks).unwrap();
+        std::fs::write(tasks.join("1.json"), r#"{"id":"1","subject":"Backfill","description":"","status":"completed","blocks":[],"blockedBy":[]}"#).unwrap();
+        std::fs::write(tasks.join("2.json"), r#"{"id":"2","subject":"Alert","description":"","status":"in_progress","blocks":[],"blockedBy":[]}"#).unwrap();
         let files = vec![crate::revive::ClaudeSessionFile {
             pid: 11,
-            session_id: "session-a".into(),
+            session_id: session.into(),
             tmux: format!("{}:@1.%1", crate::pty::tmux_session_name(id)),
         }];
-        let claude = pane_agent(id, &pane(10, "claude.exe"), &processes, &files, |_| {
-            Vec::new()
-        })
+        let claude = pane_agent(
+            id,
+            &pane(10, "claude.exe"),
+            &processes,
+            &files,
+            &config,
+            |_| Vec::new(),
+        )
         .unwrap();
         assert_eq!(claude.kind, RelayAgent::Claude);
-        assert_eq!(claude.session_id.as_deref(), Some("session-a"));
+        assert_eq!(claude.session_id.as_deref(), Some(session));
+        assert_eq!(claude.activity, Some(AgentActivity::Busy));
+        let summary = claude.tasks.clone().unwrap();
+        assert_eq!((summary.done, summary.total), (1, 2));
+        assert_eq!(summary.items[0].subject, "Alert", "open work comes first");
+        let report = claude.report(None);
+        assert_eq!(report.activity, Some(AgentActivity::Busy));
+        assert_eq!(report.tasks, Some(summary));
+
+        // A session id that is not a UUID never becomes a path.
+        let odd = vec![crate::revive::ClaudeSessionFile {
+            session_id: "../../etc".into(),
+            ..files[0].clone()
+        }];
+        let unmatched = pane_agent(
+            id,
+            &pane(10, "claude.exe"),
+            &processes,
+            &odd,
+            &config,
+            |_| Vec::new(),
+        )
+        .unwrap();
+        assert_eq!((unmatched.session_id, unmatched.tasks), (None, None));
 
         let rollout = PathBuf::from(
             "/home/u/.codex/sessions/2026/10/05/rollout-2026-10-05T10-00-00-0199b2a0-0000-7000-8000-000000000001.jsonl",
         );
-        let codex = pane_agent("t2", &pane(20, "node"), &processes, &[], |pid| {
+        let codex = pane_agent("t2", &pane(20, "node"), &processes, &[], &config, |pid| {
             if pid == 22 {
                 vec![rollout.clone()]
             } else {
@@ -678,7 +762,9 @@ mod tests {
         assert_eq!(codex.rollout.as_deref(), Some(rollout.as_path()));
 
         assert_eq!(
-            pane_agent("t3", &pane(30, "vim"), &processes, &[], |_| Vec::new()),
+            pane_agent("t3", &pane(30, "vim"), &processes, &[], &config, |_| {
+                Vec::new()
+            }),
             None
         );
     }

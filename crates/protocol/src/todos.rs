@@ -1,5 +1,6 @@
 //! Personal to-dos, stored by the Hub on the user's own machine and synced
 //! to every signed-in device through bootstrap and browser events.
+use crate::relay::{RelayAgent, RelayTask};
 use serde::{Deserialize, Serialize};
 
 pub const MAX_TITLE_CHARS: usize = 500;
@@ -32,6 +33,24 @@ pub struct TodoInfo {
     pub updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<i64>,
+    /// The agent this to-do was handed to, and the terminal it runs in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<RelayAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
+    /// The agent's task list as last seen. Kept after Claude clears a fully
+    /// finished list, so the to-do still shows that everything was done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<TodoProgress>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TodoProgress {
+    pub done: usize,
+    pub total: usize,
+    #[serde(default)]
+    pub items: Vec<RelayTask>,
+    pub updated_at: i64,
 }
 
 /// Trimmed title, or why it is not acceptable.
@@ -98,6 +117,9 @@ mod tests {
             created_at: 1,
             updated_at: 1,
             completed_at: None,
+            agent: None,
+            terminal_id: None,
+            progress: None,
         };
         assert_eq!(
             serde_json::to_string(&todo).unwrap(),

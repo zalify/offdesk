@@ -57,6 +57,65 @@ pub struct TerminalAgent {
     /// of the screen, e.g. "Usage limit reached · resets 3pm".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_limit: Option<String>,
+    /// Busy, idle or waiting for the person, when the agent says so (Claude's
+    /// session file or background job state).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<AgentActivity>,
+    /// The agent's own task list while it has one (Claude's tasks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<AgentTasks>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentActivity {
+    Busy,
+    Idle,
+    /// Waiting for the person: a permission prompt or a question.
+    Waiting,
+}
+
+/// At most this many task items travel with a terminal; the counts cover
+/// the whole list.
+pub const MAX_REPORTED_TASKS: usize = 20;
+
+/// An agent's task list, summarized for status reports.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentTasks {
+    pub done: usize,
+    pub total: usize,
+    /// Unfinished tasks first (in progress, then pending), then finished.
+    #[serde(default)]
+    pub items: Vec<RelayTask>,
+}
+
+impl AgentTasks {
+    /// None for an empty list.
+    pub fn summarize(tasks: &[RelayTask]) -> Option<Self> {
+        if tasks.is_empty() {
+            return None;
+        }
+        let rank = |task: &RelayTask| match task.status {
+            RelayTaskStatus::InProgress => 0,
+            RelayTaskStatus::Pending => 1,
+            RelayTaskStatus::Completed => 2,
+        };
+        let mut items = tasks.to_vec();
+        items.sort_by_key(rank);
+        items.truncate(MAX_REPORTED_TASKS);
+        Some(Self {
+            done: tasks
+                .iter()
+                .filter(|t| t.status == RelayTaskStatus::Completed)
+                .count(),
+            total: tasks.len(),
+            items,
+        })
+    }
+
+    pub fn finished(&self) -> bool {
+        self.total > 0 && self.done == self.total
+    }
 }
 
 /// Where a relayed terminal's task came from. Persisted by the Hub.
@@ -179,6 +238,8 @@ mod tests {
             kind: RelayAgent::Claude,
             session_id: None,
             usage_limit: Some("Usage limit reached".into()),
+            activity: None,
+            tasks: None,
         };
         let json = serde_json::to_string(&agent).unwrap();
         assert_eq!(
@@ -188,5 +249,33 @@ mod tests {
         assert_eq!(serde_json::from_str::<TerminalAgent>(&json).unwrap(), agent);
         assert_eq!(RelayAgent::Claude.other(), RelayAgent::Codex);
         assert_eq!(RelayAgent::Codex.command(), "codex");
+    }
+
+    #[test]
+    fn task_summaries_count_everything_and_list_open_work_first() {
+        let task = |subject: &str, status| RelayTask {
+            subject: subject.into(),
+            status,
+        };
+        assert_eq!(AgentTasks::summarize(&[]), None);
+        let tasks = [
+            task("a", RelayTaskStatus::Completed),
+            task("b", RelayTaskStatus::Pending),
+            task("c", RelayTaskStatus::InProgress),
+        ];
+        let summary = AgentTasks::summarize(&tasks).unwrap();
+        assert_eq!((summary.done, summary.total), (1, 3));
+        let order: Vec<_> = summary.items.iter().map(|t| t.subject.as_str()).collect();
+        assert_eq!(order, ["c", "b", "a"]);
+        assert!(!summary.finished());
+        let many: Vec<_> = (0..30)
+            .map(|i| task(&i.to_string(), RelayTaskStatus::Completed))
+            .collect();
+        let summary = AgentTasks::summarize(&many).unwrap();
+        assert_eq!(
+            (summary.items.len(), summary.total),
+            (MAX_REPORTED_TASKS, 30)
+        );
+        assert!(summary.finished());
     }
 }

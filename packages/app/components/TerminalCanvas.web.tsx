@@ -33,6 +33,7 @@ import { Terminal as TerminalIcon } from "lucide-react";
 import {
   createRelay,
   createTerminal,
+  dispatchTodo,
   createWorkspaceGroup,
   deleteMachine,
   deleteWorkspaceGroup,
@@ -882,6 +883,40 @@ function TerminalCanvasInner() {
       dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: created.id });
       window.history.pushState(null, "", `#/t/${created.id}`);
       return created;
+    },
+    [deviceId, isCompact, isMachineController, viewportHeight],
+  );
+
+  // To-do hand-off: the Hub starts the agent in a new tab in the to-do's
+  // folder and links the two; show the new terminal like a relay does.
+  const handleDispatchTodo = useCallback(
+    async (todo: TodoInfo, agent: RelayAgent, prompt: string) => {
+      const machineId = todo.machine_id;
+      if (!deviceId || !machineId || !isMachineController(machineId)) {
+        throw new Error("Take control of this machine first.");
+      }
+      const viewportHeightPx = viewportHeight ?? window.innerHeight;
+      const { cols, rows } = isCompact
+        ? estimateMobileInitialTerminalDimensions(window.innerWidth, viewportHeightPx)
+        : estimateInitialTerminalDimensions(window.innerWidth, viewportHeightPx);
+      const { todo: linked, terminal } = await dispatchTodo(todo.id, { agent, deviceId, prompt, cols, rows });
+      setBrowserState((prev) => ({
+        ...prev,
+        todos: upsertTodo(prev.todos, linked),
+        terminals: upsertTerminalInfo(prev.terminals, terminal),
+      }));
+      try {
+        const groups = await listWorkspaceGroups(machineId);
+        setBrowserState((prev) => ({
+          ...prev,
+          workspaceGroups: replaceMachineWorkspaceGroups(prev.workspaceGroups, machineId, groups),
+        }));
+      } catch {
+        /* the workspace_group_created event still fills the tab in */
+      }
+      setTodosOpen(false);
+      dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: terminal.id });
+      window.history.pushState(null, "", `#/t/${terminal.id}`);
     },
     [deviceId, isCompact, isMachineController, viewportHeight],
   );
@@ -2016,6 +2051,18 @@ function TerminalCanvasInner() {
           <TodosPanel
             todos={browserState.todos}
             machines={browserState.machines}
+            terminals={browserState.terminals}
+            defaultLocation={
+              workspaceTerminal
+                ? { machineId: workspaceTerminal.machine_id, cwd: workspaceTerminal.cwd }
+                : undefined
+            }
+            canDispatch={isMachineController}
+            onDispatch={handleDispatchTodo}
+            onOpenTerminal={(terminalId) => {
+              setTodosOpen(false);
+              handleZoomTerminal(terminalId);
+            }}
             onLocalUpsert={handleTodoUpsert}
             onLocalRemove={handleTodoRemove}
             onClose={() => setTodosOpen(false)}

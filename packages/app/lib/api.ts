@@ -187,7 +187,21 @@ export const createTodo = (todo: {
   notes?: string;
   machine_id?: string;
   cwd?: string;
+  /** Adopt the agent in this terminal (requires machine_id). */
+  terminal_id?: string;
 }) => request<TodoInfo>("POST", "/api/todos", todo);
+/** Start Claude or Codex on a to-do in its folder; retries return the agent already running. */
+export const dispatchTodo = (
+  id: string,
+  dispatch: { agent: RelayAgent; deviceId: string; prompt: string; cols?: number; rows?: number },
+) =>
+  request<{ todo: TodoInfo; terminal: TerminalInfo }>("POST", `/api/todos/${encodeURIComponent(id)}/dispatch`, {
+    agent: dispatch.agent,
+    device_id: dispatch.deviceId,
+    prompt: dispatch.prompt,
+    ...(dispatch.cols !== undefined ? { cols: dispatch.cols } : {}),
+    ...(dispatch.rows !== undefined ? { rows: dispatch.rows } : {}),
+  });
 /** `null` clears a location field; an absent field is left unchanged. */
 export const updateTodo = (
   id: string,
