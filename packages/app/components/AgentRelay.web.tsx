@@ -112,6 +112,8 @@ export function AgentRelayOverlay({ terminal, topInset }: { terminal: TerminalIn
           position: "absolute",
           top: 8 + topInset,
           right: 10,
+          // Above xterm's canvases (the size banner uses 6).
+          zIndex: 7,
           display: "flex",
           gap: 6,
           alignItems: "flex-start",
@@ -212,6 +214,7 @@ export function AgentRelayOverlay({ terminal, topInset }: { terminal: TerminalIn
             left: 10,
             right: 10,
             bottom: 10,
+            zIndex: 7,
             pointerEvents: "auto",
             display: "flex",
             flexDirection: "column",
