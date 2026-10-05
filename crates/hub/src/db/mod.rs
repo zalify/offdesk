@@ -219,6 +219,17 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
 
+    // A terminal started to continue another agent's task remembers where
+    // the task came from, so its "back" link survives a Hub restart.
+    for column in ["relay_id", "relay_source_terminal_id", "relay_source_agent"] {
+        if !column_exists(conn, "terminal_sessions", column)? {
+            conn.execute(
+                &format!("ALTER TABLE terminal_sessions ADD COLUMN {column} TEXT"),
+                [],
+            )?;
+        }
+    }
+
     if !column_exists(conn, "workspace_groups", "auto_created")? {
         conn.execute(
             "ALTER TABLE workspace_groups ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0",

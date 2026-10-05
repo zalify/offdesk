@@ -10,6 +10,8 @@ import type {
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
   ResourceStats,
+  RelayAgent,
+  RelayBrief,
 } from "@offdesk/shared";
 
 import { generateDeviceId } from "./deviceIdShared";
@@ -146,6 +148,34 @@ export const createTerminal = (
     ...(cols !== undefined ? { cols } : {}),
     ...(rows !== undefined ? { rows } : {}),
     ...(workspaceGroupId ? { workspace_group_id: workspaceGroupId } : {}),
+  });
+export const getRelayBrief = (machineId: string, terminalId: string, signal?: AbortSignal) =>
+  request<RelayBrief>(
+    "GET",
+    `/api/machines/${encodeURIComponent(machineId)}/terminals/${encodeURIComponent(terminalId)}/relay-brief`,
+    undefined,
+    signal,
+  );
+export const createRelay = (
+  machineId: string,
+  relay: {
+    id: string;
+    deviceId: string;
+    sourceTerminalId: string;
+    targetAgent: RelayAgent;
+    prompt: string;
+    cols?: number;
+    rows?: number;
+  },
+) =>
+  request<TerminalInfo>("POST", `/api/machines/${encodeURIComponent(machineId)}/relays`, {
+    id: relay.id,
+    device_id: relay.deviceId,
+    source_terminal_id: relay.sourceTerminalId,
+    target_agent: relay.targetAgent,
+    prompt: relay.prompt,
+    ...(relay.cols !== undefined ? { cols: relay.cols } : {}),
+    ...(relay.rows !== undefined ? { rows: relay.rows } : {}),
   });
 export const destroyTerminal = (
   machineId: string,

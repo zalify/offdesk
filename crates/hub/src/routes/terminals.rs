@@ -110,7 +110,7 @@ fn workspace_group_info(row: crate::db::types::WorkspaceGroupRow) -> WorkspaceGr
     }
 }
 
-fn control_action_allowed(controller_device_id: Option<&str>, device_id: Option<&str>) -> bool {
+pub(crate) fn control_action_allowed(controller_device_id: Option<&str>, device_id: Option<&str>) -> bool {
     matches!(
         (
             controller_device_id,
@@ -120,7 +120,7 @@ fn control_action_allowed(controller_device_id: Option<&str>, device_id: Option<
     )
 }
 
-async fn ensure_machine_row(
+pub(crate) async fn ensure_machine_row(
     state: &AppState,
     user_id: &str,
     machine_id: &str,
@@ -281,7 +281,7 @@ async fn create_terminal(
 
     let terminal = state
         .manager
-        .create_terminal(&machine_id, &req.cwd, req.cols, req.rows, startup_command)
+        .create_terminal(&machine_id, &req.cwd, req.cols, req.rows, startup_command, None)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -313,7 +313,7 @@ async fn create_terminal(
 
 /// Create the tab a terminal born without one goes into, named after its cwd
 /// and appended to the end of the machine's strip.
-async fn auto_create_workspace_group(
+pub(crate) async fn auto_create_workspace_group(
     state: &AppState,
     user_id: &str,
     machine_id: &str,
@@ -1125,6 +1125,8 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
+            agent: None,
+            relay_source: None,
             reachable: true,
         }
     }

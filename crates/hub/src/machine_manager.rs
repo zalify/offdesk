@@ -43,6 +43,7 @@ pub enum PendingResult {
         has_foreground_process: bool,
         process_name: Option<String>,
     },
+    RelayBrief(Result<offdesk_protocol::relay::RelayBrief, String>),
 }
 
 pub struct EventSubscription {
@@ -122,6 +123,8 @@ impl MachineManager {
                         cols: u16::try_from(row.cols).unwrap_or(80),
                         rows: u16::try_from(row.rows).unwrap_or(24),
                         attention: None,
+                        agent: None,
+                        relay_source: row.relay_source,
                         reachable: false,
                     });
             }
@@ -758,6 +761,7 @@ impl MachineManager {
         cols: u16,
         rows: u16,
         startup_command: Option<String>,
+        startup_prompt: Option<offdesk_protocol::relay::StartupPrompt>,
     ) -> Result<TerminalInfo, String> {
         let request_id = uuid::Uuid::new_v4().to_string();
 
@@ -781,6 +785,7 @@ impl MachineManager {
                 cols,
                 rows,
                 startup_command,
+                startup_prompt,
             })
             .await
         {
@@ -819,6 +824,8 @@ impl MachineManager {
                     cols,
                     rows,
                     attention: None,
+                    agent: None,
+                    relay_source: None,
                     reachable: true,
                 };
                 Ok(terminal)
@@ -850,6 +857,87 @@ impl MachineManager {
     }
 
     /// Check if a terminal has a foreground process running
+    /// A live terminal this user can see, with its current agent state.
+    pub async fn terminal_for_user(
+        &self,
+        user_id: &str,
+        machine_id: &str,
+        terminal_id: &str,
+    ) -> Option<TerminalInfo> {
+        let machines = self.machines.lock().await;
+        let conn = machines.get(machine_id)?;
+        if !connection_visible_to(conn, user_id) {
+            return None;
+        }
+        conn.terminals.get(terminal_id).cloned()
+    }
+
+    /// Remember, in memory, where a relayed terminal's task came from. The
+    /// caller persists it once the terminal's row exists.
+    pub async fn set_relay_source(
+        &self,
+        machine_id: &str,
+        terminal_id: &str,
+        source: offdesk_protocol::relay::RelaySource,
+    ) {
+        let mut machines = self.machines.lock().await;
+        if let Some(terminal) = machines
+            .get_mut(machine_id)
+            .and_then(|conn| conn.terminals.get_mut(terminal_id))
+        {
+            terminal.relay_source = Some(source);
+        }
+    }
+
+    /// Ask the Node for a handoff brief. The outer error is transport
+    /// (disconnect, timeout); the inner one is the Node's own answer.
+    pub async fn request_relay_brief(
+        &self,
+        machine_id: &str,
+        terminal_id: &str,
+    ) -> Result<Result<offdesk_protocol::relay::RelayBrief, String>, String> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+        {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err(format!("Machine {} not found", machine_id));
+            };
+            if conn
+                .cmd_tx
+                .send(HubToMachine::RelayBrief {
+                    request_id: request_id.clone(),
+                    terminal_id: terminal_id.to_string(),
+                })
+                .await
+                .is_err()
+            {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err("Machine disconnected".to_string());
+            }
+        }
+        // Reading transcripts and git status is bounded on the Node; this
+        // only guards against a Node that never answers.
+        let result = match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                return Err("Machine disconnected".to_string());
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                return Err("Timeout".to_string());
+            }
+        };
+        match result? {
+            PendingResult::RelayBrief(brief) => Ok(brief),
+            _ => Err("Unexpected response".to_string()),
+        }
+    }
+
     pub async fn check_foreground_process(
         &self,
         machine_id: &str,
@@ -1083,6 +1171,8 @@ impl MachineManager {
                             cols,
                             rows,
                             attention: None,
+                            agent: None,
+                            relay_source: None,
                             reachable: true,
                         };
                         conn.terminals.insert(terminal_id.clone(), terminal.clone());
@@ -1216,6 +1306,32 @@ impl MachineManager {
                     }
                 }
             }
+            MachineToHub::TerminalAgent { terminal_id, agent } => {
+                let mut machines = self.machines.lock().await;
+                if let Some(conn) = machines.get_mut(machine_id) {
+                    let user_id = conn.user_id.clone();
+                    if let Some(terminal) = conn.terminals.get_mut(&terminal_id) {
+                        if terminal.agent != agent {
+                            terminal.agent = agent;
+                            let terminal = terminal.clone();
+                            drop(machines);
+                            self.send_event(user_id, BrowserEvent::TerminalUpdated { terminal });
+                        }
+                    }
+                }
+            }
+            MachineToHub::RelayBriefResult {
+                request_id,
+                brief,
+                error,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let result = brief.ok_or_else(|| {
+                        error.unwrap_or_else(|| "The machine returned no brief".to_string())
+                    });
+                    let _ = tx.send(Ok(PendingResult::RelayBrief(result)));
+                }
+            }
             MachineToHub::TerminalCwd { terminal_id, cwd } => {
                 let updated = match self.db.get() {
                     Ok(db_conn) => {
@@ -1309,6 +1425,7 @@ impl MachineManager {
                             // sidecar cannot erase an OSC-derived title.
                             terminal.title = persisted_terminal.title.clone();
                             terminal.title_source = persisted_terminal.title_source;
+                            terminal.relay_source = persisted_terminal.relay_source.clone();
                         }
                         conn.terminals.insert(terminal.id.clone(), terminal.clone());
 
@@ -2169,6 +2286,8 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
+            agent: None,
+            relay_source: None,
             reachable: true,
         }
     }
@@ -2629,7 +2748,7 @@ mod tests {
         let manager = MachineManager::new(test_db());
 
         let error = manager
-            .create_terminal("missing-machine", "/tmp", 80, 24, None)
+            .create_terminal("missing-machine", "/tmp", 80, 24, None, None)
             .await
             .unwrap_err();
 
@@ -2647,7 +2766,7 @@ mod tests {
         drop(cmd_rx);
 
         let error = manager
-            .create_terminal("machine-a", "/tmp", 80, 24, None)
+            .create_terminal("machine-a", "/tmp", 80, 24, None, None)
             .await
             .unwrap_err();
 

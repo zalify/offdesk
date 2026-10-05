@@ -1,4 +1,5 @@
 import { WebPreviewDialog } from "./WebPreviewDialog";
+import { AgentRelayContext, AgentRelayOverlay, type AgentRelayContextValue } from "./AgentRelay.web";
 import {
   memo,
   useCallback,
@@ -60,6 +61,8 @@ interface TerminalWorkspaceProps {
   isCompact: boolean;
   isTouch: boolean;
   onPick: (id: string) => void;
+  /** Start the other agent on this terminal's task (agent relay). */
+  onRelay: AgentRelayContextValue["onRelay"];
   onDestroy: (
     terminal: TerminalInfo,
     options?: WorkspaceDestroyOptions,
@@ -175,6 +178,7 @@ function TerminalWorkspaceComponent({
   isCompact,
   isTouch,
   onPick,
+  onRelay,
   onDestroy,
   onSplit,
   onCreatePane,
@@ -230,6 +234,18 @@ function TerminalWorkspaceComponent({
     for (const sibling of siblings) map.set(sibling.id, sibling);
     return map;
   }, [siblings]);
+  const [relayRequest, setRelayRequest] =
+    useState<AgentRelayContextValue["relayRequest"]>(null);
+  const relayContext = useMemo<AgentRelayContextValue>(
+    () => ({
+      terminalsById,
+      canWrite: isController && canType && !eventsReconnecting,
+      onPick,
+      onRelay,
+      relayRequest,
+    }),
+    [canType, eventsReconnecting, isController, onPick, onRelay, relayRequest, terminalsById],
+  );
 
   // Set when reconcile swaps the active group's root for a layout saved
   // elsewhere; the panes then need the same refit a local layout change gets.
@@ -921,6 +937,7 @@ function TerminalWorkspaceComponent({
     // MobileWorkbench — the session title bar above and the key bar below (the
     // key bar lives inside TerminalCard) are the only permanent chrome.
     return (
+      <AgentRelayContext.Provider value={relayContext}>
       <div
         data-testid="expanded-terminal"
         style={{
@@ -971,14 +988,30 @@ function TerminalWorkspaceComponent({
         </div>
         {webPreviewTerminal && <WebPreviewDialog machineId={webPreviewTerminal.machine_id} terminalId={webPreviewTerminal.id} onClose={() => setWebPreviewTerminal(null)} />}
       </div>
+      </AgentRelayContext.Provider>
     );
   }
 
   const paneMenuTerminal = paneMenu
     ? terminalsById.get(paneMenu.terminalId) ?? null
     : null;
+  const paneMenuAgent = paneMenuTerminal?.agent?.kind ?? null;
   const paneMenuItems: ContextMenuEntry[] = paneMenuTerminal
     ? [
+        ...(paneMenuAgent
+          ? [
+              {
+                label: `Continue in ${paneMenuAgent === "claude" ? "Codex" : "Claude"}…`,
+                disabled: !relayContext.canWrite,
+                onClick: () =>
+                  setRelayRequest((current) => ({
+                    terminalId: paneMenuTerminal.id,
+                    nonce: (current?.nonce ?? 0) + 1,
+                  })),
+              },
+              { type: "separator" as const },
+            ]
+          : []),
         { label: "Open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
         {
           label: "Split right",
@@ -1073,6 +1106,7 @@ function TerminalWorkspaceComponent({
     : [];
 
   return (
+    <AgentRelayContext.Provider value={relayContext}>
     <div
       data-testid="expanded-terminal"
       style={{
@@ -1220,6 +1254,7 @@ function TerminalWorkspaceComponent({
         />
       )}
     </div>
+    </AgentRelayContext.Provider>
   );
 }
 
@@ -1502,6 +1537,9 @@ export function WorkspacePaneLeaf({
     >
       <TerminalCard
         ref={cardRef}
+        overlay={(layout) => (
+          <AgentRelayOverlay terminal={terminal} topInset={layout.topInset} />
+        )}
         terminal={terminal}
         displayMode="tab"
         isCompact={isCompact}
