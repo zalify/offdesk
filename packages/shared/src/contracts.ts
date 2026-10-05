@@ -34,6 +34,19 @@ export interface TerminalAgent {
   session_id?: string
   /** The agent's own usage-limit line while it is on screen. */
   usage_limit?: string
+  /** Claude's own busy / idle / waiting status, when known. */
+  activity?: AgentActivity
+  /** Claude's task list while it has one. */
+  tasks?: AgentTasks
+}
+
+export type AgentActivity = "busy" | "idle" | "waiting"
+
+export interface AgentTasks {
+  done: number
+  total: number
+  /** Open work first (in progress, then pending), then finished; capped. */
+  items: RelayTask[]
 }
 
 export interface RelaySource {
@@ -122,6 +135,36 @@ export interface BrowserStateSnapshot {
   agent_sessions?: AgentSessionInfo[]
   /** session_id → last_seen_seq for the requesting user (cross-device read sync). */
   agent_session_seen?: Record<string, number>
+  /** The user's to-dos; absent from older Hubs. */
+  todos?: TodoInfo[]
+}
+
+// ── To-dos — mirrors crates/protocol/src/todos.rs ──
+
+export type TodoStatus = "open" | "done"
+
+export interface TodoInfo {
+  /** Client-generated UUID; a retried create returns the stored to-do. */
+  id: string
+  title: string
+  notes: string
+  status: TodoStatus
+  /** Manual order among open to-dos; lower comes first. */
+  position: number
+  machine_id?: string
+  cwd?: string
+  created_at: number
+  updated_at: number
+  completed_at?: number
+  /** The agent this to-do was handed to, and the terminal it runs in. */
+  agent?: RelayAgent
+  terminal_id?: string
+  /** The agent's task list as last seen; kept after Claude clears it. */
+  progress?: TodoProgress
+}
+
+export interface TodoProgress extends AgentTasks {
+  updated_at: number
 }
 
 // ── Agent sessions (ACP) — mirrors crates/protocol/src/lib.rs ──
@@ -358,6 +401,8 @@ export type BrowserEvent =
   | BrowserEvent.AgentSessionDestroyed
   | BrowserEvent.AgentSessionEvent
   | BrowserEvent.AgentSessionSeen
+  | BrowserEvent.TodoUpserted
+  | BrowserEvent.TodoDeleted
 
 export namespace BrowserEvent {
   export interface MachineOnline {
@@ -462,6 +507,16 @@ export namespace BrowserEvent {
     type: 'agent_session_seen'
     session_id: string
     last_seen_seq: number
+  }
+
+  export interface TodoUpserted {
+    type: 'todo_upserted'
+    todo: TodoInfo
+  }
+
+  export interface TodoDeleted {
+    type: 'todo_deleted'
+    id: string
   }
 }
 

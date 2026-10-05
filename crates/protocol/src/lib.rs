@@ -10,6 +10,7 @@ pub mod keep_awake;
 pub mod local_host;
 pub mod preview;
 pub mod relay;
+pub mod todos;
 pub mod service;
 
 // ── Shared data types ──
@@ -285,6 +286,9 @@ pub struct BrowserStateSnapshot {
     /// session_id → last_seen_seq for the requesting user (cross-device read sync).
     #[serde(default)]
     pub agent_session_seen: HashMap<String, u64>,
+    /// The user's to-dos; absent from older Hubs.
+    #[serde(default)]
+    pub todos: Vec<todos::TodoInfo>,
 }
 
 // ── Hub → Machine messages ──
@@ -612,6 +616,10 @@ pub enum BrowserEvent {
         session_id: String,
         last_seen_seq: u64,
     },
+    #[serde(rename = "todo_upserted")]
+    TodoUpserted { todo: todos::TodoInfo },
+    #[serde(rename = "todo_deleted")]
+    TodoDeleted { id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

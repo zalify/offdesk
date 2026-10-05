@@ -379,3 +379,34 @@ body {
   outline: 2px solid rgb(var(--color-accent));
   outline-offset: 2px;
 }
+
+.todos-dialog {
+  padding: 0;
+  border: 1px solid rgb(var(--color-border));
+  border-radius: 14px;
+  width: min(560px, calc(100vw - 24px));
+  height: min(720px, calc(100dvh - 48px));
+  max-height: none;
+  box-sizing: border-box;
+  background: rgb(var(--color-surface));
+  color: rgb(var(--color-foreground));
+}
+.todos-dialog::backdrop {
+  background: rgb(43 35 64 / 0.45);
+}
+.todos-dialog :is(button, input, select, textarea):focus-visible {
+  outline: 2px solid rgb(var(--color-accent));
+  outline-offset: 2px;
+}
+@media (max-width: 767px) {
+  .todos-dialog {
+    width: 100vw;
+    max-width: 100vw;
+    height: 100dvh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}

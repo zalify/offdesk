@@ -13,6 +13,7 @@ pub mod machines;
 pub mod settings;
 pub mod session_handoffs;
 pub mod terminal_sessions;
+pub mod todos;
 pub mod tokens;
 pub mod types;
 pub mod user_focus;
@@ -273,6 +274,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
     // Startup recovery: mark all machines offline
     conn.execute("UPDATE machines SET status = 'offline'", [])?;
+
+    // After users and machines exist: to-dos reference both.
+    todos::init(conn)?;
 
     Ok(())
 }

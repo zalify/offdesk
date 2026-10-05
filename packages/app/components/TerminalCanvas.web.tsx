@@ -12,6 +12,7 @@ import {
 import type {
   RelayAgent,
   TerminalInfo,
+  TodoInfo,
   Bookmark,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
@@ -34,6 +35,7 @@ import { Terminal as TerminalIcon } from "lucide-react";
 import {
   createRelay,
   createTerminal,
+  dispatchTodo,
   createWorkspaceGroup,
   deleteMachine,
   deleteWorkspaceGroup,
@@ -60,7 +62,9 @@ import {
   applyBrowserEventEnvelope,
   EMPTY_BROWSER_SESSION_STATE,
   shouldResyncForEnvelope,
+  upsertTodo,
 } from "@/lib/bootstrapState";
+import { TodosPanel } from "./TodosPanel.web";
 import { getPersistentDeviceId } from "@/lib/deviceId";
 import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile } from "@/lib/platform";
@@ -234,6 +238,17 @@ export function TerminalCanvas() {
 
 function TerminalCanvasInner() {
   const [browserState, setBrowserState] = useState(EMPTY_BROWSER_SESSION_STATE);
+  const [todosOpen, setTodosOpen] = useState(false);
+  const openTodoCount = useMemo(
+    () => browserState.todos.filter((todo) => todo.status === "open").length,
+    [browserState.todos],
+  );
+  const handleTodoUpsert = useCallback((todo: TodoInfo) => {
+    setBrowserState((prev) => ({ ...prev, todos: upsertTodo(prev.todos, todo) }));
+  }, []);
+  const handleTodoRemove = useCallback((id: string) => {
+    setBrowserState((prev) => ({ ...prev, todos: prev.todos.filter((todo) => todo.id !== id) }));
+  }, []);
   const [layout, dispatchLayout] = useReducer(
     mainLayoutReducer,
     undefined,
@@ -873,6 +888,40 @@ function TerminalCanvasInner() {
       dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: created.id });
       window.history.pushState(null, "", `#/t/${created.id}`);
       return created;
+    },
+    [deviceId, isCompact, isMachineController, viewportHeight],
+  );
+
+  // To-do hand-off: the Hub starts the agent in a new tab in the to-do's
+  // folder and links the two; show the new terminal like a relay does.
+  const handleDispatchTodo = useCallback(
+    async (todo: TodoInfo, agent: RelayAgent, prompt: string) => {
+      const machineId = todo.machine_id;
+      if (!deviceId || !machineId || !isMachineController(machineId)) {
+        throw new Error("Take control of this machine first.");
+      }
+      const viewportHeightPx = viewportHeight ?? window.innerHeight;
+      const { cols, rows } = isCompact
+        ? estimateMobileInitialTerminalDimensions(window.innerWidth, viewportHeightPx)
+        : estimateInitialTerminalDimensions(window.innerWidth, viewportHeightPx);
+      const { todo: linked, terminal } = await dispatchTodo(todo.id, { agent, deviceId, prompt, cols, rows });
+      setBrowserState((prev) => ({
+        ...prev,
+        todos: upsertTodo(prev.todos, linked),
+        terminals: upsertTerminalInfo(prev.terminals, terminal),
+      }));
+      try {
+        const groups = await listWorkspaceGroups(machineId);
+        setBrowserState((prev) => ({
+          ...prev,
+          workspaceGroups: replaceMachineWorkspaceGroups(prev.workspaceGroups, machineId, groups),
+        }));
+      } catch {
+        /* the workspace_group_created event still fills the tab in */
+      }
+      setTodosOpen(false);
+      dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: terminal.id });
+      window.history.pushState(null, "", `#/t/${terminal.id}`);
     },
     [deviceId, isCompact, isMachineController, viewportHeight],
   );
@@ -1727,6 +1776,8 @@ function TerminalCanvasInner() {
               onEngageViewOnly={handleEngageViewOnly}
               onDisengageViewOnly={handleDisengageViewOnly}
               onOpenSettings={() => setShowSettings(true)}
+              onOpenTodos={() => setTodosOpen(true)}
+              openTodoCount={openTodoCount}
               onOpenWebPreview={() => workspaceCommandsRef.current.openWebPreview?.()}
             >
               {scopedTerminals.length > 0 && workspaceTerminal?.machine_id === activeMachine?.id && workspaceTerminal ? (
@@ -1800,6 +1851,8 @@ function TerminalCanvasInner() {
                 onAddMachine={() => setAddMachineOpen(true)}
                 onOpenPhone={() => setPhoneOpen(true)}
                 onOpenSettings={() => setShowSettings(true)}
+                onOpenTodos={() => setTodosOpen(true)}
+                openTodoCount={openTodoCount}
                 onRemoveHost={handleRemoveHost}
                 onRequestControl={() => {
                   if (activeMachine) void handleRequestControl(activeMachine.id);
@@ -2018,6 +2071,28 @@ function TerminalCanvasInner() {
               onCancel={() => setGroupRenameTarget(null)}
             />
           </Suspense>
+        )}
+
+        {todosOpen && (
+          <TodosPanel
+            todos={browserState.todos}
+            machines={browserState.machines}
+            terminals={browserState.terminals}
+            defaultLocation={
+              workspaceTerminal
+                ? { machineId: workspaceTerminal.machine_id, cwd: workspaceTerminal.cwd }
+                : undefined
+            }
+            canDispatch={isMachineController}
+            onDispatch={handleDispatchTodo}
+            onOpenTerminal={(terminalId) => {
+              setTodosOpen(false);
+              handleZoomTerminal(terminalId);
+            }}
+            onLocalUpsert={handleTodoUpsert}
+            onLocalRemove={handleTodoRemove}
+            onClose={() => setTodosOpen(false)}
+          />
         )}
 
         {closeConfirmation && (
