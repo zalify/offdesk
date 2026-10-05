@@ -2,7 +2,8 @@
 //! unlike terminal actions they need no machine control. Every change is
 //! pushed to the user's other devices as a browser event.
 use axum::{
-    extract::{Path, State},
+    extract::{FromRequestParts, Path, State},
+    http::request::Parts,
     http::StatusCode,
     response::Json,
     routing::{get, patch, post},
@@ -30,6 +31,54 @@ pub fn router() -> Router<AppState> {
         .route("/api/todos", get(list_todos).post(create_todo))
         .route("/api/todos/{id}", patch(update_todo).delete(delete_todo))
         .route("/api/todos/{id}/dispatch", post(dispatch_todo))
+}
+
+/// Who is calling a to-do route: a signed-in user, or an Offdesk machine
+/// using its own credentials on behalf of its owner. The machine path lets
+/// the `offdesk todo` CLI work in any terminal on that machine without an
+/// API token; it reaches only the owner's to-dos, never terminal control.
+struct TodoCaller {
+    user_id: String,
+    /// Set when the caller is a machine: new to-dos default to it.
+    machine_id: Option<String>,
+}
+
+/// `X-Offdesk-Machine: <machine id>` with `Authorization: Machine <secret>`.
+const MACHINE_HEADER: &str = "x-offdesk-machine";
+
+impl FromRequestParts<AppState> for TodoCaller {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let unauthorized = || (StatusCode::UNAUTHORIZED, "Unauthorized".to_string());
+        if let Some(machine_id) = parts.headers.get(MACHINE_HEADER) {
+            let machine_id = machine_id.to_str().map_err(|_| unauthorized())?.to_string();
+            let secret = parts
+                .headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Machine "))
+                .ok_or_else(unauthorized)?;
+            return match crate::ws::authenticate_machine(state, &machine_id, secret).await {
+                // A machine without an owner (dev mode) has no to-do list.
+                Ok(Some(user_id)) => Ok(Self {
+                    user_id,
+                    machine_id: Some(machine_id),
+                }),
+                _ => Err(unauthorized()),
+            };
+        }
+        let user = AuthUser::from_request_parts(parts, state)
+            .await
+            .map_err(|_| unauthorized())?;
+        Ok(Self {
+            user_id: user.user_id,
+            machine_id: None,
+        })
+    }
 }
 
 fn db_error(error: impl std::fmt::Display) -> ApiError {
@@ -118,10 +167,19 @@ async fn validate_location(
     cwd: Option<&str>,
 ) -> Result<(), ApiError> {
     if let Some(machine_id) = machine_id {
-        if !state
-            .manager
-            .user_can_access_machine(user_id, machine_id)
-            .await
+        // A to-do may name a machine that is offline right now: ownership
+        // comes from the machines table, not only from a live connection.
+        let owned = {
+            let conn = state.db.get().map_err(db_error)?;
+            crate::db::machines::find_machine_by_id(&conn, machine_id)
+                .map_err(db_error)?
+                .is_some_and(|machine| machine.user_id == user_id)
+        };
+        if !owned
+            && !state
+                .manager
+                .user_can_access_machine(user_id, machine_id)
+                .await
         {
             return Err((StatusCode::NOT_FOUND, "Machine not found".to_string()));
         }
@@ -139,26 +197,30 @@ async fn validate_location(
 
 async fn list_todos(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    caller: TodoCaller,
 ) -> Result<Json<Vec<TodoInfo>>, ApiError> {
     let conn = state.db.get().map_err(db_error)?;
-    crate::db::todos::list(&conn, &auth_user.user_id)
+    crate::db::todos::list(&conn, &caller.user_id)
         .map(Json)
         .map_err(db_error)
 }
 
 async fn create_todo(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    caller: TodoCaller,
     Json(req): Json<CreateTodoRequest>,
 ) -> Result<Json<TodoInfo>, ApiError> {
-    let user_id = auth_user.user_id.as_str();
+    let user_id = caller.user_id.as_str();
     if uuid::Uuid::parse_str(&req.id).is_err() {
         return Err(bad_request("Invalid to-do id"));
     }
     let title = normalize_title(&req.title).map_err(bad_request)?;
     let notes = normalize_notes(&req.notes).map_err(bad_request)?;
-    let machine_id = req.machine_id.filter(|id| !id.is_empty());
+    // A machine adding a to-do means "on this machine" unless told otherwise.
+    let machine_id = req
+        .machine_id
+        .filter(|id| !id.is_empty())
+        .or_else(|| caller.machine_id.clone());
     let mut cwd = req.cwd.filter(|cwd| !cwd.is_empty());
     let adopted = match req.terminal_id.as_deref().filter(|id| !id.is_empty()) {
         Some(terminal_id) => {
@@ -302,11 +364,11 @@ async fn dispatch_todo(
 
 async fn update_todo(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    caller: TodoCaller,
     Path(id): Path<String>,
     Json(req): Json<UpdateTodoRequest>,
 ) -> Result<Json<TodoInfo>, ApiError> {
-    let user_id = auth_user.user_id.as_str();
+    let user_id = caller.user_id.as_str();
     let title = req
         .title
         .as_deref()
@@ -355,15 +417,15 @@ async fn update_todo(
 
 async fn delete_todo(
     State(state): State<AppState>,
-    auth_user: AuthUser,
+    caller: TodoCaller,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
     let conn = state.db.get().map_err(db_error)?;
-    let deleted = crate::db::todos::delete(&conn, &auth_user.user_id, &id).map_err(db_error)?;
+    let deleted = crate::db::todos::delete(&conn, &caller.user_id, &id).map_err(db_error)?;
     drop(conn);
     // Deleting twice (a retry) succeeds without a second event.
     if deleted {
-        state.manager.publish_todo_deleted(&auth_user.user_id, id);
+        state.manager.publish_todo_deleted(&caller.user_id, id);
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -569,6 +631,94 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    async fn machine_call(
+        state: &AppState,
+        secret: &str,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-offdesk-machine", "machine-m")
+            .header(header::AUTHORIZATION, format!("Machine {secret}"));
+        let body = match body {
+            Some(body) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Body::from(body.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = super::router()
+            .with_state(state.clone())
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn a_machine_adds_to_dos_for_its_owner_with_its_own_credentials() {
+        let state = test_state();
+        {
+            let conn = state.db.get().unwrap();
+            let hash = crate::auth::hash_password("machine-secret").unwrap();
+            crate::db::machines::create_machine(&conn, "machine-m", "user-a", "Mac", &hash)
+                .unwrap();
+        }
+        let (status, todo) = machine_call(
+            &state,
+            "machine-secret",
+            Method::POST,
+            "/api/todos",
+            Some(json!({
+                "id": ID, "title": "Ship the CLI", "cwd": "/Users/a/repo"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{todo}");
+        assert_eq!(
+            todo["machine_id"], "machine-m",
+            "defaults to the calling machine"
+        );
+        assert_eq!(todo["cwd"], "/Users/a/repo");
+
+        // It is the owner's list: the user sees it, and the machine can list and finish it.
+        let (_, mine) = call(&state, "user-a", Method::GET, "/api/todos", None).await;
+        assert_eq!(mine[0]["title"], "Ship the CLI");
+        let (status, done) = machine_call(
+            &state,
+            "machine-secret",
+            Method::PATCH,
+            &format!("/api/todos/{ID}"),
+            Some(json!({"status": "done"})),
+        )
+        .await;
+        assert_eq!(
+            (status, done["status"].as_str()),
+            (StatusCode::OK, Some("done"))
+        );
+
+        // Wrong secrets and machine-started hand-offs are refused.
+        let (status, _) = machine_call(&state, "wrong", Method::GET, "/api/todos", None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        let (status, _) = machine_call(
+            &state,
+            "machine-secret",
+            Method::POST,
+            &format!("/api/todos/{ID}/dispatch"),
+            Some(json!({"agent": "codex", "prompt": "x"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     mod agents {

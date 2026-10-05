@@ -6,13 +6,14 @@ pub mod open;
 pub mod read;
 pub mod read_all;
 pub mod send;
+pub mod todo;
 pub mod wait;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 
-use serde::Serialize;
 use offdesk_protocol::TerminalInfo;
+use serde::Serialize;
 
 use crate::client::HubClient;
 use crate::resolve::{resolve_prefix, short_id};
@@ -90,8 +91,8 @@ pub fn group_label(terminal: &TerminalInfo, names: &HashMap<String, String>) -> 
 #[cfg(test)]
 mod tests {
     use super::group_label;
-    use std::collections::HashMap;
     use offdesk_protocol::TerminalInfo;
+    use std::collections::HashMap;
 
     fn terminal(group_id: Option<&str>) -> TerminalInfo {
         TerminalInfo {

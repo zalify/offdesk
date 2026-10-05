@@ -173,6 +173,13 @@ enum Commands {
         #[arg(long)]
         yes: bool,
     },
+    /// Your to-do list on the hub. Without an API token, works on any machine
+    /// running Offdesk Node using that machine's own credentials; new to-dos
+    /// default to this machine and the current folder.
+    Todo {
+        #[command(subcommand)]
+        action: TodoAction,
+    },
     /// Open the hub in a browser. On the machine that runs the hub this is
     /// `offdesk-hub link`: the sign-in link, with the code for a phone;
     /// elsewhere it opens the hub's address
@@ -181,6 +188,42 @@ enum Commands {
         #[arg(long)]
         no_open: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum TodoAction {
+    /// Add a to-do (at the top of the list)
+    Add {
+        /// Title (joined with single spaces)
+        #[arg(required = true)]
+        title: Vec<String>,
+        /// Longer notes; becomes part of the prompt if handed to an agent
+        #[arg(long)]
+        notes: Option<String>,
+        /// Folder the work belongs to (default: the current directory)
+        #[arg(long, conflicts_with = "no_folder")]
+        folder: Option<std::path::PathBuf>,
+        /// Do not record a folder
+        #[arg(long)]
+        no_folder: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List open to-dos (with --all, finished ones too)
+    Ls {
+        #[arg(long)]
+        all: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Mark a to-do done (id, unique id prefix, or exact title)
+    Done { todo: String },
+    /// Reopen a finished to-do
+    Reopen { todo: String },
+    /// Delete a to-do
+    Rm { todo: String },
 }
 
 #[derive(Subcommand)]
@@ -232,13 +275,15 @@ fn link(no_open: bool, configured_url: Option<&str>) -> Result<(), CliError> {
         if no_open {
             command.arg("--no-open");
         }
-        let status = command
-            .status()
-            .map_err(|error| CliError::Config(format!("could not run offdesk-hub link: {error}")))?;
+        let status = command.status().map_err(|error| {
+            CliError::Config(format!("could not run offdesk-hub link: {error}"))
+        })?;
         if status.success() {
             return Ok(());
         }
-        return Err(CliError::Config("offdesk-hub link did not succeed".to_string()));
+        return Err(CliError::Config(
+            "offdesk-hub link did not succeed".to_string(),
+        ));
     }
     let Some(url) = configured_url else {
         return Err(CliError::Config(
@@ -250,7 +295,11 @@ fn link(no_open: bool, configured_url: Option<&str>) -> Result<(), CliError> {
     let url = url.trim_end_matches('/');
     println!("{url}");
     if !no_open {
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
         let _ = std::process::Command::new(opener)
             .arg(url)
             .stdout(std::process::Stdio::null())
@@ -300,6 +349,50 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return link(no_open, url.as_deref());
     }
     let env_token = env_with_legacy("OFFDESK_TOKEN", "WEBMUX_TOKEN");
+    // To-dos also work with this machine's own credentials, so they are
+    // resolved before the token-only path below.
+    if let Commands::Todo { action } = cli.command {
+        let url = cli
+            .url
+            .clone()
+            .or_else(|| env_url.clone())
+            .or_else(|| file.as_ref().and_then(|f| f.url.clone()));
+        let token = cli
+            .token
+            .clone()
+            .or_else(|| env_token.clone())
+            .or_else(|| file.as_ref().and_then(|f| f.token.clone()));
+        let local = commands::todo::read_local_machine(&commands::todo::local_machine_path());
+        let auth = commands::todo::resolve_auth(url.as_deref(), token.as_deref(), local.as_ref())?;
+        return match action {
+            TodoAction::Add {
+                title,
+                notes,
+                folder,
+                no_folder,
+                json,
+            } => {
+                let options = commands::todo::AddOptions {
+                    title: title.join(" "),
+                    notes,
+                    folder,
+                    no_folder,
+                    json,
+                };
+                commands::todo::add(&auth, local.as_ref(), options).await
+            }
+            TodoAction::Ls { all, json } => commands::todo::ls(&auth, all, json).await,
+            TodoAction::Done { todo } => {
+                commands::todo::set_status(&auth, &todo, offdesk_protocol::todos::TodoStatus::Done)
+                    .await
+            }
+            TodoAction::Reopen { todo } => {
+                commands::todo::set_status(&auth, &todo, offdesk_protocol::todos::TodoStatus::Open)
+                    .await
+            }
+            TodoAction::Rm { todo } => commands::todo::rm(&auth, &todo).await,
+        };
+    }
     let resolved = config::resolve(
         cli.url.as_deref(),
         cli.token.as_deref(),
@@ -312,6 +405,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     match cli.command {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
+        Commands::Todo { .. } => unreachable!("todo returns early"),
         Commands::Machines { action, json, all } => match action {
             Some(MachinesAction::Rm { machine, yes }) => {
                 commands::machines::rm(&hub_client, &machine, yes).await

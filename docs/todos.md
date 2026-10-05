@@ -19,6 +19,28 @@ restarts. Forgetting a machine keeps its to-dos and clears only the machine.
 Limits: titles are one line up to 500 characters; notes up to 8 KB; at most
 2,000 to-dos per account.
 
+## From a terminal or an agent
+
+`offdesk todo` reads and edits the same list, so you can tell Claude or Codex
+"add that to my to-dos" in a conversation, and it can run:
+
+```sh
+offdesk todo add "Renew the certificate" --notes "Expires on the 9th"
+offdesk todo ls            # open to-dos; --all includes finished ones
+offdesk todo done 5f3a     # id, unique id prefix (4+ characters) or exact title
+offdesk todo reopen 5f3a
+offdesk todo rm 5f3a
+```
+
+New to-dos go on top and default to this machine and the current folder, so
+they are ready to hand off later (`--folder PATH` or `--no-folder` change
+that). Every command takes `--json`.
+
+No setup is needed on a machine running Offdesk Node: without an API token
+the CLI signs in with that machine's own credentials (from `machine.json`),
+which reach only your to-dos, never terminals or hand-offs. Anywhere else,
+create an API token in Settings and set `OFFDESK_URL` and `OFFDESK_TOKEN`.
+
 ## Agents
 
 **Hand off.** Open a to-do that has a machine and folder (or tap **Use the
