@@ -107,7 +107,7 @@ fn resolve_with(
 /// Resolve the (home, thread uuid, rollout path) of a pane that runs exactly
 /// one codex process holding exactly one open rollout. Callers keep their own
 /// pane filter; this only looks at the process tree and the open files.
-fn rollout_for_pane(
+pub(crate) fn rollout_for_pane(
     pane: &PaneInfo,
     processes: &[Process],
     open_files: impl Fn(u32) -> Vec<PathBuf>,
@@ -189,7 +189,7 @@ fn read_title(home: &Path, thread: &str, rollout: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_files(pid: u32) -> Vec<PathBuf> {
+pub(crate) fn open_files(pid: u32) -> Vec<PathBuf> {
     std::fs::read_dir(format!("/proc/{pid}/fd"))
         .into_iter()
         .flatten()
@@ -199,7 +199,7 @@ fn open_files(pid: u32) -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_files(pid: u32) -> Vec<PathBuf> {
+pub(crate) fn open_files(pid: u32) -> Vec<PathBuf> {
     // -b avoids kernel operations that can block; -F avoids parsing spaces
     // in paths. lsof can return partial data with a nonzero exit status.
     std::process::Command::new("/usr/sbin/lsof")
@@ -220,7 +220,7 @@ fn parse_lsof(output: &str) -> Vec<PathBuf> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn open_files(_pid: u32) -> Vec<PathBuf> {
+pub(crate) fn open_files(_pid: u32) -> Vec<PathBuf> {
     Vec::new()
 }
 

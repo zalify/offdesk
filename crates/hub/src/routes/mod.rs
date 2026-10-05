@@ -7,6 +7,7 @@ mod bootstrap;
 mod focus;
 mod mode;
 mod registration;
+mod relays;
 mod settings;
 mod session_handoffs;
 mod terminals;
@@ -20,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .merge(crate::secure::management_router())
         .merge(auth::router())
         .merge(terminals::router())
+        .merge(relays::router())
         .merge(agent_sessions::router())
         .merge(conversation_history::router())
         .merge(bootstrap::router())

@@ -372,3 +372,10 @@ body {
 .history-dialog .history-agents button { padding: 8px 0; }
 .history-dialog .history-view button, .history-dialog .history-sort { width: 36px; height: 34px; }
 @media (prefers-reduced-motion: reduce) { .history-loading, .history-skeleton span, .history-chevron { animation: none; transition: none; } }
+.agent-relay-dialog::backdrop {
+  background: rgb(43 35 64 / 0.45);
+}
+.agent-relay-dialog :is(button, input, textarea):focus-visible {
+  outline: 2px solid rgb(var(--color-accent));
+  outline-offset: 2px;
+}

@@ -9,6 +9,7 @@ pub mod compression;
 pub mod keep_awake;
 pub mod local_host;
 pub mod preview;
+pub mod relay;
 pub mod service;
 
 // ── Shared data types ──
@@ -42,6 +43,12 @@ pub struct TerminalInfo {
     /// Best-effort detection of an interactive confirmation on the live screen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention: Option<TerminalAttention>,
+    /// The Claude/Codex agent detected in this terminal. Live only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<relay::TerminalAgent>,
+    /// Set when this terminal was started to continue another agent's task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_source: Option<relay::RelaySource>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,6 +314,15 @@ pub enum HubToMachine {
         rows: u16,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         startup_command: Option<String>,
+        /// Only sent to Nodes with `relay::CAPABILITY`; replaces
+        /// `startup_command`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        startup_prompt: Option<relay::StartupPrompt>,
+    },
+    #[serde(rename = "relay_brief")]
+    RelayBrief {
+        request_id: String,
+        terminal_id: String,
     },
     #[serde(rename = "destroy_terminal")]
     DestroyTerminal { terminal_id: String },
@@ -479,6 +495,19 @@ pub enum MachineToHub {
     TerminalAttention {
         terminal_id: String,
         attention: Option<TerminalAttention>,
+    },
+    #[serde(rename = "terminal_agent")]
+    TerminalAgent {
+        terminal_id: String,
+        agent: Option<relay::TerminalAgent>,
+    },
+    #[serde(rename = "relay_brief_result")]
+    RelayBriefResult {
+        request_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        brief: Option<relay::RelayBrief>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
     #[serde(rename = "pong")]
     Pong,

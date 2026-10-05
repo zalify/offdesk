@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
+import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle, type ReactNode } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
 import { X } from "lucide-react";
 import type { TerminalViewRef, SelectionSnapshot } from "./TerminalView.types";
@@ -56,6 +56,8 @@ interface TerminalCardProps {
   onDestroy: (terminal: TerminalInfo) => void;
   onRequestControl?: (machineId: string) => void;
   onReleaseControl?: (machineId: string) => void;
+  /** Floating controls over the terminal area (never resizes the PTY). */
+  overlay?: (layout: { topInset: number }) => ReactNode;
 }
 
 const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(function TerminalCardComponent({
@@ -74,6 +76,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   onDestroy,
   onRequestControl,
   onReleaseControl,
+  overlay,
 }, ref) {
   const termViewRef = useRef<TerminalViewRef>(null);
   const selectOverlayRef = useRef<HTMLPreElement>(null);
@@ -560,6 +563,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                 </button>
               </div>
             )}
+            {isTab && overlay?.({ topInset: sizedElsewhere ? 48 : 0 })}
             {terminal.reachable && isTab ? (
               <Suspense
                 fallback={<LazyLoadingFallback />}
