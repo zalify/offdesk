@@ -1,9 +1,9 @@
+use offdesk_protocol::{MachineInfo, TerminalInfo, WorkspaceGroupInfo};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Response, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use offdesk_protocol::{MachineInfo, TerminalInfo, WorkspaceGroupInfo};
 
 use crate::config::ResolvedConfig;
 use crate::CliError;

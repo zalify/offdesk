@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use futures::StreamExt;
-use serde_json::{json, Value};
 use offdesk_protocol::{MachineInfo, TerminalInfo};
+use serde_json::{json, Value};
 
 use super::read::ReadOptions;
 use crate::attach;
@@ -273,8 +273,8 @@ mod tests {
     use super::{
         entry_json, json_output, render_text, retain_machine, BatchEntry, Capture, Outcome,
     };
-    use serde_json::json;
     use offdesk_protocol::{MachineInfo, TerminalInfo, TerminalTitleSource};
+    use serde_json::json;
 
     fn terminal(id: &str, machine_id: &str, cwd: &str) -> TerminalInfo {
         TerminalInfo {

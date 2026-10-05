@@ -66,7 +66,6 @@ pub fn resolve_machine<'a>(
     }
 }
 
-
 /// First-8 short form used in table output.
 pub fn short_id(id: &str) -> &str {
     id.get(..8).unwrap_or(id)
