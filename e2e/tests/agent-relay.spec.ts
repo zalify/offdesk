@@ -9,7 +9,7 @@ import {
   resetMachineState,
 } from "./helpers";
 
-// The Node image ships fake `claude` / `codex` CLIs (e2e/fake-agents): real
+// The Node image ships fake `claude` / `codex` CLIs (e2e/fake-agents): native
 // processes with the agents' names that print their first prompt verbatim.
 // The fake Claude also shows Claude's usage-limit notice.
 test.use({ ...devices["Pixel 7"], browserName: "chromium" });

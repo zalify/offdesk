@@ -1,6 +1,0 @@
-#!/bin/bash
-# Fake Codex CLI for the container E2E suite: stays alive as "codex" and
-# prints any first-message prompt verbatim.
-printf 'FAKE-CODEX ready\n'
-if [ "$#" -gt 0 ]; then printf 'PROMPT-BEGIN\n%s\nPROMPT-END\n' "$1"; fi
-while :; do sleep 1; done

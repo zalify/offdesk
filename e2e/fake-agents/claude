@@ -1,9 +1,0 @@
-#!/bin/bash
-# Fake Claude Code for the container E2E suite. It stays alive as a process
-# named "claude" (so the Node identifies the agent), prints any first-message
-# prompt it was started with, and shows Claude's usage-limit notice at the
-# bottom of the screen.
-printf 'FAKE-CLAUDE ready\n'
-if [ "$#" -gt 0 ]; then printf 'PROMPT-BEGIN\n%s\nPROMPT-END\n' "$1"; fi
-printf '\n\xe2\x9c\xbb Usage limit reached \xc2\xb7 resets 3pm\n'
-while :; do sleep 1; done
