@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone)]
-struct Process {
-    pid: u32,
-    parent: Option<u32>,
-    name: String,
+pub(crate) struct Process {
+    pub(crate) pid: u32,
+    pub(crate) parent: Option<u32>,
+    pub(crate) name: String,
 }
 
 /// A single snapshot shared by polling and the attach OSC path. Replacing
@@ -34,13 +34,19 @@ pub fn resolve(panes: &HashMap<String, PaneInfo>) -> HashMap<String, String> {
     if !panes.values().any(is_codex_pane) {
         return HashMap::new();
     }
+    resolve_with(panes, &snapshot_processes(), open_files)
+}
+
+/// One sysinfo process snapshot, shared by the title poll and the revive
+/// resolver.
+pub(crate) fn snapshot_processes() -> Vec<Process> {
     let mut system = sysinfo::System::new();
     system.refresh_processes_specifics(
         sysinfo::ProcessesToUpdate::All,
         true,
         sysinfo::ProcessRefreshKind::nothing(),
     );
-    let processes: Vec<_> = system
+    system
         .processes()
         .values()
         .map(|p| Process {
@@ -48,8 +54,33 @@ pub fn resolve(panes: &HashMap<String, PaneInfo>) -> HashMap<String, String> {
             parent: p.parent().map(|pid| pid.as_u32()),
             name: p.name().to_string_lossy().into_owned(),
         })
-        .collect();
-    resolve_with(panes, &processes, open_files)
+        .collect()
+}
+
+/// Pids of the processes named `name` under `root` (inclusive), walking
+/// parent links. The walk never descends into a match, so a nested agent is
+/// not mistaken for the pane's own.
+pub(crate) fn find_named_descendants(processes: &[Process], root: u32, name: &str) -> Vec<u32> {
+    let mut pending = vec![root];
+    let mut visited = std::collections::HashSet::new();
+    let mut found = Vec::new();
+    while let Some(pid) = pending.pop() {
+        if !visited.insert(pid) {
+            continue;
+        }
+        if processes.iter().any(|p| p.pid == pid && p.name == name) {
+            found.push(pid);
+            // Do not descend into this agent's tools or subagents.
+            continue;
+        }
+        pending.extend(
+            processes
+                .iter()
+                .filter(|p| p.parent == Some(pid))
+                .map(|p| p.pid),
+        );
+    }
+    found
 }
 
 fn is_codex_pane(pane: &PaneInfo) -> bool {
@@ -63,46 +94,49 @@ fn resolve_with(
 ) -> HashMap<String, String> {
     let mut titles = HashMap::new();
     for (id, pane) in panes.iter().filter(|(_, p)| is_codex_pane(p)) {
-        let root = pane.pid.unwrap();
-        let mut pending = vec![root];
-        let mut visited = std::collections::HashSet::new();
-        let mut candidates = Vec::new();
-        while let Some(pid) = pending.pop() {
-            if !visited.insert(pid) {
-                continue;
-            }
-            if processes.iter().any(|p| p.pid == pid && p.name == "codex") {
-                candidates.push(pid);
-                // Do not descend into this Codex's tools or subagents.
-                continue;
-            }
-            pending.extend(
-                processes
-                    .iter()
-                    .filter(|p| p.parent == Some(pid))
-                    .map(|p| p.pid),
-            );
-        }
-        let [pid] = candidates.as_slice() else {
+        let Some((home, thread, path)) = rollout_for_pane(pane, processes, &open_files) else {
             continue;
         };
-        let mut rollouts: Vec<_> = open_files(*pid)
-            .into_iter()
-            .filter_map(|path| {
-                rollout_identity(&path).map(|(home, thread)| (path.clone(), home, thread))
-            })
-            .collect();
-        rollouts.sort();
-        rollouts.dedup();
-        // Parallel/resumed threads can briefly overlap. Never guess a winner.
-        let [(path, home, thread)] = rollouts.as_slice() else {
-            continue;
-        };
-        if let Some(title) = read_title(home, thread, path) {
+        if let Some(title) = read_title(&home, &thread, &path) {
             titles.insert(id.clone(), title);
         }
     }
     titles
+}
+
+/// Resolve the (home, thread uuid, rollout path) of a pane that runs exactly
+/// one codex process holding exactly one open rollout. Callers keep their own
+/// pane filter; this only looks at the process tree and the open files.
+fn rollout_for_pane(
+    pane: &PaneInfo,
+    processes: &[Process],
+    open_files: impl Fn(u32) -> Vec<PathBuf>,
+) -> Option<(PathBuf, String, PathBuf)> {
+    let root = pane.pid?;
+    let codex_pids = find_named_descendants(processes, root, "codex");
+    let [pid] = codex_pids.as_slice() else {
+        return None;
+    };
+    let mut rollouts: Vec<_> = open_files(*pid)
+        .into_iter()
+        .filter_map(|path| {
+            rollout_identity(&path).map(|(home, thread)| (path.clone(), home, thread))
+        })
+        .collect();
+    rollouts.sort();
+    rollouts.dedup();
+    // Parallel/resumed threads can briefly overlap. Never guess a winner.
+    let [(path, home, thread)] = rollouts.as_slice() else {
+        return None;
+    };
+    Some((home.clone(), thread.clone(), path.clone()))
+}
+
+/// The codex thread uuid for one pane, when exactly one codex process with
+/// exactly one open rollout exists under the pane root. Used to resume the
+/// thread after a machine reboot; never touches the title path.
+pub(crate) fn thread_id_for_pane(pane: &PaneInfo, processes: &[Process]) -> Option<String> {
+    rollout_for_pane(pane, processes, open_files).map(|(_, thread, _)| thread)
 }
 
 fn rollout_identity(path: &Path) -> Option<(PathBuf, String)> {
@@ -301,6 +335,27 @@ mod tests {
         shell.get_mut("a").unwrap().current_command = None;
         assert!(resolve_with(&shell, &processes, |_| vec![a.clone()]).is_empty());
     }
+    #[test]
+    fn rollout_for_pane_yields_the_thread_only_for_one_unambiguous_rollout() {
+        let f = Fixture::new();
+        let a = f.thread("parent task");
+        let b = f.thread("child task");
+        let p = pane(1);
+        let processes = vec![process(11, 1, "fish"), process(12, 11, "codex")];
+
+        let (home, thread, path) = rollout_for_pane(&p, &processes, |_| vec![a.clone()]).unwrap();
+        assert_eq!(home, f.0);
+        assert_eq!(path, a);
+        assert_eq!(thread, rollout_identity(&a).unwrap().1);
+
+        // Two rollouts on the same process: never guess a winner.
+        assert!(rollout_for_pane(&p, &processes, |_| vec![a.clone(), b.clone()]).is_none());
+        assert!(rollout_for_pane(&p, &processes, |_| vec![]).is_none());
+        // Two codex processes under one pane are also ambiguous.
+        let competing = vec![process(11, 1, "codex"), process(12, 1, "codex")];
+        assert!(rollout_for_pane(&p, &competing, |_| vec![a.clone()]).is_none());
+    }
+
     #[test]
     fn osc_updates_cannot_overwrite_a_resolved_name_and_exit_clears_it() {
         let titles = SessionTitles::default();

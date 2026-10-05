@@ -1535,6 +1535,15 @@ function TerminalCanvasInner() {
         action: () =>
           workspaceCommandsRef.current.runPrefixAction?.("rotateLayout"),
       },
+      {
+        id: "tile-panes",
+        section: "actions",
+        label: "Tile panes",
+        hint: formatPrefixBinding("tilePanes", bindings),
+        disabled: !isActiveController,
+        action: () =>
+          workspaceCommandsRef.current.runPrefixAction?.("tilePanes"),
+      },
       ...tabGroups.map((group, index): PaletteRow => {
         const tabAction = `selectTab${index + 1}` as PrefixActionId;
         return {

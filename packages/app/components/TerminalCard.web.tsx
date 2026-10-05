@@ -13,7 +13,7 @@ import { useVisualViewportHeight } from "@/lib/hooks";
 import { useTerminalKeyboard } from "@/lib/useTerminalKeyboard";
 import { useKeyBarSlot } from "@/lib/keyBarSlot";
 import { getMobileViewportTerminalAction } from "@/lib/mobileViewportTerminal";
-import { estimateInitialTerminalDimensions } from "@/lib/terminalViewModel";
+import { isSizedElsewhere } from "@/lib/terminalViewModel";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 
@@ -153,15 +153,12 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
     observer.observe(node);
     return () => observer.disconnect();
   }, [isTab, isCompact]);
-  const wouldFit = paneSize
-    ? estimateInitialTerminalDimensions(paneSize.width, paneSize.height)
-    : null;
   const sizedElsewhere =
     isTab &&
     !isCompact &&
     terminal.reachable &&
-    wouldFit !== null &&
-    (terminal.cols < wouldFit.cols * 0.6 || terminal.rows < wouldFit.rows * 0.6);
+    paneSize !== null &&
+    isSizedElsewhere(terminal.cols, terminal.rows, paneSize.width, paneSize.height);
   const [fitAfterControl, setFitAfterControl] = useState(false);
   useEffect(() => {
     if (!fitAfterControl || !isController) return;

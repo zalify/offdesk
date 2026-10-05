@@ -159,7 +159,10 @@ jobs:
         with:
           targets: aarch64-linux-android,x86_64-linux-android
       - uses: cargo-bins/cargo-binstall@main
-      - run: cargo binstall -y tauri-cli --version "^2.0" || cargo install tauri-cli --version "^2.0" --locked
+      # Gradle's BuildTask calls back into `cargo tauri`, which must match the
+      # @tauri-apps/cli in pnpm-lock.yaml: 2.12.1 reads a handoff file 2.10.1
+      # never writes. Bump both together.
+      - run: cargo binstall -y tauri-cli --version "=2.10.1" || cargo install tauri-cli --version "=2.10.1" --locked
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/desktop/src-tauri

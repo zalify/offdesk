@@ -24,6 +24,7 @@ export type PrefixActionId =
   | "splitRight"
   | "splitDown"
   | "rotateLayout"
+  | "tilePanes"
   | "paneLeft"
   | "paneRight"
   | "paneUp"
@@ -72,6 +73,7 @@ export const DEFAULT_PREFIX_BINDINGS: PrefixBindings = {
   splitRight: "%",
   splitDown: '"',
   rotateLayout: "r",
+  tilePanes: "E",
   paneLeft: "ArrowLeft",
   paneRight: "ArrowRight",
   paneUp: "ArrowUp",
@@ -107,6 +109,7 @@ export const PREFIX_ACTION_DEFINITIONS: Array<{
   { id: "splitRight", label: "Split pane right" },
   { id: "splitDown", label: "Split pane down" },
   { id: "rotateLayout", label: "Rotate layout" },
+  { id: "tilePanes", label: "Tile panes" },
   { id: "paneLeft", label: "Focus pane left" },
   { id: "paneRight", label: "Focus pane right" },
   { id: "paneUp", label: "Focus pane up" },

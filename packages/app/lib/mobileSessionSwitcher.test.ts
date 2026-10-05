@@ -42,6 +42,7 @@ function group(
     persistent: true,
     root,
     paneCount: terminalIds.length,
+    layoutUpdatedAt: null,
   };
 }
 

@@ -102,6 +102,15 @@ struct PersistedSession {
     cwd: String,
     cols: u16,
     rows: u16,
+    /// Boot id of the machine when this entry was last written. A mismatch
+    /// at startup proves the machine rebooted and the tmux session died
+    /// with it, making the entry a revive candidate.
+    #[serde(default)]
+    boot_id: Option<String>,
+    /// Sanitized resume command for the agent that was running in this
+    /// pane, refreshed by the periodic pane poll.
+    #[serde(default)]
+    resume: Option<crate::revive::ResumeCommand>,
 }
 
 /// Lightweight metadata holder for tmux-backed terminals.
@@ -113,6 +122,10 @@ struct PersistedSession {
 pub struct PtyManager {
     codex_titles: crate::codex_title::SessionTitles,
     sessions: Arc<Mutex<HashMap<String, SessionInfo>>>,
+    /// Resume commands captured by the periodic pane poll, keyed by terminal
+    /// id. Persisted alongside the session metadata so a revived entry keeps
+    /// its resume command across the rewrite.
+    resume_commands: Mutex<HashMap<String, crate::revive::ResumeCommand>>,
 }
 
 impl PtyManager {
@@ -131,6 +144,7 @@ impl PtyManager {
         Self {
             codex_titles: Default::default(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            resume_commands: Mutex::new(HashMap::new()),
         }
     }
 
@@ -263,6 +277,7 @@ impl PtyManager {
             .remove(id);
         if removed.is_some() {
             tmux_kill_session(id);
+            self.resume_commands.lock().unwrap().remove(id);
             self.persist();
             Ok(())
         } else {
@@ -421,7 +436,50 @@ impl PtyManager {
             }
         }
         self.codex_titles.replace(titles);
+        self.update_revive_snapshots(&panes);
         panes
+    }
+
+    /// Merge live cwd + agent resume snapshots from the pane poll into the
+    /// persisted state. Writes sessions.json only when something actually
+    /// changed (persist() is atomic and stamps the boot id).
+    fn update_revive_snapshots(&self, panes: &HashMap<String, PaneInfo>) {
+        let resolved = crate::revive::resolve_resume_commands(panes);
+        let mut changed = false;
+        {
+            let mut commands = self.resume_commands.lock().unwrap();
+            for (id, state) in resolved {
+                match state {
+                    Some(command) => {
+                        if commands.get(&id) != Some(&command) {
+                            commands.insert(id, command);
+                            changed = true;
+                        }
+                    }
+                    None => {
+                        if commands.remove(&id).is_some() {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        {
+            let mut sessions = self.sessions.lock().unwrap();
+            for (id, pane) in panes {
+                if let Some(cwd) = &pane.cwd {
+                    if let Some(info) = sessions.get_mut(id) {
+                        if info.cwd != *cwd {
+                            info.cwd = cwd.clone();
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.persist();
+        }
     }
 
     pub fn resolve_osc_title(&self, terminal_id: &str, title: String) -> String {
@@ -441,46 +499,140 @@ impl PtyManager {
     /// Returns recovered SessionInfo list for reporting to the hub. The
     /// per-attach byte streams are established on-demand when browsers
     /// connect, so there is nothing more to wire up here than the metadata.
-    pub fn recover_sessions(&self) -> Vec<SessionInfo> {
+    ///
+    /// Entries whose tmux session died with a reboot are recreated under
+    /// their original terminal id when `restore_on_reboot` is set; when
+    /// `resume_agents` is also set, the agent that was running in them is
+    /// relaunched (staggered, off the startup path).
+    pub fn recover_sessions(
+        &self,
+        restore_on_reboot: bool,
+        resume_agents: bool,
+    ) -> Vec<SessionInfo> {
         let persisted = load_sessions_file();
         if persisted.is_empty() {
             return vec![];
         }
 
         let alive = tmux_list_sessions();
+        let current_boot = crate::revive::current_boot_id();
         let mut recovered = vec![];
+        let mut resume_plan: Vec<(String, Option<crate::revive::ResumeCommand>)> = vec![];
 
         for (id, meta) in &persisted {
             let tmux_name = tmux_session_name(id);
-            if !alive.contains(&tmux_name) {
-                tracing::info!(
-                    "tmux session {} gone (shell exited), cleaning up",
-                    tmux_name
-                );
-                continue;
+            match crate::revive::decide_recover(
+                alive.contains(&tmux_name),
+                meta.boot_id.as_deref(),
+                current_boot.as_deref(),
+                restore_on_reboot,
+            ) {
+                crate::revive::RecoverDecision::Recover => {
+                    let info = SessionInfo {
+                        id: id.clone(),
+                        title: meta.title.clone(),
+                        cwd: meta.cwd.clone(),
+                        cols: meta.cols,
+                        rows: meta.rows,
+                    };
+                    self.sessions
+                        .lock()
+                        .unwrap()
+                        .insert(id.clone(), info.clone());
+                    if let Some(command) = &meta.resume {
+                        self.resume_commands
+                            .lock()
+                            .unwrap()
+                            .insert(id.clone(), command.clone());
+                    }
+                    recovered.push(info);
+                    tracing::info!("Recovered terminal {} (tmux {})", id, tmux_name);
+                }
+                crate::revive::RecoverDecision::Drop => {
+                    tracing::info!(
+                        "tmux session {} gone (shell exited), cleaning up",
+                        tmux_name
+                    );
+                }
+                crate::revive::RecoverDecision::Revive => {
+                    let cwd = revive_cwd(&meta.cwd);
+                    match self.create_terminal(id, &cwd, meta.cols, meta.rows) {
+                        Err(error) => {
+                            tracing::warn!(
+                                "Failed to revive terminal {} after reboot: {}",
+                                id,
+                                error
+                            );
+                        }
+                        Ok(mut info) => {
+                            // create_terminal starts with an empty title; keep
+                            // the one we persisted so the hub and the next
+                            // sessions.json rewrite carry it.
+                            info.title = meta.title.clone();
+                            if let Some(stored) = self.sessions.lock().unwrap().get_mut(id) {
+                                stored.title = meta.title.clone();
+                            }
+                            if let Some(command) = &meta.resume {
+                                self.resume_commands
+                                    .lock()
+                                    .unwrap()
+                                    .insert(id.clone(), command.clone());
+                            }
+                            recovered.push(info);
+                            tracing::info!(
+                                "Revived terminal {} after reboot (tmux {})",
+                                id,
+                                tmux_name
+                            );
+                            if resume_agents && meta.resume.is_some() {
+                                resume_plan.push((id.clone(), meta.resume.clone()));
+                            }
+                        }
+                    }
+                }
             }
-            let info = SessionInfo {
-                id: id.clone(),
-                title: meta.title.clone(),
-                cwd: meta.cwd.clone(),
-                cols: meta.cols,
-                rows: meta.rows,
-            };
-            self.sessions
-                .lock()
-                .unwrap()
-                .insert(id.clone(), info.clone());
-            recovered.push(info);
-            tracing::info!("Recovered terminal {} (tmux {})", id, tmux_name);
         }
 
         // Rewrite file to drop dead sessions
         self.persist();
+
+        // Relaunch the agents off the startup path: a fresh shell needs a
+        // moment to come up, and staggering keeps a burst of resumes from
+        // landing on the machine at once.
+        if !resume_plan.is_empty() {
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                for (index, (id, command)) in resume_plan.iter().enumerate() {
+                    if index > 0 {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                    }
+                    let Some(command) = command else { continue };
+                    match crate::revive::join_shell_command(&command.argv) {
+                        Some(line) => {
+                            tracing::info!(
+                                "Resuming {:?} session in terminal {}: {}",
+                                command.agent,
+                                id,
+                                line
+                            );
+                            send_keys_line(&tmux_session_name(id), &line);
+                        }
+                        None => tracing::warn!(
+                            "Not resuming terminal {}: resume argv contains an unquotable token",
+                            id
+                        ),
+                    }
+                }
+            });
+        }
+
         recovered
     }
 
     fn persist(&self) {
         let sessions = self.sessions.lock().unwrap();
+        let boot_id = crate::revive::current_boot_id();
+        let resume_commands = self.resume_commands.lock().unwrap();
         let map: HashMap<String, PersistedSession> = sessions
             .iter()
             .map(|(id, info)| {
@@ -491,10 +643,13 @@ impl PtyManager {
                         cwd: info.cwd.clone(),
                         cols: info.cols,
                         rows: info.rows,
+                        boot_id: boot_id.clone(),
+                        resume: resume_commands.get(id).cloned(),
                     },
                 )
             })
             .collect();
+        drop(resume_commands);
         drop(sessions);
 
         let path = sessions_file_path();
@@ -502,7 +657,12 @@ impl PtyManager {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Ok(json) = serde_json::to_string_pretty(&map) {
-            let _ = std::fs::write(&path, json);
+            // Write a sibling temp file and rename over the target, so a
+            // crash mid-write cannot leave a truncated sessions.json behind.
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
         }
     }
 }
@@ -847,6 +1007,25 @@ fn sessions_on_socket(socket: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Type one command line into a tmux session and press Enter. Literal
+/// send-keys (-l) so the text is never interpreted as key names.
+fn send_keys_line(tmux_name: &str, line: &str) {
+    let _ = tmux_cmd()
+        .args([
+            "-L",
+            tmux_socket(),
+            "send-keys",
+            "-l",
+            "-t",
+            tmux_name,
+            line,
+        ])
+        .status();
+    let _ = tmux_cmd()
+        .args(["-L", tmux_socket(), "send-keys", "-t", tmux_name, "Enter"])
+        .status();
+}
+
 fn tmux_kill_session(id: &str) {
     let name = tmux_session_name(id);
     let _ = tmux_cmd()
@@ -1032,6 +1211,16 @@ fn is_shell_name(cmd: &str) -> bool {
     )
 }
 
+/// Directory to recreate a revived session in: the persisted cwd when it
+/// still exists, else $HOME (then "/" if even that is unknown).
+fn revive_cwd(persisted: &str) -> String {
+    if !persisted.is_empty() && std::path::Path::new(&resolve_cwd(persisted)).is_dir() {
+        persisted.to_string()
+    } else {
+        std::env::var("HOME").unwrap_or_else(|_| "/".into())
+    }
+}
+
 fn resolve_cwd(cwd: &str) -> String {
     if cwd.starts_with("~/") || cwd == "~" {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
@@ -1044,6 +1233,17 @@ fn resolve_cwd(cwd: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_sessions_file_entries_deserialize_with_no_revive_fields() {
+        let json = r#"{ "id-1": { "title": "t", "cwd": "/tmp", "cols": 80, "rows": 24 } }"#;
+        let parsed: HashMap<String, PersistedSession> = serde_json::from_str(json).unwrap();
+
+        let entry = &parsed["id-1"];
+        assert_eq!(entry.title, "t");
+        assert_eq!(entry.boot_id, None);
+        assert_eq!(entry.resume, None);
+    }
 
     #[test]
     fn the_locale_a_terminal_gets_is_always_utf8() {
@@ -1349,6 +1549,25 @@ mod tests {
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
         assert_eq!(args, tmux_args);
+    }
+
+    #[test]
+    fn revive_cwd_prefers_the_persisted_path() {
+        let dir = std::env::temp_dir();
+        let dir = dir.to_str().unwrap();
+        assert_eq!(revive_cwd(dir), dir);
+    }
+
+    #[test]
+    fn revive_cwd_falls_back_to_home_when_the_directory_is_gone() {
+        let expected = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        assert_eq!(revive_cwd("/nonexistent/offdesk-revive-test"), expected);
+    }
+
+    #[test]
+    fn revive_cwd_falls_back_to_home_when_persisted_is_empty() {
+        let expected = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+        assert_eq!(revive_cwd(""), expected);
     }
 
     #[test]

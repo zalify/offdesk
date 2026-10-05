@@ -32,6 +32,7 @@ import {
   buildReorderPersistentGroupIds,
   closeWorkspacePane,
   createTerminalWorkspace,
+  tileWorkspaceLayout,
   findAdjacentWorkspacePane,
   flattenWorkspacePanes,
   getActiveWorkspaceGroup,
@@ -134,6 +135,7 @@ const WORKSPACE_PREFIX_ACTIONS: PrefixActionId[] = [
   "splitRight",
   "splitDown",
   "rotateLayout",
+  "tilePanes",
   "paneLeft",
   "paneRight",
   "paneUp",
@@ -234,6 +236,10 @@ function TerminalWorkspaceComponent({
     return map;
   }, [siblings]);
 
+  // Set when reconcile swaps the active group's root for a layout saved
+  // elsewhere; the panes then need the same refit a local layout change gets.
+  const adoptedLayoutGroupIdRef = useRef<string | null>(null);
+  const layoutSaveQueuesRef = useRef(new Map<string, Promise<void>>());
   const previousTerminalIdRef = useRef(terminal.id);
   useEffect(() => {
     const externalTerminalChanged = previousTerminalIdRef.current !== terminal.id;
@@ -245,7 +251,18 @@ function TerminalWorkspaceComponent({
         externalTerminalChanged ? terminal.id : prev.activeTerminalId,
         workspaceGroups,
         workspaceLayouts,
+        pendingLayoutSaveGroupIds(layoutSaveQueuesRef.current),
       );
+      const prevActive = getActiveWorkspaceGroup(prev);
+      const nextActive = getActiveWorkspaceGroup(next);
+      if (
+        prevActive &&
+        nextActive?.id === prevActive.id &&
+        nextActive.layoutUpdatedAt !== prevActive.layoutUpdatedAt &&
+        nextActive.root !== prevActive.root
+      ) {
+        adoptedLayoutGroupIdRef.current = nextActive.id;
+      }
       // Retry a pending selection: selectGroup may be issued from the
       // create-group HTTP response before the workspace_group_created
       // event lands here and reconciles the new group into local state.
@@ -303,7 +320,6 @@ function TerminalWorkspaceComponent({
   // further splits. Creating a terminal is not blocked the same way — that
   // path (TerminalCanvas) overflows into a new tab instead.
   const activeGroupFull = isWorkspaceGroupFull(activeGroup);
-  const layoutSaveQueuesRef = useRef(new Map<string, Promise<void>>());
 
   const persistGroupLayout = useCallback(
     async (
@@ -364,6 +380,17 @@ function TerminalWorkspaceComponent({
     },
     [],
   );
+  // A layout adopted from another device resizes the panes without any
+  // local action, so refit them the way the local layout handlers do.
+  useEffect(() => {
+    const groupId = adoptedLayoutGroupIdRef.current;
+    if (!groupId) return;
+    adoptedLayoutGroupIdRef.current = null;
+    if (!isController || workspace.activeGroupId !== groupId) return;
+    requestPaneFit(collectIds(getActiveWorkspaceGroup(workspace)?.root ?? null), {
+      focusTerminalId: workspace.activeTerminalId,
+    });
+  }, [isController, requestPaneFit, workspace]);
   const handleFitRequestHandled = useCallback(
     (nonce: number, terminalId: string) => {
       setFitRequest((current) => {
@@ -578,6 +605,22 @@ function TerminalWorkspaceComponent({
     void persistGroupLayout(nextWorkspace, groupId);
   }, [isController, persistGroupLayout, requestPaneFit, updateWorkspace]);
 
+  // ⌃B E: re-tile the active group into an even grid (tmux select-layout
+  // tiled) — heals layouts saved by the old halving append.
+  const handleTileLayout = useCallback(() => {
+    if (!isController) return;
+    const group = getActiveWorkspaceGroup(workspaceRef.current);
+    if (!group || collectIds(group.root).length < 2) return;
+    const groupId = group.id;
+    const nextWorkspace = updateWorkspace((current) =>
+      tileWorkspaceLayout(current),
+    );
+    requestPaneFit(collectIds(getActiveWorkspaceGroup(nextWorkspace)?.root ?? null), {
+      focusTerminalId: nextWorkspace.activeTerminalId,
+    });
+    void persistGroupLayout(nextWorkspace, groupId);
+  }, [isController, persistGroupLayout, requestPaneFit, updateWorkspace]);
+
   const handleReorderGroups = useCallback(
     async (
       sourceGroupId: string,
@@ -653,6 +696,7 @@ function TerminalWorkspaceComponent({
           prev.activeTerminalId,
           groups,
           workspaceLayouts,
+          pendingLayoutSaveGroupIds(layoutSaveQueuesRef.current),
         ),
       );
     },
@@ -779,6 +823,7 @@ function TerminalWorkspaceComponent({
     splitRight: () => void handleSplit("right"),
     splitDown: () => void handleSplit("down"),
     rotateLayout: handleRotateLayout,
+    tilePanes: handleTileLayout,
     paneLeft: () => focusPaneByDirection("left"),
     paneRight: () => focusPaneByDirection("right"),
     paneUp: () => focusPaneByDirection("up"),
@@ -967,6 +1012,12 @@ function TerminalWorkspaceComponent({
           shortcut: formatPrefixBinding("rotateLayout"),
           disabled: !isController || activeGroupPaneCount < 2,
           onClick: handleRotateLayout,
+        },
+        {
+          label: "Tile panes",
+          shortcut: formatPrefixBinding("tilePanes"),
+          disabled: !isController || activeGroupPaneCount < 2,
+          onClick: handleTileLayout,
         },
         {
           label: "Zoom",
@@ -1542,6 +1593,16 @@ const drawerNewButtonStyle: CSSProperties = {
   fontSize: 13,
   fontWeight: 700,
 };
+
+// Save queues are keyed `${machineId}\u0000${groupId}`; group ids are
+// unique across machines, so the machine part can be dropped.
+function pendingLayoutSaveGroupIds(
+  queues: ReadonlyMap<string, unknown>,
+): Set<string> {
+  return new Set(
+    Array.from(queues.keys(), (key) => key.slice(key.indexOf("\u0000") + 1)),
+  );
+}
 
 function collectIds(root: WorkspacePaneNode | null): string[] {
   if (!root) return [];

@@ -9,6 +9,8 @@ import {
   collectGroupPaneTerminalIds,
   collectPaneTerminalIds,
   createTerminalWorkspace,
+  tileWorkspaceLayout,
+  tileGrid,
   getActiveWorkspaceGroup,
   findAdjacentWorkspacePane,
   flattenWorkspacePanes,
@@ -43,6 +45,7 @@ function workspaceWithGroups(
       persistent: false,
       root: null,
       paneCount: 0,
+      layoutUpdatedAt: null,
     })),
     activeGroupId,
     activeTerminalId: null,
@@ -91,6 +94,34 @@ function leafWidths(root: WorkspacePaneNode | null): Record<string, number> {
   };
   walk(root, 1);
   return widths;
+}
+
+// [left, top, width, height] of each pane, rounded, keyed by terminal id.
+function paneRects(
+  root: WorkspacePaneNode | null,
+): Record<string, [number, number, number, number]> {
+  const rects: Record<string, [number, number, number, number]> = {};
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  for (const rect of flattenWorkspacePanes(root)) {
+    rects[rect.terminalId] = [
+      round(rect.left),
+      round(rect.top),
+      round(rect.width),
+      round(rect.height),
+    ];
+  }
+  return rects;
+}
+
+// Row-major quadrants: first two on top, last two below.
+function QUADRANTS(ids: string[]) {
+  const [a, b, c, d] = ids;
+  return {
+    [a]: [0, 0, 0.5, 0.5],
+    [b]: [0.5, 0, 0.5, 0.5],
+    [c]: [0, 0.5, 0.5, 0.5],
+    [d]: [0.5, 0.5, 0.5, 0.5],
+  };
 }
 
 describe("terminalWorkspaceLayout", () => {
@@ -233,7 +264,7 @@ describe("terminalWorkspaceLayout", () => {
     });
   });
 
-  it("tiles panes evenly when the saved layout only references destroyed terminals", () => {
+  it("tiles panes into a grid when the saved layout only references destroyed terminals", () => {
     const workspace = createTerminalWorkspace(
       [
         terminal("t1", "/repo"),
@@ -253,47 +284,27 @@ describe("terminalWorkspaceLayout", () => {
             direction: "horizontal",
             ratio: 0.5,
             first: { type: "leaf", terminalId: "dead-1" },
-            second: {
-              type: "split",
-              direction: "horizontal",
-              ratio: 0.5,
-              first: { type: "leaf", terminalId: "dead-2" },
-              second: { type: "leaf", terminalId: "dead-3" },
-            },
+            second: { type: "leaf", terminalId: "dead-2" },
           },
         },
       ],
     );
 
-    const root = getActiveWorkspaceGroup(workspace)?.root ?? null;
-    expect(root).toEqual({
-      type: "split",
-      direction: "horizontal",
-      ratio: 0.25,
-      first: { type: "leaf", terminalId: "t1" },
-      second: {
-        type: "split",
-        direction: "horizontal",
-        ratio: 1 / 3,
-        first: { type: "leaf", terminalId: "t2" },
-        second: {
-          type: "split",
-          direction: "horizontal",
-          ratio: 0.5,
-          first: { type: "leaf", terminalId: "t3" },
-          second: { type: "leaf", terminalId: "t4" },
-        },
-      },
-    });
-    const widths = leafWidths(root);
-    for (const id of ["t1", "t2", "t3", "t4"]) {
-      expect(widths[id]).toBeCloseTo(0.25);
-    }
+    expect(paneRects(getActiveWorkspaceGroup(workspace)?.root ?? null)).toEqual(
+      QUADRANTS(["t1", "t2", "t3", "t4"]),
+    );
   });
 
-  it("keeps surviving saved geometry and appends leftovers with a 50/50 split", () => {
+  it("re-tiles a restored layout as a grid when terminals are missing from it", () => {
+    // The production shape: the saved root held one pane and three more
+    // terminals joined the tab later.
     const workspace = createTerminalWorkspace(
-      [terminal("a", "/repo"), terminal("b", "/repo"), terminal("c", "/repo")],
+      [
+        terminal("a", "/repo"),
+        terminal("b", "/repo"),
+        terminal("c", "/repo"),
+        terminal("d", "/repo"),
+      ],
       "a",
       [],
       [
@@ -301,50 +312,121 @@ describe("terminalWorkspaceLayout", () => {
           machine_id: "m1",
           group_key: "cwd:/repo",
           updated_at: 10,
-          root: {
-            type: "split",
-            direction: "horizontal",
-            ratio: 0.3,
-            first: {
-              type: "split",
-              direction: "vertical",
-              ratio: 0.7,
-              first: { type: "leaf", terminalId: "a" },
-              second: { type: "leaf", terminalId: "dead-1" },
-            },
-            second: { type: "leaf", terminalId: "b" },
-          },
+          root: { type: "leaf", terminalId: "a" },
         },
       ],
     );
 
-    const root = getActiveWorkspaceGroup(workspace)?.root ?? null;
-    expect(root).toEqual({
-      type: "split",
-      direction: "horizontal",
-      ratio: 0.5,
-      first: {
-        type: "split",
-        direction: "horizontal",
-        ratio: 0.3,
-        first: { type: "leaf", terminalId: "a" },
-        second: { type: "leaf", terminalId: "b" },
-      },
-      second: { type: "leaf", terminalId: "c" },
-    });
+    expect(paneRects(getActiveWorkspaceGroup(workspace)?.root ?? null)).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
   });
 
-  it("tiles a cwd fallback group with no saved layout evenly", () => {
+  it("tiles a cwd fallback group with no saved layout as two on top, one below", () => {
     const workspace = createTerminalWorkspace(
       [terminal("a", "/repo"), terminal("b", "/repo"), terminal("c", "/repo")],
       "a",
     );
 
-    const root = getActiveWorkspaceGroup(workspace)?.root ?? null;
-    const widths = leafWidths(root);
-    for (const id of ["a", "b", "c"]) {
-      expect(widths[id]).toBeCloseTo(1 / 3);
+    expect(paneRects(getActiveWorkspaceGroup(workspace)?.root ?? null)).toEqual({
+      a: [0, 0, 0.5, 0.5],
+      b: [0.5, 0, 0.5, 0.5],
+      c: [0, 0.5, 1, 0.5],
+    });
+  });
+
+  it("tiles one to four panes as an even grid", () => {
+    expect(paneRects(tileGrid(["a"]))).toEqual({ a: [0, 0, 1, 1] });
+    expect(paneRects(tileGrid(["a", "b"]))).toEqual({
+      a: [0, 0, 0.5, 1],
+      b: [0.5, 0, 0.5, 1],
+    });
+    expect(paneRects(tileGrid(["a", "b", "c"]))).toEqual({
+      a: [0, 0, 0.5, 0.5],
+      b: [0.5, 0, 0.5, 0.5],
+      c: [0, 0.5, 1, 0.5],
+    });
+    expect(paneRects(tileGrid(["a", "b", "c", "d"]))).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
+    expect(tileGrid([])).toBeNull();
+  });
+
+  it("appends panes into quadrants instead of halving the whole row", () => {
+    let workspace = createTerminalWorkspace([terminal("a", "/repo")], "a");
+    for (const id of ["b", "c", "d"]) {
+      workspace = appendWorkspacePaneToGroup(workspace, {
+        groupId: workspace.groups[0].id,
+        newTerminalId: id,
+      });
     }
+
+    expect(paneRects(getActiveWorkspaceGroup(workspace)?.root ?? null)).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
+  });
+
+  it("reconcile tiles newly arrived terminals into quadrants", () => {
+    const previous = createTerminalWorkspace([terminal("a", "/repo")], "a");
+    const workspace = reconcileTerminalWorkspace(
+      previous,
+      [
+        terminal("a", "/repo"),
+        terminal("b", "/repo"),
+        terminal("c", "/repo"),
+        terminal("d", "/repo"),
+      ],
+      "a",
+    );
+
+    expect(paneRects(getActiveWorkspaceGroup(workspace)?.root ?? null)).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
+  });
+
+  it("tiles a degenerate append chain into quadrants", () => {
+    // The old appendNode shape: ((A|B)|C)|D, every split 0.5 → 1/8,1/8,1/4,1/2.
+    const chain = (ids: string[]): WorkspacePaneNode =>
+      ids.length === 1
+        ? { type: "leaf", terminalId: ids[0] }
+        : {
+            type: "split",
+            direction: "horizontal",
+            ratio: 0.5,
+            first: chain(ids.slice(0, -1)),
+            second: { type: "leaf", terminalId: ids[ids.length - 1] },
+          };
+    const workspace = createTerminalWorkspace(
+      ["a", "b", "c", "d"].map((id) => terminal(id, "/repo")),
+      "a",
+      [],
+      [
+        {
+          machine_id: "m1",
+          group_key: "cwd:/repo",
+          updated_at: 10,
+          root: chain(["a", "b", "c", "d"]),
+        },
+      ],
+    );
+    expect(leafWidths(getActiveWorkspaceGroup(workspace)?.root ?? null)).toEqual({
+      a: 0.125,
+      b: 0.125,
+      c: 0.25,
+      d: 0.5,
+    });
+
+    const next = tileWorkspaceLayout(workspace);
+    expect(paneRects(getActiveWorkspaceGroup(next)?.root ?? null)).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
+    // Already tiled: a second press changes nothing.
+    expect(tileWorkspaceLayout(next)).toBe(next);
+  });
+
+  it("leaves a single-pane group untouched when tiling", () => {
+    const workspace = createTerminalWorkspace([terminal("a", "/repo")], "a");
+    expect(tileWorkspaceLayout(workspace)).toBe(workspace);
   });
 
   it("groups panes by persisted workspace tab before falling back to cwd", () => {
@@ -1167,5 +1249,144 @@ describe("labelFromCwd", () => {
   it("does not mistake a directory under home for home", () => {
     expect(labelFromCwd("/Users/zourenyuan/eng")).toBe("eng");
     expect(labelFromCwd("/home")).toBe("home");
+  });
+});
+
+describe("adopting layouts saved elsewhere", () => {
+  const GROUPS: WorkspaceGroupInfo[] = [
+    { id: "g1", machine_id: "m1", name: "Main", sort_order: 0 },
+  ];
+  const terminals = ["a", "b", "c", "d"].map((id) =>
+    groupedTerminal(id, "/repo", "g1"),
+  );
+  const columns: WorkspacePaneNode = {
+    type: "split",
+    direction: "horizontal",
+    ratio: 0.5,
+    first: {
+      type: "split",
+      direction: "horizontal",
+      ratio: 0.5,
+      first: { type: "leaf", terminalId: "a" },
+      second: { type: "leaf", terminalId: "b" },
+    },
+    second: {
+      type: "split",
+      direction: "horizontal",
+      ratio: 0.5,
+      first: { type: "leaf", terminalId: "c" },
+      second: { type: "leaf", terminalId: "d" },
+    },
+  };
+  const layout = (root: WorkspacePaneNode, updatedAt: number) => ({
+    machine_id: "m1",
+    group_key: "g1",
+    updated_at: updatedAt,
+    root,
+  });
+  const initial = () =>
+    createTerminalWorkspace(terminals, "a", GROUPS, [layout(columns, 10)]);
+
+  it("replaces the root with a newer saved layout", () => {
+    const workspace = initial();
+    const grid = tileGrid(["a", "b", "c", "d"])!;
+
+    const next = reconcileTerminalWorkspace(workspace, terminals, "a", GROUPS, [
+      layout(grid, 20),
+    ]);
+
+    expect(paneRects(next.groups[0].root)).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
+    expect(next.groups[0].layoutUpdatedAt).toBe(20);
+  });
+
+  it("keeps the local root for a saved layout that is not newer", () => {
+    const workspace = initial();
+    const grid = tileGrid(["a", "b", "c", "d"])!;
+
+    for (const updatedAt of [10, 5]) {
+      const next = reconcileTerminalWorkspace(
+        workspace,
+        terminals,
+        "a",
+        GROUPS,
+        [layout(grid, updatedAt)],
+      );
+      expect(next.groups[0].root).toBe(workspace.groups[0].root);
+    }
+  });
+
+  it("keeps the local root while a local save is in flight", () => {
+    const workspace = initial();
+
+    const next = reconcileTerminalWorkspace(
+      workspace,
+      terminals,
+      "a",
+      GROUPS,
+      [layout(tileGrid(["a", "b", "c", "d"])!, 20)],
+      new Set(["g1"]),
+    );
+
+    expect(next.groups[0].root).toBe(workspace.groups[0].root);
+    expect(next.groups[0].layoutUpdatedAt).toBe(10);
+  });
+
+  it("keeps root identity when our own save echoes back", () => {
+    const workspace = initial();
+
+    const next = reconcileTerminalWorkspace(workspace, terminals, "a", GROUPS, [
+      layout(structuredClone(columns), 20),
+    ]);
+
+    expect(next.groups[0].root).toBe(workspace.groups[0].root);
+    expect(next.groups[0].layoutUpdatedAt).toBe(20);
+  });
+
+  it("drops unknown panes and grid-appends live ones the layout misses", () => {
+    const workspace = initial();
+    const saved: WorkspacePaneNode = {
+      type: "split",
+      direction: "vertical",
+      ratio: 0.5,
+      first: { type: "leaf", terminalId: "a" },
+      second: {
+        type: "split",
+        direction: "vertical",
+        ratio: 0.5,
+        first: { type: "leaf", terminalId: "gone" },
+        second: { type: "leaf", terminalId: "b" },
+      },
+    };
+
+    const next = reconcileTerminalWorkspace(workspace, terminals, "a", GROUPS, [
+      layout(saved, 20),
+    ]);
+
+    expect(collectPaneTerminalIds(next.groups[0].root).sort()).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
+    expect(paneRects(next.groups[0].root)).toEqual(
+      QUADRANTS(["a", "b", "c", "d"]),
+    );
+  });
+
+  it("moves focus off a pane the adopted layout no longer holds", () => {
+    const three = terminals.slice(0, 3);
+    const workspace = createTerminalWorkspace(three, "c", GROUPS, [
+      layout(tileGrid(["a", "b", "c"])!, 10),
+    ]);
+    const stillLive = three.slice(0, 2);
+
+    const next = reconcileTerminalWorkspace(workspace, stillLive, "c", GROUPS, [
+      layout(tileGrid(["a", "b"])!, 20),
+    ]);
+
+    expect(collectPaneTerminalIds(next.groups[0].root)).toEqual(["a", "b"]);
+    expect(next.activeTerminalId).toBe("a");
   });
 });

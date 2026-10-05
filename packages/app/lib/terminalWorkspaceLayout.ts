@@ -20,6 +20,9 @@ export interface WorkspaceGroup {
   persistent: boolean;
   root: WorkspacePaneNode | null;
   paneCount: number;
+  /// `updated_at` of the saved layout `root` was last built from, or null
+  /// when none was. A newer saved layout replaces the root on reconcile.
+  layoutUpdatedAt: number | null;
 }
 
 export interface TerminalWorkspace {
@@ -251,12 +254,57 @@ export function rotateWorkspaceLayout(
   };
 }
 
+// ⌃B E: re-tile the active group into an even grid (tmux `select-layout
+// tiled`) in its current pane order — four panes become quadrants.
+export function tileWorkspaceLayout(
+  workspace: TerminalWorkspace,
+): TerminalWorkspace {
+  const group = workspace.groups.find(
+    (candidate) => candidate.id === workspace.activeGroupId,
+  );
+  if (!group || !group.root || group.root.type !== "split") return workspace;
+
+  const root = tileGrid(collectPaneTerminalIds(group.root));
+  if (!root || sameLayout(root, group.root)) return workspace;
+  const groups = workspace.groups.map((candidate) =>
+    candidate.id === group.id
+      ? {
+          ...candidate,
+          root,
+          paneCount: collectPaneTerminalIds(root).length,
+        }
+      : candidate,
+  );
+
+  return {
+    ...workspace,
+    groups,
+  };
+}
+
+function sameLayout(a: WorkspacePaneNode, b: WorkspacePaneNode): boolean {
+  if (a.type === "leaf" || b.type === "leaf") {
+    return (
+      a.type === "leaf" && b.type === "leaf" && a.terminalId === b.terminalId
+    );
+  }
+  return (
+    a.direction === b.direction &&
+    Math.abs(a.ratio - b.ratio) < 1e-9 &&
+    sameLayout(a.first, b.first) &&
+    sameLayout(a.second, b.second)
+  );
+}
+
 export function reconcileTerminalWorkspace(
   workspace: TerminalWorkspace,
   terminals: TerminalInfo[],
   activeTerminalId: string | null,
   workspaceGroups: WorkspaceGroupInfo[] = [],
   workspaceLayouts: WorkspaceLayoutInfo[] = [],
+  // Groups with a local layout save in flight: a saved layout arriving now
+  // may predate that save, so adopting it would undo the local change.
+  skipLayoutAdoptionGroupIds: ReadonlySet<string> = new Set(),
 ): TerminalWorkspace {
   const grouped = createGroups(terminals, workspaceGroups, workspaceLayouts);
   let fallbackForRemovedActive: string | null = null;
@@ -265,6 +313,32 @@ export function reconcileTerminalWorkspace(
       (candidate) => candidate.id === group.id,
     );
     if (!previous) return group;
+
+    // A layout saved after this group's root was built — by another device,
+    // or through the API — replaces the local root, so a running client
+    // shows it without a restart. Our own save echoes back here too; it
+    // matches the local root, which then keeps its identity.
+    if (
+      group.layoutUpdatedAt !== null &&
+      group.layoutUpdatedAt > (previous.layoutUpdatedAt ?? -Infinity) &&
+      !skipLayoutAdoptionGroupIds.has(group.id)
+    ) {
+      const adoptedIds = new Set(collectPaneTerminalIds(group.root));
+      for (const id of collectPaneTerminalIds(previous.root)) {
+        if (
+          !adoptedIds.has(id) &&
+          (id === workspace.activeTerminalId || id === activeTerminalId)
+        ) {
+          fallbackForRemovedActive =
+            fallbackForRemovedActive ?? firstTerminalId(group.root);
+        }
+      }
+      const root =
+        previous.root && group.root && sameLayout(previous.root, group.root)
+          ? previous.root
+          : group.root;
+      return { ...group, root };
+    }
 
     const groupTerminalIds = new Set(collectPaneTerminalIds(group.root));
 
@@ -290,6 +364,7 @@ export function reconcileTerminalWorkspace(
       ...group,
       root,
       paneCount: collectPaneTerminalIds(root).length,
+      layoutUpdatedAt: previous.layoutUpdatedAt,
     };
   });
   groups = preserveActiveEmptyGroup(groups, workspace, terminals);
@@ -340,6 +415,7 @@ function preserveActiveEmptyGroup(
       ...activeGroup,
       root: null,
       paneCount: 0,
+      layoutUpdatedAt: null,
     },
   ];
 }
@@ -581,12 +657,14 @@ function createGroups(
     string,
     {
       root: WorkspaceLayoutNode | null;
+      updatedAt: number;
     }
   >(
     workspaceLayouts.map((layout) => [
       layout.group_key,
       {
         root: layout.root,
+        updatedAt: layout.updated_at,
       },
     ]),
   );
@@ -655,6 +733,7 @@ function createGroups(
         persistent: group.persistent,
         root,
         paneCount: group.terminals.length,
+        layoutUpdatedAt: layoutEntry?.updatedAt ?? null,
       };
     });
 }
@@ -700,7 +779,7 @@ function restorePaneLayout(
   if (!root) {
     // No usable saved layout: tile evenly. Appending each pane with a
     // nested 50/50 split would shrink every new pane to a sliver.
-    return tileTerminals(ids);
+    return tileGrid(ids);
   }
   for (const id of ids) {
     if (!consumed.has(id)) {
@@ -748,18 +827,42 @@ function normalizeSplitRatio(ratio: number): number {
   return Math.min(0.95, Math.max(0.05, ratio));
 }
 
-// Horizontal chain where every pane gets width 1/n: the outermost split
-// takes 1/n of the width, the next 1/(n-1) of what remains, … innermost 1/2.
-function tileTerminals(ids: string[]): WorkspacePaneNode | null {
+// Even grid in row-major order, like tmux's tiled layout: ceil(sqrt(n))
+// columns, as many rows as needed, rows of equal height and panes of equal
+// width within a row. A short last row spans the full width, so three panes
+// are two on top and one below; four are quadrants.
+export function tileGrid(ids: string[]): WorkspacePaneNode | null {
   if (ids.length === 0) return null;
-  if (ids.length === 1) return { type: "leaf", terminalId: ids[0] };
-  const [first, ...rest] = ids;
+  const cols = Math.ceil(Math.sqrt(ids.length));
+  const rows: WorkspacePaneNode[] = [];
+  for (let start = 0; start < ids.length; start += cols) {
+    rows.push(
+      evenChain(
+        ids.slice(start, start + cols).map((terminalId) => ({
+          type: "leaf" as const,
+          terminalId,
+        })),
+        "horizontal",
+      ),
+    );
+  }
+  return evenChain(rows, "vertical");
+}
+
+// Chain where every node gets 1/n: the outermost split takes 1/n, the next
+// 1/(n-1) of what remains, … innermost 1/2.
+function evenChain(
+  nodes: WorkspacePaneNode[],
+  direction: WorkspaceSplitDirection,
+): WorkspacePaneNode {
+  const [first, ...rest] = nodes;
+  if (rest.length === 0) return first;
   return {
     type: "split",
-    direction: "horizontal",
-    ratio: normalizeSplitRatio(1 / ids.length),
-    first: { type: "leaf", terminalId: first },
-    second: tileTerminals(rest) ?? { type: "leaf", terminalId: first },
+    direction,
+    ratio: normalizeSplitRatio(1 / nodes.length),
+    first,
+    second: evenChain(rest, direction),
   };
 }
 
@@ -1001,13 +1104,14 @@ function appendNode(
   inserted: WorkspacePaneNode,
 ): WorkspacePaneNode {
   if (!root) return inserted;
-  return {
-    type: "split",
-    direction: "horizontal",
-    ratio: 0.5,
-    first: root,
-    second: inserted,
-  };
+  // Re-tile instead of nesting: wrapping the whole root in a 50/50 split
+  // shrank every earlier pane to 1/2, 1/4, 1/8…
+  return (
+    tileGrid([
+      ...collectPaneTerminalIds(root),
+      ...collectPaneTerminalIds(inserted),
+    ]) ?? inserted
+  );
 }
 
 function firstTerminalId(root: WorkspacePaneNode | null): string | null {
