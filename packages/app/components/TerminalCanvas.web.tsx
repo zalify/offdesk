@@ -12,6 +12,7 @@ import {
 import type {
   RelayAgent,
   TerminalInfo,
+  TodoInfo,
   Bookmark,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
@@ -58,7 +59,9 @@ import {
   applyBrowserEventEnvelope,
   EMPTY_BROWSER_SESSION_STATE,
   shouldResyncForEnvelope,
+  upsertTodo,
 } from "@/lib/bootstrapState";
+import { TodosPanel } from "./TodosPanel.web";
 import { getPersistentDeviceId } from "@/lib/deviceId";
 import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile } from "@/lib/platform";
@@ -231,6 +234,17 @@ export function TerminalCanvas() {
 
 function TerminalCanvasInner() {
   const [browserState, setBrowserState] = useState(EMPTY_BROWSER_SESSION_STATE);
+  const [todosOpen, setTodosOpen] = useState(false);
+  const openTodoCount = useMemo(
+    () => browserState.todos.filter((todo) => todo.status === "open").length,
+    [browserState.todos],
+  );
+  const handleTodoUpsert = useCallback((todo: TodoInfo) => {
+    setBrowserState((prev) => ({ ...prev, todos: upsertTodo(prev.todos, todo) }));
+  }, []);
+  const handleTodoRemove = useCallback((id: string) => {
+    setBrowserState((prev) => ({ ...prev, todos: prev.todos.filter((todo) => todo.id !== id) }));
+  }, []);
   const [layout, dispatchLayout] = useReducer(
     mainLayoutReducer,
     undefined,
@@ -1701,6 +1715,8 @@ function TerminalCanvasInner() {
               onEngageViewOnly={handleEngageViewOnly}
               onDisengageViewOnly={handleDisengageViewOnly}
               onOpenSettings={() => setShowSettings(true)}
+              onOpenTodos={() => setTodosOpen(true)}
+              openTodoCount={openTodoCount}
               onOpenWebPreview={() => workspaceCommandsRef.current.openWebPreview?.()}
             >
               {scopedTerminals.length > 0 && workspaceTerminal?.machine_id === activeMachine?.id && workspaceTerminal ? (
@@ -1774,6 +1790,8 @@ function TerminalCanvasInner() {
                 onAddMachine={() => setAddMachineOpen(true)}
                 onOpenPhone={() => setPhoneOpen(true)}
                 onOpenSettings={() => setShowSettings(true)}
+                onOpenTodos={() => setTodosOpen(true)}
+                openTodoCount={openTodoCount}
                 onRemoveHost={handleRemoveHost}
                 onRequestControl={() => {
                   if (activeMachine) void handleRequestControl(activeMachine.id);
@@ -1992,6 +2010,16 @@ function TerminalCanvasInner() {
               onCancel={() => setGroupRenameTarget(null)}
             />
           </Suspense>
+        )}
+
+        {todosOpen && (
+          <TodosPanel
+            todos={browserState.todos}
+            machines={browserState.machines}
+            onLocalUpsert={handleTodoUpsert}
+            onLocalRemove={handleTodoRemove}
+            onClose={() => setTodosOpen(false)}
+          />
         )}
 
         {closeConfirmation && (

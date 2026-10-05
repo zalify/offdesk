@@ -12,6 +12,8 @@ import type {
   ResourceStats,
   RelayAgent,
   RelayBrief,
+  TodoInfo,
+  TodoStatus,
 } from "@offdesk/shared";
 
 import { generateDeviceId } from "./deviceIdShared";
@@ -177,6 +179,29 @@ export const createRelay = (
     ...(relay.cols !== undefined ? { cols: relay.cols } : {}),
     ...(relay.rows !== undefined ? { rows: relay.rows } : {}),
   });
+export const listTodos = (signal?: AbortSignal) =>
+  request<TodoInfo[]>("GET", "/api/todos", undefined, signal);
+export const createTodo = (todo: {
+  id: string;
+  title: string;
+  notes?: string;
+  machine_id?: string;
+  cwd?: string;
+}) => request<TodoInfo>("POST", "/api/todos", todo);
+/** `null` clears a location field; an absent field is left unchanged. */
+export const updateTodo = (
+  id: string,
+  patch: {
+    title?: string;
+    notes?: string;
+    status?: TodoStatus;
+    position?: number;
+    machine_id?: string | null;
+    cwd?: string | null;
+  },
+) => request<TodoInfo>("PATCH", `/api/todos/${encodeURIComponent(id)}`, patch);
+export const deleteTodo = (id: string) =>
+  request<void>("DELETE", `/api/todos/${encodeURIComponent(id)}`);
 export const destroyTerminal = (
   machineId: string,
   terminalId: string,
