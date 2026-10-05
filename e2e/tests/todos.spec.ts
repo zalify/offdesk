@@ -10,8 +10,12 @@ async function deleteAllTodos(page: Page) {
   }
 }
 
+// A describe group cannot switch the browser type, so take only the phone's
+// viewport and touch settings; the suite already runs Chromium.
+const { defaultBrowserType: _browserType, ...pixel7 } = devices["Pixel 7"];
+
 test.describe("to-dos on a phone", () => {
-  test.use({ ...devices["Pixel 7"], browserName: "chromium" });
+  test.use(pixel7);
 
   test("to-dos are added, finished, edited and deleted, and survive a reload", async ({ page }) => {
     await openApp(page);
