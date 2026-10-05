@@ -287,6 +287,8 @@ mod tests {
             cols: 107,
             rows: 59,
             attention: None,
+            agent: None,
+            relay_source: None,
             reachable: true,
         }
     }

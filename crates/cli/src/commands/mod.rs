@@ -104,6 +104,8 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
+            agent: None,
+            relay_source: None,
             reachable: true,
         }
     }

@@ -20,6 +20,46 @@ export interface TerminalInfo {
   reachable: boolean
   /** Best-effort live-screen detection; absent on older nodes. */
   attention?: "confirmation" | null
+  /** The Claude/Codex agent detected in this terminal; absent on older nodes. */
+  agent?: TerminalAgent | null
+  /** Set when this terminal continues another agent's task. */
+  relay_source?: RelaySource | null
+}
+
+export type RelayAgent = "claude" | "codex"
+
+export interface TerminalAgent {
+  kind: RelayAgent
+  /** Claude session id or Codex thread id when matched exactly. */
+  session_id?: string
+  /** The agent's own usage-limit line while it is on screen. */
+  usage_limit?: string
+}
+
+export interface RelaySource {
+  relay_id: string
+  terminal_id: string
+  agent: RelayAgent
+}
+
+export type RelayTaskStatus = "pending" | "in_progress" | "completed"
+
+export interface RelayTask {
+  subject: string
+  status: RelayTaskStatus
+}
+
+export interface RelayBrief {
+  agent: RelayAgent
+  cwd: string
+  session_id?: string
+  title?: string
+  goal?: string
+  latest?: string
+  tasks: RelayTask[]
+  git?: { branch?: string; changed: string[]; more: number }
+  usage_limit?: string
+  warnings: string[]
 }
 
 export interface WorkspaceGroupInfo {

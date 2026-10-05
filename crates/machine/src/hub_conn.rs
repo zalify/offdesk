@@ -154,6 +154,7 @@ impl HubConnection {
                 DEFLATE_RAW_V1.to_string(),
                 offdesk_protocol::composer::COMPOSER_V1.to_string(),
                 offdesk_protocol::preview::CAPABILITY.to_string(),
+                offdesk_protocol::relay::CAPABILITY.to_string(),
             ],
         };
         let msg = serde_json::to_string(&register).unwrap();
@@ -260,6 +261,8 @@ impl HubConnection {
                 cols: s.cols,
                 rows: s.rows,
                 attention: None,
+                agent: None,
+                relay_source: None,
                 reachable: true,
             })
             .collect();
@@ -324,13 +327,18 @@ impl HubConnection {
                 (String, TerminalTitleSource),
             > = std::collections::HashMap::new();
             let mut last_sent_attention = std::collections::HashMap::new();
+            let mut last_sent_agent: std::collections::HashMap<
+                String,
+                Option<offdesk_protocol::relay::TerminalAgent>,
+            > = std::collections::HashMap::new();
             loop {
                 interval.tick().await;
                 let poll_pty = pty_for_titles.clone();
-                let (pane_infos, attentions) = match tokio::task::spawn_blocking(move || {
+                let (pane_infos, screens, agents) = match tokio::task::spawn_blocking(move || {
                     let panes = poll_pty.pane_infos();
-                    let attention = poll_pty.terminal_attentions(&panes);
-                    (panes, attention)
+                    let screens = poll_pty.terminal_screen_states(&panes);
+                    let agents = crate::relay::resolve_agents(&panes);
+                    (panes, screens, agents)
                 })
                 .await
                 {
@@ -346,8 +354,26 @@ impl HubConnection {
                 last_sent_cwd.retain(|id, _| terminal_ids.contains(id));
                 last_sent_title.retain(|id, _| terminal_ids.contains(id));
                 last_sent_attention.retain(|id, _| terminal_ids.contains(id));
+                last_sent_agent.retain(|id, _| terminal_ids.contains(id));
                 for terminal_id in terminal_ids {
-                    let attention = attentions.get(&terminal_id).copied().flatten();
+                    let screen = screens.get(&terminal_id).cloned().unwrap_or_default();
+                    let agent = agents
+                        .get(&terminal_id)
+                        .map(|agent| agent.report(screen.usage_limit.clone()));
+                    if last_sent_agent.get(&terminal_id) != Some(&agent) {
+                        if send_tx_for_titles
+                            .send(OutboundHubMessage::Json(MachineToHub::TerminalAgent {
+                                terminal_id: terminal_id.clone(),
+                                agent: agent.clone(),
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        last_sent_agent.insert(terminal_id.clone(), agent);
+                    }
+                    let attention = screen.attention;
                     if last_sent_attention.get(&terminal_id) != Some(&attention) {
                         if send_tx_for_titles
                             .send(OutboundHubMessage::Json(MachineToHub::TerminalAttention {
@@ -563,9 +589,26 @@ async fn handle_hub_message(
             cols,
             rows,
             startup_command,
-            ..
+            startup_prompt,
         } => {
             let terminal_id = uuid::Uuid::new_v4().to_string();
+            // A relay prompt is saved before the terminal exists, so a
+            // prompt that cannot be delivered never leaves a bare shell.
+            let startup_command = match startup_prompt {
+                Some(prompt) => match crate::relay::startup_command(&terminal_id, &prompt) {
+                    Ok(command) => Some(command),
+                    Err(error) => {
+                        let _ = send_tx
+                            .send(OutboundHubMessage::Json(MachineToHub::TerminalCreateError {
+                                request_id,
+                                error,
+                            }))
+                            .await;
+                        return;
+                    }
+                },
+                None => startup_command,
+            };
             match pty.create_terminal(&terminal_id, &cwd, cols, rows) {
                 Ok(info) => {
                     let _ = send_tx
@@ -647,6 +690,31 @@ async fn handle_hub_message(
                     message.unwrap_or_default()
                 );
             }
+        }
+        HubToMachine::RelayBrief {
+            request_id,
+            terminal_id,
+        } => {
+            // Reading transcripts and running git must not stall the hub
+            // message loop.
+            let pty = pty.clone();
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || relay_brief(&pty, &terminal_id))
+                    .await
+                    .unwrap_or_else(|_| Err("Reading the session failed; try again".to_string()));
+                let (brief, error) = match result {
+                    Ok(brief) => (Some(brief), None),
+                    Err(error) => (None, Some(error)),
+                };
+                let _ = send_tx
+                    .send(OutboundHubMessage::Json(MachineToHub::RelayBriefResult {
+                        request_id,
+                        brief,
+                        error,
+                    }))
+                    .await;
+            });
         }
         HubToMachine::CheckForegroundProcess {
             request_id,
@@ -923,6 +991,26 @@ async fn handle_hub_message(
 /// Process-name fallback for the periodic title task. `None` (and empty)
 /// means "nothing worth reporting" — an empty title update would only flip
 /// the hub-side title_source and storm TerminalUpdated events.
+/// Build a relay brief for one terminal from its live agent.
+fn relay_brief(
+    pty: &PtyManager,
+    terminal_id: &str,
+) -> Result<offdesk_protocol::relay::RelayBrief, String> {
+    let panes = pty.pane_infos();
+    let pane = panes
+        .get(terminal_id)
+        .cloned()
+        .ok_or_else(|| "Terminal not found".to_string())?;
+    let single = std::collections::HashMap::from([(terminal_id.to_string(), pane.clone())]);
+    let agent = crate::relay::resolve_agents(&single)
+        .remove(terminal_id)
+        .ok_or_else(|| "No Claude or Codex session is running in this terminal".to_string())?;
+    let usage_limit = pty
+        .capture_screen(terminal_id)
+        .and_then(|screen| crate::relay::usage_limit_line(&screen));
+    Ok(crate::relay::build_brief(&pane, &agent, usage_limit))
+}
+
 fn fallback_title(process_name: Option<String>) -> Option<(String, TerminalTitleSource)> {
     process_name
         .filter(|name| !name.is_empty())
