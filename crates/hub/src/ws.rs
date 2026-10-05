@@ -934,7 +934,7 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
 
 /// Authenticate a machine by checking its secret against the DB hash.
 /// In dev mode, allows empty secrets or machines not in DB.
-async fn authenticate_machine(
+pub(crate) async fn authenticate_machine(
     state: &AppState,
     machine_id: &str,
     machine_secret: &str,

@@ -1378,6 +1378,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "vt100",
 ]
 
