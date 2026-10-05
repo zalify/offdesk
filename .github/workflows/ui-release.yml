@@ -44,7 +44,7 @@ jobs:
       - run: node --test scripts/ui-updates/package.test.mjs
       - name: Container browser regression
         env:
-          E2E_TEST_GREP: 'mobile fixed UI|UI updates|agent history|handoff|auto detection captures|ambiguous destinations|lost save response'
+          E2E_TEST_GREP: 'mobile fixed UI|UI updates|agent history|agent relay|viewers see the agent|pty size|cross-device handoff|shared pty|Fit to Window'
         run: pnpm e2e:ci
       - name: Build Web UI
         run: pnpm build

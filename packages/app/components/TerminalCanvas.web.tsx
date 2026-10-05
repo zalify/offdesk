@@ -1131,15 +1131,6 @@ function TerminalCanvasInner() {
     [handleCreateTerminal],
   );
 
-  const handleCreateHandoffTerminal = useCallback(
-    (source: TerminalInfo, agent: "claude" | "codex") =>
-      handleCreateTerminal(source.machine_id, source.cwd, agent === "codex" ? "codex" : "claude", {
-        selectWorkpath: false,
-        focus: false,
-        workspaceGroupId: null,
-      }),
-    [handleCreateTerminal],
-  );
 
   // Mobile title-bar actions: ＋ / "New terminal here" create in the
   // group's cwd (machine home when there is no group); chip close goes
@@ -1752,7 +1743,6 @@ function TerminalCanvasInner() {
                   isCompact
                   isTouch={isTouch}
                   onPick={handleZoomTerminal}
-                  onCreateHandoffTerminal={handleCreateHandoffTerminal}
                   onRelay={handleRelay}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
@@ -1901,7 +1891,6 @@ function TerminalCanvasInner() {
                   isCompact={isCompact}
                   isTouch={isTouch}
                   onPick={handleZoomTerminal}
-                  onCreateHandoffTerminal={handleCreateHandoffTerminal}
                   onRelay={handleRelay}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
