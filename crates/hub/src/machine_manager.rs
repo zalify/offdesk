@@ -628,6 +628,29 @@ impl MachineManager {
         }
     }
 
+    fn record_todo_progress(
+        &self,
+        user_id: &str,
+        terminal_id: &str,
+        tasks: &offdesk_protocol::relay::AgentTasks,
+    ) {
+        let changed = match self.db.get() {
+            Ok(conn) => crate::db::todos::record_terminal_tasks(&conn, user_id, terminal_id, tasks),
+            Err(error) => {
+                tracing::warn!("to-do progress not saved: {error}");
+                return;
+            }
+        };
+        match changed {
+            Ok(todos) => {
+                for todo in todos {
+                    self.publish_todo_upserted(user_id, todo);
+                }
+            }
+            Err(error) => tracing::warn!("to-do progress not saved: {error}"),
+        }
+    }
+
     pub fn publish_todo_upserted(&self, user_id: &str, todo: offdesk_protocol::todos::TodoInfo) {
         self.send_event(Some(user_id.to_string()), BrowserEvent::TodoUpserted { todo });
     }
@@ -1323,7 +1346,15 @@ impl MachineManager {
                             terminal.agent = agent;
                             let terminal = terminal.clone();
                             drop(machines);
-                            self.send_event(user_id, BrowserEvent::TerminalUpdated { terminal });
+                            let tasks = terminal.agent.as_ref().and_then(|a| a.tasks.clone());
+                            self.send_event(
+                                user_id.clone(),
+                                BrowserEvent::TerminalUpdated { terminal },
+                            );
+                            // To-dos handed to this agent follow its task list.
+                            if let (Some(owner), Some(tasks)) = (user_id, tasks) {
+                                self.record_todo_progress(&owner, &terminal_id, &tasks);
+                            }
                         }
                     }
                 }

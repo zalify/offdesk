@@ -20,7 +20,7 @@ use super::terminals::{auto_create_workspace_group, control_action_allowed, ensu
 use crate::auth::AuthUser;
 use crate::AppState;
 
-type ApiError = (StatusCode, String);
+pub(crate) type ApiError = (StatusCode, String);
 
 const UPDATE_NODE: &str = "Update Offdesk on this machine to continue a task in another agent";
 
@@ -163,49 +163,68 @@ async fn create_relay(
             format!("This terminal already runs {}", source_agent.label()),
         ));
     }
-    if !state
-        .manager
-        .machine_supports(&machine_id, CAPABILITY)
-        .await
-    {
-        return Err((StatusCode::CONFLICT, UPDATE_NODE.to_string()));
-    }
-
-    let terminal = state
-        .manager
-        .create_terminal(
-            &machine_id,
-            &source.cwd,
-            req.cols,
-            req.rows,
-            None,
-            Some(prompt),
-        )
-        .await
-        .map_err(|message| (StatusCode::SERVICE_UNAVAILABLE, message))?;
+    require_relay_node(&state, &machine_id).await?;
     let relay_source = RelaySource {
         relay_id: req.id.clone(),
         terminal_id: source.id.clone(),
         agent: source_agent,
     };
-    state
-        .manager
-        .set_relay_source(&machine_id, &terminal.id, relay_source.clone())
-        .await;
-    // The relayed agent gets its own tab, named after the directory, so the
-    // source keeps its layout and the two can be switched between.
-    let group_id = auto_create_workspace_group(&state, user_id, &machine_id, &terminal.cwd).await?;
-    let terminal = state
-        .manager
-        .set_terminal_workspace_group(user_id, &machine_id, &terminal.id, Some(group_id))
-        .await
-        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    let terminal = start_agent_terminal(
+        &state,
+        user_id,
+        &machine_id,
+        &source.cwd,
+        (req.cols, req.rows),
+        prompt,
+        Some(relay_source.clone()),
+    )
+    .await?;
     {
         let conn = state.db.get().map_err(db_error)?;
         crate::db::terminal_sessions::set_relay_source(&conn, &terminal.id, &relay_source)
             .map_err(db_error)?;
     }
     Ok(Json(terminal))
+}
+
+/// 409 unless the machine's Node can deliver a startup prompt.
+pub(crate) async fn require_relay_node(state: &AppState, machine_id: &str) -> Result<(), ApiError> {
+    if state.manager.machine_supports(machine_id, CAPABILITY).await {
+        Ok(())
+    } else {
+        Err((StatusCode::CONFLICT, UPDATE_NODE.to_string()))
+    }
+}
+
+/// Start an agent in a new terminal whose first message is `prompt`, in its
+/// own tab named after the folder. Shared by relays and to-do hand-offs.
+pub(crate) async fn start_agent_terminal(
+    state: &AppState,
+    user_id: &str,
+    machine_id: &str,
+    cwd: &str,
+    (cols, rows): (u16, u16),
+    prompt: StartupPrompt,
+    relay_source: Option<RelaySource>,
+) -> Result<TerminalInfo, ApiError> {
+    let terminal = state
+        .manager
+        .create_terminal(machine_id, cwd, cols, rows, None, Some(prompt))
+        .await
+        .map_err(|message| (StatusCode::SERVICE_UNAVAILABLE, message))?;
+    if let Some(source) = relay_source {
+        // In memory first, so the tab assignment event already carries it.
+        state
+            .manager
+            .set_relay_source(machine_id, &terminal.id, source)
+            .await;
+    }
+    let group_id = auto_create_workspace_group(state, user_id, machine_id, &terminal.cwd).await?;
+    state
+        .manager
+        .set_terminal_workspace_group(user_id, machine_id, &terminal.id, Some(group_id))
+        .await
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))
 }
 
 #[cfg(test)]
@@ -313,6 +332,8 @@ mod tests {
                         kind: RelayAgent::Claude,
                         session_id: None,
                         usage_limit: Some("Usage limit reached".into()),
+                        activity: None,
+                        tasks: None,
                     }),
                 },
             )

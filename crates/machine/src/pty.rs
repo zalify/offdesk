@@ -1398,10 +1398,12 @@ mod tests {
         for (id, agent) in &agents {
             let brief = crate::relay::build_brief(&panes[id], agent, None);
             println!(
-                "{} kind={:?} session={} title={} goal={} latest={} tasks={} git={:?} warnings={}",
+                "{} kind={:?} session={} activity={:?} live_tasks={:?} title={} goal={} latest={} tasks={} git={:?} warnings={}",
                 &id[..8],
                 agent.kind,
                 agent.session_id.is_some(),
+                agent.activity,
+                agent.tasks.as_ref().map(|t| (t.done, t.total)),
                 brief.title.is_some(),
                 brief.goal.as_ref().map_or(0, |g| g.chars().count()),
                 brief.latest.as_ref().map_or(0, |l| l.chars().count()),

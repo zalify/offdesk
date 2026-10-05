@@ -5,14 +5,18 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::Json,
-    routing::{get, patch},
+    routing::{get, patch, post},
     Router,
 };
+use offdesk_protocol::relay::{RelayAgent, StartupPrompt};
 use offdesk_protocol::todos::{
     normalize_notes, normalize_title, TodoInfo, TodoStatus, MAX_TODOS_PER_USER,
 };
-use serde::{Deserialize, Deserializer};
+use offdesk_protocol::TerminalInfo;
+use serde::{Deserialize, Deserializer, Serialize};
 
+use super::relays::{require_relay_node, start_agent_terminal};
+use super::terminals::{control_action_allowed, ensure_machine_row};
 use crate::auth::AuthUser;
 use crate::db::todos::{NewTodo, TodoPatch};
 use crate::AppState;
@@ -25,6 +29,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/todos", get(list_todos).post(create_todo))
         .route("/api/todos/{id}", patch(update_todo).delete(delete_todo))
+        .route("/api/todos/{id}/dispatch", post(dispatch_todo))
 }
 
 fn db_error(error: impl std::fmt::Display) -> ApiError {
@@ -58,6 +63,36 @@ struct CreateTodoRequest {
     machine_id: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
+    /// Adopt the agent running in this terminal (on `machine_id`): the new
+    /// to-do follows its task list.
+    #[serde(default)]
+    terminal_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct DispatchRequest {
+    agent: RelayAgent,
+    #[serde(default)]
+    device_id: Option<String>,
+    prompt: String,
+    #[serde(default = "default_cols")]
+    cols: u16,
+    #[serde(default = "default_rows")]
+    rows: u16,
+}
+
+fn default_cols() -> u16 {
+    120
+}
+
+fn default_rows() -> u16 {
+    40
+}
+
+#[derive(Serialize)]
+struct DispatchResponse {
+    todo: TodoInfo,
+    terminal: TerminalInfo,
 }
 
 #[derive(Deserialize)]
@@ -124,7 +159,26 @@ async fn create_todo(
     let title = normalize_title(&req.title).map_err(bad_request)?;
     let notes = normalize_notes(&req.notes).map_err(bad_request)?;
     let machine_id = req.machine_id.filter(|id| !id.is_empty());
-    let cwd = req.cwd.filter(|cwd| !cwd.is_empty());
+    let mut cwd = req.cwd.filter(|cwd| !cwd.is_empty());
+    let adopted = match req.terminal_id.as_deref().filter(|id| !id.is_empty()) {
+        Some(terminal_id) => {
+            let machine = machine_id
+                .as_deref()
+                .ok_or_else(|| bad_request("Choose the machine that runs this agent"))?;
+            let terminal = state
+                .manager
+                .terminal_for_user(user_id, machine, terminal_id)
+                .await
+                .ok_or_else(|| (StatusCode::NOT_FOUND, "Terminal not found".to_string()))?;
+            let agent = terminal
+                .agent
+                .clone()
+                .ok_or_else(|| bad_request("No Claude or Codex session runs in that terminal"))?;
+            cwd = cwd.or_else(|| Some(terminal.cwd.clone()));
+            Some((terminal.id, agent))
+        }
+        None => None,
+    };
     validate_location(&state, user_id, machine_id.as_deref(), cwd.as_deref()).await?;
 
     let conn = state.db.get().map_err(db_error)?;
@@ -161,9 +215,89 @@ async fn create_todo(
         },
     )
     .map_err(db_error)?;
+    let todo = match adopted {
+        Some((terminal_id, agent)) => crate::db::todos::link_agent(
+            &conn,
+            user_id,
+            &todo.id,
+            agent.kind,
+            &terminal_id,
+            agent.tasks.as_ref(),
+        )
+        .map_err(db_error)?
+        .unwrap_or(todo),
+        None => todo,
+    };
     drop(conn);
     state.manager.publish_todo_upserted(user_id, todo.clone());
     Ok(Json(todo))
+}
+
+/// Hand a to-do to Claude or Codex: start the agent in a new terminal in the
+/// to-do's folder with `prompt` as its first message, and link the two so
+/// the to-do follows the agent's task list. Retrying returns the agent that
+/// is already running instead of starting another.
+async fn dispatch_todo(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(id): Path<String>,
+    Json(req): Json<DispatchRequest>,
+) -> Result<Json<DispatchResponse>, ApiError> {
+    let user_id = auth_user.user_id.as_str();
+    let todo = {
+        let conn = state.db.get().map_err(db_error)?;
+        crate::db::todos::find(&conn, user_id, &id).map_err(db_error)?
+    }
+    .ok_or_else(|| (StatusCode::NOT_FOUND, "To-do not found".to_string()))?;
+    let (Some(machine_id), Some(cwd)) = (todo.machine_id.clone(), todo.cwd.clone()) else {
+        return Err(bad_request(
+            "Choose the machine and folder for this to-do first",
+        ));
+    };
+    if !state
+        .manager
+        .user_can_access_machine(user_id, &machine_id)
+        .await
+    {
+        return Err((StatusCode::NOT_FOUND, "Machine not found".to_string()));
+    }
+    ensure_machine_row(&state, user_id, &machine_id).await?;
+    let controller = state.manager.get_controller(user_id, &machine_id);
+    if !control_action_allowed(controller.as_deref(), req.device_id.as_deref()) {
+        return Err((StatusCode::FORBIDDEN, "Control required".to_string()));
+    }
+    if todo.agent == Some(req.agent) {
+        if let Some(terminal_id) = todo.terminal_id.as_deref() {
+            if let Some(terminal) = state
+                .manager
+                .terminal_for_user(user_id, &machine_id, terminal_id)
+                .await
+            {
+                return Ok(Json(DispatchResponse { todo, terminal }));
+            }
+        }
+    }
+    let prompt = StartupPrompt::normalized(req.agent, &req.prompt)
+        .map_err(|message| bad_request(message))?;
+    require_relay_node(&state, &machine_id).await?;
+    let terminal = start_agent_terminal(
+        &state,
+        user_id,
+        &machine_id,
+        &cwd,
+        (req.cols, req.rows),
+        prompt,
+        None,
+    )
+    .await?;
+    let todo = {
+        let conn = state.db.get().map_err(db_error)?;
+        crate::db::todos::link_agent(&conn, user_id, &id, req.agent, &terminal.id, None)
+            .map_err(db_error)?
+    }
+    .ok_or_else(|| (StatusCode::NOT_FOUND, "To-do not found".to_string()))?;
+    state.manager.publish_todo_upserted(user_id, todo.clone());
+    Ok(Json(DispatchResponse { todo, terminal }))
 }
 
 async fn update_todo(
@@ -435,5 +569,239 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    mod agents {
+        use super::*;
+        use offdesk_protocol::relay::{
+            AgentTasks, RelayAgent, RelayTask, RelayTaskStatus, TerminalAgent,
+        };
+        use offdesk_protocol::{HubToMachine, MachineInfo, MachineToHub, TerminalInfo};
+        use tokio::sync::mpsc::Receiver;
+
+        fn tasks(done: usize, total: usize) -> AgentTasks {
+            let list: Vec<_> = (0..total)
+                .map(|i| RelayTask {
+                    subject: format!("Task {i}"),
+                    status: if i < done {
+                        RelayTaskStatus::Completed
+                    } else {
+                        RelayTaskStatus::Pending
+                    },
+                })
+                .collect();
+            AgentTasks::summarize(&list).unwrap()
+        }
+
+        fn agent_message(done: usize, total: usize) -> MachineToHub {
+            MachineToHub::TerminalAgent {
+                terminal_id: "claude-term".into(),
+                agent: Some(TerminalAgent {
+                    kind: RelayAgent::Claude,
+                    session_id: None,
+                    usage_limit: None,
+                    activity: None,
+                    tasks: Some(tasks(done, total)),
+                }),
+            }
+        }
+
+        async fn connected() -> (AppState, Receiver<HubToMachine>) {
+            let state = test_state();
+            {
+                let conn = state.db.get().unwrap();
+                crate::db::machines::ensure_machine_for_user(
+                    &conn,
+                    "machine-a",
+                    "user-a",
+                    "Machine A",
+                    Some("linux"),
+                    Some("/root"),
+                )
+                .unwrap();
+            }
+            let info = MachineInfo {
+                id: "machine-a".into(),
+                name: "Machine A".into(),
+                os: "linux".into(),
+                home_dir: "/root".into(),
+                production: false,
+            };
+            let (_, cmd_rx) = state
+                .manager
+                .register_machine_with_capabilities(
+                    info,
+                    Some("user-a".into()),
+                    vec![offdesk_protocol::relay::CAPABILITY.into()],
+                )
+                .await;
+            let terminal = TerminalInfo {
+                id: "claude-term".into(),
+                machine_id: "machine-a".into(),
+                title: "Backfill".into(),
+                cwd: "/root/repo".into(),
+                title_source: Default::default(),
+                workspace_group_id: None,
+                cols: 80,
+                rows: 24,
+                attention: None,
+                agent: None,
+                relay_source: None,
+                reachable: true,
+            };
+            state
+                .manager
+                .handle_machine_message(
+                    "machine-a",
+                    MachineToHub::ExistingTerminals {
+                        terminals: vec![terminal],
+                    },
+                )
+                .await;
+            state
+                .manager
+                .handle_machine_message("machine-a", agent_message(1, 2))
+                .await;
+            state
+                .manager
+                .request_control("user-a", "machine-a", "device-a");
+            (state, cmd_rx)
+        }
+
+        #[tokio::test]
+        async fn adopted_agents_keep_their_to_do_up_to_date() {
+            let (state, _cmd_rx) = connected().await;
+            let (status, todo) = call(&state, "user-a", Method::POST, "/api/todos", Some(json!({
+                "id": ID, "title": "Backfill orders", "machine_id": "machine-a", "terminal_id": "claude-term"
+            }))).await;
+            assert_eq!(status, StatusCode::OK, "{todo}");
+            assert_eq!(todo["agent"], "claude");
+            assert_eq!(todo["terminal_id"], "claude-term");
+            assert_eq!(
+                todo["cwd"], "/root/repo",
+                "the folder comes from the terminal"
+            );
+            assert_eq!(
+                (
+                    todo["progress"]["done"].as_u64(),
+                    todo["progress"]["total"].as_u64()
+                ),
+                (Some(1), Some(2))
+            );
+
+            let mut events = state.manager.subscribe_events();
+            state
+                .manager
+                .handle_machine_message("machine-a", agent_message(2, 2))
+                .await;
+            let mut saw_progress = false;
+            while let Ok(Ok(envelope)) =
+                tokio::time::timeout(std::time::Duration::from_secs(1), events.recv()).await
+            {
+                if let BrowserEvent::TodoUpserted { todo } = envelope.event {
+                    let progress = todo.progress.unwrap();
+                    assert_eq!((progress.done, progress.total), (2, 2));
+                    saw_progress = true;
+                    break;
+                }
+            }
+            assert!(saw_progress, "the to-do follows the agent's task list");
+
+            let (status, _) = call(&state, "user-a", Method::POST, "/api/todos", Some(json!({
+                "id": "66666666-6666-4666-8666-666666666666", "title": "x", "machine_id": "machine-a", "terminal_id": "missing"
+            }))).await;
+            assert_eq!(status, StatusCode::NOT_FOUND);
+        }
+
+        #[tokio::test]
+        async fn handing_off_starts_the_agent_once_in_the_to_dos_folder() {
+            let (state, mut cmd_rx) = connected().await;
+            let (status, _) = call(
+                &state,
+                "user-a",
+                Method::POST,
+                "/api/todos",
+                Some(json!({
+                    "id": ID, "title": "Write release notes"
+                })),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            let dispatch =
+                json!({"agent": "codex", "device_id": "device-a", "prompt": "Write release notes"});
+            let uri = format!("/api/todos/{ID}/dispatch");
+            let (status, message) =
+                call(&state, "user-a", Method::POST, &uri, Some(dispatch.clone())).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{message}");
+
+            call(
+                &state,
+                "user-a",
+                Method::PATCH,
+                &format!("/api/todos/{ID}"),
+                Some(json!({"machine_id": "machine-a", "cwd": "/root/repo"})),
+            )
+            .await;
+            let mut viewer = dispatch.clone();
+            viewer["device_id"] = json!("device-b");
+            assert_eq!(
+                call(&state, "user-a", Method::POST, &uri, Some(viewer))
+                    .await
+                    .0,
+                StatusCode::FORBIDDEN
+            );
+
+            let request = tokio::spawn({
+                let state = state.clone();
+                let uri = uri.clone();
+                let dispatch = dispatch.clone();
+                async move { call(&state, "user-a", Method::POST, &uri, Some(dispatch)).await }
+            });
+            match cmd_rx.recv().await.unwrap() {
+                HubToMachine::CreateTerminal {
+                    request_id,
+                    cwd,
+                    startup_command,
+                    startup_prompt,
+                    ..
+                } => {
+                    assert_eq!(cwd, "/root/repo");
+                    assert_eq!(startup_command, None);
+                    let prompt = startup_prompt.unwrap();
+                    assert_eq!(
+                        (prompt.agent, prompt.text.as_str()),
+                        (RelayAgent::Codex, "Write release notes")
+                    );
+                    state
+                        .manager
+                        .handle_machine_message(
+                            "machine-a",
+                            MachineToHub::TerminalCreated {
+                                request_id,
+                                terminal_id: "codex-term".into(),
+                                title: "zsh".into(),
+                                cwd,
+                                cols: 120,
+                                rows: 40,
+                            },
+                        )
+                        .await;
+                }
+                other => panic!("unexpected machine command: {other:?}"),
+            }
+            let (status, body) = request.await.unwrap();
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert_eq!(body["todo"]["agent"], "codex");
+            assert_eq!(body["todo"]["terminal_id"], "codex-term");
+            assert_eq!(body["terminal"]["id"], "codex-term");
+
+            // A retry returns the running agent; no second terminal starts.
+            let (status, again) = call(&state, "user-a", Method::POST, &uri, Some(dispatch)).await;
+            assert_eq!(
+                (status, again["terminal"]["id"].as_str()),
+                (StatusCode::OK, Some("codex-term"))
+            );
+            assert!(cmd_rx.try_recv().is_err());
+        }
     }
 }

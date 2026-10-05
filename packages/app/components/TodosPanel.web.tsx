@@ -1,14 +1,35 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { MachineInfo, TodoInfo } from "@offdesk/shared";
+import type { AgentTasks, MachineInfo, RelayAgent, RelayTask, TerminalInfo, TodoInfo } from "@offdesk/shared";
 import { ChevronDown, ChevronLeft, ChevronRight, Folder, Plus, X } from "lucide-react";
 import { createTodo, deleteTodo, updateTodo } from "@/lib/api";
-import { colors } from "@/lib/colors";
-import { cleanTitle, doneTodos, draftTodo, folderLabel, openTodos } from "@/lib/todos";
+import { agentLabel } from "@/lib/agentRelay";
+import { colors, colorAlpha } from "@/lib/colors";
+import {
+  agentLooksFinished,
+  cleanTitle,
+  composeTodoPrompt,
+  doneTodos,
+  draftTodo,
+  folderLabel,
+  openTodos,
+  todoAgentState,
+  unlinkedAgentTerminals,
+  type TodoAgentState,
+} from "@/lib/todos";
 import { newUuid } from "@/lib/uuid";
 
 interface TodosPanelProps {
   todos: TodoInfo[];
   machines: MachineInfo[];
+  /** Live terminals, for agent progress and task lists. */
+  terminals: TerminalInfo[];
+  /** Where the active terminal is, offered as a to-do's location. */
+  defaultLocation?: { machineId: string; cwd: string };
+  /** Starting an agent creates a terminal, which needs machine control. */
+  canDispatch: (machineId: string) => boolean;
+  /** Start the agent; the canvas then shows its terminal. */
+  onDispatch: (todo: TodoInfo, agent: RelayAgent, prompt: string) => Promise<void>;
+  onOpenTerminal: (terminalId: string) => void;
   /** Apply a change locally right away; the Hub's event confirms it. */
   onLocalUpsert: (todo: TodoInfo) => void;
   onLocalRemove: (id: string) => void;
@@ -65,7 +86,18 @@ const sectionTitle: CSSProperties = {
 };
 
 /** The user's own to-dos, kept by the Hub and synced to every device. */
-export function TodosPanel({ todos, machines, onLocalUpsert, onLocalRemove, onClose }: TodosPanelProps) {
+export function TodosPanel({
+  todos,
+  machines,
+  terminals,
+  defaultLocation,
+  canDispatch,
+  onDispatch,
+  onOpenTerminal,
+  onLocalUpsert,
+  onLocalRemove,
+  onClose,
+}: TodosPanelProps) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const [newTitle, setNewTitle] = useState("");
@@ -76,6 +108,19 @@ export function TodosPanel({ todos, machines, onLocalUpsert, onLocalRemove, onCl
   const done = useMemo(() => doneTodos(todos), [todos]);
   const detail = detailId ? todos.find((todo) => todo.id === detailId) ?? null : null;
   const homeDirs = useMemo(() => new Map(machines.map((m) => [m.id, m.home_dir])), [machines]);
+  const agentTerminals = useMemo(() => unlinkedAgentTerminals(terminals, todos), [terminals, todos]);
+
+  const adopt = async (terminal: TerminalInfo) => {
+    const title = cleanTitle(terminal.title) || "Agent task";
+    setError(null);
+    try {
+      onLocalUpsert(
+        await createTodo({ id: newUuid(), title, machine_id: terminal.machine_id, terminal_id: terminal.id }),
+      );
+    } catch (reason) {
+      setError(`Couldn't add "${title}": ${message(reason)}`);
+    }
+  };
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -129,6 +174,11 @@ export function TodosPanel({ todos, machines, onLocalUpsert, onLocalRemove, onCl
           key={detail.id}
           todo={detail}
           machines={machines}
+          agentState={todoAgentState(detail, terminals)}
+          defaultLocation={defaultLocation}
+          canDispatch={canDispatch}
+          onDispatch={onDispatch}
+          onOpenTerminal={onOpenTerminal}
           onBack={() => setDetailId(null)}
           onLocalUpsert={onLocalUpsert}
           onDeleted={(id) => {
@@ -191,7 +241,7 @@ export function TodosPanel({ todos, machines, onLocalUpsert, onLocalRemove, onCl
             )}
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {open.map((todo) => (
-                <TodoRow key={todo.id} todo={todo} homeDir={todo.machine_id ? homeDirs.get(todo.machine_id) : undefined} onToggle={toggle} onOpen={setDetailId} />
+                <TodoRow key={todo.id} todo={todo} agentState={todoAgentState(todo, terminals)} homeDir={todo.machine_id ? homeDirs.get(todo.machine_id) : undefined} onToggle={toggle} onOpen={setDetailId} />
               ))}
             </ul>
 
@@ -208,12 +258,29 @@ export function TodosPanel({ todos, machines, onLocalUpsert, onLocalRemove, onCl
                   <ChevronDown size={18} style={{ transform: showDone ? "rotate(180deg)" : undefined }} />
                 </button>
                 {showDone && (
-                  <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+                  <ul style={{ listStyle: "none", margin: 0, padding: 0 }} data-testid="todos-done-list">
                     {done.map((todo) => (
-                      <TodoRow key={todo.id} todo={todo} homeDir={todo.machine_id ? homeDirs.get(todo.machine_id) : undefined} onToggle={toggle} onOpen={setDetailId} />
+                      <TodoRow key={todo.id} todo={todo} agentState={todoAgentState(todo, terminals)} homeDir={todo.machine_id ? homeDirs.get(todo.machine_id) : undefined} onToggle={toggle} onOpen={setDetailId} />
                     ))}
                   </ul>
                 )}
+              </>
+            )}
+
+            {agentTerminals.length > 0 && (
+              <>
+                <h2 style={{ ...sectionTitle, marginTop: 20 }}>Agent tasks · not in your list</h2>
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
+                  {agentTerminals.map((terminal) => (
+                    <AgentTasksCard
+                      key={terminal.id}
+                      terminal={terminal}
+                      homeDir={homeDirs.get(terminal.machine_id)}
+                      onAdopt={() => void adopt(terminal)}
+                      onOpen={() => onOpenTerminal(terminal.id)}
+                    />
+                  ))}
+                </div>
               </>
             )}
           </div>
@@ -225,18 +292,21 @@ export function TodosPanel({ todos, machines, onLocalUpsert, onLocalRemove, onCl
 
 function TodoRow({
   todo,
+  agentState,
   homeDir,
   onToggle,
   onOpen,
 }: {
   todo: TodoInfo;
+  agentState: TodoAgentState;
   homeDir?: string;
   onToggle: (todo: TodoInfo) => void;
   onOpen: (id: string) => void;
 }) {
   const doneItem = todo.status === "done";
+  const finished = agentLooksFinished(todo, agentState);
   return (
-    <li data-testid={`todo-row-${todo.id}`} style={{ display: "flex", alignItems: "center", gap: 4, borderBottom: `1px solid ${colors.border}` }}>
+    <li data-testid={`todo-row-${todo.id}`} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4, borderBottom: `1px solid ${colors.border}` }}>
       <label style={{ width: 44, minHeight: 52, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, cursor: "pointer" }}>
         <input
           type="checkbox"
@@ -257,8 +327,9 @@ function TodoRow({
           <span style={{ fontSize: 15, fontWeight: 500, overflowWrap: "anywhere", textDecoration: doneItem ? "line-through" : undefined, color: doneItem ? colors.foregroundSecondary : colors.foreground }}>
             {todo.title}
           </span>
-          {(todo.cwd || todo.notes) && (
-            <span style={{ display: "flex", gap: 10, fontSize: 12, color: colors.foregroundSecondary, minWidth: 0 }}>
+          {(todo.cwd || todo.notes || todo.agent) && (
+            <span style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 12, color: colors.foregroundSecondary, minWidth: 0 }}>
+              {todo.agent && <AgentBadge agent={todo.agent} state={agentState} />}
               {todo.cwd && (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
                   <Folder size={12} aria-hidden="true" />
@@ -271,23 +342,144 @@ function TodoRow({
         </span>
         <ChevronRight size={18} aria-hidden="true" style={{ color: colors.foregroundSecondary, flexShrink: 0 }} />
       </button>
+      {finished && todo.agent && (
+        <div
+          data-testid={`todo-finished-${todo.id}`}
+          style={{ flexBasis: "100%", display: "flex", alignItems: "center", gap: 8, margin: "0 0 10px 48px", padding: "6px 6px 6px 10px", borderRadius: 10, border: `1px dashed ${colors.border}` }}
+        >
+          <span style={{ flex: 1, fontSize: 13 }}>
+            {agentLabel(todo.agent)} finished all {agentState.kind !== "none" ? agentState.tasks?.total : ""} tasks. Mark done?
+          </span>
+          <button
+            type="button"
+            onClick={() => onToggle(todo)}
+            style={{ minHeight: 44, padding: "0 12px", border: 0, borderRadius: 8, background: colors.accent, color: colors.onAccent, fontWeight: 600, cursor: "pointer" }}
+          >
+            Mark done
+          </button>
+        </div>
+      )}
     </li>
+  );
+}
+
+function progressLabel(tasks?: AgentTasks) {
+  return tasks && tasks.total > 0 ? ` · ${tasks.done}/${tasks.total}` : "";
+}
+
+function AgentBadge({ agent, state }: { agent: RelayAgent; state: TodoAgentState }) {
+  const status =
+    state.kind === "working"
+      ? "working"
+      : state.kind === "waiting"
+        ? "needs you"
+        : state.kind === "idle"
+          ? "idle"
+          : "stopped";
+  return (
+    <span
+      data-testid="todo-agent-badge"
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "1px 8px", borderRadius: 999, border: `1px solid ${colors.border}`, color: colors.foreground, fontWeight: 600 }}
+    >
+      <span style={{ width: 7, height: 7, borderRadius: 4, background: state.kind === "waiting" ? colors.warning : state.kind === "working" ? colors.accent : colors.foregroundMuted }} />
+      {agentLabel(agent)} · {status}
+      {state.kind !== "none" && progressLabel(state.tasks)}
+    </span>
+  );
+}
+
+function TaskList({ items }: { items: RelayTask[] }) {
+  return (
+    <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
+      {items.map((task, index) => (
+        <li
+          key={`${index}-${task.subject}`}
+          style={{ display: "flex", gap: 8, alignItems: "baseline", color: task.status === "completed" ? colors.foregroundSecondary : colors.foreground, textDecoration: task.status === "completed" ? "line-through" : undefined }}
+        >
+          <span aria-hidden="true" style={{ width: 14, flexShrink: 0, textAlign: "center" }}>
+            {task.status === "completed" ? "✓" : task.status === "in_progress" ? "■" : "□"}
+          </span>
+          <span>
+            <span style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0 0 0 0)" }}>
+              {task.status === "completed" ? "Done: " : task.status === "in_progress" ? "In progress: " : "Pending: "}
+            </span>
+            {task.subject}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AgentTasksCard({
+  terminal,
+  homeDir,
+  onAdopt,
+  onOpen,
+}: {
+  terminal: TerminalInfo;
+  homeDir?: string;
+  onAdopt: () => void;
+  onOpen: () => void;
+}) {
+  const agent = terminal.agent!;
+  const tasks = agent.tasks!;
+  return (
+    <section
+      aria-label={terminal.title}
+      data-testid={`agent-tasks-${terminal.id}`}
+      style={{ border: `1px solid ${colors.border}`, borderRadius: 12, padding: 12, display: "flex", flexDirection: "column", gap: 10 }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "flex-start" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 15, fontWeight: 600, overflowWrap: "anywhere" }}>{terminal.title}</div>
+          <div style={{ fontSize: 12, color: colors.foregroundSecondary, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+            {folderLabel(terminal.cwd, homeDir)} · {agentLabel(agent.kind)}
+            {agent.activity ? ` · ${agent.activity === "waiting" ? "needs you" : agent.activity === "busy" ? "working" : "idle"}` : ""}
+          </div>
+        </div>
+        <span style={{ flexShrink: 0, padding: "1px 8px", borderRadius: 999, border: `1px solid ${colors.border}`, fontSize: 12, fontWeight: 600 }}>
+          {tasks.done}/{tasks.total}
+        </span>
+      </div>
+      <TaskList items={tasks.items.slice(0, 5)} />
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" data-testid="agent-tasks-adopt" onClick={onAdopt} style={{ flex: 1, minHeight: 44, borderRadius: 8, border: `1px solid ${colors.border}`, background: "transparent", color: colors.foreground, fontWeight: 600, cursor: "pointer" }}>
+          Add to my to-dos
+        </button>
+        <button type="button" onClick={onOpen} style={{ flex: 1, minHeight: 44, borderRadius: 8, border: `1px solid ${colors.border}`, background: "transparent", color: colors.foreground, fontWeight: 600, cursor: "pointer" }}>
+          Open terminal
+        </button>
+      </div>
+    </section>
   );
 }
 
 function TodoDetail({
   todo,
   machines,
+  agentState,
+  defaultLocation,
+  canDispatch,
+  onDispatch,
+  onOpenTerminal,
   onBack,
   onLocalUpsert,
   onDeleted,
 }: {
   todo: TodoInfo;
   machines: MachineInfo[];
+  agentState: TodoAgentState;
+  defaultLocation?: { machineId: string; cwd: string };
+  canDispatch: (machineId: string) => boolean;
+  onDispatch: (todo: TodoInfo, agent: RelayAgent, prompt: string) => Promise<void>;
+  onOpenTerminal: (terminalId: string) => void;
   onBack: () => void;
   onLocalUpsert: (todo: TodoInfo) => void;
   onDeleted: (id: string) => void;
 }) {
+  const [dispatchAgent, setDispatchAgent] = useState<RelayAgent | null>(null);
+  const [prompt, setPrompt] = useState("");
   const [title, setTitle] = useState(todo.title);
   const [notes, setNotes] = useState(todo.notes);
   const [machineId, setMachineId] = useState(todo.machine_id ?? "");
@@ -314,6 +506,21 @@ function TodoDetail({
       setBusy(false);
     }
   };
+
+  const located = Boolean(todo.machine_id && todo.cwd);
+  const controllable = located && canDispatch(todo.machine_id!);
+  const dispatchHint = !located
+    ? "Choose the machine and folder, then Save, to hand this to an agent."
+    : changed
+      ? "Save your changes first."
+      : !controllable
+        ? "Take control of this machine to start an agent."
+        : null;
+  const startAgent = () =>
+    run(async () => {
+      if (!dispatchAgent) return;
+      await onDispatch(todo, dispatchAgent, prompt.trim() || composeTodoPrompt(todo));
+    });
 
   const save = () =>
     run(async () => {
@@ -404,6 +611,118 @@ function TodoDetail({
             />
           </label>
         </div>
+        {!machineId && defaultLocation && (
+          <button
+            type="button"
+            data-testid="todo-use-current-folder"
+            onClick={() => {
+              setMachineId(defaultLocation.machineId);
+              setCwd(defaultLocation.cwd);
+            }}
+            style={{ alignSelf: "flex-start", minHeight: 44, padding: "0 4px", border: 0, background: "transparent", color: colors.accent, fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+          >
+            Use the current terminal's folder
+          </button>
+        )}
+
+        <section aria-label="Agent" data-testid="todo-agent-section" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12, borderRadius: 12, border: `1px solid ${colors.border}` }}>
+          {todo.agent && agentState.kind !== "none" ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <AgentBadge agent={todo.agent} state={agentState} />
+                {agentState.kind === "stopped" && (
+                  <span style={{ fontSize: 12, color: colors.foregroundSecondary }}>Its terminal is closed.</span>
+                )}
+              </div>
+              {agentState.tasks && agentState.tasks.items.length > 0 ? (
+                <TaskList items={agentState.tasks.items} />
+              ) : (
+                <span style={{ fontSize: 13, color: colors.foregroundSecondary }}>
+                  No task list yet. Progress appears when {agentLabel(todo.agent)} plans its steps.
+                </span>
+              )}
+              {agentState.kind !== "stopped" && todo.terminal_id && (
+                <button
+                  type="button"
+                  data-testid="todo-open-terminal"
+                  onClick={() => onOpenTerminal(todo.terminal_id!)}
+                  style={{ minHeight: 44, borderRadius: 8, border: `1px solid ${colors.border}`, background: "transparent", color: colors.foreground, fontWeight: 600, cursor: "pointer" }}
+                >
+                  Open terminal
+                </button>
+              )}
+            </>
+          ) : (
+            <span style={{ fontSize: 13, color: colors.foregroundSecondary }}>Hand this to an agent to work on it in its folder.</span>
+          )}
+
+          {dispatchAgent ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={label}>
+                First message for {agentLabel(dispatchAgent)}
+                <textarea
+                  data-testid="todo-dispatch-prompt"
+                  value={prompt}
+                  rows={5}
+                  readOnly={busy}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  style={{ ...field, padding: "10px 12px", resize: "vertical", lineHeight: 1.4 }}
+                />
+              </label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" disabled={busy} onClick={() => setDispatchAgent(null)} style={{ flex: 1, minHeight: 44, borderRadius: 8, border: `1px solid ${colors.border}`, background: "transparent", color: colors.foreground, cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="todo-dispatch-start"
+                  disabled={busy || !prompt.trim()}
+                  onClick={() => void startAgent()}
+                  style={{ flex: 2, minHeight: 44, borderRadius: 8, border: 0, background: colors.accent, color: colors.onAccent, fontWeight: 600, cursor: "pointer", opacity: busy || !prompt.trim() ? 0.5 : 1 }}
+                >
+                  {busy ? `Starting ${agentLabel(dispatchAgent)}…` : `Start ${agentLabel(dispatchAgent)}`}
+                </button>
+              </div>
+              <span style={{ fontSize: 12, color: colors.foregroundSecondary }}>
+                Opens a new tab in {todo.cwd}. The to-do follows {agentLabel(dispatchAgent)}'s task list.
+              </span>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8 }}>
+              {(["claude", "codex"] as const).map((agent) => {
+                // The same agent already on it: open its terminal instead.
+                const running =
+                  todo.agent === agent && Boolean(todo.terminal_id) && agentState.kind !== "stopped" && agentState.kind !== "none";
+                const blocked = !running && Boolean(dispatchHint);
+                return (
+                  <button
+                    key={agent}
+                    type="button"
+                    data-testid={`todo-dispatch-${agent}`}
+                    disabled={busy || blocked}
+                    onClick={() => {
+                      if (running) {
+                        onOpenTerminal(todo.terminal_id!);
+                        return;
+                      }
+                      setPrompt(composeTodoPrompt(todo));
+                      setDispatchAgent(agent);
+                    }}
+                    style={{ flex: 1, minHeight: 44, borderRadius: 8, border: `1px solid ${colors.border}`, background: colorAlpha.accentSubtle, color: colors.foreground, fontWeight: 600, cursor: blocked ? "not-allowed" : "pointer", opacity: blocked ? 0.5 : 1 }}
+                  >
+                    {running ? `Open ${agentLabel(agent)}` : `Hand off to ${agentLabel(agent)}`}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {dispatchHint && !dispatchAgent && (
+            <span data-testid="todo-dispatch-hint" style={{ fontSize: 12, color: colors.foregroundSecondary }}>
+              {dispatchHint}
+            </span>
+          )}
+        </section>
+
         {error && (
           <div role="alert" style={{ fontSize: 13, color: colors.danger }}>
             {error}
