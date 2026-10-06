@@ -180,6 +180,11 @@ enum Commands {
         #[command(subcommand)]
         action: TodoAction,
     },
+    /// Rewrite a group's pane layout; open web clients update live
+    Layout {
+        #[command(subcommand)]
+        action: LayoutAction,
+    },
     /// Open the hub in a browser. On the machine that runs the hub this is
     /// `offdesk-hub link`: the sign-in link, with the code for a phone;
     /// elsewhere it opens the hub's address
@@ -224,6 +229,27 @@ enum TodoAction {
     Reopen { todo: String },
     /// Delete a to-do
     Rm { todo: String },
+}
+
+#[derive(Subcommand)]
+enum LayoutAction {
+    /// Rebalance every split so sibling subtrees share space by column/row count
+    Equalize(LayoutArgs),
+    /// Flip every split between side-by-side and stacked
+    Rotate(LayoutArgs),
+}
+
+#[derive(clap::Args)]
+struct LayoutArgs {
+    /// Machine id, unique id prefix, or name (optional when only one machine has terminals)
+    #[arg(long)]
+    machine: Option<String>,
+    /// Workspace group name, or `cwd:<path>` for ungrouped terminals
+    #[arg(long)]
+    group: String,
+    /// Machine-readable JSON on stdout
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -469,5 +495,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             timeout,
         } => commands::wait::run(&hub_client, &resolved, &term, pattern, silence, timeout).await,
         Commands::Kill { term, yes } => commands::kill::run(&hub_client, &term, yes).await,
+        Commands::Layout { action } => {
+            let (op, args) = match action {
+                LayoutAction::Equalize(args) => (commands::layout::Op::Equalize, args),
+                LayoutAction::Rotate(args) => (commands::layout::Op::Rotate, args),
+            };
+            commands::layout::run(&hub_client, op, args.machine, &args.group, args.json).await
+        }
     }
 }

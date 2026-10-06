@@ -376,6 +376,10 @@ offdesk send <term> <text...> [--no-enter]      # type text (Enter appended by d
 offdesk key  <term> <KEY>...                    # Enter Esc Tab BTab Up Down Left Right C-c C-d F1-F12 ...
 offdesk wait <term> [--pattern <regex>] [--silence <ms>] [--timeout <sec>]
 offdesk kill <term> [--yes]
+offdesk layout equalize --group <name|cwd:path> [--machine <id>] [--json]
+                                                # rebalance a group's pane splits evenly; web clients update live
+offdesk layout rotate --group <name|cwd:path> [--machine <id>] [--json]
+                                                # flip every split between side-by-side and stacked
 offdesk link [--no-open]                        # open the hub in a browser; on the hub's machine, the sign-in link + code
 ```
 

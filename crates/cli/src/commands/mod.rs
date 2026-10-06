@@ -1,5 +1,6 @@
 pub mod key;
 pub mod kill;
+pub mod layout;
 pub mod ls;
 pub mod machines;
 pub mod open;

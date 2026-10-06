@@ -1,4 +1,6 @@
-use offdesk_protocol::{MachineInfo, TerminalInfo, WorkspaceGroupInfo};
+use offdesk_protocol::{
+    MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
+};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Response, StatusCode};
 use serde::de::DeserializeOwned;
@@ -127,6 +129,41 @@ impl HubClient {
     ) -> Result<Vec<WorkspaceGroupInfo>, CliError> {
         self.get(&format!("/machines/{machine_id}/workspace-groups"))
             .await
+    }
+
+    /// Saved pane layouts of a machine, one per workspace group / cwd key.
+    pub async fn workspace_layouts(
+        &self,
+        machine_id: &str,
+    ) -> Result<Vec<WorkspaceLayoutInfo>, CliError> {
+        self.get(&format!("/machines/{machine_id}/workspace-layouts"))
+            .await
+    }
+
+    /// Save a layout against the revision it was read at. `Ok(None)` means
+    /// the hub answered 409: someone else changed the layout in between.
+    pub async fn save_workspace_layout(
+        &self,
+        machine_id: &str,
+        group_key: &str,
+        root: &WorkspaceLayoutNode,
+        base_updated_at: i64,
+    ) -> Result<Option<WorkspaceLayoutInfo>, CliError> {
+        let response = self
+            .http
+            .put(self.url(&format!("/machines/{machine_id}/workspace-layouts")))
+            .json(&serde_json::json!({
+                "group_key": group_key,
+                "root": root,
+                "base_updated_at": base_updated_at,
+            }))
+            .send()
+            .await
+            .map_err(network_error)?;
+        if response.status() == StatusCode::CONFLICT {
+            return Ok(None);
+        }
+        parse_json(response).await.map(Some)
     }
 
     /// What process is running in the foreground of a terminal's pane.
