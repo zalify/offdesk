@@ -8,6 +8,7 @@ use offdesk_protocol::{AgentBrowserCommand, AgentBrowserInfo, MachineInfo};
 use serde_json::Value;
 
 use crate::client::HubClient;
+use crate::commands::onepassword;
 use crate::resolve::{resolve_machine, resolve_prefix, short_id};
 use crate::CliError;
 
@@ -128,6 +129,7 @@ async fn call(
         AgentBrowserCommand::Goto { browser_id, .. }
         | AgentBrowserCommand::Click { browser_id, .. }
         | AgentBrowserCommand::Fill { browser_id, .. }
+        | AgentBrowserCommand::Login { browser_id, .. }
         | AgentBrowserCommand::Press { browser_id, .. }
         | AgentBrowserCommand::Close { browser_id } => short_id(browser_id).to_string(),
         _ => String::new(),
@@ -277,22 +279,130 @@ pub async fn snapshot_text(client: &HubClient, browser: &str) -> Result<String, 
     Ok(text.trim_end_matches('\n').to_string())
 }
 
+/// What `click` aims at.
+pub enum ClickTarget {
+    /// A `[ref=eN]` handle from the latest snapshot.
+    Ref(String),
+    /// The smallest visible element with this text, in any frame.
+    Text(String),
+}
+
+impl ClickTarget {
+    /// From the CLI / MCP arguments: exactly one of ref and text.
+    pub fn from_args(element: Option<String>, text: Option<String>) -> Result<Self, CliError> {
+        match (element, text) {
+            (Some(element), None) => Ok(Self::Ref(element)),
+            (None, Some(text)) => Ok(Self::Text(text)),
+            _ => Err(CliError::Usage(
+                "click needs exactly one of a ref or --text".to_string(),
+            )),
+        }
+    }
+}
+
+/// Click; for a text target returns what was clicked (tag and text).
 pub async fn click_element(
     client: &HubClient,
     browser: &str,
-    element: String,
-) -> Result<(), CliError> {
+    target: ClickTarget,
+) -> Result<Option<String>, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
-    call(
+    let (r#ref, text) = match target {
+        ClickTarget::Ref(element) => (Some(element), None),
+        ClickTarget::Text(text) => (None, Some(text)),
+    };
+    let value = call(
         client,
         &machine_id,
         AgentBrowserCommand::Click {
             browser_id,
-            r#ref: element,
+            r#ref,
+            text,
         },
     )
     .await?;
-    Ok(())
+    Ok(value
+        .get("clicked")
+        .and_then(Value::as_str)
+        .map(str::to_string))
+}
+
+/// The registrable domain of the page a browser is on.
+fn page_domain(url: &str) -> Result<String, CliError> {
+    offdesk_protocol::domain::registrable_domain_of_url(url).ok_or_else(|| {
+        CliError::Usage(format!(
+            "the browser is not on a web page ({}); open the login page first",
+            if url.is_empty() { "blank" } else { url }
+        ))
+    })
+}
+
+async fn resolve_browser_info(
+    client: &HubClient,
+    query: &str,
+) -> Result<(String, AgentBrowserInfo), CliError> {
+    let browsers = list_browsers(client, None).await?;
+    let (machine, info) = resolve_prefix(query, &browsers, |(_, info)| info.id.as_str())?;
+    Ok((machine.id.clone(), info.clone()))
+}
+
+/// The page's URL and the 1Password logins saved for its domain (no secrets).
+pub async fn find_logins(
+    client: &HubClient,
+    browser: &str,
+) -> Result<(String, Vec<onepassword::LoginItem>), CliError> {
+    let (_, info) = resolve_browser_info(client, browser).await?;
+    let domain = page_domain(&info.url)?;
+    let items = onepassword::matching(onepassword::list_login_items().await?, &domain);
+    Ok((info.url, items))
+}
+
+/// What the node reports about a login: field names and frame hosts only.
+pub struct LoginOutcome {
+    pub reply: Value,
+}
+
+/// Log in with a 1Password item: fetch its credentials, check the page is on
+/// one of the item's domains, and let the node fill the form (it re-checks
+/// every frame it fills).
+pub async fn login_with_item(
+    client: &HubClient,
+    browser: &str,
+    item: &str,
+    submit: bool,
+) -> Result<LoginOutcome, CliError> {
+    let (machine_id, info) = resolve_browser_info(client, browser).await?;
+    let domain = page_domain(&info.url)?;
+    let credentials = onepassword::get_credentials(item).await?;
+    if credentials.domains.is_empty() {
+        return Err(CliError::Usage(
+            "that 1Password item has no website; add its URL in 1Password first".to_string(),
+        ));
+    }
+    if !credentials.domains.contains(&domain) {
+        return Err(CliError::Usage(format!(
+            "that 1Password item is for {}, but the browser is on {domain}; not filling it",
+            credentials.domains.join(", ")
+        )));
+    }
+    if credentials.username.is_none() && credentials.password.is_none() {
+        return Err(CliError::Usage(
+            "that 1Password item has no username or password".to_string(),
+        ));
+    }
+    let reply = call(
+        client,
+        &machine_id,
+        AgentBrowserCommand::Login {
+            browser_id: info.id,
+            username: credentials.username,
+            password: credentials.password,
+            allowed_domains: credentials.domains,
+            submit,
+        },
+    )
+    .await?;
+    Ok(LoginOutcome { reply })
 }
 
 pub async fn fill_element(
@@ -494,8 +604,44 @@ pub async fn snapshot(client: &HubClient, browser: &str) -> Result<(), CliError>
     Ok(())
 }
 
-pub async fn click(client: &HubClient, browser: &str, element: String) -> Result<(), CliError> {
-    click_element(client, browser, element).await
+pub async fn click(
+    client: &HubClient,
+    browser: &str,
+    element: Option<String>,
+    text: Option<String>,
+) -> Result<(), CliError> {
+    let target = ClickTarget::from_args(element, text)?;
+    if let Some(clicked) = click_element(client, browser, target).await? {
+        super::out_line(&format!("clicked {clicked}"));
+    }
+    Ok(())
+}
+
+/// The `logins` table, or JSON with `--json`.
+pub async fn logins(client: &HubClient, browser: &str, json: bool) -> Result<(), CliError> {
+    let (url, items) = find_logins(client, browser).await?;
+    if json {
+        super::out_line(&super::json_pretty(&items)?);
+        return Ok(());
+    }
+    if items.is_empty() {
+        eprintln!("no 1Password login is saved for {url}");
+        return Ok(());
+    }
+    super::out_line(&onepassword::format_table(&items));
+    Ok(())
+}
+
+/// Fill a 1Password login into the page; prints what was filled (never values).
+pub async fn login(
+    client: &HubClient,
+    browser: &str,
+    item: &str,
+    submit: bool,
+) -> Result<(), CliError> {
+    let outcome = login_with_item(client, browser, item, submit).await?;
+    super::out_line(&outcome.reply.to_string());
+    Ok(())
 }
 
 pub async fn fill(
@@ -709,5 +855,26 @@ mod tests {
         assert!(message.contains("Please log in"), "{message}");
         assert_eq!(CliError::Usage("x".into()).exit_code(), 2);
         assert_eq!(CliError::WaitTimeout.exit_code(), 1);
+    }
+
+    #[test]
+    fn click_needs_exactly_one_of_ref_and_text() {
+        assert!(matches!(
+            ClickTarget::from_args(Some("e1".into()), None),
+            Ok(ClickTarget::Ref(r)) if r == "e1"
+        ));
+        assert!(matches!(
+            ClickTarget::from_args(None, Some("账密登录".into())),
+            Ok(ClickTarget::Text(t)) if t == "账密登录"
+        ));
+        assert!(ClickTarget::from_args(None, None).is_err());
+        assert!(ClickTarget::from_args(Some("e1".into()), Some("x".into())).is_err());
+    }
+
+    #[test]
+    fn page_domain_is_the_registrable_domain() {
+        assert_eq!(page_domain("https://passport.aliyun.com/a").unwrap(), "aliyun.com");
+        assert!(page_domain("about:blank").is_err());
+        assert!(page_domain("").is_err());
     }
 }

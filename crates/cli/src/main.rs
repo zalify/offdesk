@@ -215,7 +215,7 @@ Exit codes:
   0  success (wait: matched; handoff --wait / wait-control: a person is done)
   1  timeout (wait, handoff --wait, wait-control)
   2  error
-  3  a person is controlling the browser, so goto/click/fill/press/close were
+  3  a person is controlling the browser, so goto/click/fill/press/login/close were
      refused. Run `offdesk browser wait-control <browser>` to wait for them,
      or `offdesk browser handoff <browser> --reason \"...\" --wait` to ask for
      help and wait until they hand control back. snapshot, screenshot, wait
@@ -232,7 +232,8 @@ Register it with an agent that speaks MCP, from inside an offdesk terminal:
 
 Tools: browser_open, browser_list, browser_close, browser_goto,
 browser_snapshot, browser_click, browser_fill, browser_press, browser_wait,
-browser_screenshot, browser_handoff, browser_wait_control. They make the same
+browser_screenshot, browser_handoff, browser_wait_control, browser_logins,
+browser_login. They make the same
 hub calls as `offdesk browser ...`; the hub URL and token come from the same
 flags, OFFDESK_URL / OFFDESK_TOKEN, or config.toml. Only JSON-RPC goes to
 stdout; diagnostics go to stderr.
@@ -330,12 +331,37 @@ enum BrowserAction {
         /// Browser id or unique prefix
         browser: String,
     },
-    /// Click an element from the latest snapshot
+    /// Click an element from the latest snapshot, or the smallest visible
+    /// element with some text (in any iframe)
     Click {
         /// Browser id or unique prefix
         browser: String,
         /// Element ref, e.g. e12
-        element: String,
+        #[arg(required_unless_present = "text", conflicts_with = "text")]
+        element: Option<String>,
+        /// Click by visible text instead of a ref, e.g. --text "账密登录"
+        #[arg(long)]
+        text: Option<String>,
+    },
+    /// List the 1Password logins saved for the page the browser is on (no secrets)
+    Logins {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Log in with a 1Password item: fills username and password into the
+    /// page's form (iframes too); the secret is never printed
+    Login {
+        /// Browser id or unique prefix
+        browser: String,
+        /// 1Password item id or exact title (see `logins`)
+        #[arg(long)]
+        item: String,
+        /// Press Enter after filling
+        #[arg(long)]
+        submit: bool,
     },
     /// Type text into an element from the latest snapshot
     Fill {
@@ -649,9 +675,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             BrowserAction::Snapshot { browser } => {
                 commands::browser::snapshot(&hub_client, &browser).await
             }
-            BrowserAction::Click { browser, element } => {
-                commands::browser::click(&hub_client, &browser, element).await
+            BrowserAction::Click {
+                browser,
+                element,
+                text,
+            } => commands::browser::click(&hub_client, &browser, element, text).await,
+            BrowserAction::Logins { browser, json } => {
+                commands::browser::logins(&hub_client, &browser, json).await
             }
+            BrowserAction::Login {
+                browser,
+                item,
+                submit,
+            } => commands::browser::login(&hub_client, &browser, &item, submit).await,
             BrowserAction::Fill {
                 browser,
                 element,
@@ -762,5 +798,29 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             };
             commands::layout::run(&hub_client, op, args.machine, &args.group, args.json).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
+        Cli::try_parse_from(std::iter::once("offdesk").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn browser_click_takes_a_ref_or_text() {
+        assert!(parse(&["browser", "click", "b1", "e3"]).is_ok());
+        assert!(parse(&["browser", "click", "b1", "--text", "账密登录"]).is_ok());
+        assert!(parse(&["browser", "click", "b1"]).is_err());
+        assert!(parse(&["browser", "click", "b1", "e3", "--text", "x"]).is_err());
+    }
+
+    #[test]
+    fn browser_login_commands_parse() {
+        assert!(parse(&["browser", "logins", "b1", "--json"]).is_ok());
+        assert!(parse(&["browser", "login", "b1", "--item", "Aliyun", "--submit"]).is_ok());
+        assert!(parse(&["browser", "login", "b1"]).is_err());
     }
 }
