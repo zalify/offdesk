@@ -11,46 +11,22 @@ import {
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
 import { Globe, Hand, Maximize2, Minimize2, X } from "lucide-react";
 import {
-  agentBrowserWsUrl,
-  closeAgentBrowser,
-  controlAgentBrowser,
-} from "@/lib/api";
-import {
   containedImageRect,
   isComposingKey,
   keyEvent,
   mapClientPointToViewport,
   mouseEvent,
-  parseFrameMeta,
   textEvent,
   wheelEvent,
-  type AgentBrowserFrameMeta,
 } from "@/lib/agentBrowserInput";
-import { getPersistentDeviceId } from "@/lib/deviceId";
 import { usePrefixKey } from "@/lib/prefixKeyContext";
-import { openSocket } from "@/lib/secureTransport";
-import { createTerminalReconnectController } from "@/lib/terminalReconnect";
+import {
+  DESKTOP_STREAM_QUALITY,
+  STREAM_STATE_LABEL,
+  useAgentBrowserStream,
+} from "@/lib/useAgentBrowserStream";
 import { browserLabel } from "@/lib/terminalWorkspaceLayout";
 import { colors, colorAlpha } from "@/lib/colors";
-
-// The agent browser's viewport is fixed at 1280x800 on the node; the stream
-// is only ever downscaled to the pane.
-const MAX_STREAM_WIDTH = 1280;
-const MAX_STREAM_HEIGHT = 800;
-const MIN_STREAM_SIZE = 200;
-const STREAM_QUALITY = 60;
-const PARAMS_DEBOUNCE_MS = 250;
-const RECONNECT_DELAY_MS = 1000;
-
-type StreamState = "connecting" | "live" | "reconnecting" | "paused" | "closed";
-
-const STATE_LABEL: Record<StreamState, string> = {
-  connecting: "Connecting",
-  live: "Live",
-  reconnecting: "Reconnecting",
-  paused: "Paused",
-  closed: "Closed",
-};
 
 const bannerButton = {
   fontSize: 10,
@@ -78,10 +54,6 @@ function shortUrl(url: string): string {
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
 
-function clampSize(value: number, max: number): number {
-  return Math.max(MIN_STREAM_SIZE, Math.min(max, Math.round(value)));
-}
-
 // Live screencast of one agent browser. View only until the person takes
 // control, then pointer, wheel, keyboard, IME and paste input goes to the
 // page. Streams only while the pane is visible (its tab is active and the
@@ -106,237 +78,34 @@ export function AgentBrowserPane({
   onToggleMaximize?: (id: string) => void;
   onFocus: (id: string) => void;
 }) {
-  const machineId = browser.machine_id ?? "";
   const browserId = browser.id;
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const metaRef = useRef<AgentBrowserFrameMeta | null>(null);
-  const framesRef = useRef(0);
   const prefixKey = usePrefixKey();
-  const paramsRef = useRef({
-    max_width: MAX_STREAM_WIDTH,
-    max_height: MAX_STREAM_HEIGHT,
-    quality: STREAM_QUALITY,
-  });
-  const sentParamsRef = useRef("");
-
-  const [documentHidden, setDocumentHidden] = useState(
-    typeof document !== "undefined" && document.hidden,
-  );
-  const [generation, setGeneration] = useState(0);
-  const [state, setState] = useState<StreamState>("connecting");
-  const [hasFrame, setHasFrame] = useState(false);
-  const [closing, setClosing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [deviceId, setDeviceId] = useState<string | null>(null);
-  const [controlBusy, setControlBusy] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
 
-  const controller = browser.controller ?? "agent";
-  const mine =
-    controller === "human" &&
-    deviceId !== null &&
-    browser.controller_device_id === deviceId;
-  const otherDevice = controller === "human" && !mine;
-
-  const streaming =
-    visible && !documentHidden && machineId !== "" && deviceId !== null;
-
-  useEffect(() => {
-    let cancelled = false;
-    void getPersistentDeviceId().then((id) => {
-      if (!cancelled) setDeviceId(id);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    const onVisibility = () => setDocumentHidden(document.hidden);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, []);
-
-  const sendParams = useCallback(() => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    const message = JSON.stringify({ type: "params", ...paramsRef.current });
-    if (message === sentParamsRef.current) return;
-    sentParamsRef.current = message;
-    ws.send(message);
-  }, []);
-
-  // Size the stream to the pane body: no point decoding more pixels than the
-  // pane can show.
-  useEffect(() => {
-    const body = bodyRef.current;
-    if (!body) return;
-    let timer = 0;
-    const measure = (width: number, height: number) => {
-      const dpr = window.devicePixelRatio || 1;
-      paramsRef.current = {
-        max_width: clampSize(width * dpr, MAX_STREAM_WIDTH),
-        max_height: clampSize(height * dpr, MAX_STREAM_HEIGHT),
-        quality: STREAM_QUALITY,
-      };
-      sendParams();
-    };
-    const observer = new ResizeObserver((entries) => {
-      const rect = entries[entries.length - 1]?.contentRect;
-      if (!rect) return;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(
-        () => measure(rect.width, rect.height),
-        PARAMS_DEBOUNCE_MS,
-      );
-    });
-    observer.observe(body);
-    const rect = body.getBoundingClientRect();
-    measure(rect.width, rect.height);
-    return () => {
-      window.clearTimeout(timer);
-      observer.disconnect();
-    };
-  }, [sendParams]);
-
-  useEffect(() => {
-    if (!streaming) {
-      setState((current) => (current === "closed" ? current : "paused"));
-      return;
-    }
-    let disposed = false;
-    let destroyed = false;
-    let decoding = false;
-    let pending: Uint8Array | null = null;
-
-    const ws = openSocket(agentBrowserWsUrl(machineId, browserId, deviceId ?? undefined));
-    ws.binaryType = "arraybuffer";
-    wsRef.current = ws;
-    sentParamsRef.current = "";
-    setState(generation === 0 ? "connecting" : "reconnecting");
-
-    const reconnect = createTerminalReconnectController<number>({
-      delayMs: RECONNECT_DELAY_MS,
-      openReadyState: WebSocket.OPEN,
-      onReconnect: () => {
-        if (!disposed) setGeneration((value) => value + 1);
-      },
-      schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),
-      cancel: (timerId) => window.clearTimeout(timerId),
-    });
-
-    const drawLoop = async () => {
-      if (decoding) return;
-      decoding = true;
-      try {
-        while (pending && !disposed) {
-          // Latest frame wins; anything older was superseded while decoding.
-          const jpeg = pending;
-          pending = null;
-          let bitmap: ImageBitmap | null = null;
-          try {
-            bitmap = await createImageBitmap(
-              new Blob([jpeg as BlobPart], { type: "image/jpeg" }),
-            );
-            const canvas = canvasRef.current;
-            if (disposed || !canvas) continue;
-            if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-              canvas.width = bitmap.width;
-              canvas.height = bitmap.height;
-            }
-            canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
-            framesRef.current += 1;
-            canvas.dataset.frames = String(framesRef.current);
-            setHasFrame(true);
-          } catch {
-            // A corrupt frame is skipped; the ack below still unblocks the hub.
-          } finally {
-            bitmap?.close();
-          }
-          if (!disposed && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "ack" }));
-          }
-        }
-      } finally {
-        decoding = false;
-      }
-    };
-
-    ws.onopen = () => {
-      reconnect.handleSocketOpen();
-      setState("live");
-      sendParams();
-    };
-    ws.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        try {
-          const message = JSON.parse(event.data) as { type?: string };
-          if (message.type === "destroyed") {
-            destroyed = true;
-            setState("closed");
-          }
-        } catch {
-          // ignore malformed control messages
-        }
-        return;
-      }
-      // [u16 BE meta_len][meta JSON][jpeg]
-      const data = new Uint8Array(event.data as ArrayBuffer);
-      if (data.length < 2) return;
-      const metaLen = (data[0] << 8) | data[1];
-      if (data.length < 2 + metaLen) return;
-      metaRef.current = parseFrameMeta(data.subarray(2, 2 + metaLen));
-      pending = data.subarray(2 + metaLen);
-      void drawLoop();
-    };
-    ws.onclose = () => {
-      if (disposed || destroyed) return;
-      setState("reconnecting");
-      reconnect.scheduleReconnect();
-    };
-    ws.onerror = () => {
-      // onclose follows and schedules the reconnect.
-    };
-
-    return () => {
-      disposed = true;
-      reconnect.cancelReconnect();
-      if (wsRef.current === ws) wsRef.current = null;
-      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
-      ws.close();
-    };
-  }, [streaming, machineId, browserId, deviceId, generation, sendParams]);
-
-  const changeControl = useCallback(
-    async (action: "take" | "release") => {
-      if (!deviceId) return;
-      setControlBusy(true);
-      setError(null);
-      try {
-        await controlAgentBrowser(machineId, browserId, {
-          action,
-          device_id: deviceId,
-        });
-      } catch (e) {
-        setError(
-          `Could not ${action === "take" ? "take over" : "hand back"}: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      } finally {
-        setControlBusy(false);
-      }
-    },
-    [deviceId, machineId, browserId],
-  );
-
-  const sendInput = useCallback((event: AgentBrowserInputEvent) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "input", event }));
-  }, []);
+  const {
+    deviceId,
+    mine,
+    otherDevice,
+    state,
+    hasFrame,
+    metaRef,
+    sendInput,
+    changeControl,
+    controlBusy,
+    error,
+    closing,
+    closeBrowser,
+  } = useAgentBrowserStream({
+    browser,
+    visible,
+    quality: DESKTOP_STREAM_QUALITY,
+    bodyRef,
+    canvasRef,
+  });
 
   /** Viewport point of a client position; `clamp` pins it to the image edge (drags). */
   const viewportPoint = useCallback(
@@ -359,7 +128,7 @@ export function AgentBrowserPane({
         metaRef.current,
       );
     },
-    [],
+    [metaRef],
   );
 
   // Take focus into the hidden textarea whenever the person is in control, so
@@ -506,26 +275,6 @@ export function AgentBrowserPane({
     if (text) sendInput(text);
   };
 
-  const handleClose = useCallback(async () => {
-    setClosing(true);
-    setError(null);
-    try {
-      // The hub refuses to close a browser a person controls; hand it back first.
-      if (mine && deviceId) {
-        await controlAgentBrowser(machineId, browserId, {
-          action: "release",
-          device_id: deviceId,
-        });
-      }
-      await closeAgentBrowser(machineId, browserId);
-    } catch (e) {
-      setError(
-        `Could not close the browser: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      setClosing(false);
-    }
-  }, [machineId, browserId, mine, deviceId]);
-
   const label = browserLabel(browser);
   const highlighted = isActive && focusRing;
   const iconButton = {
@@ -576,7 +325,7 @@ export function AgentBrowserPane({
           data-testid="agent-browser-close"
           onClick={(e) => {
             e.stopPropagation();
-            if (!closing) void handleClose();
+            if (!closing) void closeBrowser();
           }}
           disabled={closing}
           style={{ ...iconButton, color: colors.danger, opacity: closing ? 0.3 : 0.6 }}
@@ -676,7 +425,7 @@ export function AgentBrowserPane({
             flexShrink: 0,
           }}
         >
-          {STATE_LABEL[state]}
+          {STREAM_STATE_LABEL[state]}
         </span>
         {onToggleMaximize && (
           <button

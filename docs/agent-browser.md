@@ -22,6 +22,34 @@ back** button, connection state and a close button (see
 visible: a hidden tab or a hidden browser window holds no connection, and the
 node stops the screencast when the last viewer leaves.
 
+### On the phone
+
+The mobile web UI (and the Android app, which wraps it) lists the agent browsers
+of the active machine in the session switcher, with a globe icon: in the tab of
+the terminal that opened it, or in a tab of its own. Picking one shows it
+full-width in place of the terminal (terminals stay connected underneath); a
+machine that has only browsers opens its browser straight away. The header has
+the page title, who is in control, **Take over** / **Hand back** and close; a
+handoff shows the same banner as on the desktop, and also appears in the bar of
+sessions needing attention at the top of the phone UI with its reason (tap it to
+open the browser).
+
+- **Zoom** is local, a view aid that is never sent to the page. The page is
+  1280x800, so on a phone it is small: pinch to zoom 1x to 3x around your
+  fingers and drag with two fingers to pan. Double-tap toggles 1x and 2.5x at
+  the tap point while you are *not* in control (one finger also pans a zoomed
+  view then); a chip in the corner resets it.
+- **While you are in control** one finger is the mouse: a tap is a left click,
+  a one-finger drag scrolls the page (it follows your finger, like native
+  scrolling), and holding still for about half a second is a right click. Two
+  fingers are always zoom and pan and never reach the page.
+- **Keyboard.** The keyboard button in the bar under the page opens the soft
+  keyboard. Typed text and committed IME text are sent as text (a composition is
+  sent once, when you commit it), and the bar has Esc, Tab, arrows, Backspace
+  and Enter keys.
+- The stream is sized to the view (times the device pixel ratio, at most
+  1280x800) at JPEG quality 50.
+
 ## Commands
 
 ```

@@ -80,6 +80,7 @@ import { CheatSheetOverlay } from "./CheatSheetOverlay.web";
 import { UpdateNotification } from "./UpdateNotification";
 import { useAuth } from "@/lib/auth";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
+import { releaseAndCloseAgentBrowser } from "@/lib/useAgentBrowserStream";
 import {
   MAX_PANES_PER_TAB,
   buildReorderPersistentGroupIds,
@@ -733,15 +734,16 @@ function TerminalCanvasInner() {
     return terminals.filter((t) => t.machine_id === activeMachine.id);
   }, [terminals, activeMachine]);
 
-  // Agent browsers of the active machine. Compact/mobile has no browser
-  // pane yet, so it gets none and its tabs stay terminal-only.
+  // Agent browsers of the active machine. Compact/mobile feeds them to the
+  // session switcher and shows one full-width (the terminal workspace there
+  // still gets none: it stays terminal-only).
   const scopedAgentBrowsers = useMemo<AgentBrowserInfo[]>(() => {
-    if (!activeMachine || isCompact) return NO_AGENT_BROWSERS;
+    if (!activeMachine) return NO_AGENT_BROWSERS;
     const own = browserState.agentBrowsers.filter(
       (browser) => browser.machine_id === activeMachine.id,
     );
     return own.length > 0 ? own : NO_AGENT_BROWSERS;
-  }, [browserState.agentBrowsers, activeMachine, isCompact]);
+  }, [browserState.agentBrowsers, activeMachine]);
 
   const activeMachineWorkspaceGroups = useMemo<WorkspaceGroupInfo[]>(() => {
     if (!activeMachine) return [];
@@ -1131,6 +1133,42 @@ function TerminalCanvasInner() {
     dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: id });
     window.history.pushState(null, "", `#/t/${id}`);
   }, []);
+
+  // Mobile: the agent browser shown instead of the terminal workspace. A
+  // browser id is not a terminal, so it has no zoom state or #/t/ route.
+  const [mobileBrowserId, setMobileBrowserId] = useState<string | null>(null);
+  const mobileBrowser = useMemo<AgentBrowserInfo | null>(() => {
+    if (!isCompact) return null;
+    const picked = scopedAgentBrowsers.find(
+      (browser) => browser.id === mobileBrowserId,
+    );
+    if (picked) return picked;
+    // A machine with only browsers has no terminal to show instead.
+    return scopedTerminals.length === 0 ? (scopedAgentBrowsers[0] ?? null) : null;
+  }, [isCompact, scopedAgentBrowsers, mobileBrowserId, scopedTerminals]);
+  const handleMobilePickTerminal = useCallback(
+    (id: string) => {
+      setMobileBrowserId(null);
+      handleZoomTerminal(id);
+    },
+    [handleZoomTerminal],
+  );
+  const handleMobilePickBrowser = useCallback((id: string) => {
+    // Drop the terminal's soft keyboard; the browser view opens its own.
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+    setMobileBrowserId(id);
+  }, []);
+  const handleMobileCloseBrowser = useCallback(
+    (browser: AgentBrowserInfo) => {
+      void releaseAndCloseAgentBrowser(browser, deviceId).catch((error) => {
+        showWorkspaceToast(
+          `Could not close the browser: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    },
+    [deviceId],
+  );
 
   // Desktop workspace focus: a browser pane id is not a terminal, so it has
   // no zoom state or #/t/ route.
@@ -1757,9 +1795,13 @@ function TerminalCanvasInner() {
               terminals={terminals}
               groups={tabGroups}
               activeTerminalId={workspaceTerminal?.id ?? null}
+              browsers={scopedAgentBrowsers}
+              activeBrowserId={mobileBrowser?.id ?? null}
               canCreateTerminal={isActiveController}
               canSendAttention={(machineId) => !eventsReconnecting && canTypeOnMachine(machineId)}
-              onPickTerminal={handleZoomTerminal}
+              onPickTerminal={handleMobilePickTerminal}
+              onPickBrowser={handleMobilePickBrowser}
+              onCloseBrowser={handleMobileCloseBrowser}
               onSelectGroup={(groupId) =>
                 workspaceCommandsRef.current.selectGroup?.(groupId)
               }

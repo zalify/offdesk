@@ -222,3 +222,340 @@ export function keyEvent(
 export function textEvent(text: string): AgentBrowserInputEvent | null {
   return text === "" ? null : { kind: "text", text };
 }
+
+// ---- Local view zoom (phone) ----
+//
+// A view aid only: it scales the canvas inside its box and is never sent to
+// the page. The canvas is drawn with `transform: translate(x, y) scale(scale)`
+// and `transform-origin: 0 0`, with `x` / `y` in box-local CSS px.
+
+export const VIEW_ZOOM_MIN = 1;
+export const VIEW_ZOOM_MAX = 3;
+/** Zoom a double tap toggles to. */
+export const VIEW_ZOOM_DOUBLE_TAP = 2.5;
+
+export interface ViewZoom {
+  scale: number;
+  x: number;
+  y: number;
+}
+
+export const IDENTITY_VIEW_ZOOM: ViewZoom = { scale: 1, x: 0, y: 0 };
+
+export interface Size {
+  width: number;
+  height: number;
+}
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/** Keep the scale in range and the zoomed canvas covering the whole box. */
+export function clampViewZoom(zoom: ViewZoom, box: Size): ViewZoom {
+  const scale = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, zoom.scale));
+  if (scale === 1) return IDENTITY_VIEW_ZOOM;
+  return {
+    scale,
+    x: Math.min(0, Math.max(box.width * (1 - scale), zoom.x)),
+    y: Math.min(0, Math.max(box.height * (1 - scale), zoom.y)),
+  };
+}
+
+/** Zoom to `scale` keeping the content under `point` (box-local) in place. */
+export function zoomViewAt(
+  zoom: ViewZoom,
+  scale: number,
+  point: Point,
+  box: Size,
+): ViewZoom {
+  const next = Math.min(VIEW_ZOOM_MAX, Math.max(VIEW_ZOOM_MIN, scale));
+  const contentX = (point.x - zoom.x) / zoom.scale;
+  const contentY = (point.y - zoom.y) / zoom.scale;
+  return clampViewZoom(
+    { scale: next, x: point.x - contentX * next, y: point.y - contentY * next },
+    box,
+  );
+}
+
+export function panViewBy(
+  zoom: ViewZoom,
+  dx: number,
+  dy: number,
+  box: Size,
+): ViewZoom {
+  return clampViewZoom({ ...zoom, x: zoom.x + dx, y: zoom.y + dy }, box);
+}
+
+/** Double tap: back to 1x when zoomed, else 2.5x around the tap. */
+export function toggleViewZoomAt(
+  zoom: ViewZoom,
+  point: Point,
+  box: Size,
+): ViewZoom {
+  return zoom.scale > 1
+    ? IDENTITY_VIEW_ZOOM
+    : zoomViewAt(zoom, VIEW_ZOOM_DOUBLE_TAP, point, box);
+}
+
+/**
+ * Two-finger gesture: the content point that was under the fingers' centre at
+ * the start follows the centre (pan) while the scale follows the finger
+ * distance (pinch). All points are box-local.
+ */
+export function pinchViewZoom(
+  start: ViewZoom,
+  startCenter: Point,
+  startDistance: number,
+  center: Point,
+  distance: number,
+  box: Size,
+): ViewZoom {
+  const ratio = startDistance > 0 ? distance / startDistance : 1;
+  const scale = Math.min(
+    VIEW_ZOOM_MAX,
+    Math.max(VIEW_ZOOM_MIN, start.scale * ratio),
+  );
+  const contentX = (startCenter.x - start.x) / start.scale;
+  const contentY = (startCenter.y - start.y) / start.scale;
+  return clampViewZoom(
+    { scale, x: center.x - contentX * scale, y: center.y - contentY * scale },
+    box,
+  );
+}
+
+/**
+ * Client point mapped back through the view zoom: where the same point would
+ * be with the canvas unzoomed. `boxRect` is the untransformed box.
+ */
+export function unzoomClientPoint(
+  clientX: number,
+  clientY: number,
+  boxRect: Rect,
+  zoom: ViewZoom,
+): Point {
+  return {
+    x: boxRect.left + (clientX - boxRect.left - zoom.x) / zoom.scale,
+    y: boxRect.top + (clientY - boxRect.top - zoom.y) / zoom.scale,
+  };
+}
+
+/** `mapClientPointToViewport` for a canvas under a local view zoom. */
+export function mapZoomedClientPointToViewport(
+  clientX: number,
+  clientY: number,
+  boxRect: Rect,
+  zoom: ViewZoom,
+  frameWidth: number,
+  frameHeight: number,
+  meta?: AgentBrowserFrameMeta | null,
+): Point | null {
+  const point = unzoomClientPoint(clientX, clientY, boxRect, zoom);
+  return mapClientPointToViewport(
+    point.x,
+    point.y,
+    boxRect,
+    frameWidth,
+    frameHeight,
+    meta,
+  );
+}
+
+/** Viewport CSS px that one client px covers under the zoom (for drag to wheel). */
+export function viewportPerClientPx(
+  boxRect: Rect,
+  zoom: ViewZoom,
+  frameWidth: number,
+  frameHeight: number,
+  meta?: AgentBrowserFrameMeta | null,
+): number {
+  const image = containedImageRect(boxRect, frameWidth, frameHeight);
+  if (!image) return 1;
+  const deviceWidth = positive(meta?.deviceWidth, AGENT_BROWSER_VIEWPORT.width);
+  const pageScale = positive(meta?.pageScaleFactor, 1);
+  return deviceWidth / pageScale / image.width / zoom.scale;
+}
+
+// ---- Touch gestures (phone) ----
+
+/** A touch that moves farther than this is a drag, not a tap. */
+export const TOUCH_TAP_SLOP_PX = 10;
+/** A touch held this long without moving is a long press. */
+export const TOUCH_LONG_PRESS_MS = 500;
+/** Two taps this close in time and place are a double tap. */
+export const DOUBLE_TAP_MS = 300;
+export const DOUBLE_TAP_SLOP_PX = 30;
+
+export type TouchGesture =
+  | "pending"
+  | "tap"
+  | "drag"
+  | "long-press"
+  | "two-finger";
+
+/**
+ * Classify a touch from what has been observed so far: the most fingers that
+ * were down at once, how far the first finger travelled from where it
+ * started, how long it has been down, and whether it has lifted.
+ *
+ * Two fingers always win (they are reserved for local zoom / pan and never
+ * reach the page), then travel (drag), then time (long press), then a lift
+ * is a tap.
+ */
+export function classifyTouchGesture(state: {
+  maxTouches: number;
+  travel: number;
+  elapsedMs: number;
+  ended: boolean;
+}): TouchGesture {
+  if (state.maxTouches >= 2) return "two-finger";
+  if (state.travel > TOUCH_TAP_SLOP_PX) return "drag";
+  if (state.elapsedMs >= TOUCH_LONG_PRESS_MS) return "long-press";
+  return state.ended ? "tap" : "pending";
+}
+
+export function isDoubleTap(
+  previous: { time: number; x: number; y: number } | null,
+  current: { time: number; x: number; y: number },
+): boolean {
+  return (
+    previous !== null &&
+    current.time - previous.time <= DOUBLE_TAP_MS &&
+    Math.hypot(current.x - previous.x, current.y - previous.y) <=
+      DOUBLE_TAP_SLOP_PX
+  );
+}
+
+/** A left click, or the right click of a long press, as input events. */
+export function tapEvents(
+  point: Point,
+  button: "left" | "right" = "left",
+): AgentBrowserInputEvent[] {
+  const buttons = button === "left" ? 1 : 2;
+  return [
+    {
+      kind: "mouse",
+      action: "move",
+      x: point.x,
+      y: point.y,
+      button: "none",
+      buttons: 0,
+      click_count: 0,
+      modifiers: 0,
+    },
+    {
+      kind: "mouse",
+      action: "down",
+      x: point.x,
+      y: point.y,
+      button,
+      buttons,
+      click_count: 1,
+      modifiers: 0,
+    },
+    {
+      kind: "mouse",
+      action: "up",
+      x: point.x,
+      y: point.y,
+      button,
+      buttons: 0,
+      click_count: 1,
+      modifiers: 0,
+    },
+  ];
+}
+
+/** A one-finger drag as a wheel event: the page follows the finger (inverted). */
+export function dragWheelEvent(
+  point: Point,
+  fingerDeltaX: number,
+  fingerDeltaY: number,
+  viewportPerPx: number,
+): AgentBrowserInputEvent {
+  return {
+    kind: "wheel",
+    x: point.x,
+    y: point.y,
+    delta_x: -fingerDeltaX * viewportPerPx,
+    delta_y: -fingerDeltaY * viewportPerPx,
+    modifiers: 0,
+  };
+}
+
+// ---- Soft keyboard (phone) ----
+
+export type SoftKeyName =
+  | "Enter"
+  | "Backspace"
+  | "Tab"
+  | "Escape"
+  | "ArrowUp"
+  | "ArrowDown"
+  | "ArrowLeft"
+  | "ArrowRight";
+
+const SOFT_KEY_CODES: Record<SoftKeyName, number> = {
+  Enter: 13,
+  Backspace: 8,
+  Tab: 9,
+  Escape: 27,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+};
+
+/** Key down + key up of a named key (the node fills in text for Enter). */
+export function softKeyEvents(name: SoftKeyName): AgentBrowserInputEvent[] {
+  const common = {
+    kind: "key" as const,
+    key: name,
+    code: name,
+    modifiers: 0,
+    key_code: SOFT_KEY_CODES[name],
+  };
+  return [
+    { ...common, action: "down" },
+    { ...common, action: "up" },
+  ];
+}
+
+export type SoftInputAction =
+  | { kind: "text"; text: string }
+  | { kind: "key"; key: "Backspace" | "Enter" };
+
+/**
+ * What a `beforeinput` on the hidden textarea means for the page. Mobile IMEs
+ * mostly send keyCode 229 keydowns, so text is driven from here instead.
+ * Composition text (`insertCompositionText`, and anything while composing)
+ * yields nothing: the committed string arrives once, with `compositionend`
+ * (see `compositionEndAction`).
+ */
+export function softInputAction(
+  inputType: string,
+  data: string | null,
+  isComposing: boolean,
+): SoftInputAction | null {
+  if (isComposing) return null;
+  switch (inputType) {
+    case "insertText":
+    case "insertReplacementText":
+      return data ? { kind: "text", text: data } : null;
+    case "deleteContentBackward":
+      return { kind: "key", key: "Backspace" };
+    case "insertLineBreak":
+    case "insertParagraph":
+      return { kind: "key", key: "Enter" };
+    default:
+      return null;
+  }
+}
+
+/** The string an IME composition committed, sent once at `compositionend`. */
+export function compositionEndAction(
+  data: string | null,
+): SoftInputAction | null {
+  return data ? { kind: "text", text: data } : null;
+}
