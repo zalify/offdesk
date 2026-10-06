@@ -380,6 +380,10 @@ offdesk layout equalize --group <name|cwd:path> [--machine <id>] [--json]
                                                 # rebalance a group's pane splits evenly; web clients update live
 offdesk layout rotate --group <name|cwd:path> [--machine <id>] [--json]
                                                 # flip every split between side-by-side and stacked
+offdesk browser open [URL] [--machine M] [--json]   # open a node's headless Chromium tab; prints its id
+offdesk browser ls [--machine M] [--json]           # list agent browsers
+offdesk browser goto|snapshot|click|fill|press|wait|screenshot|close <browser> ...
+                                                # drive it; see docs/agent-browser.md
 offdesk link [--no-open]                        # open the hub in a browser; on the hub's machine, the sign-in link + code
 ```
 

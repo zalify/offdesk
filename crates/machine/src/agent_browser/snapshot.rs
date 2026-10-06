@@ -29,6 +29,7 @@ const INTERACTIVE_ROLES: &[&str] = &[
 
 /// Roles that carry a live `value` worth showing.
 const VALUE_ROLES: &[&str] = &["textbox", "searchbox", "combobox", "slider", "spinbutton"];
+const LEAF_ROLES: &[&str] = &["textbox", "searchbox", "slider", "spinbutton"];
 
 pub struct SnapshotResult {
     pub text: String,
@@ -92,24 +93,15 @@ fn is_transparent(node: &Value) -> bool {
     if is_ignored(node) {
         return true;
     }
-    let role = role_of(node);
-    matches!(
-        role,
-        "generic"
-            | "none"
-            | "presentation"
-            | "GenericContainer"
-            | "RootWebArea"
-            | "WebArea"
-            | "InlineTextBox"
-            | "ListMarker"
-            | "LineBreak"
-    ) && (role == "RootWebArea"
-        || role == "WebArea"
-        || role == "InlineTextBox"
-        || role == "ListMarker"
-        || role == "LineBreak"
-        || norm(str_of(node, "name")).is_empty())
+    match role_of(node) {
+        // Structural wrappers whose names (if any) only repeat their content.
+        "RootWebArea" | "WebArea" | "InlineTextBox" | "ListMarker" | "LineBreak" | "LabelText"
+        | "MenuListPopup" | "LayoutTable" | "LayoutTableRow" | "LayoutTableCell" => true,
+        "generic" | "none" | "presentation" | "GenericContainer" => {
+            norm(str_of(node, "name")).is_empty()
+        }
+        _ => false,
+    }
 }
 
 enum Item<'a> {
@@ -138,7 +130,9 @@ impl<'a> Ctx<'a> {
         for n in flat {
             if role_of(n) == "StaticText" {
                 let t = norm(str_of(n, "name"));
-                if t.is_empty() {
+                // Skip empty runs and bare separators like "|" or "·".
+                if t.is_empty() || (t.chars().count() <= 2 && !t.chars().any(char::is_alphanumeric))
+                {
                     continue;
                 }
                 if let Some(Item::Text(prev)) = out.last_mut() {
@@ -247,6 +241,11 @@ impl<'a> Ctx<'a> {
             }
         }
 
+        // Text fields already show their value; their text children repeat it.
+        if LEAF_ROLES.contains(&role.as_str()) {
+            self.push(depth, line);
+            return;
+        }
         // A lone text child of an unnamed node reads best inline.
         if name.is_empty() && items.len() == 1 && matches!(items[0], Item::Text(_)) {
             if let Some(Item::Text(t)) = items.into_iter().next() {
@@ -407,6 +406,23 @@ mod tests {
             res.text,
             "- list\n  - listitem\n    - text: See\n    - link \"docs\" [ref=e1]"
         );
+    }
+
+    #[test]
+    fn layout_wrappers_and_text_field_children_are_dropped() {
+        let mut textbox = node("5", Some("4"), "textbox", "Name", &["6"], 5);
+        textbox["value"] = val("string", json!("Ada"));
+        let nodes = vec![
+            node("1", None, "RootWebArea", "", &["2", "7"], 1),
+            node("2", Some("1"), "LayoutTable", "", &["3"], 2),
+            node("3", Some("2"), "LayoutTableCell", "Name Ada", &["4"], 3),
+            node("4", Some("3"), "LabelText", "", &["5"], 4),
+            textbox,
+            node("6", Some("5"), "StaticText", "Ada", &[], 6),
+            node("7", Some("1"), "StaticText", "|", &[], 7),
+        ];
+        let res = ax_tree_to_text(&nodes);
+        assert_eq!(res.text, "- textbox \"Name\" [ref=e1] value=\"Ada\"");
     }
 
     #[test]

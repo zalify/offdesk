@@ -44,6 +44,18 @@ pub enum PendingResult {
         process_name: Option<String>,
     },
     RelayBrief(Result<offdesk_protocol::relay::RelayBrief, String>),
+    /// Node's reply to an agent browser command: its `data`, or its error text.
+    AgentBrowser(Result<serde_json::Value, String>),
+}
+
+/// Why an agent browser command did not produce data.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AgentBrowserError {
+    /// The machine is not connected (or dropped while the request was pending).
+    Offline(String),
+    /// The node ran the command and reported an error.
+    Node(String),
+    Timeout,
 }
 
 pub struct EventSubscription {
@@ -1024,6 +1036,59 @@ impl MachineManager {
         }
     }
 
+    /// Run an agent browser command on a machine and wait for the node's reply.
+    pub async fn agent_browser(
+        &self,
+        machine_id: &str,
+        command: offdesk_protocol::AgentBrowserCommand,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, AgentBrowserError> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            machines.get(machine_id).map(|conn| conn.cmd_tx.clone())
+        };
+        let Some(cmd_tx) = cmd_tx else {
+            self.remove_pending(&request_id).await;
+            return Err(AgentBrowserError::Offline(format!(
+                "Machine {machine_id} is offline"
+            )));
+        };
+        if cmd_tx
+            .send(HubToMachine::AgentBrowser {
+                request_id: request_id.clone(),
+                command,
+            })
+            .await
+            .is_err()
+        {
+            self.remove_pending(&request_id).await;
+            return Err(AgentBrowserError::Offline(
+                "Machine disconnected".to_string(),
+            ));
+        }
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(PendingResult::AgentBrowser(result)))) => {
+                result.map_err(AgentBrowserError::Node)
+            }
+            Ok(Ok(Ok(_))) => Err(AgentBrowserError::Node("Unexpected response".to_string())),
+            Ok(Ok(Err(error))) => Err(AgentBrowserError::Node(error)),
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                Err(AgentBrowserError::Offline(
+                    "Machine disconnected".to_string(),
+                ))
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(AgentBrowserError::Timeout)
+            }
+        }
+    }
+
     /// Send an arbitrary `HubToMachine` command to the machine. Used by the
     /// per-attach WS handler to forward `OpenAttach` / `CloseAttach` /
     /// `AttachInput` etc. without each variant needing its own helper.
@@ -1721,9 +1786,18 @@ impl MachineManager {
                     },
                 );
             }
-            MachineToHub::AgentBrowserResult { request_id, .. } => {
-                // TODO(agent-browser 1b): resolve the pending request.
-                tracing::debug!(request_id = %request_id, "ignoring agent browser result");
+            MachineToHub::AgentBrowserResult {
+                request_id,
+                data,
+                error,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let result = match error {
+                        Some(error) => Err(error),
+                        None => Ok(data.unwrap_or_else(|| serde_json::json!({}))),
+                    };
+                    let _ = tx.send(Ok(PendingResult::AgentBrowser(result)));
+                }
             }
             MachineToHub::AgentSessionExited { session_id, reason } => {
                 tracing::info!(

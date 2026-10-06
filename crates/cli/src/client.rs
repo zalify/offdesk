@@ -178,6 +178,37 @@ impl HubClient {
         .await
     }
 
+    /// Run an agent browser command on a machine; returns the node's reply
+    /// data. The hub answers a node-reported failure with 422 and
+    /// `{"error": "<message>"}`, which becomes the error message as is.
+    pub async fn agent_browser(
+        &self,
+        machine_id: &str,
+        command: &offdesk_protocol::AgentBrowserCommand,
+    ) -> Result<serde_json::Value, CliError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/machines/{machine_id}/agent-browser")))
+            .json(command)
+            .send()
+            .await
+            .map_err(network_error)?;
+        if response.status().is_success() {
+            return response
+                .json()
+                .await
+                .map_err(|error| CliError::Protocol(format!("invalid JSON from hub: {error}")));
+        }
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if status != StatusCode::UNAUTHORIZED {
+            if let Some(message) = error_message(&body) {
+                return Err(CliError::Protocol(message));
+            }
+        }
+        Err(plain_status_error(status, &body))
+    }
+
     pub async fn create_terminal(
         &self,
         machine_id: &str,
@@ -259,8 +290,18 @@ async fn parse_json<T: DeserializeOwned>(response: Response) -> Result<T, CliErr
     Err(status_error(response.status(), response).await)
 }
 
+/// The `error` field of a `{"error": "..."}` body.
+fn error_message(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    value.get("error")?.as_str().map(str::to_string)
+}
+
 async fn status_error(status: StatusCode, response: Response) -> CliError {
     let body = response.text().await.unwrap_or_default();
+    plain_status_error(status, &body)
+}
+
+fn plain_status_error(status: StatusCode, body: &str) -> CliError {
     let body = body.trim();
     match status.as_u16() {
         401 => CliError::Config(
@@ -311,7 +352,17 @@ fn sanitize_device_id(hostname: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_device_id;
+    use super::{error_message, sanitize_device_id};
+
+    #[test]
+    fn error_message_reads_the_error_field() {
+        assert_eq!(
+            error_message(r#"{"error":"no such browser"}"#).as_deref(),
+            Some("no such browser")
+        );
+        assert_eq!(error_message("plain text"), None);
+        assert_eq!(error_message(r#"{"other":1}"#), None);
+    }
 
     #[test]
     fn sanitize_device_id_prefixes_plain_hostnames() {

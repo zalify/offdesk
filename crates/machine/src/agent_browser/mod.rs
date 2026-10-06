@@ -7,6 +7,7 @@
 
 mod cdp;
 mod chromium;
+mod download;
 mod keys;
 mod snapshot;
 
@@ -107,10 +108,12 @@ impl AgentBrowserManager {
                 timeout_ms,
             } => {
                 let tab = self.tab(&browser_id).await?;
-                Ok(match tab.wait(text, url_regex, idle_ms, timeout_ms).await? {
-                    None => json!({"matched": true}),
-                    Some(message) => json!({"matched": false, "message": message}),
-                })
+                Ok(
+                    match tab.wait(text, url_regex, idle_ms, timeout_ms).await? {
+                        None => json!({"matched": true}),
+                        Some(message) => json!({"matched": false, "message": message}),
+                    },
+                )
             }
             C::Screenshot {
                 browser_id,
@@ -170,7 +173,7 @@ impl AgentBrowserManager {
         if let Some(r) = &state.chromium {
             return Ok(r.client.clone());
         }
-        let binary = chromium::discover()?;
+        let binary = self.find_or_download_chromium().await?;
         let launched = chromium::launch(
             &binary,
             &self.dir.join("profile"),
@@ -191,6 +194,23 @@ impl AgentBrowserManager {
             client: client.clone(),
         });
         Ok(client)
+    }
+
+    /// Env/PATH/app-bundle discovery, then a previously downloaded Chrome
+    /// for Testing, then a fresh download. Runs under the state lock, so
+    /// concurrent opens cannot download twice.
+    async fn find_or_download_chromium(&self) -> Result<PathBuf, String> {
+        match chromium::discover() {
+            Err(e) if e == chromium::NO_CHROMIUM => {}
+            other => return other,
+        }
+        if let Some(p) = download::current_platform()
+            .ok()
+            .and_then(|pl| download::installed(&self.dir, &pl))
+        {
+            return Ok(p);
+        }
+        download::install(&self.dir).await
     }
 
     async fn open(&self, url: Option<String>) -> Result<AgentBrowserInfo, String> {
@@ -632,6 +652,49 @@ mod tests {
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
+    }
+
+    /// Real download of Chrome for Testing (~150 MB), then drive it. Needs
+    /// network, and `OFFDESK_CHROMIUM` unset with no Chrome on PATH.
+    #[tokio::test]
+    #[ignore]
+    async fn downloads_and_drives_chrome_for_testing() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_some() {
+            eprintln!("OFFDESK_CHROMIUM is set; skipping download test");
+            return;
+        }
+        if chromium::discover().is_ok() {
+            eprintln!("a system Chromium exists; skipping download test");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("offdesk-agent-dl-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let started = Instant::now();
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some("data:text/html,<title>CfT</title><button>Go</button>".to_string()),
+            })
+            .await
+            .unwrap();
+        eprintln!("download + launch took {:?}", started.elapsed());
+        assert_eq!(info["title"], "CfT");
+        let id = info["id"].as_str().unwrap().to_string();
+        let snap = mgr
+            .execute(AgentBrowserCommand::Snapshot {
+                browser_id: id.clone(),
+            })
+            .await
+            .unwrap();
+        assert!(
+            snap["snapshot"].as_str().unwrap().contains("button"),
+            "{snap}"
+        );
+        mgr.execute(AgentBrowserCommand::Close { browser_id: id })
+            .await
+            .unwrap();
+        let platform = download::current_platform().unwrap();
+        assert!(download::installed(&dir, &platform).is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// End-to-end against a real Chromium. Skips unless `OFFDESK_CHROMIUM`

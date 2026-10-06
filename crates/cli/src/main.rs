@@ -185,6 +185,11 @@ enum Commands {
         #[command(subcommand)]
         action: LayoutAction,
     },
+    /// Drive a node's headless Chromium (the agent browser)
+    Browser {
+        #[command(subcommand)]
+        action: BrowserAction,
+    },
     /// Open the hub in a browser. On the machine that runs the hub this is
     /// `offdesk-hub link`: the sign-in link, with the code for a phone;
     /// elsewhere it opens the hub's address
@@ -229,6 +234,100 @@ enum TodoAction {
     Reopen { todo: String },
     /// Delete a to-do
     Rm { todo: String },
+}
+
+#[derive(Subcommand)]
+enum BrowserAction {
+    /// Open a new agent browser tab; prints its id
+    Open {
+        /// URL to load (default: blank page)
+        #[arg(value_name = "URL")]
+        page: Option<String>,
+        /// Machine id, unique id prefix, or name (default: the only online machine, or this one)
+        #[arg(long)]
+        machine: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List agent browsers (on every online machine unless --machine)
+    Ls {
+        /// Machine id, unique id prefix, or name
+        #[arg(long)]
+        machine: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close an agent browser
+    Close {
+        /// Browser id or unique prefix
+        browser: String,
+    },
+    /// Navigate to a URL
+    Goto {
+        /// Browser id or unique prefix
+        browser: String,
+        #[arg(value_name = "URL")]
+        page: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the page as text with [ref=eN] handles for click/fill
+    Snapshot {
+        /// Browser id or unique prefix
+        browser: String,
+    },
+    /// Click an element from the latest snapshot
+    Click {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Element ref, e.g. e12
+        element: String,
+    },
+    /// Type text into an element from the latest snapshot
+    Fill {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Element ref, e.g. e12
+        element: String,
+        text: String,
+    },
+    /// Press a key: Enter, Tab, Escape, ArrowDown, a, ...
+    Press {
+        /// Browser id or unique prefix
+        browser: String,
+        key: String,
+    },
+    /// Wait for text, a URL, or network idle: exit 0 matched, 1 timeout, 2 error
+    Wait {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Page text to wait for
+        #[arg(long)]
+        text: Option<String>,
+        /// Regex the page URL must match
+        #[arg(long = "url-regex")]
+        url_regex: Option<String>,
+        /// Wait until the network has been idle this many ms
+        #[arg(long)]
+        idle: Option<u64>,
+        /// Give up after this many seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+    /// Save a PNG screenshot; prints the file path
+    Screenshot {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Output file (default ./browser-<id>-<timestamp>.png)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+        /// Capture the whole page, not just the viewport
+        #[arg(long)]
+        full: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -432,6 +531,65 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
         Commands::Todo { .. } => unreachable!("todo returns early"),
+        Commands::Browser { action } => match action {
+            BrowserAction::Open {
+                page,
+                machine,
+                json,
+            } => {
+                let local =
+                    commands::todo::read_local_machine(&commands::todo::local_machine_path());
+                let local_id = local.as_ref().map(|m| m.machine_id.as_str());
+                commands::browser::open(&hub_client, machine.as_deref(), local_id, page, json).await
+            }
+            BrowserAction::Ls { machine, json } => {
+                commands::browser::ls(&hub_client, machine.as_deref(), json).await
+            }
+            BrowserAction::Close { browser } => {
+                commands::browser::close(&hub_client, &browser).await
+            }
+            BrowserAction::Goto {
+                browser,
+                page,
+                json,
+            } => commands::browser::goto(&hub_client, &browser, page, json).await,
+            BrowserAction::Snapshot { browser } => {
+                commands::browser::snapshot(&hub_client, &browser).await
+            }
+            BrowserAction::Click { browser, element } => {
+                commands::browser::click(&hub_client, &browser, element).await
+            }
+            BrowserAction::Fill {
+                browser,
+                element,
+                text,
+            } => commands::browser::fill(&hub_client, &browser, element, text).await,
+            BrowserAction::Press { browser, key } => {
+                commands::browser::press(&hub_client, &browser, key).await
+            }
+            BrowserAction::Wait {
+                browser,
+                text,
+                url_regex,
+                idle,
+                timeout,
+            } => {
+                let options = commands::browser::WaitOptions {
+                    text,
+                    url_regex,
+                    idle_ms: idle,
+                    timeout_secs: timeout,
+                };
+                commands::browser::wait(&hub_client, &browser, options).await
+            }
+            BrowserAction::Screenshot {
+                browser,
+                output,
+                full,
+            } => {
+                commands::browser::screenshot(&hub_client, &browser, output.as_deref(), full).await
+            }
+        },
         Commands::Machines { action, json, all } => match action {
             Some(MachinesAction::Rm { machine, yes }) => {
                 commands::machines::rm(&hub_client, &machine, yes).await

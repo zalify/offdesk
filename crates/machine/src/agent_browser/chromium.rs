@@ -83,6 +83,48 @@ pub fn discover() -> Result<PathBuf, String> {
     )
 }
 
+/// Last few lines Chromium wrote to stderr, drained continuously so the pipe
+/// never fills.
+#[derive(Clone, Default)]
+pub struct StderrTail(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
+
+const STDERR_LINES: usize = 20;
+const STDERR_LINE_MAX: usize = 500;
+
+impl StderrTail {
+    pub fn push(&self, line: &str) {
+        let line = line.trim_end();
+        if line.is_empty() {
+            return;
+        }
+        let line: String = line.chars().take(STDERR_LINE_MAX).collect();
+        let mut q = self.0.lock().unwrap();
+        if q.len() == STDERR_LINES {
+            q.pop_front();
+        }
+        q.push_back(line);
+    }
+
+    pub fn text(&self) -> String {
+        let q = self.0.lock().unwrap();
+        q.iter().cloned().collect::<Vec<_>>().join("\n")
+    }
+
+    /// Drain `reader` line by line until EOF.
+    pub async fn drain<R: tokio::io::AsyncRead + Unpin>(self, reader: R) {
+        use tokio::io::AsyncBufReadExt;
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut buf = Vec::new();
+        loop {
+            buf.clear();
+            match reader.read_until(b'\n', &mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => self.push(&String::from_utf8_lossy(&buf)),
+            }
+        }
+    }
+}
+
 pub struct Launched {
     pub child: Child,
     pub ws_url: String,
@@ -114,11 +156,16 @@ pub async fn launch(binary: &Path, profile: &Path, pidfile: &Path) -> Result<Lau
     cmd.arg("about:blank")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to launch {}: {e}", binary.display()))?;
+    let tail = StderrTail::default();
+    let drain = child
+        .stderr
+        .take()
+        .map(|e| tokio::spawn(tail.clone().drain(e)));
     if let Some(pid) = child.id() {
         let _ = std::fs::write(pidfile, pid.to_string());
     }
@@ -136,7 +183,16 @@ pub async fn launch(binary: &Path, profile: &Path, pidfile: &Path) -> Result<Lau
         }
         if let Ok(Some(status)) = child.try_wait() {
             let _ = std::fs::remove_file(pidfile);
-            return Err(format!("Chromium exited during startup ({status})"));
+            // Give the drain task a moment to read what was written before exit.
+            if let Some(d) = drain {
+                let _ = tokio::time::timeout(Duration::from_millis(500), d).await;
+            }
+            let stderr = tail.text();
+            let mut msg = format!("Chromium exited during startup ({status})");
+            if !stderr.is_empty() {
+                msg.push_str(&format!("; stderr:\n{stderr}"));
+            }
+            return Err(msg);
         }
         if tokio::time::Instant::now() >= deadline {
             let _ = child.kill().await;
@@ -188,6 +244,30 @@ mod tests {
             std::env::temp_dir().join(format!("offdesk-chromium-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn stderr_tail_keeps_last_lines() {
+        let t = StderrTail::default();
+        for i in 0..30 {
+            t.push(&format!("line {i}\n"));
+        }
+        t.push("   \n");
+        t.push(&"x".repeat(2000));
+        let text = t.text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), STDERR_LINES);
+        assert_eq!(lines[0], "line 11");
+        assert_eq!(lines[STDERR_LINES - 1].len(), STDERR_LINE_MAX);
+    }
+
+    #[tokio::test]
+    async fn stderr_tail_drains_reader() {
+        let t = StderrTail::default();
+        t.clone()
+            .drain(&b"a\nb: error while loading libnss3.so\n\xff"[..])
+            .await;
+        assert!(t.text().starts_with("a\nb: error while loading libnss3.so"));
     }
 
     #[test]

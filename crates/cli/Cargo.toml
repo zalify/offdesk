@@ -23,5 +23,6 @@ dirs = { workspace = true }
 thiserror = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 regex = "1"
+base64 = "0.22"
 toml = "0.8"
 uuid = { workspace = true }
