@@ -22,6 +22,7 @@ import {
 } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type {
+  AgentBrowserInfo,
   MachineInfo,
   ResourceStats,
   TerminalInfo,
@@ -31,7 +32,7 @@ import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { diskPercent, diskTooltip } from "@/lib/resourceStats";
-import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
+import { browserLabel, collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { HostSwitcher } from "./HostSwitcher.web";
 import { useLongPress } from "@/lib/longPress";
 import { WorkspaceManager } from "./WorkspaceManager.web";
@@ -46,6 +47,8 @@ interface TabBarProps {
   activeGroupId: string | null;
   activeTerminalId: string | null;
   terminalsById: Map<string, TerminalInfo>;
+  /** Agent browsers shown as panes in the tabs (desktop only). */
+  agentBrowsers?: AgentBrowserInfo[];
   // All terminals across machines (HostSwitcher shows per-machine counts).
   terminals: TerminalInfo[];
   machines: MachineInfo[];
@@ -88,6 +91,7 @@ function TabBarComponent({
   activeGroupId,
   activeTerminalId,
   terminalsById,
+  agentBrowsers,
   terminals,
   machines,
   activeMachineId,
@@ -356,7 +360,7 @@ function TabBarComponent({
       >
         {groups.map((group) => {
           const active = group.id === activeGroupId;
-          const annotation = groupAnnotation(group, terminalsById);
+          const annotation = groupAnnotation(group, terminalsById, agentBrowsers);
           return (
             <div
               key={group.id}
@@ -448,6 +452,21 @@ function TabBarComponent({
                   color: active ? terminalTheme.foreground : colors.fg2,
                 }}
               >
+                {groupNeedsPerson(group, agentBrowsers) && (
+                  <span
+                    role="img"
+                    aria-label="The agent needs you"
+                    title="The agent needs you"
+                    data-testid={`workspace-tab-attention-${group.id}`}
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: colors.warn,
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
                 <span style={truncateStyle}>{group.label}</span>
                 {annotation && (
                   <span
@@ -730,6 +749,25 @@ const controlPillStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+/* ---------- tab attention ---------- */
+
+// An agent browser in the tab has asked a person for help and nobody has
+// taken over yet.
+function groupNeedsPerson(
+  group: WorkspaceGroup,
+  agentBrowsers: AgentBrowserInfo[] = [],
+): boolean {
+  if (agentBrowsers.length === 0) return false;
+  return collectPaneTerminalIds(group.root).some((id) =>
+    agentBrowsers.some(
+      (browser) =>
+        browser.id === id &&
+        browser.handoff !== undefined &&
+        browser.controller !== "human",
+    ),
+  );
+}
+
 /* ---------- tab annotation ---------- */
 
 // Distinct pane titles joined with ▏ (deduped, max 2 shown then +N).
@@ -737,13 +775,19 @@ const controlPillStyle: CSSProperties = {
 function groupAnnotation(
   group: WorkspaceGroup,
   terminalsById: Map<string, TerminalInfo>,
+  agentBrowsers: AgentBrowserInfo[] = [],
 ): string | null {
   const paneIds = collectPaneTerminalIds(group.root);
   const titles: string[] = [];
   for (const id of paneIds) {
     const terminal = terminalsById.get(id);
-    if (!terminal) continue;
-    const title = displayTerminalTitle(terminal);
+    const browser = terminal
+      ? undefined
+      : agentBrowsers.find((candidate) => candidate.id === id);
+    if (!terminal && !browser) continue;
+    const title = terminal
+      ? displayTerminalTitle(terminal)
+      : browserLabel(browser!);
     if (!titles.includes(title)) titles.push(title);
   }
   if (titles.length === 0) return null;

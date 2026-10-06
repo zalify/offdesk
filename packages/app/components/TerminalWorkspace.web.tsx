@@ -13,12 +13,14 @@ import type {
   MutableRefObject,
 } from "react";
 import type {
+  AgentBrowserInfo,
   TerminalInfo,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
 } from "@offdesk/shared";
 import { Plus } from "lucide-react";
+import { AgentBrowserPane } from "./AgentBrowserPane.web";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { TerminalCard, type TerminalCardRef } from "./TerminalCard.web";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
@@ -37,6 +39,7 @@ import {
   findAdjacentWorkspacePane,
   flattenWorkspacePanes,
   getActiveWorkspaceGroup,
+  isBrowserTabId,
   isWorkspaceGroupFull,
   mountedWorkspaceGroupIds,
   reconcileTerminalWorkspace,
@@ -50,8 +53,12 @@ import { useLongPress } from "@/lib/longPress";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
 
 interface TerminalWorkspaceProps {
-  terminal: TerminalInfo;
+  /** Anchor terminal; null while the machine has only agent browsers. */
+  terminal: TerminalInfo | null;
+  machineId: string;
   siblings: TerminalInfo[];
+  /** Live agent browsers on this machine; never passed in compact mode. */
+  agentBrowsers?: AgentBrowserInfo[];
   workspaceGroups: WorkspaceGroupInfo[];
   workspaceLayouts: WorkspaceLayoutInfo[];
   isController: boolean;
@@ -129,6 +136,7 @@ type PaneMenuEvent = {
 // Stable no-op so TerminalCard's memo comparator doesn't see a fresh
 // function identity on every parent render (panes never render tab strips).
 const NOOP_SELECT_TAB = () => {};
+const NO_BROWSERS: AgentBrowserInfo[] = [];
 
 // Prefix actions owned by this component (TerminalCanvas owns the rest).
 const WORKSPACE_PREFIX_ACTIONS: PrefixActionId[] = [
@@ -168,7 +176,9 @@ interface WorkspaceDestroyOptions {
 
 function TerminalWorkspaceComponent({
   terminal,
+  machineId,
   siblings,
+  agentBrowsers = NO_BROWSERS,
   workspaceGroups,
   workspaceLayouts,
   isController,
@@ -194,9 +204,10 @@ function TerminalWorkspaceComponent({
   const [workspace, setWorkspace] = useState(() =>
     createTerminalWorkspace(
       siblings,
-      terminal.id,
+      terminal?.id ?? null,
       workspaceGroups,
       workspaceLayouts,
+      agentBrowsers,
     ),
   );
   const workspaceRef = useRef(workspace);
@@ -234,6 +245,14 @@ function TerminalWorkspaceComponent({
     for (const sibling of siblings) map.set(sibling.id, sibling);
     return map;
   }, [siblings]);
+  const browsersById = useMemo(() => {
+    const map = new Map<string, AgentBrowserInfo>();
+    for (const browser of agentBrowsers) map.set(browser.id, browser);
+    return map;
+  }, [agentBrowsers]);
+  // Stable view for requestPaneFit: only terminals take part in fit.
+  const terminalsByIdRef = useRef(terminalsById);
+  terminalsByIdRef.current = terminalsById;
   const [relayRequest, setRelayRequest] =
     useState<AgentRelayContextValue["relayRequest"]>(null);
   const relayContext = useMemo<AgentRelayContextValue>(
@@ -251,18 +270,21 @@ function TerminalWorkspaceComponent({
   // elsewhere; the panes then need the same refit a local layout change gets.
   const adoptedLayoutGroupIdRef = useRef<string | null>(null);
   const layoutSaveQueuesRef = useRef(new Map<string, Promise<void>>());
-  const previousTerminalIdRef = useRef(terminal.id);
+  const anchorTerminalId = terminal?.id ?? null;
+  const previousTerminalIdRef = useRef(anchorTerminalId);
   useEffect(() => {
-    const externalTerminalChanged = previousTerminalIdRef.current !== terminal.id;
-    previousTerminalIdRef.current = terminal.id;
+    const externalTerminalChanged =
+      previousTerminalIdRef.current !== anchorTerminalId;
+    previousTerminalIdRef.current = anchorTerminalId;
     setWorkspace((prev) => {
       let next = reconcileTerminalWorkspace(
         prev,
         siblings,
-        externalTerminalChanged ? terminal.id : prev.activeTerminalId,
+        externalTerminalChanged ? anchorTerminalId : prev.activeTerminalId,
         workspaceGroups,
         workspaceLayouts,
         pendingLayoutSaveGroupIds(layoutSaveQueuesRef.current),
+        agentBrowsers,
       );
       const prevActive = getActiveWorkspaceGroup(prev);
       const nextActive = getActiveWorkspaceGroup(next);
@@ -288,7 +310,7 @@ function TerminalWorkspaceComponent({
       workspaceRef.current = next;
       return next;
     });
-  }, [siblings, terminal.id, workspaceGroups, workspaceLayouts]);
+  }, [siblings, agentBrowsers, anchorTerminalId, workspaceGroups, workspaceLayouts]);
 
   const activeGroup = getActiveWorkspaceGroup(workspace);
   // Keep-alive LRU (size 2): the group active on the previous render stays
@@ -321,7 +343,7 @@ function TerminalWorkspaceComponent({
   const activeTerminal = workspace.activeTerminalId
     ? terminalsById.get(workspace.activeTerminalId) ?? null
     : null;
-  const commandMachineId = activeTerminal?.machine_id ?? terminal.machine_id;
+  const commandMachineId = activeTerminal?.machine_id ?? machineId;
   // Panes in the active group — a group with a single pane renders no
   // focused-pane accent border (a lone pane needs no focus indicator).
   const activeGroupPaneCount = activeGroup
@@ -339,6 +361,8 @@ function TerminalWorkspaceComponent({
       persistenceGroupId = groupId,
     ) => {
       if (!groupId || !persistenceGroupId) return;
+      // A browser's own tab is derived from the live browser, never saved.
+      if (isBrowserTabId(groupId) || isBrowserTabId(persistenceGroupId)) return;
       const group = nextWorkspace.groups.find(
         (candidate) => candidate.id === groupId,
       );
@@ -380,7 +404,10 @@ function TerminalWorkspaceComponent({
         : terminalIds
           ? [terminalIds]
           : [];
-      const uniqueIds = [...new Set(ids)];
+      // Browser panes have no terminal to fit.
+      const uniqueIds = [...new Set(ids)].filter((id) =>
+        terminalsByIdRef.current.has(id),
+      );
       if (uniqueIds.length === 0) return;
       fitRequestCounterRef.current += 1;
       setFitRequest({
@@ -497,7 +524,7 @@ function TerminalWorkspaceComponent({
         if (!activeGroup) return;
         const created = await onCreatePane({
           machineId: commandMachineId,
-          cwd: activeGroup.cwd || terminal.cwd,
+          cwd: activeGroup.cwd || terminal?.cwd || "",
           workspaceGroupId: activeGroup.workspaceGroupId,
         });
         if (!created) return;
@@ -591,7 +618,7 @@ function TerminalWorkspaceComponent({
       onSplit,
       persistGroupLayout,
       requestPaneFit,
-      terminal.cwd,
+      terminal?.cwd,
       updateWorkspace,
     ],
   );
@@ -708,10 +735,12 @@ function TerminalWorkspaceComponent({
           groups,
           workspaceLayouts,
           pendingLayoutSaveGroupIds(layoutSaveQueuesRef.current),
+          agentBrowsers,
         ),
       );
     },
     [
+      agentBrowsers,
       commandMachineId,
       onPromoteGroup,
       onReorderGroups,
@@ -829,6 +858,14 @@ function TerminalWorkspaceComponent({
     // size change needs an explicit refit — mount-time fit doesn't happen.
     requestPaneFit(activeTerminal.id, { focusTerminalId: activeTerminal.id });
   }, [activeTerminal, requestPaneFit]);
+
+  const toggleMaximizeBrowser = useCallback(
+    (browserId: string) => {
+      activateTerminal(browserId);
+      setMaximizedTerminalId((value) => (value === browserId ? null : browserId));
+    },
+    [activateTerminal],
+  );
 
   workspacePrefixActionsRef.current = {
     splitRight: () => void handleSplit("right"),
@@ -1176,8 +1213,19 @@ function TerminalWorkspaceComponent({
                               ),
                             )
                       }
+                      groupVisible={isActiveGroup}
+                      onToggleMaximizeBrowser={toggleMaximizeBrowser}
+                      browsersById={
+                        isActiveGroup
+                          ? browsersById
+                          : new Map(
+                              [...browsersById].filter(
+                                ([id]) => !activePaneIds.has(id),
+                              ),
+                            )
+                      }
                       activeTerminalId={
-                        isActiveGroup ? activeTerminal?.id ?? null : null
+                        isActiveGroup ? workspace.activeTerminalId : null
                       }
                       isController={isController}
                       canType={canType}
@@ -1201,14 +1249,15 @@ function TerminalWorkspaceComponent({
               );
             })}
           </div>
-        ) : maximizedTerminalId ? (
+        ) : maximizedTerminalId &&
+          (terminalsById.get(maximizedTerminalId) ?? activeTerminal ?? terminal) ? (
           // Defensive: a zoom without a layout tree (shouldn't happen in
           // practice) still renders the terminal full-size.
           <WorkspacePaneLeaf
             terminal={
-              terminalsById.get(maximizedTerminalId) ??
-              activeTerminal ??
-              terminal
+              (terminalsById.get(maximizedTerminalId) ??
+                activeTerminal ??
+                terminal)!
             }
             isActive
             isController={isController}
@@ -1277,6 +1326,9 @@ function WorkspacePaneTree({
   node,
   maximizedTerminalId,
   terminalsById,
+  browsersById,
+  groupVisible,
+  onToggleMaximizeBrowser,
   activeTerminalId,
   isController,
   canType,
@@ -1296,6 +1348,10 @@ function WorkspacePaneTree({
   node: WorkspacePaneNode;
   maximizedTerminalId: string | null;
   terminalsById: Map<string, TerminalInfo>;
+  browsersById: Map<string, AgentBrowserInfo>;
+  /** False for a kept-alive group whose tab is not the shown one. */
+  groupVisible: boolean;
+  onToggleMaximizeBrowser: (browserId: string) => void;
   activeTerminalId: string | null;
   isController: boolean;
   canType: boolean;
@@ -1328,7 +1384,8 @@ function WorkspacePaneTree({
     >
       {panes.map((pane) => {
         const terminal = terminalsById.get(pane.terminalId);
-        if (!terminal) return null;
+        const browser = terminal ? undefined : browsersById.get(pane.terminalId);
+        if (!terminal && !browser) return null;
         const isMaximized = pane.terminalId === maximizedTerminalId;
         return (
           <div
@@ -1350,6 +1407,21 @@ function WorkspacePaneTree({
                   }
             }
           >
+            {browser ? (
+              <AgentBrowserPane
+                browser={browser}
+                isActive={
+                  maximizedTerminalId !== null
+                    ? isMaximized
+                    : browser.id === activeTerminalId
+                }
+                focusRing={focusRing}
+                visible={groupVisible}
+                isMaximized={isMaximized}
+                onToggleMaximize={onToggleMaximizeBrowser}
+                onFocus={onFocus}
+              />
+            ) : terminal ? (
             <WorkspacePaneLeaf
               terminal={terminal}
               // While a zoom overlay is up, the zoomed pane is the ONLY
@@ -1387,6 +1459,7 @@ function WorkspacePaneTree({
               onRequestControl={onRequestControl}
               onReleaseControl={onReleaseControl}
             />
+            ) : null}
           </div>
         );
       })}

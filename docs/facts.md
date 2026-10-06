@@ -9,6 +9,19 @@ rename mapping is at the bottom.
 
 ---
 
+## Agent browser (implementation added 2026-10-06)
+
+- A node can own one headless Chromium with a persistent per-machine profile at
+  `<config dir>/agent-browser/profile` and one tab per agent browser; `offdesk
+  browser` drives it through the Hub
+  (`crates/machine/src/agent_browser/`, `crates/hub/src/routes/agent_browser.rs`,
+  `crates/cli/src/commands/browser.rs`).
+- Chromium is taken from `OFFDESK_CHROMIUM`, then `PATH`, then macOS app
+  locations; `OFFDESK_CHROMIUM_NO_SANDBOX` (or running as root) adds
+  `--no-sandbox` (`crates/machine/src/agent_browser/chromium.rs`).
+- Hub time limits: `open` five minutes, `wait` its timeout plus fifteen
+  seconds, other commands sixty seconds (`crates/hub/src/routes/agent_browser.rs`).
+
 ## Web previews (implementation added 2026-09-05)
 
 These facts describe the web-preview feature in this branch, not a production

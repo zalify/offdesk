@@ -3,6 +3,7 @@ mod client;
 mod commands;
 mod config;
 mod keys;
+mod mcp;
 mod resolve;
 
 use clap::{ArgGroup, Parser, Subcommand};
@@ -21,12 +22,35 @@ pub enum CliError {
     Protocol(String),
     #[error("wait timed out")]
     WaitTimeout,
+    /// An agent browser command was refused because a person is controlling
+    /// the browser (`browser` is filled in by the browser commands).
+    #[error("{}", user_in_control_message(.browser, .reason.as_deref()))]
+    UserInControl {
+        browser: String,
+        reason: Option<String>,
+    },
+}
+
+fn user_in_control_message(browser: &str, reason: Option<&str>) -> String {
+    let browser = if browser.is_empty() {
+        "<browser>"
+    } else {
+        browser
+    };
+    let mut message = format!(
+        "A person is controlling this browser. Wait for them with `offdesk browser wait-control {browser}`."
+    );
+    if let Some(reason) = reason {
+        message.push_str(&format!("\nPending handoff request: {reason}"));
+    }
+    message
 }
 
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
             CliError::WaitTimeout => 1,
+            CliError::UserInControl { .. } => 3,
             _ => 2,
         }
     }
@@ -185,6 +209,38 @@ enum Commands {
         #[command(subcommand)]
         action: LayoutAction,
     },
+    /// Drive a node's headless Chromium (the agent browser)
+    #[command(after_help = "\
+Exit codes:
+  0  success (wait: matched; handoff --wait / wait-control: a person is done)
+  1  timeout (wait, handoff --wait, wait-control)
+  2  error
+  3  a person is controlling the browser, so goto/click/fill/press/close were
+     refused. Run `offdesk browser wait-control <browser>` to wait for them,
+     or `offdesk browser handoff <browser> --reason \"...\" --wait` to ask for
+     help and wait until they hand control back. snapshot, screenshot, wait
+     and ls still work while a person is in control.")]
+    Browser {
+        #[command(subcommand)]
+        action: BrowserAction,
+    },
+    /// Serve the agent browser as MCP tools over stdio (for Claude Code, Codex, ...)
+    #[command(after_help = "\
+Register it with an agent that speaks MCP, from inside an offdesk terminal:
+  claude mcp add offdesk -- offdesk mcp
+  codex mcp add offdesk -- offdesk mcp
+
+Tools: browser_open, browser_list, browser_close, browser_goto,
+browser_snapshot, browser_click, browser_fill, browser_press, browser_wait,
+browser_screenshot, browser_handoff, browser_wait_control. They make the same
+hub calls as `offdesk browser ...`; the hub URL and token come from the same
+flags, OFFDESK_URL / OFFDESK_TOKEN, or config.toml. Only JSON-RPC goes to
+stdout; diagnostics go to stderr.
+
+A tool result with isError says a person is controlling the browser (wait with
+browser_wait_control) or the call failed. browser_wait, browser_handoff and
+browser_wait_control that time out are not errors; their text says so.")]
+    Mcp,
     /// Open the hub in a browser. On the machine that runs the hub this is
     /// `offdesk-hub link`: the sign-in link, with the code for a phone;
     /// elsewhere it opens the hub's address
@@ -229,6 +285,124 @@ enum TodoAction {
     Reopen { todo: String },
     /// Delete a to-do
     Rm { todo: String },
+}
+
+#[derive(Subcommand)]
+enum BrowserAction {
+    /// Open a new agent browser tab; prints its id
+    Open {
+        /// URL to load (default: blank page)
+        #[arg(value_name = "URL")]
+        page: Option<String>,
+        /// Machine id, unique id prefix, or name (default: the only online machine, or this one)
+        #[arg(long)]
+        machine: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List agent browsers (on every online machine unless --machine)
+    Ls {
+        /// Machine id, unique id prefix, or name
+        #[arg(long)]
+        machine: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close an agent browser
+    Close {
+        /// Browser id or unique prefix
+        browser: String,
+    },
+    /// Navigate to a URL
+    Goto {
+        /// Browser id or unique prefix
+        browser: String,
+        #[arg(value_name = "URL")]
+        page: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the page as text with [ref=eN] handles for click/fill
+    Snapshot {
+        /// Browser id or unique prefix
+        browser: String,
+    },
+    /// Click an element from the latest snapshot
+    Click {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Element ref, e.g. e12
+        element: String,
+    },
+    /// Type text into an element from the latest snapshot
+    Fill {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Element ref, e.g. e12
+        element: String,
+        text: String,
+    },
+    /// Press a key: Enter, Tab, Escape, ArrowDown, a, ...
+    Press {
+        /// Browser id or unique prefix
+        browser: String,
+        key: String,
+    },
+    /// Wait for text, a URL, or network idle: exit 0 matched, 1 timeout, 2 error
+    Wait {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Page text to wait for
+        #[arg(long)]
+        text: Option<String>,
+        /// Regex the page URL must match
+        #[arg(long = "url-regex")]
+        url_regex: Option<String>,
+        /// Wait until the network has been idle this many ms
+        #[arg(long)]
+        idle: Option<u64>,
+        /// Give up after this many seconds
+        #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+    /// Ask a person for help (log in, solve a captcha, ...); shows a banner on the browser's pane
+    Handoff {
+        /// Browser id or unique prefix
+        browser: String,
+        /// What the person should do
+        #[arg(long)]
+        reason: String,
+        /// Block until a person has taken control and handed it back
+        /// (exit 0; 1 on timeout)
+        #[arg(long)]
+        wait: bool,
+        /// With --wait: give up after this many seconds
+        #[arg(long, default_value = "600", requires = "wait")]
+        timeout: u64,
+    },
+    /// Block until no person controls the browser: exit 0 when the agent may
+    /// drive it, 1 on timeout
+    WaitControl {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Give up after this many seconds
+        #[arg(long, default_value = "600")]
+        timeout: u64,
+    },
+    /// Save a PNG screenshot; prints the file path
+    Screenshot {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Output file (default ./browser-<id>-<timestamp>.png)
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+        /// Capture the whole page, not just the viewport
+        #[arg(long)]
+        full: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -375,6 +549,23 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return link(no_open, url.as_deref());
     }
     let env_token = env_with_legacy("OFFDESK_TOKEN", "WEBMUX_TOKEN");
+    // MCP starts even without a usable config: initialize and tools/list
+    // work, and tool calls report the problem.
+    if let Commands::Mcp = cli.command {
+        let client = config::resolve(
+            cli.url.as_deref(),
+            cli.token.as_deref(),
+            env_url.as_deref(),
+            env_token.as_deref(),
+            file.as_ref(),
+        )
+        .and_then(|resolved| client::HubClient::new(&resolved))
+        .map(std::sync::Arc::new)
+        .map_err(|error| error.to_string());
+        let local = commands::todo::read_local_machine(&commands::todo::local_machine_path());
+        mcp::serve(mcp::Server::new(client, local.map(|m| m.machine_id))).await;
+        return Ok(());
+    }
     // To-dos also work with this machine's own credentials, so they are
     // resolved before the token-only path below.
     if let Commands::Todo { action } = cli.command {
@@ -432,6 +623,75 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
         Commands::Todo { .. } => unreachable!("todo returns early"),
+        Commands::Mcp => unreachable!("mcp returns early"),
+        Commands::Browser { action } => match action {
+            BrowserAction::Open {
+                page,
+                machine,
+                json,
+            } => {
+                let local =
+                    commands::todo::read_local_machine(&commands::todo::local_machine_path());
+                let local_id = local.as_ref().map(|m| m.machine_id.as_str());
+                commands::browser::open(&hub_client, machine.as_deref(), local_id, page, json).await
+            }
+            BrowserAction::Ls { machine, json } => {
+                commands::browser::ls(&hub_client, machine.as_deref(), json).await
+            }
+            BrowserAction::Close { browser } => {
+                commands::browser::close(&hub_client, &browser).await
+            }
+            BrowserAction::Goto {
+                browser,
+                page,
+                json,
+            } => commands::browser::goto(&hub_client, &browser, page, json).await,
+            BrowserAction::Snapshot { browser } => {
+                commands::browser::snapshot(&hub_client, &browser).await
+            }
+            BrowserAction::Click { browser, element } => {
+                commands::browser::click(&hub_client, &browser, element).await
+            }
+            BrowserAction::Fill {
+                browser,
+                element,
+                text,
+            } => commands::browser::fill(&hub_client, &browser, element, text).await,
+            BrowserAction::Press { browser, key } => {
+                commands::browser::press(&hub_client, &browser, key).await
+            }
+            BrowserAction::Wait {
+                browser,
+                text,
+                url_regex,
+                idle,
+                timeout,
+            } => {
+                let options = commands::browser::WaitOptions {
+                    text,
+                    url_regex,
+                    idle_ms: idle,
+                    timeout_ms: timeout.saturating_mul(1000),
+                };
+                commands::browser::wait(&hub_client, &browser, options).await
+            }
+            BrowserAction::Handoff {
+                browser,
+                reason,
+                wait,
+                timeout,
+            } => commands::browser::handoff(&hub_client, &browser, reason, wait, timeout).await,
+            BrowserAction::WaitControl { browser, timeout } => {
+                commands::browser::wait_control(&hub_client, &browser, timeout).await
+            }
+            BrowserAction::Screenshot {
+                browser,
+                output,
+                full,
+            } => {
+                commands::browser::screenshot(&hub_client, &browser, output.as_deref(), full).await
+            }
+        },
         Commands::Machines { action, json, all } => match action {
             Some(MachinesAction::Rm { machine, yes }) => {
                 commands::machines::rm(&hub_client, &machine, yes).await

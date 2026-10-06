@@ -1,3 +1,4 @@
+mod agent_browser_stream;
 mod connections;
 mod secure;
 mod tunnel_check;

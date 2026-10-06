@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { TerminalInfo, WorkspaceGroupInfo } from "@offdesk/shared";
+import type {
+  AgentBrowserInfo,
+  TerminalInfo,
+  WorkspaceGroupInfo,
+} from "@offdesk/shared";
 import {
   labelFromCwd,
   MAX_PANES_PER_TAB,
@@ -1387,6 +1391,168 @@ describe("adopting layouts saved elsewhere", () => {
     ]);
 
     expect(collectPaneTerminalIds(next.groups[0].root)).toEqual(["a", "b"]);
+    expect(next.activeTerminalId).toBe("a");
+  });
+});
+
+describe("agent browser panes", () => {
+  const group = (id: string): WorkspaceGroupInfo => ({
+    id,
+    machine_id: "m1",
+    name: id,
+    sort_order: 0,
+  }) as WorkspaceGroupInfo;
+  const browser = (
+    id: string,
+    extra: Partial<AgentBrowserInfo> = {},
+  ): AgentBrowserInfo => ({
+    id,
+    machine_id: "m1",
+    url: "https://example.com/page",
+    title: "",
+    ...extra,
+  });
+  const inTab = (ids: string[], tab: string) =>
+    ids.map((id) => groupedTerminal(id, "/w", tab));
+  const savedLayout = (root: WorkspacePaneNode, key: string) =>
+    ({ machine_id: "m1", group_key: key, root, updated_at: 5 }) as never;
+
+  it("appends a browser to its opener's tab", () => {
+    const ws = createTerminalWorkspace(
+      inTab(["a", "b"], "g1"),
+      "a",
+      [group("g1")],
+      [],
+      [browser("b1", { opener_terminal_id: "a" })],
+    );
+    expect(ws.groups).toHaveLength(1);
+    expect(collectPaneTerminalIds(ws.groups[0].root)).toEqual(["a", "b", "b1"]);
+    expect(ws.groups[0].paneCount).toBe(3);
+  });
+
+  it("gives a browser its own tab when the opener's tab is full", () => {
+    const ids = ["a", "b", "c", "d"];
+    expect(ids).toHaveLength(MAX_PANES_PER_TAB);
+    const ws = createTerminalWorkspace(
+      inTab(ids, "g1"),
+      "a",
+      [group("g1")],
+      [],
+      [browser("b1", { opener_terminal_id: "a", title: "Docs" })],
+    );
+    expect(ws.groups.map((g) => g.id)).toEqual(["g1", "browser:b1"]);
+    const own = ws.groups[1];
+    expect(own.label).toBe("Docs");
+    expect(own.persistent).toBe(false);
+    expect(collectPaneTerminalIds(own.root)).toEqual(["b1"]);
+    expect(collectPaneTerminalIds(ws.groups[0].root)).toEqual(ids);
+  });
+
+  it("gives an opener-less or unknown-opener browser its own tab, labelled by title or host", () => {
+    const ws = createTerminalWorkspace(
+      inTab(["a"], "g1"),
+      "a",
+      [group("g1")],
+      [],
+      [
+        browser("b1", { title: "Titled" }),
+        browser("b2", { opener_terminal_id: "ghost" }),
+      ],
+    );
+    expect(ws.groups.map((g) => [g.id, g.label])).toEqual([
+      ["g1", "g1"],
+      ["browser:b1", "Titled"],
+      ["browser:b2", "example.com"],
+    ]);
+  });
+
+  it("restores a saved layout containing a browser leaf", () => {
+    const saved = savedLayout(
+      {
+        type: "split",
+        direction: "vertical",
+        ratio: 0.3,
+        first: { type: "leaf", terminalId: "b1" },
+        second: { type: "leaf", terminalId: "a" },
+      },
+      "g1",
+    );
+    const ws = createTerminalWorkspace(
+      inTab(["a"], "g1"),
+      "a",
+      [group("g1")],
+      [saved],
+      [browser("b1", { opener_terminal_id: "a" })],
+    );
+    expect(collectPaneTerminalIds(ws.groups[0].root)).toEqual(["b1", "a"]);
+  });
+
+  it("drops a destroyed browser's leaf and its browser-only tab", () => {
+    const terminals = inTab(["a"], "g1");
+    const browsers = [
+      browser("b1", { opener_terminal_id: "a" }),
+      browser("b2"),
+    ];
+    const ws = createTerminalWorkspace(terminals, "b2", [group("g1")], [], browsers);
+    expect(ws.activeTerminalId).toBe("b2");
+    expect(ws.groups.map((g) => g.id)).toEqual(["g1", "browser:b2"]);
+
+    const next = reconcileTerminalWorkspace(
+      ws,
+      terminals,
+      null,
+      [group("g1")],
+      [],
+      new Set(),
+      [],
+    );
+    expect(next.groups.map((g) => g.id)).toEqual(["g1"]);
+    expect(collectPaneTerminalIds(next.groups[0].root)).toEqual(["a"]);
+    expect(next.activeGroupId).toBe("g1");
+    expect(next.activeTerminalId).toBe("a");
+  });
+
+  it("keeps an active browser pane across reconcile", () => {
+    const terminals = inTab(["a"], "g1");
+    const browsers = [
+      browser("b1", { opener_terminal_id: "a" }),
+      browser("b2"),
+    ];
+    const ws = createTerminalWorkspace(terminals, "b2", [group("g1")], [], browsers);
+    const next = reconcileTerminalWorkspace(
+      ws,
+      terminals,
+      "b2",
+      [group("g1")],
+      [],
+      new Set(),
+      browsers,
+    );
+    expect(next.activeTerminalId).toBe("b2");
+    expect(next.activeGroupId).toBe("browser:b2");
+    const inGroup = reconcileTerminalWorkspace(
+      createTerminalWorkspace(terminals, "b1", [group("g1")], [], browsers),
+      terminals,
+      "b1",
+      [group("g1")],
+      [],
+      new Set(),
+      browsers,
+    );
+    expect(inGroup.activeTerminalId).toBe("b1");
+    expect(inGroup.activeGroupId).toBe("g1");
+  });
+
+  it("removes a browser-only tab when its last pane closes", () => {
+    const ws = createTerminalWorkspace(
+      inTab(["a"], "g1"),
+      "b2",
+      [group("g1")],
+      [],
+      [browser("b2")],
+    );
+    const next = closeWorkspacePane(ws, "b2");
+    expect(next.groups.map((g) => g.id)).toEqual(["g1"]);
     expect(next.activeTerminalId).toBe("a");
   });
 });

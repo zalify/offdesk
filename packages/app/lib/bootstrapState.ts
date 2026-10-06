@@ -1,4 +1,5 @@
 import type {
+  AgentBrowserInfo,
   BrowserEvent,
   BrowserEventEnvelope,
   BrowserStateSnapshot,
@@ -20,6 +21,7 @@ export interface BrowserSessionState {
   machineStats: Record<string, ResourceStats>;
   controlLeases: Record<string, string>;
   todos: TodoInfo[];
+  agentBrowsers: AgentBrowserInfo[];
 }
 
 export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
@@ -32,6 +34,7 @@ export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
   machineStats: {},
   controlLeases: {},
   todos: [],
+  agentBrowsers: [],
 };
 
 export function applyBootstrapSnapshot(
@@ -53,7 +56,22 @@ export function applyBootstrapSnapshot(
       ),
     ),
     todos: snapshot.todos ?? [],
+    agentBrowsers: snapshot.agent_browsers ?? [],
   };
+}
+
+/** Replace or add one agent browser (same machine + id), keeping order. */
+export function upsertAgentBrowser(
+  browsers: AgentBrowserInfo[],
+  browser: AgentBrowserInfo,
+): AgentBrowserInfo[] {
+  const index = browsers.findIndex(
+    (item) => item.id === browser.id && item.machine_id === browser.machine_id,
+  );
+  if (index === -1) return [...browsers, browser];
+  const next = browsers.slice();
+  next[index] = browser;
+  return next;
 }
 
 /** Replace or add one to-do, keeping the list's identity when unchanged. */
@@ -129,6 +147,9 @@ function applyBrowserEvent(
         ),
         workspaceLayouts: state.workspaceLayouts.filter(
           (layout) => layout.machine_id !== machineId,
+        ),
+        agentBrowsers: state.agentBrowsers.filter(
+          (browser) => browser.machine_id !== machineId,
         ),
         machineStats: omitKey(state.machineStats, machineId),
         controlLeases: omitKey(state.controlLeases, machineId),
@@ -225,6 +246,20 @@ function applyBrowserEvent(
       };
     case "todo_upserted":
       return { ...state, todos: upsertTodo(state.todos, event.todo) };
+    case "agent_browser_created":
+    case "agent_browser_updated":
+      return {
+        ...state,
+        agentBrowsers: upsertAgentBrowser(state.agentBrowsers, event.browser),
+      };
+    case "agent_browser_destroyed":
+      return {
+        ...state,
+        agentBrowsers: state.agentBrowsers.filter(
+          (browser) =>
+            !(browser.id === event.browser_id && browser.machine_id === event.machine_id),
+        ),
+      };
     case "todo_deleted":
       return { ...state, todos: state.todos.filter((todo) => todo.id !== event.id) };
     default:

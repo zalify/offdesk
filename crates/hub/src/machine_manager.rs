@@ -2,12 +2,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
 use offdesk_protocol::{
+    AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
     AgentSessionInfo, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
     ControlLeaseSnapshot, DirEntry, HubToMachine, MachineInfo, MachineStatsSnapshot, MachineToHub,
     TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
 };
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
 struct ModeState {
     control_leases: HashMap<String, String>,
@@ -26,6 +28,8 @@ pub struct EventEnvelope {
 
 /// Pending request waiting for a Machine response
 type PendingResponse = oneshot::Sender<Result<PendingResult, String>>;
+/// Open viewer sockets per device id, keyed by (machine, browser).
+type AgentBrowserViewers = HashMap<(String, String), HashMap<String, usize>>;
 
 pub enum PendingResult {
     Composer(offdesk_protocol::ComposerReceipt),
@@ -44,6 +48,47 @@ pub enum PendingResult {
         process_name: Option<String>,
     },
     RelayBrief(Result<offdesk_protocol::relay::RelayBrief, String>),
+    /// Node's reply to an agent browser command: its `data`, or its error text.
+    AgentBrowser(Result<serde_json::Value, String>),
+}
+
+/// A change to who controls an agent browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlChange {
+    Take {
+        device_id: String,
+    },
+    Release,
+    /// The agent asks a person for help.
+    Handoff {
+        reason: String,
+    },
+}
+
+/// What a control long-poll waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlWait {
+    /// The agent controls the browser.
+    Agent,
+    /// The agent controls it and no handoff is pending.
+    Resolved,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Why an agent browser command did not produce data.
+#[derive(Debug, PartialEq, Eq)]
+pub enum AgentBrowserError {
+    /// The machine is not connected (or dropped while the request was pending).
+    Offline(String),
+    /// The node ran the command and reported an error.
+    Node(String),
+    Timeout,
 }
 
 pub struct EventSubscription {
@@ -57,6 +102,16 @@ const EVENT_HISTORY_LIMIT: usize = 1024;
 /// Must exceed the maximum number of events that can go unflushed
 /// (flush cadence is every 100 events or 5 seconds).
 const SEQ_RECOVERY_OFFSET: u64 = 200;
+
+/// How long a person may control an agent browser without any open viewer
+/// socket from their device before the hub hands it back to the agent.
+pub const AGENT_BROWSER_CONTROL_GRACE: Duration = Duration::from_secs(120);
+
+/// A pending auto-release: the device whose absence it waits out.
+struct ControlTimer {
+    device_id: String,
+    handle: tokio::task::AbortHandle,
+}
 
 /// A connected machine
 struct MachineConnection {
@@ -73,12 +128,28 @@ struct MachineConnection {
     pub latest_stats: Option<offdesk_protocol::ResourceStats>,
     /// Capability tokens from the machine's Register (e.g. deflate-raw-v1).
     pub capabilities: Vec<String>,
+    /// Agent browsers (tabs of the node's headless Chromium), by id.
+    pub agent_browsers: HashMap<String, AgentBrowserInfo>,
 }
 
 pub struct MachineManager {
     machines: Arc<Mutex<HashMap<String, MachineConnection>>>,
     /// Pending request/response tracking
     pending: Arc<Mutex<HashMap<String, PendingResponse>>>,
+    /// Agent browser request id -> machine id, so a machine going offline can
+    /// fail its pending requests at once instead of after the full timeout.
+    agent_browser_requests: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Live screencast fan-out per agent browser.
+    streams: Streams,
+    /// Bumped on every agent browser event, so long-polls on the control
+    /// state re-check it.
+    agent_browser_changes: watch::Sender<u64>,
+    /// Open viewer sockets per (machine, browser) and device id, to notice a
+    /// controlling device that has gone away.
+    agent_browser_viewers: Arc<std::sync::Mutex<AgentBrowserViewers>>,
+    /// Auto-release timers per (machine, browser).
+    agent_browser_timers: Arc<std::sync::Mutex<HashMap<(String, String), ControlTimer>>>,
+    control_grace: Duration,
     /// Browser events broadcast
     event_tx: broadcast::Sender<EventEnvelope>,
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
@@ -135,6 +206,12 @@ impl MachineManager {
         Self {
             machines: Arc::new(Mutex::new(HashMap::new())),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            agent_browser_requests: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            streams: Streams::default(),
+            agent_browser_changes: watch::channel(0).0,
+            agent_browser_viewers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_browser_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            control_grace: AGENT_BROWSER_CONTROL_GRACE,
             event_tx,
             event_history: Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
                 EVENT_HISTORY_LIMIT,
@@ -188,12 +265,16 @@ impl MachineManager {
             terminals: HashMap::new(),
             latest_stats: None,
             capabilities,
+            agent_browsers: HashMap::new(),
         };
 
         {
             let mut machines = self.machines.lock().await;
             if let Some(old_conn) = machines.insert(machine_id.clone(), conn) {
                 old_conn.preview_lifetime.cancel();
+                // The new connection reports its own browsers
+                // (ExistingAgentBrowsers); drop the old connection's.
+                self.drop_agent_browsers(&machine_id, &old_conn);
                 // A reconnecting machine can register its new connection
                 // before the old connection's disconnect is detected; the
                 // later unregister_machine then no-ops on the conn_id
@@ -264,6 +345,7 @@ impl MachineManager {
         if let Some(conn) = machines.remove(machine_id) {
             conn.preview_lifetime.cancel();
             let target_user_id = conn.user_id.clone();
+            self.drop_agent_browsers(machine_id, &conn);
 
             // Agent processes die with the machine connection: their sessions
             // go Disconnected (resume brings them back).
@@ -326,6 +408,45 @@ impl MachineManager {
                     machine_id: machine_id.to_string(),
                 },
             );
+        }
+    }
+
+    /// A machine connection ended: its agent browsers are gone from the UI's
+    /// point of view, viewers are told, and its pending agent browser
+    /// requests fail now rather than after their timeout.
+    fn drop_agent_browsers(&self, machine_id: &str, conn: &MachineConnection) {
+        for browser_id in conn.agent_browsers.keys() {
+            self.send_event(
+                conn.user_id.clone(),
+                BrowserEvent::AgentBrowserDestroyed {
+                    machine_id: machine_id.to_string(),
+                    browser_id: browser_id.clone(),
+                },
+            );
+        }
+        self.streams.destroy_machine(machine_id);
+        let request_ids: Vec<String> = {
+            let mut requests = self.agent_browser_requests.lock().unwrap();
+            let ids: Vec<String> = requests
+                .iter()
+                .filter(|(_, machine)| machine.as_str() == machine_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &ids {
+                requests.remove(id);
+            }
+            ids
+        };
+        if !request_ids.is_empty() {
+            // Dropping the senders wakes the waiting requests with "machine
+            // disconnected". `pending` is a tokio mutex; don't block on it.
+            let pending = self.pending.clone();
+            tokio::spawn(async move {
+                let mut pending = pending.lock().await;
+                for id in request_ids {
+                    pending.remove(&id);
+                }
+            });
         }
     }
 
@@ -1021,6 +1142,511 @@ impl MachineManager {
                 process_name,
             } => Ok((has_foreground_process, process_name)),
             _ => Err("Unexpected response".to_string()),
+        }
+    }
+
+    /// Store (or refresh) one agent browser and tell the UIs.
+    async fn upsert_agent_browser(&self, machine_id: &str, mut browser: AgentBrowserInfo) {
+        browser.machine_id = Some(machine_id.to_string());
+        let (user_id, was_known) = {
+            let mut machines = self.machines.lock().await;
+            let Some(conn) = machines.get_mut(machine_id) else {
+                return;
+            };
+            // Control belongs to the hub: whatever the node reports, keep it.
+            if let Some(known) = conn.agent_browsers.get(&browser.id) {
+                browser.controller = known.controller;
+                browser.controller_device_id = known.controller_device_id.clone();
+                browser.controller_since = known.controller_since;
+                browser.handoff = known.handoff.clone();
+            }
+            let previous = conn
+                .agent_browsers
+                .insert(browser.id.clone(), browser.clone());
+            if previous.as_ref() == Some(&browser) {
+                return;
+            }
+            (conn.user_id.clone(), previous.is_some())
+        };
+        self.send_event(
+            user_id,
+            if was_known {
+                BrowserEvent::AgentBrowserUpdated { browser }
+            } else {
+                BrowserEvent::AgentBrowserCreated { browser }
+            },
+        );
+    }
+
+    /// The node's full list after (re)connecting: diff against what we know.
+    async fn replace_agent_browsers(&self, machine_id: &str, browsers: Vec<AgentBrowserInfo>) {
+        let ids: HashSet<String> = browsers.iter().map(|b| b.id.clone()).collect();
+        let (user_id, gone) = {
+            let mut machines = self.machines.lock().await;
+            let Some(conn) = machines.get_mut(machine_id) else {
+                return;
+            };
+            let gone: Vec<String> = conn
+                .agent_browsers
+                .keys()
+                .filter(|id| !ids.contains(*id))
+                .cloned()
+                .collect();
+            for id in &gone {
+                conn.agent_browsers.remove(id);
+            }
+            (conn.user_id.clone(), gone)
+        };
+        for browser_id in gone {
+            self.send_event(
+                user_id.clone(),
+                BrowserEvent::AgentBrowserDestroyed {
+                    machine_id: machine_id.to_string(),
+                    browser_id,
+                },
+            );
+        }
+        for browser in browsers {
+            self.upsert_agent_browser(machine_id, browser).await;
+        }
+        // Screencasts do not survive a reconnect: restart the watched ones.
+        let actions = self
+            .streams
+            .resync_machine(machine_id, &|id| ids.contains(id));
+        for (browser_id, action) in actions {
+            self.send_node_action(machine_id, &browser_id, action).await;
+        }
+    }
+
+    /// Live agent browsers of one of `user_id`'s machines.
+    pub async fn list_agent_browsers_for_user(
+        &self,
+        user_id: &str,
+        machine_id: &str,
+    ) -> Vec<AgentBrowserInfo> {
+        let machines = self.machines.lock().await;
+        machines
+            .get(machine_id)
+            .filter(|conn| connection_visible_to(conn, user_id))
+            .map(|conn| conn.agent_browsers.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Whether the machine is connected and has this agent browser.
+    pub async fn agent_browser_exists(&self, machine_id: &str, browser_id: &str) -> bool {
+        self.machines
+            .lock()
+            .await
+            .get(machine_id)
+            .map(|conn| conn.agent_browsers.contains_key(browser_id))
+            .unwrap_or(false)
+    }
+
+    /// One agent browser as the hub knows it (with its control state).
+    pub async fn agent_browser_info(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+    ) -> Option<AgentBrowserInfo> {
+        self.machines
+            .lock()
+            .await
+            .get(machine_id)
+            .and_then(|conn| conn.agent_browsers.get(browser_id).cloned())
+    }
+
+    /// Overlay the hub-owned control fields onto infos the node reported.
+    pub async fn overlay_agent_browser_control(
+        &self,
+        machine_id: &str,
+        infos: &mut [AgentBrowserInfo],
+    ) {
+        let machines = self.machines.lock().await;
+        let Some(conn) = machines.get(machine_id) else {
+            return;
+        };
+        for info in infos {
+            if let Some(known) = conn.agent_browsers.get(&info.id) {
+                info.controller = known.controller;
+                info.controller_device_id = known.controller_device_id.clone();
+                info.controller_since = known.controller_since;
+                info.handoff = known.handoff.clone();
+            }
+        }
+    }
+
+    /// Apply a control change and tell the UIs. `None` when the browser is
+    /// unknown. Taking is last-writer-wins between devices.
+    pub async fn change_agent_browser_control(
+        self: &Arc<Self>,
+        machine_id: &str,
+        browser_id: &str,
+        change: ControlChange,
+    ) -> Option<AgentBrowserInfo> {
+        let info = self
+            .apply_agent_browser_control(machine_id, browser_id, change)
+            .await?;
+        self.reconcile_control_timer(machine_id, browser_id).await;
+        Some(info)
+    }
+
+    /// Override the auto-release grace period (tests).
+    #[cfg(test)]
+    fn with_control_grace(mut self, grace: Duration) -> Self {
+        self.control_grace = grace;
+        self
+    }
+
+    fn device_viewers(&self, machine_id: &str, browser_id: &str, device_id: &str) -> usize {
+        self.agent_browser_viewers
+            .lock()
+            .unwrap()
+            .get(&(machine_id.to_string(), browser_id.to_string()))
+            .and_then(|devices| devices.get(device_id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Keep the auto-release timer in line with the control state: it runs
+    /// exactly while a person controls the browser and their device has no
+    /// open viewer socket.
+    async fn reconcile_control_timer(self: &Arc<Self>, machine_id: &str, browser_id: &str) {
+        let key = (machine_id.to_string(), browser_id.to_string());
+        let absent_controller = self
+            .agent_browser_info(machine_id, browser_id)
+            .await
+            .filter(|info| info.controller == AgentBrowserController::Human)
+            .and_then(|info| info.controller_device_id)
+            .filter(|device| self.device_viewers(machine_id, browser_id, device) == 0);
+        let mut timers = self.agent_browser_timers.lock().unwrap();
+        match absent_controller {
+            None => {
+                if let Some(timer) = timers.remove(&key) {
+                    timer.handle.abort();
+                }
+            }
+            Some(device_id) => {
+                if timers.get(&key).is_some_and(|t| t.device_id == device_id) {
+                    return;
+                }
+                if let Some(timer) = timers.remove(&key) {
+                    timer.handle.abort();
+                }
+                let manager = self.clone();
+                let grace = self.control_grace;
+                let (m, b, d) = (
+                    machine_id.to_string(),
+                    browser_id.to_string(),
+                    device_id.clone(),
+                );
+                let task = tokio::spawn(async move {
+                    tokio::time::sleep(grace).await;
+                    manager.expire_control(&m, &b, &d).await;
+                });
+                timers.insert(
+                    key,
+                    ControlTimer {
+                        device_id,
+                        handle: task.abort_handle(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// The grace period ran out: release exactly like a person's `release`,
+    /// unless the device came back or control moved on meanwhile.
+    async fn expire_control(&self, machine_id: &str, browser_id: &str, device_id: &str) {
+        let key = (machine_id.to_string(), browser_id.to_string());
+        let still_absent = self
+            .agent_browser_info(machine_id, browser_id)
+            .await
+            .is_some_and(|info| {
+                info.controller == AgentBrowserController::Human
+                    && info.controller_device_id.as_deref() == Some(device_id)
+            })
+            && self.device_viewers(machine_id, browser_id, device_id) == 0;
+        if still_absent {
+            self.apply_agent_browser_control(machine_id, browser_id, ControlChange::Release)
+                .await;
+        }
+        let mut timers = self.agent_browser_timers.lock().unwrap();
+        if timers.get(&key).is_some_and(|t| t.device_id == device_id) {
+            timers.remove(&key);
+        }
+    }
+
+    async fn apply_agent_browser_control(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        change: ControlChange,
+    ) -> Option<AgentBrowserInfo> {
+        let now = now_ms();
+        let (user_id, info, changed) = {
+            let mut machines = self.machines.lock().await;
+            let conn = machines.get_mut(machine_id)?;
+            let user_id = conn.user_id.clone();
+            let browser = conn.agent_browsers.get_mut(browser_id)?;
+            let before = browser.clone();
+            match change {
+                ControlChange::Take { device_id } => {
+                    let same = browser.controller == AgentBrowserController::Human
+                        && browser.controller_device_id.as_deref() == Some(device_id.as_str());
+                    browser.controller = AgentBrowserController::Human;
+                    browser.controller_device_id = Some(device_id);
+                    if !same {
+                        browser.controller_since = Some(now);
+                    }
+                }
+                ControlChange::Release => {
+                    browser.controller = AgentBrowserController::Agent;
+                    browser.controller_device_id = None;
+                    browser.controller_since = None;
+                    browser.handoff = None;
+                }
+                ControlChange::Handoff { reason } => {
+                    browser.handoff = Some(AgentBrowserHandoff {
+                        reason,
+                        requested_at: now,
+                    });
+                }
+            }
+            (user_id, browser.clone(), *browser != before)
+        };
+        if changed {
+            self.send_event(
+                user_id,
+                BrowserEvent::AgentBrowserUpdated {
+                    browser: info.clone(),
+                },
+            );
+        }
+        Some(info)
+    }
+
+    /// Long-poll helper: wait until `ready(info)` holds for the browser, or
+    /// `timeout` passes. Returns the latest info and whether it was ready;
+    /// `None` when the browser does not exist (or went away meanwhile).
+    pub async fn wait_agent_browser_control(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        wait_for: ControlWait,
+        timeout: Duration,
+    ) -> Option<(AgentBrowserInfo, bool)> {
+        let mut changes = self.agent_browser_changes.subscribe();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let info = self.agent_browser_info(machine_id, browser_id).await?;
+            let ready = match wait_for {
+                ControlWait::Agent => info.controller == AgentBrowserController::Agent,
+                ControlWait::Resolved => {
+                    info.controller == AgentBrowserController::Agent && info.handoff.is_none()
+                }
+            };
+            if ready {
+                return Some((info, true));
+            }
+            match tokio::time::timeout_at(deadline, changes.changed()).await {
+                Ok(Ok(())) => {}
+                _ => return Some((info, false)),
+            }
+        }
+    }
+
+    /// Forward a viewer's input to the node, but only from the device that
+    /// currently controls the browser. Returns whether it was forwarded.
+    pub async fn agent_browser_input(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        device_id: &str,
+        event: AgentBrowserInputEvent,
+    ) -> bool {
+        let Some(event) = event.sanitized() else {
+            return false;
+        };
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                return false;
+            };
+            let allowed = conn.agent_browsers.get(browser_id).is_some_and(|b| {
+                b.controller == AgentBrowserController::Human
+                    && b.controller_device_id.as_deref() == Some(device_id)
+            });
+            if !allowed {
+                return false;
+            }
+            conn.cmd_tx.clone()
+        };
+        cmd_tx
+            .send(HubToMachine::AgentBrowserInput {
+                browser_id: browser_id.to_string(),
+                event,
+            })
+            .await
+            .is_ok()
+    }
+
+    /// Name of a machine that belongs to `user_id` but is not connected.
+    /// `None` for unknown machines and other users' machines.
+    pub fn offline_machine_name(&self, user_id: &str, machine_id: &str) -> Option<String> {
+        let conn = self.db.get().ok()?;
+        let machine = crate::db::machines::find_machine_by_id(&conn, machine_id)
+            .ok()
+            .flatten()?;
+        (machine.user_id == user_id).then_some(machine.name)
+    }
+
+    async fn send_node_action(&self, machine_id: &str, browser_id: &str, action: NodeAction) {
+        let browser_id = browser_id.to_string();
+        let msg = match action {
+            NodeAction::Start(p, epoch) => HubToMachine::AgentBrowserScreencastStart {
+                browser_id,
+                max_width: p.max_width,
+                max_height: p.max_height,
+                quality: p.quality,
+                epoch,
+            },
+            NodeAction::Stop(epoch) => {
+                HubToMachine::AgentBrowserScreencastStop { browser_id, epoch }
+            }
+            NodeAction::Ack => HubToMachine::AgentBrowserFrameAck { browser_id },
+        };
+        let _ = self.send_to_machine(machine_id, msg).await;
+    }
+
+    async fn send_node_actions(&self, machine_id: &str, browser_id: &str, actions: Vec<NodeAction>) {
+        for action in actions {
+            self.send_node_action(machine_id, browser_id, action).await;
+        }
+    }
+
+    /// A screencast frame from the node (binary frame 0x03).
+    pub async fn agent_browser_frame(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        meta: bytes::Bytes,
+        jpeg: bytes::Bytes,
+    ) {
+        let actions = self
+            .streams
+            .on_frame(machine_id, browser_id, Frame { meta, jpeg });
+        self.send_node_actions(machine_id, browser_id, actions).await;
+    }
+
+    /// Register a viewer of an agent browser's screencast. Dropping the
+    /// returned handle detaches it (and stops the node's screencast when it
+    /// was the last), however the viewer's socket ended.
+    pub async fn attach_agent_browser_viewer(
+        self: &Arc<Self>,
+        machine_id: &str,
+        browser_id: &str,
+        params: Params,
+        device_id: Option<&str>,
+    ) -> (AgentBrowserViewer, mpsc::UnboundedReceiver<ViewerMsg>) {
+        let (id, rx, actions) = self.streams.add_viewer(machine_id, browser_id, params);
+        self.send_node_actions(machine_id, browser_id, actions).await;
+        let device_id = device_id.map(str::to_string);
+        if let Some(device) = &device_id {
+            *self
+                .agent_browser_viewers
+                .lock()
+                .unwrap()
+                .entry((machine_id.to_string(), browser_id.to_string()))
+                .or_default()
+                .entry(device.clone())
+                .or_insert(0) += 1;
+            // A returning controller cancels its pending auto-release.
+            self.reconcile_control_timer(machine_id, browser_id).await;
+        }
+        (
+            AgentBrowserViewer {
+                manager: self.clone(),
+                machine_id: machine_id.to_string(),
+                browser_id: browser_id.to_string(),
+                id,
+                device_id,
+            },
+            rx,
+        )
+    }
+
+    /// Run an agent browser command on a machine and wait for the node's reply.
+    pub async fn agent_browser(
+        &self,
+        machine_id: &str,
+        command: offdesk_protocol::AgentBrowserCommand,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, AgentBrowserError> {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        self.agent_browser_requests
+            .lock()
+            .unwrap()
+            .insert(request_id.clone(), machine_id.to_string());
+        let result = self
+            .agent_browser_request(&request_id, machine_id, command, timeout)
+            .await;
+        self.agent_browser_requests
+            .lock()
+            .unwrap()
+            .remove(&request_id);
+        result
+    }
+
+    async fn agent_browser_request(
+        &self,
+        request_id: &str,
+        machine_id: &str,
+        command: offdesk_protocol::AgentBrowserCommand,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, AgentBrowserError> {
+        let request_id = request_id.to_string();
+        let rx = self.register_pending(&request_id).await;
+
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            machines.get(machine_id).map(|conn| conn.cmd_tx.clone())
+        };
+        let Some(cmd_tx) = cmd_tx else {
+            self.remove_pending(&request_id).await;
+            return Err(AgentBrowserError::Offline(format!(
+                "Machine {machine_id} is offline"
+            )));
+        };
+        if cmd_tx
+            .send(HubToMachine::AgentBrowser {
+                request_id: request_id.clone(),
+                command,
+            })
+            .await
+            .is_err()
+        {
+            self.remove_pending(&request_id).await;
+            return Err(AgentBrowserError::Offline(
+                "Machine disconnected".to_string(),
+            ));
+        }
+
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(PendingResult::AgentBrowser(result)))) => {
+                result.map_err(AgentBrowserError::Node)
+            }
+            Ok(Ok(Ok(_))) => Err(AgentBrowserError::Node("Unexpected response".to_string())),
+            Ok(Ok(Err(error))) => Err(AgentBrowserError::Node(error)),
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                Err(AgentBrowserError::Offline(
+                    "Machine disconnected".to_string(),
+                ))
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(AgentBrowserError::Timeout)
+            }
         }
     }
 
@@ -1721,6 +2347,46 @@ impl MachineManager {
                     },
                 );
             }
+            MachineToHub::AgentBrowserResult {
+                request_id,
+                data,
+                error,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let result = match error {
+                        Some(error) => Err(error),
+                        None => Ok(data.unwrap_or_else(|| serde_json::json!({}))),
+                    };
+                    let _ = tx.send(Ok(PendingResult::AgentBrowser(result)));
+                }
+            }
+            MachineToHub::AgentBrowserCreated { browser }
+            | MachineToHub::AgentBrowserUpdated { browser } => {
+                self.upsert_agent_browser(machine_id, browser).await;
+            }
+            MachineToHub::AgentBrowserDestroyed { browser_id } => {
+                let removed = {
+                    let mut machines = self.machines.lock().await;
+                    machines.get_mut(machine_id).and_then(|conn| {
+                        conn.agent_browsers
+                            .remove(&browser_id)
+                            .map(|_| conn.user_id.clone())
+                    })
+                };
+                if let Some(user_id) = removed {
+                    self.send_event(
+                        user_id,
+                        BrowserEvent::AgentBrowserDestroyed {
+                            machine_id: machine_id.to_string(),
+                            browser_id: browser_id.clone(),
+                        },
+                    );
+                }
+                self.streams.destroy(machine_id, &browser_id);
+            }
+            MachineToHub::ExistingAgentBrowsers { browsers } => {
+                self.replace_agent_browsers(machine_id, browsers).await;
+            }
             MachineToHub::AgentSessionExited { session_id, reason } => {
                 tracing::info!(
                     session_id = %session_id,
@@ -2132,6 +2798,11 @@ impl MachineManager {
             .ok()
             .and_then(|conn| crate::db::todos::list(&conn, user_id).ok())
             .unwrap_or_default();
+        let mut agent_browsers: Vec<AgentBrowserInfo> = visible
+            .iter()
+            .flat_map(|conn| conn.agent_browsers.values().cloned())
+            .collect();
+        agent_browsers.sort_by(|a, b| a.id.cmp(&b.id));
 
         BrowserStateSnapshot {
             snapshot_seq,
@@ -2149,10 +2820,19 @@ impl MachineManager {
             agent_sessions,
             agent_session_seen,
             todos,
+            agent_browsers,
         }
     }
 
     fn send_event(&self, target_user_id: Option<String>, event: BrowserEvent) {
+        if matches!(
+            event,
+            BrowserEvent::AgentBrowserCreated { .. }
+                | BrowserEvent::AgentBrowserUpdated { .. }
+                | BrowserEvent::AgentBrowserDestroyed { .. }
+        ) {
+            self.agent_browser_changes.send_modify(|n| *n += 1);
+        }
         let seq = self.next_event_seq.fetch_add(1, Ordering::AcqRel) + 1;
         let envelope = EventEnvelope {
             seq,
@@ -2239,6 +2919,90 @@ fn new_mode_state() -> ModeState {
         control_leases: HashMap::new(),
         connected_devices: HashMap::new(),
         released_leases: HashMap::new(),
+    }
+}
+
+/// One viewer of an agent browser's screencast. Dropping it detaches the
+/// viewer; the last one out stops the node's screencast. Tying this to `Drop`
+/// (not to a close message) covers sockets that are aborted rather than
+/// closed.
+pub struct AgentBrowserViewer {
+    manager: Arc<MachineManager>,
+    machine_id: String,
+    browser_id: String,
+    id: u64,
+    device_id: Option<String>,
+}
+
+impl AgentBrowserViewer {
+    /// The viewer drew the last frame.
+    pub async fn ack(&self) {
+        let actions = self
+            .manager
+            .streams
+            .viewer_ack(&self.machine_id, &self.browser_id, self.id);
+        self.manager
+            .send_node_actions(&self.machine_id, &self.browser_id, actions)
+            .await;
+    }
+
+    /// The viewer asked for different quality/size.
+    pub async fn set_params(&self, params: Params) {
+        let actions =
+            self.manager
+                .streams
+                .set_params(&self.machine_id, &self.browser_id, self.id, params);
+        self.manager
+            .send_node_actions(&self.machine_id, &self.browser_id, actions)
+            .await;
+    }
+}
+
+impl Drop for AgentBrowserViewer {
+    fn drop(&mut self) {
+        if let Some(device) = &self.device_id {
+            let key = (self.machine_id.clone(), self.browser_id.clone());
+            {
+                let mut viewers = self.manager.agent_browser_viewers.lock().unwrap();
+                if let Some(devices) = viewers.get_mut(&key) {
+                    if let Some(count) = devices.get_mut(device) {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            devices.remove(device);
+                        }
+                    }
+                    if devices.is_empty() {
+                        viewers.remove(&key);
+                    }
+                }
+            }
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let manager = self.manager.clone();
+                let (machine_id, browser_id) = key;
+                handle.spawn(async move {
+                    manager
+                        .reconcile_control_timer(&machine_id, &browser_id)
+                        .await;
+                });
+            }
+        }
+        let actions =
+            self.manager
+                .streams
+                .remove_viewer(&self.machine_id, &self.browser_id, self.id);
+        if actions.is_empty() {
+            return;
+        }
+        let manager = self.manager.clone();
+        let machine_id = self.machine_id.clone();
+        let browser_id = self.browser_id.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                manager
+                    .send_node_actions(&machine_id, &browser_id, actions)
+                    .await;
+            });
+        }
     }
 }
 
@@ -3783,5 +4547,653 @@ mod tests {
             manager.get_controller("user-a", "machine-b"),
             Some("device-a".to_string())
         );
+    }
+
+    fn browser(id: &str, url: &str) -> AgentBrowserInfo {
+        AgentBrowserInfo {
+            id: id.to_string(),
+            machine_id: None,
+            url: url.to_string(),
+            title: String::new(),
+            opener_terminal_id: Some("term-a".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Events of one kind seen since `after_seq`, as their JSON `type` tags.
+    fn event_types(manager: &MachineManager) -> Vec<String> {
+        manager
+            .subscribe_events_after("user-a", 0)
+            .replay
+            .iter()
+            .map(|e| serde_json::to_value(&e.event).unwrap()["type"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn agent_browsers_are_tracked_snapshotted_and_destroyed_on_unregister() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (conn_id, _rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .register_machine(machine("machine-b"), Some("user-b".to_string()))
+            .await;
+
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: browser("b1", "https://example.com"),
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-b",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("other", "x"),
+                },
+            )
+            .await;
+
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(snapshot.agent_browsers.len(), 1);
+        assert_eq!(snapshot.agent_browsers[0].id, "b1");
+        assert_eq!(snapshot.agent_browsers[0].url, "https://example.com");
+        assert_eq!(
+            snapshot.agent_browsers[0].machine_id.as_deref(),
+            Some("machine-a")
+        );
+        assert_eq!(
+            snapshot.agent_browsers[0].opener_terminal_id.as_deref(),
+            Some("term-a")
+        );
+        let types = event_types(&manager);
+        assert!(types.contains(&"agent_browser_created".to_string()), "{types:?}");
+        assert!(types.contains(&"agent_browser_updated".to_string()), "{types:?}");
+        // An identical report is not an event.
+        let before = event_types(&manager).len();
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: browser("b1", "https://example.com"),
+                },
+            )
+            .await;
+        assert_eq!(event_types(&manager).len(), before);
+
+        manager.unregister_machine("machine-a", &conn_id).await;
+        let types = event_types(&manager);
+        assert!(types.contains(&"agent_browser_destroyed".to_string()), "{types:?}");
+        assert!(manager.snapshot_for_user("user-a").await.agent_browsers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn existing_agent_browsers_replaces_the_list() {
+        let manager = MachineManager::new(test_db());
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        for id in ["b1", "b2"] {
+            manager
+                .handle_machine_message(
+                    "machine-a",
+                    MachineToHub::AgentBrowserCreated {
+                        browser: browser(id, "u"),
+                    },
+                )
+                .await;
+        }
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: vec![browser("b2", "u"), browser("b3", "u")],
+                },
+            )
+            .await;
+        let ids: Vec<String> = manager
+            .snapshot_for_user("user-a")
+            .await
+            .agent_browsers
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(ids, vec!["b2", "b3"]);
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserDestroyed {
+                    browser_id: "b2".to_string(),
+                },
+            )
+            .await;
+        assert!(!manager.agent_browser_exists("machine-a", "b2").await);
+        assert!(manager.agent_browser_exists("machine-a", "b3").await);
+    }
+
+    async fn manager_with_browser() -> (Arc<MachineManager>, mpsc::Receiver<HubToMachine>) {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (_conn_id, rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        (manager, rx)
+    }
+
+    fn take(device: &str) -> ControlChange {
+        ControlChange::Take {
+            device_id: device.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn control_take_release_and_last_writer_wins() {
+        let (manager, _rx) = manager_with_browser().await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+
+        let a = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await
+            .unwrap();
+        assert_eq!(a.controller, AgentBrowserController::Human);
+        assert_eq!(a.controller_device_id.as_deref(), Some("dev-a"));
+        let since = a.controller_since.unwrap();
+        assert!(since > 0);
+
+        // A second device wins; its since is new.
+        let b = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await
+            .unwrap();
+        assert_eq!(b.controller_device_id.as_deref(), Some("dev-b"));
+        // Re-taking by the same device keeps the original since.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let b2 = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await
+            .unwrap();
+        assert_eq!(b2.controller_since, b.controller_since);
+
+        // The snapshot carries it.
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(
+            snapshot.agent_browsers[0].controller_device_id.as_deref(),
+            Some("dev-b")
+        );
+
+        let handoff = manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(handoff.handoff.as_ref().unwrap().reason, "log in");
+        // A handoff does not take control by itself.
+        let released = manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await
+            .unwrap();
+        assert_eq!(released.controller, AgentBrowserController::Agent);
+        assert!(released.controller_device_id.is_none());
+        assert!(released.controller_since.is_none());
+        assert!(released.handoff.is_none());
+
+        let types = event_types(&manager);
+        assert!(
+            types
+                .iter()
+                .filter(|t| *t == "agent_browser_updated")
+                .count()
+                >= 4,
+            "{types:?}"
+        );
+        assert!(manager
+            .change_agent_browser_control("machine-a", "nope", ControlChange::Release)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn node_updates_do_not_clobber_control_fields() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "captcha".to_string(),
+                },
+            )
+            .await;
+        // The node reports a new URL without any control fields; a full
+        // list after a reconnect behaves the same.
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: browser("b1", "https://example.com/next"),
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: vec![browser("b1", "https://example.com/again")],
+                },
+            )
+            .await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.url, "https://example.com/again");
+        assert_eq!(info.controller, AgentBrowserController::Human);
+        assert_eq!(info.controller_device_id.as_deref(), Some("dev-a"));
+        assert_eq!(info.handoff.unwrap().reason, "captcha");
+    }
+
+    fn click_event() -> AgentBrowserInputEvent {
+        AgentBrowserInputEvent::Text {
+            text: "hi".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn input_is_forwarded_only_from_the_controlling_device() {
+        let (manager, mut rx) = manager_with_browser().await;
+        // Nobody controls: dropped.
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-b", click_event())
+                .await
+        );
+        assert!(
+            manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+        match rx.recv().await {
+            Some(HubToMachine::AgentBrowserInput { browser_id, event }) => {
+                assert_eq!(browser_id, "b1");
+                assert_eq!(event, click_event());
+            }
+            other => panic!("{other:?}"),
+        }
+        // Nothing else was queued for dev-b / the refused attempts.
+        assert!(rx.try_recv().is_err());
+        // Oversized text is refused even from the controller.
+        assert!(
+            !manager
+                .agent_browser_input(
+                    "machine-a",
+                    "b1",
+                    "dev-a",
+                    AgentBrowserInputEvent::Text {
+                        text: "x".repeat(10_001)
+                    }
+                )
+                .await
+        );
+        // After release, the former controller is refused too.
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn control_long_poll_wakes_on_release_and_times_out() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+
+        // Times out while a person still controls it.
+        let started = std::time::Instant::now();
+        let (info, ready) = manager
+            .wait_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlWait::Agent,
+                Duration::from_millis(80),
+            )
+            .await
+            .unwrap();
+        assert!(!ready);
+        assert_eq!(info.controller, AgentBrowserController::Human);
+        assert!(started.elapsed() >= Duration::from_millis(70));
+
+        // Wakes promptly on release.
+        let waiter = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .wait_agent_browser_control(
+                        "machine-a",
+                        "b1",
+                        ControlWait::Agent,
+                        Duration::from_secs(30),
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let released_at = std::time::Instant::now();
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        let (info, ready) = waiter.await.unwrap().unwrap();
+        assert!(ready);
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert!(released_at.elapsed() < Duration::from_secs(1));
+
+        // Already satisfied: returns at once.
+        let (_, ready) = manager
+            .wait_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlWait::Agent,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        assert!(ready);
+        assert!(manager
+            .wait_agent_browser_control(
+                "machine-a",
+                "gone",
+                ControlWait::Agent,
+                Duration::from_millis(10)
+            )
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn handoff_resolves_only_after_a_person_hands_control_back() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await;
+        let wait = |timeout_ms| {
+            let manager = manager.clone();
+            async move {
+                manager
+                    .wait_agent_browser_control(
+                        "machine-a",
+                        "b1",
+                        ControlWait::Resolved,
+                        Duration::from_millis(timeout_ms),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        // The agent controls it, but the handoff is still open.
+        assert!(!wait(40).await.1);
+        // A person takes control: still open.
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        assert!(!wait(40).await.1);
+        let pending = tokio::spawn(wait(30_000));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        let (info, ready) = pending.await.unwrap();
+        assert!(ready);
+        assert!(info.handoff.is_none());
+    }
+
+    #[tokio::test]
+    async fn pending_agent_browser_requests_fail_when_the_machine_disconnects() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (conn_id, mut rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let waiting = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .agent_browser(
+                        "machine-a",
+                        offdesk_protocol::AgentBrowserCommand::List,
+                        Duration::from_secs(60),
+                    )
+                    .await
+            })
+        };
+        // The request reached the node; it never answers.
+        assert!(matches!(
+            rx.recv().await,
+            Some(HubToMachine::AgentBrowser { .. })
+        ));
+        let started = std::time::Instant::now();
+        manager.unregister_machine("machine-a", &conn_id).await;
+        let result = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("request still pending")
+            .unwrap();
+        assert!(matches!(result, Err(AgentBrowserError::Offline(_))), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(manager.agent_browser_requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn viewer_frames_are_paced_and_the_last_drop_stops_the_node() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (_conn_id, mut node_rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let jpeg = |n: u8| bytes::Bytes::from(vec![0xFF, 0xD8, n]);
+        let meta = || bytes::Bytes::from_static(b"{}");
+
+        let (viewer, mut frames) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), None)
+            .await;
+        assert!(matches!(
+            node_rx.recv().await,
+            Some(HubToMachine::AgentBrowserScreencastStart {
+                max_width: 1280,
+                max_height: 800,
+                quality: 60,
+                ..
+            })
+        ));
+        manager.agent_browser_frame("machine-a", "b1", meta(), jpeg(1)).await;
+        manager.agent_browser_frame("machine-a", "b1", meta(), jpeg(2)).await;
+        let first = frames.recv().await.unwrap();
+        assert!(matches!(first, ViewerMsg::Frame(f) if f.jpeg[2] == 1));
+        assert!(frames.try_recv().is_err(), "frame 2 sent before the ack");
+        assert!(node_rx.try_recv().is_err(), "node acked before any viewer");
+
+        viewer.ack().await;
+        assert!(matches!(
+            node_rx.recv().await,
+            Some(HubToMachine::AgentBrowserFrameAck { .. })
+        ));
+        assert!(matches!(frames.recv().await.unwrap(), ViewerMsg::Frame(f) if f.jpeg[2] == 2));
+
+        drop(viewer);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), node_rx.recv()).await,
+            Ok(Some(HubToMachine::AgentBrowserScreencastStop { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn offline_machine_name_only_for_the_owner() {
+        let manager = MachineManager::new(test_db());
+        {
+            let conn = manager.db.get().unwrap();
+            crate::db::users::create_user(&conn, "user-a", "test", "user-a", "User A", None, "user")
+                .unwrap();
+            crate::db::machines::create_machine(&conn, "m1", "user-a", "My Box", "hash").unwrap();
+        }
+        assert_eq!(
+            manager.offline_machine_name("user-a", "m1").as_deref(),
+            Some("My Box")
+        );
+        assert_eq!(manager.offline_machine_name("user-b", "m1"), None);
+        assert_eq!(manager.offline_machine_name("user-a", "nope"), None);
+    }
+
+    async fn grace_manager(grace: Duration) -> Arc<MachineManager> {
+        let manager = Arc::new(MachineManager::new(test_db()).with_control_grace(grace));
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        manager
+    }
+
+    async fn grace_controller(manager: &MachineManager) -> AgentBrowserController {
+        manager
+            .agent_browser_info("machine-a", "b1")
+            .await
+            .unwrap()
+            .controller
+    }
+
+    fn grace_take(device: &str) -> ControlChange {
+        ControlChange::Take {
+            device_id: device.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn control_is_released_after_the_controller_has_no_viewer_for_the_grace_period() {
+        let grace = Duration::from_millis(150);
+        let manager = grace_manager(grace).await;
+        // Taken with no viewer socket at all, and a pending handoff.
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-a"))
+            .await;
+        assert_eq!(
+            grace_controller(&manager).await,
+            AgentBrowserController::Human
+        );
+        tokio::time::sleep(grace * 3).await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert!(info.controller_device_id.is_none());
+        assert!(info.handoff.is_none(), "behaves like release");
+        assert!(event_types(&manager)
+            .iter()
+            .any(|t| t == "agent_browser_updated"));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_within_the_grace_period_keeps_control() {
+        let grace = Duration::from_millis(300);
+        let manager = grace_manager(grace).await;
+        let (viewer, _rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-a"))
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-a"))
+            .await;
+        // Socket drops: the clock starts. Another device watching does not help.
+        let (_other, _other_rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-b"))
+            .await;
+        drop(viewer);
+        tokio::time::sleep(grace / 3).await;
+        let (viewer, _rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-a"))
+            .await;
+        tokio::time::sleep(grace * 2).await;
+        assert_eq!(
+            grace_controller(&manager).await,
+            AgentBrowserController::Human
+        );
+
+        // Dropping the viewer for good releases after the grace period.
+        drop(viewer);
+        tokio::time::sleep(grace * 2).await;
+        assert_eq!(
+            grace_controller(&manager).await,
+            AgentBrowserController::Agent
+        );
+    }
+
+    #[tokio::test]
+    async fn a_takeover_by_another_device_is_not_released_by_the_old_timer() {
+        let grace = Duration::from_millis(300);
+        let manager = grace_manager(grace).await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-a"))
+            .await;
+        tokio::time::sleep(grace / 2).await;
+        let (_viewer, _rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-b"))
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-b"))
+            .await;
+        tokio::time::sleep(grace * 2).await;
+        // dev-b has a live viewer, so dev-a's old timer must not release it.
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.controller, AgentBrowserController::Human);
+        assert_eq!(info.controller_device_id.as_deref(), Some("dev-b"));
     }
 }

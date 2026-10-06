@@ -2,7 +2,7 @@ use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use offdesk_protocol::{
     compression::{AttachCompressor, DEFLATE_RAW_V1},
-    encode_attach_output_frame, DirEntry, HubToMachine, MachineToHub, TerminalTitleSource,
+    encode_agent_browser_frame, encode_attach_output_frame, DirEntry, HubToMachine, MachineToHub, TerminalTitleSource,
 };
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +13,7 @@ use tokio_tungstenite::{
 };
 
 use crate::acp::AcpManager;
+use crate::agent_browser::{AgentBrowserEvent, AgentBrowserManager};
 use crate::attach::{AttachEvent, AttachManager};
 use crate::osc_title::OscTitleScanner;
 use crate::pty::{tmux_resize_window, tmux_window_size, PtyManager};
@@ -39,6 +40,12 @@ enum OutboundHubMessage {
         attach_id: String,
         enable: bool,
     },
+    /// One agent browser screencast frame (JPEG + CDP metadata JSON).
+    AgentBrowserFrame {
+        browser_id: String,
+        meta: Bytes,
+        jpeg: Bytes,
+    },
 }
 
 /// One WebSocket message ready to feed to the sink.
@@ -54,6 +61,12 @@ enum WireMessage {
     AttachCompression {
         attach_id: String,
         enable: bool,
+    },
+    /// Never merged with anything: a JPEG is one self-contained message.
+    AgentBrowserFrame {
+        browser_id: String,
+        meta: Bytes,
+        jpeg: Bytes,
     },
 }
 
@@ -72,6 +85,17 @@ fn coalesce_outbound_batch(
             }
             OutboundHubMessage::AttachCompression { attach_id, enable } => {
                 wire.push(WireMessage::AttachCompression { attach_id, enable });
+            }
+            OutboundHubMessage::AgentBrowserFrame {
+                browser_id,
+                meta,
+                jpeg,
+            } => {
+                wire.push(WireMessage::AgentBrowserFrame {
+                    browser_id,
+                    meta,
+                    jpeg,
+                });
             }
             OutboundHubMessage::AttachOutput { attach_id, data } => {
                 if let Some(WireMessage::AttachFrame {
@@ -100,6 +124,7 @@ pub struct HubConnection {
     pub machine_secret: String,
     pub hub_url: String,
     pub pty_manager: Arc<PtyManager>,
+    pub agent_browser: Arc<AgentBrowserManager>,
     /// Spawn-command overrides for agent sessions (machine.json `acp_agents`).
     pub acp_agents: std::collections::HashMap<String, Vec<String>>,
 }
@@ -272,6 +297,57 @@ impl HubConnection {
                 terminals,
             }))
             .await;
+
+        // Agent browsers: subscribe before listing so nothing falls in
+        // between, report the full list (like ExistingTerminals), then
+        // forward live events and screencast frames.
+        let mut browser_events = self.agent_browser.subscribe();
+        let existing_browsers = self.agent_browser.list().await.unwrap_or_default();
+        let _ = send_tx
+            .send(OutboundHubMessage::Json(
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: existing_browsers,
+                },
+            ))
+            .await;
+        let send_tx_browsers = send_tx.clone();
+        let browsers_manager = self.agent_browser.clone();
+        let mut agent_browser_task = tokio::spawn(async move {
+            loop {
+                let message = match browser_events.recv().await {
+                    Ok(AgentBrowserEvent::Created(browser)) => {
+                        OutboundHubMessage::Json(MachineToHub::AgentBrowserCreated { browser })
+                    }
+                    Ok(AgentBrowserEvent::Updated(browser)) => {
+                        OutboundHubMessage::Json(MachineToHub::AgentBrowserUpdated { browser })
+                    }
+                    Ok(AgentBrowserEvent::Destroyed(browser_id)) => {
+                        OutboundHubMessage::Json(MachineToHub::AgentBrowserDestroyed {
+                            browser_id,
+                        })
+                    }
+                    Ok(AgentBrowserEvent::Frame {
+                        browser_id,
+                        meta,
+                        jpeg,
+                    }) => OutboundHubMessage::AgentBrowserFrame {
+                        browser_id,
+                        meta,
+                        jpeg,
+                    },
+                    // Missed events: resync the whole list.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        OutboundHubMessage::Json(MachineToHub::ExistingAgentBrowsers {
+                            browsers: browsers_manager.list().await.unwrap_or_default(),
+                        })
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                };
+                if send_tx_browsers.send(message).await.is_err() {
+                    break;
+                }
+            }
+        });
 
         // Task: periodically send resource stats
         let send_tx_stats = send_tx.clone();
@@ -467,6 +543,11 @@ impl HubConnection {
                                     }
                                     continue;
                                 }
+                                WireMessage::AgentBrowserFrame { browser_id, meta, jpeg } => {
+                                    Message::Binary(
+                                        encode_agent_browser_frame(&browser_id, &meta, &jpeg).into(),
+                                    )
+                                }
                                 WireMessage::AttachFrame { attach_id, payload } => {
                                     let payload = match compressors.get_mut(&attach_id) {
                                         Some(compressor) => {
@@ -499,6 +580,7 @@ impl HubConnection {
 
         // Task: receive Hub messages with read timeout
         let pty_recv = pty.clone();
+        let agent_browser_recv = self.agent_browser.clone();
         let send_tx_recv = send_tx.clone();
         let attach_mgr_recv = attach_mgr.clone();
         let acp_manager_recv = acp_manager.clone();
@@ -526,6 +608,7 @@ impl HubConnection {
                                     &send_tx_recv,
                                     &attach_mgr_recv,
                                     &acp_manager_recv,
+                                    &agent_browser_recv,
                                 )
                                 .await;
                             }
@@ -552,6 +635,7 @@ impl HubConnection {
             _ = &mut stats_task => {},
             _ = &mut title_fallback_task => {},
             _ = &mut acp_forward_task => {},
+            _ = &mut agent_browser_task => {},
         }
 
         // Abort all tasks to ensure full cleanup
@@ -560,6 +644,9 @@ impl HubConnection {
         stats_task.abort();
         title_fallback_task.abort();
         acp_forward_task.abort();
+        agent_browser_task.abort();
+        // Nobody is watching once the hub connection is gone.
+        self.agent_browser.stop_all_screencasts().await;
 
         // Kill every per-attach tmux client we spawned for this hub
         // connection — when hub comes back, browsers will reattach freshly.
@@ -580,6 +667,7 @@ async fn handle_hub_message(
     send_tx: &mpsc::Sender<OutboundHubMessage>,
     attach_mgr: &Arc<AttachManager>,
     acp_manager: &Arc<AcpManager>,
+    agent_browser: &Arc<AgentBrowserManager>,
 ) {
     match msg {
         HubToMachine::OpenPreviewStream { .. } => {}, // handled by connection-owned JoinSet
@@ -715,6 +803,54 @@ async fn handle_hub_message(
                     }))
                     .await;
             });
+        }
+        HubToMachine::AgentBrowser {
+            request_id,
+            command,
+        } => {
+            // A slow goto/wait must not stall the hub message loop.
+            let manager = agent_browser.clone();
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let (data, error) = match manager.execute(command).await {
+                    Ok(data) => (Some(data), None),
+                    Err(error) => (None, Some(error)),
+                };
+                let _ = send_tx
+                    .send(OutboundHubMessage::Json(MachineToHub::AgentBrowserResult {
+                        request_id,
+                        data,
+                        error,
+                    }))
+                    .await;
+            });
+        }
+        HubToMachine::AgentBrowserScreencastStart {
+            browser_id,
+            max_width,
+            max_height,
+            quality,
+            epoch,
+        } => {
+            let manager = agent_browser.clone();
+            tokio::spawn(async move {
+                if let Err(error) = manager
+                    .screencast_start(&browser_id, max_width, max_height, quality, epoch)
+                    .await
+                {
+                    tracing::warn!(%browser_id, "screencast start failed: {error}");
+                }
+            });
+        }
+        HubToMachine::AgentBrowserScreencastStop { browser_id, epoch } => {
+            let manager = agent_browser.clone();
+            tokio::spawn(async move { manager.screencast_stop(&browser_id, epoch).await });
+        }
+        HubToMachine::AgentBrowserInput { browser_id, event } => {
+            agent_browser.input(&browser_id, event);
+        }
+        HubToMachine::AgentBrowserFrameAck { browser_id } => {
+            agent_browser.frame_ack(&browser_id);
         }
         HubToMachine::CheckForegroundProcess {
             request_id,
@@ -1268,6 +1404,33 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn coalesce_never_merges_agent_browser_frames() {
+        let frame = || OutboundHubMessage::AgentBrowserFrame {
+            browser_id: "b".into(),
+            meta: Bytes::from_static(b"{}"),
+            jpeg: Bytes::from_static(b"\xFF\xD8"),
+        };
+        let batch = vec![
+            OutboundHubMessage::AttachOutput {
+                attach_id: "a".into(),
+                data: Bytes::from_static(b"x"),
+            },
+            frame(),
+            OutboundHubMessage::AttachOutput {
+                attach_id: "a".into(),
+                data: Bytes::from_static(b"y"),
+            },
+            frame(),
+            frame(),
+        ];
+        let wire = coalesce_outbound_batch(batch);
+        assert_eq!(wire.len(), 5);
+        assert!(matches!(wire[1], WireMessage::AgentBrowserFrame { .. }));
+        assert!(matches!(wire[3], WireMessage::AgentBrowserFrame { .. }));
+        assert!(matches!(wire[4], WireMessage::AgentBrowserFrame { .. }));
     }
 
     #[test]

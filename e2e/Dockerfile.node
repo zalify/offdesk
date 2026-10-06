@@ -9,7 +9,7 @@ RUN gcc -O2 -DAGENT='"CLAUDE"' -DUSAGE_LIMIT -DSESSION_FILES -o /tmp/fake-claude
  && gcc -O2 -DAGENT='"CODEX"' -o /tmp/fake-codex /tmp/fake-agent.c
 
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates bash coreutils tmux python3 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates bash coreutils tmux python3 chromium fonts-liberation && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/offdesk-node /usr/local/bin/
 # Fake ACP agent for agent-session tests; machine.json points every agent
 # kind at it (its machine_id must match the compose `--id e2e-node`).
@@ -25,5 +25,9 @@ RUN cd /opt/offdesk/preview-fixture && npm ci --no-audit --no-fund
 # UTF-8 locale so tmux and readline handle multibyte input/echo (CJK IME
 # e2e tests); bookworm's glibc always ships C.UTF-8.
 ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
+
+# Headless Chromium for the agent browser (e2e/tests/agent-browser.spec.ts);
+# the node runs as root in the container, which needs --no-sandbox.
+ENV OFFDESK_CHROMIUM=/usr/bin/chromium OFFDESK_CHROMIUM_NO_SANDBOX=1
 
 CMD ["offdesk-node"]

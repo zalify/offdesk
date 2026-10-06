@@ -123,6 +123,70 @@ export interface ControlLeaseSnapshot {
   controller_device_id: string | null
 }
 
+/** One agent browser = one tab of a node's headless Chromium (crates/protocol AgentBrowserInfo). */
+export interface AgentBrowserInfo {
+  id: string
+  machine_id?: string
+  url: string
+  title: string
+  /** Terminal the browser was opened from, when known. */
+  opener_terminal_id?: string
+  /** Who drives the page; owned by the hub. Absent from older Hubs (= agent). */
+  controller?: AgentBrowserController
+  /** While a person controls it: the viewer device that took control. */
+  controller_device_id?: string
+  /** While a person controls it: when they took control (ms since epoch). */
+  controller_since?: number
+  /** The agent is asking a person for help; cleared when a person hands control back. */
+  handoff?: AgentBrowserHandoff
+}
+
+export type AgentBrowserController = 'agent' | 'human'
+
+export interface AgentBrowserHandoff {
+  reason: string
+  /** ms since epoch */
+  requested_at: number
+}
+
+/** `POST /api/machines/{m}/agent-browser/{b}/control` body. */
+export interface AgentBrowserControlRequest {
+  action: 'take' | 'release'
+  /** Required for `take`: the viewer's device id (same one as the viewer WebSocket's `device_id` query). */
+  device_id?: string
+}
+
+/**
+ * A person's input, sent over the viewer WebSocket as
+ * `{"type":"input","event":AgentBrowserInputEvent}`. Dropped unless this
+ * viewer's `device_id` is the browser's `controller_device_id`. Coordinates are
+ * CSS px in the 1280x800 viewport; `modifiers` is the CDP bitmask
+ * (Alt 1, Ctrl 2, Meta 4, Shift 8).
+ */
+export type AgentBrowserInputEvent =
+  | {
+      kind: 'mouse'
+      action: 'move' | 'down' | 'up'
+      x: number
+      y: number
+      button?: 'left' | 'middle' | 'right' | 'none'
+      /** Bitmask of buttons held (left 1, right 2, middle 4). */
+      buttons?: number
+      click_count?: number
+      modifiers?: number
+    }
+  | { kind: 'wheel'; x: number; y: number; delta_x?: number; delta_y?: number; modifiers?: number }
+  | {
+      kind: 'key'
+      action: 'down' | 'up'
+      key: string
+      code?: string
+      text?: string
+      modifiers?: number
+      key_code?: number
+    }
+  | { kind: 'text'; text: string }
+
 export interface BrowserStateSnapshot {
   snapshot_seq: number
   last_focused_terminal_id?: string | null
@@ -137,6 +201,8 @@ export interface BrowserStateSnapshot {
   agent_session_seen?: Record<string, number>
   /** The user's to-dos; absent from older Hubs. */
   todos?: TodoInfo[]
+  /** Live agent browsers on online machines; absent from older Hubs. */
+  agent_browsers?: AgentBrowserInfo[]
 }
 
 // ── To-dos — mirrors crates/protocol/src/todos.rs ──
@@ -403,6 +469,9 @@ export type BrowserEvent =
   | BrowserEvent.AgentSessionSeen
   | BrowserEvent.TodoUpserted
   | BrowserEvent.TodoDeleted
+  | BrowserEvent.AgentBrowserCreated
+  | BrowserEvent.AgentBrowserUpdated
+  | BrowserEvent.AgentBrowserDestroyed
 
 export namespace BrowserEvent {
   export interface MachineOnline {
@@ -517,6 +586,22 @@ export namespace BrowserEvent {
   export interface TodoDeleted {
     type: 'todo_deleted'
     id: string
+  }
+
+  export interface AgentBrowserCreated {
+    type: 'agent_browser_created'
+    browser: AgentBrowserInfo
+  }
+
+  export interface AgentBrowserUpdated {
+    type: 'agent_browser_updated'
+    browser: AgentBrowserInfo
+  }
+
+  export interface AgentBrowserDestroyed {
+    type: 'agent_browser_destroyed'
+    machine_id: string
+    browser_id: string
   }
 }
 

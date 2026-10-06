@@ -114,8 +114,140 @@ export async function destroyAllTerminals(page: Page): Promise<void> {
   }
 }
 
+export interface AgentBrowserRecord {
+  id: string;
+  machine_id?: string;
+  url: string;
+  title: string;
+  opener_terminal_id?: string;
+  controller?: "agent" | "human";
+  controller_device_id?: string;
+  handoff?: { reason: string; requested_at: number };
+}
+
+async function agentBrowserCommand(
+  page: Page,
+  command: Record<string, unknown>,
+): Promise<unknown> {
+  const response = await page.request.post(
+    `/api/machines/${MACHINE_ID}/agent-browser`,
+    { headers: await getAuthHeaders(page), data: command, timeout: 120_000 },
+  );
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return response.json();
+}
+
+export async function openAgentBrowserViaApi(
+  page: Page,
+  opts: { url?: string; openerTerminalId?: string } = {},
+): Promise<AgentBrowserRecord> {
+  return (await agentBrowserCommand(page, {
+    type: "open",
+    ...(opts.url ? { url: opts.url } : {}),
+    ...(opts.openerTerminalId
+      ? { opener_terminal_id: opts.openerTerminalId }
+      : {}),
+  })) as AgentBrowserRecord;
+}
+
+export async function gotoAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+  url: string,
+): Promise<AgentBrowserRecord> {
+  return (await agentBrowserCommand(page, {
+    type: "goto",
+    browser_id: browserId,
+    url,
+  })) as AgentBrowserRecord;
+}
+
+export async function closeAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+): Promise<void> {
+  await agentBrowserCommand(page, { type: "close", browser_id: browserId });
+}
+
+export async function listAgentBrowsersViaApi(
+  page: Page,
+): Promise<AgentBrowserRecord[]> {
+  return (await agentBrowserCommand(page, {
+    type: "list",
+  })) as AgentBrowserRecord[];
+}
+
+/** The agent browser's current record from the REST list. */
+export async function getAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+): Promise<AgentBrowserRecord | undefined> {
+  return (await listAgentBrowsersViaApi(page)).find((b) => b.id === browserId);
+}
+
+/** Agent command that may be refused: returns status and body instead of asserting. */
+export async function tryAgentBrowserCommand(
+  page: Page,
+  command: Record<string, unknown>,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await page.request.post(
+    `/api/machines/${MACHINE_ID}/agent-browser`,
+    { headers: await getAuthHeaders(page), data: command, timeout: 120_000 },
+  );
+  return { status: response.status(), body: await response.json() };
+}
+
+export async function agentBrowserSnapshotViaApi(
+  page: Page,
+  browserId: string,
+): Promise<string> {
+  const result = (await agentBrowserCommand(page, {
+    type: "snapshot",
+    browser_id: browserId,
+  })) as { snapshot: string };
+  return result.snapshot;
+}
+
+export async function controlAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+  body: { action: "take" | "release"; device_id?: string },
+): Promise<AgentBrowserRecord> {
+  const response = await page.request.post(
+    `/api/machines/${MACHINE_ID}/agent-browser/${browserId}/control`,
+    { headers: await getAuthHeaders(page), data: body },
+  );
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return response.json();
+}
+
+export async function requestAgentBrowserHandoffViaApi(
+  page: Page,
+  browserId: string,
+  reason: string,
+): Promise<AgentBrowserRecord> {
+  const response = await page.request.post(
+    `/api/machines/${MACHINE_ID}/agent-browser/${browserId}/handoff`,
+    { headers: await getAuthHeaders(page), data: { reason } },
+  );
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return response.json();
+}
+
+/** Close every agent browser on the e2e node (no-op if none ever opened). */
+export async function closeAllAgentBrowsers(page: Page): Promise<void> {
+  for (const browser of await listAgentBrowsersViaApi(page)) {
+    // The agent may not close a browser a person controls.
+    if (browser.controller === "human") {
+      await controlAgentBrowserViaApi(page, browser.id, { action: "release" });
+    }
+    await closeAgentBrowserViaApi(page, browser.id);
+  }
+}
+
 export async function resetMachineState(page: Page): Promise<void> {
   await requestMachineControl(page);
+  await closeAllAgentBrowsers(page);
   await destroyAllTerminals(page);
   await deleteAllWorkspaceGroups(page);
   await deleteAllWorkspaceLayouts(page);

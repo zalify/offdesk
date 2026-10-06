@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { TerminalInfo } from "@offdesk/shared";
+import type { AgentBrowserInfo, TerminalInfo } from "@offdesk/shared";
 
 import { buildMobileSessionGroups } from "./mobileSessionSwitcher";
-import type { WorkspaceGroup } from "./terminalWorkspaceLayout";
+import {
+  createTerminalWorkspace,
+  type WorkspaceGroup,
+} from "./terminalWorkspaceLayout";
 
 function terminal(id: string, title: string, cwd: string): TerminalInfo {
   return {
@@ -59,7 +62,7 @@ describe("buildMobileSessionGroups", () => {
 
     expect(result.map((entry) => entry.panes.length)).toEqual([2, 1]);
     expect(
-      result.flatMap((entry) => entry.panes.map((pane) => pane.terminal.id)),
+      result.flatMap((entry) => entry.panes.map((pane) => pane.id)),
     ).toEqual(["one", "two", "three"]);
   });
 
@@ -72,9 +75,60 @@ describe("buildMobileSessionGroups", () => {
       ],
     );
 
-    expect(result[0]?.panes.map((pane) => pane.terminal.id)).toEqual([
+    expect(result[0]?.panes.map((pane) => pane.id)).toEqual([
       "one",
       "two",
     ]);
+  });
+
+  it("places agent browsers in their opener's tab or a tab of their own", () => {
+    const terminals = [
+      terminal("one", "Terminal One", "/repo/one"),
+      terminal("two", "Terminal Two", "/repo/two"),
+    ];
+    const browsers: AgentBrowserInfo[] = [
+      {
+        id: "b-opened",
+        machine_id: "machine-1",
+        url: "https://example.com/",
+        title: "Example",
+        opener_terminal_id: "one",
+      },
+      {
+        id: "b-solo",
+        machine_id: "machine-1",
+        url: "https://solo.test/page",
+        title: "",
+      },
+    ];
+    // The same derivation the desktop tab bar uses.
+    const groups = createTerminalWorkspace(
+      terminals,
+      null,
+      [],
+      [],
+      browsers,
+    ).groups;
+    const result = buildMobileSessionGroups(groups, terminals, browsers);
+
+    const byPane = (id: string) =>
+      result.find((entry) => entry.panes.some((pane) => pane.id === id));
+    const opened = byPane("b-opened");
+    expect(opened?.panes.map((pane) => pane.id)).toContain("one");
+    expect(opened?.panes.map((pane) => pane.kind)).toContain("browser");
+    const solo = byPane("b-solo");
+    expect(solo?.panes.map((pane) => pane.id)).toEqual(["b-solo"]);
+    expect(solo?.group.id).toBe("browser:b-solo");
+    // Terminals keep their own entries.
+    expect(byPane("two")?.panes.some((pane) => pane.kind === "terminal")).toBe(true);
+  });
+
+  it("drops a browser that is no longer listed", () => {
+    const result = buildMobileSessionGroups(
+      [group("alpha", "Alpha", ["one", "gone"])],
+      [terminal("one", "Terminal One", "/repo/one")],
+      [],
+    );
+    expect(result[0]?.panes.map((pane) => pane.id)).toEqual(["one"]);
   });
 });

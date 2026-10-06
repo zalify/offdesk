@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { sendAttentionEnter } from "@/lib/attentionEnter";
-import type { MachineInfo, TerminalInfo } from "@offdesk/shared";
-import { CircleAlert, ChevronRight } from "lucide-react";
+import type { AgentBrowserInfo, MachineInfo, TerminalInfo } from "@offdesk/shared";
+import { CircleAlert, ChevronRight, Globe } from "lucide-react";
 import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
+import { browserLabel } from "@/lib/terminalWorkspaceLayout";
 
-export function MobileTerminalAttention({ terminals, machines, activeTerminalId, groupLabels, onPick, deviceId, canSend }: {
+const NO_BROWSERS: AgentBrowserInfo[] = [];
+
+export function MobileTerminalAttention({ terminals, machines, activeTerminalId, groupLabels, onPick, deviceId, canSend, browsers = NO_BROWSERS, activeBrowserId = null, onPickBrowser }: {
   terminals: TerminalInfo[];
   machines: MachineInfo[];
   activeTerminalId: string | null;
@@ -13,9 +16,16 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
   onPick: (id: string) => void;
   deviceId: string | null;
   canSend: (machineId: string) => boolean;
+  /** Agent browsers of the active machine; a pending handoff asks for a person. */
+  browsers?: AgentBrowserInfo[];
+  activeBrowserId?: string | null;
+  onPickBrowser?: (id: string) => void;
 }) {
   const pending = terminals.filter(t => t.id !== activeTerminalId && t.reachable && t.attention === "confirmation"
     && machines.some(m => m.id === t.machine_id));
+  // A browser the agent handed off, that this device is not already helping with.
+  const handoffs = browsers.filter(b => b.handoff && b.id !== activeBrowserId
+    && !(b.controller === "human" && b.controller_device_id === deviceId));
   const live = useRef({ pending, canSend, deviceId });
   live.current = { pending, canSend, deviceId };
   const requests = useRef(new Map<string, AbortController>());
@@ -53,15 +63,36 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
     } finally { requests.current.delete(terminal.id); }
     // Keep disabled until the prompt clears, even after an uncertain delivery.
   };
-  if (pending.length === 0) return null;
+  const waiting = pending.length + handoffs.length;
+  if (waiting === 0) return null;
   return (
-    <nav aria-label="Terminals needing attention" data-testid="mobile-terminal-attention"
+    <nav aria-label="Sessions needing attention" data-testid="mobile-terminal-attention"
       style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 8px", borderBottom: `1px solid ${colors.lineSoft}`, background: colors.bg1, minWidth: 0 }}>
       <span role="status" style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0, color: colors.accent, fontSize: 12 }}>
         <CircleAlert size={16} aria-hidden="true" />
-        <span>{pending.length} waiting</span>
+        <span>{waiting} waiting</span>
       </span>
       <div style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0, flex: 1, overscrollBehaviorX: "contain" }}>
+        {handoffs.map(browser => {
+          const title = browserLabel(browser);
+          const reason = browser.handoff?.reason ?? "";
+          return (
+            <div key={browser.id} style={{ display: "flex", alignItems: "stretch", flexShrink: 0, border: `1px solid ${colors.line}`, borderRadius: 10, overflow: "hidden", background: colors.bg0 }}>
+              <button type="button" data-testid={`mobile-attention-browser-${browser.id}`}
+                aria-label={`Open browser ${title}, the agent needs you: ${reason}`}
+                title={`${title} — the agent needs you: ${reason}`}
+                onClick={() => onPickBrowser?.(browser.id)}
+                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, maxWidth: 220, minHeight: 44, padding: "4px 10px", border: 0, background: colors.bg0, color: colors.fg0, textAlign: "left", cursor: "pointer" }}>
+                <Globe size={14} aria-hidden="true" style={{ flexShrink: 0, color: colors.accent }} />
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 600 }}>{title}</span>
+                  <span data-testid={`mobile-attention-browser-reason-${browser.id}`} style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, color: colors.fg2 }}>{reason}</span>
+                </span>
+                <ChevronRight size={14} aria-hidden="true" style={{ flexShrink: 0 }} />
+              </button>
+            </div>
+          );
+        })}
         {pending.map(terminal => {
           const title = displayTerminalTitle(terminal);
           const machine = machines.find(m => m.id === terminal.machine_id)?.name;
