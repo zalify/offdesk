@@ -231,6 +231,28 @@ impl HubClient {
         self.agent_browser_reply(response).await.map(|_| ())
     }
 
+    /// Take control of an agent browser back (`reason` is shown to the
+    /// person). A person who operated the page in the last 30 s makes the hub
+    /// answer 409 `user_active`, which becomes `CliError::UserActive`.
+    pub async fn agent_browser_reclaim(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        reason: &str,
+        force: bool,
+    ) -> Result<(), CliError> {
+        let response = self
+            .http
+            .post(self.url(&format!(
+                "/machines/{machine_id}/agent-browser/{browser_id}/reclaim"
+            )))
+            .json(&serde_json::json!({ "reason": reason, "force": force }))
+            .send()
+            .await
+            .map_err(network_error)?;
+        self.agent_browser_reply(response).await.map(|_| ())
+    }
+
     /// One long-poll (the hub holds it up to 60 s) for the browser's control
     /// state. `wait_for` is `agent` or `resolved`; returns the hub's `ready`.
     pub async fn agent_browser_wait_control(
@@ -268,6 +290,9 @@ impl HubClient {
         }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if let Some(error) = user_active_error(status, &body) {
+            return Err(error);
+        }
         if status != StatusCode::UNAUTHORIZED {
             if let Some(message) = error_message(&body) {
                 return Err(CliError::Protocol(message));
@@ -372,6 +397,20 @@ fn user_in_control_error(status: StatusCode, body: &str) -> Option<CliError> {
     })
 }
 
+/// The hub's 409 `{"code":"user_active","retry_after_ms":N}` refusal of a reclaim.
+fn user_active_error(status: StatusCode, body: &str) -> Option<CliError> {
+    if status != StatusCode::CONFLICT {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    (value.get("code")?.as_str()? == "user_active").then(|| CliError::UserActive {
+        retry_after_ms: value
+            .get("retry_after_ms")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(30_000),
+    })
+}
+
 /// The `error` field of a `{"error": "..."}` body.
 fn error_message(body: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -434,7 +473,26 @@ fn sanitize_device_id(hostname: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_message, sanitize_device_id, user_in_control_error, CliError, StatusCode};
+    use super::{
+        error_message, sanitize_device_id, user_active_error, user_in_control_error, CliError,
+        StatusCode,
+    };
+
+    #[test]
+    fn user_active_refusal_is_recognised() {
+        let body = r#"{"error":"a person is using this browser right now","code":"user_active","retry_after_ms":12001}"#;
+        match user_active_error(StatusCode::CONFLICT, body) {
+            Some(error @ CliError::UserActive { retry_after_ms: 12001 }) => {
+                assert_eq!(
+                    error.to_string(),
+                    "A person is using this browser right now. Try again in 13 s, or pass --force to take it anyway."
+                );
+            }
+            _ => panic!("not recognised"),
+        }
+        assert!(user_active_error(StatusCode::CONFLICT, r#"{"code":"user_in_control"}"#).is_none());
+        assert!(user_active_error(StatusCode::BAD_REQUEST, body).is_none());
+    }
 
     #[test]
     fn user_in_control_refusal_is_recognised() {

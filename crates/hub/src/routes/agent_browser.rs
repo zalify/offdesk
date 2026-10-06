@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::auth::AuthUser;
-use crate::machine_manager::{AgentBrowserError, ControlChange, ControlWait};
+use crate::machine_manager::{AgentBrowserError, ControlChange, ControlWait, ReclaimOutcome};
 use crate::AppState;
 
 /// The first `open` may download Chromium (~150 MB).
@@ -42,6 +42,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/machines/{machine_id}/agent-browser/{browser_id}/handoff",
             post(request_handoff),
+        )
+        .route(
+            "/api/machines/{machine_id}/agent-browser/{browser_id}/reclaim",
+            post(reclaim),
         )
 }
 
@@ -181,6 +185,50 @@ async fn request_handoff(
         .await
     {
         Some(info) => Json(info).into_response(),
+        None => no_such_browser(),
+    }
+}
+
+#[derive(Deserialize)]
+struct ReclaimBody {
+    reason: String,
+    #[serde(default)]
+    force: bool,
+}
+
+/// The agent takes control back. Refused (409 `user_active`) while a person
+/// has operated the page in the last 30 s, unless `force`.
+async fn reclaim(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path((machine_id, browser_id)): Path<(String, String)>,
+    Json(body): Json<ReclaimBody>,
+) -> Response {
+    if let Some(response) = check_machine_access(&state, &auth_user.user_id, &machine_id).await {
+        return response;
+    }
+    let reason = body.reason.trim();
+    if reason.is_empty() || reason.chars().count() > MAX_HANDOFF_REASON_CHARS {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            "reason must be 1 to 500 characters",
+        );
+    }
+    match state
+        .manager
+        .reclaim_agent_browser_control(&machine_id, &browser_id, reason.to_string(), body.force)
+        .await
+    {
+        Some(ReclaimOutcome::Reclaimed(info)) => Json(info).into_response(),
+        Some(ReclaimOutcome::UserActive { retry_after_ms }) => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "a person is using this browser right now",
+                "code": "user_active",
+                "retry_after_ms": retry_after_ms,
+            })),
+        )
+            .into_response(),
         None => no_such_browser(),
     }
 }
@@ -857,6 +905,132 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    const RECLAIM: &str = "/api/machines/machine-a/agent-browser/b1/reclaim";
+
+    #[tokio::test]
+    async fn reclaim_route_refuses_an_active_person_and_honours_force() {
+        let (state, _rx) = state_with_browser().await;
+        request(
+            &state,
+            Method::POST,
+            CONTROL,
+            Some(json!({"action": "take", "device_id": "dev-a"})),
+        )
+        .await;
+        assert!(
+            state
+                .manager
+                .agent_browser_input(
+                    "machine-a",
+                    "b1",
+                    "dev-a",
+                    offdesk_protocol::AgentBrowserInputEvent::Text { text: "x".into() },
+                )
+                .await
+        );
+        let (status, body) = request(
+            &state,
+            Method::POST,
+            RECLAIM,
+            Some(json!({"reason": "need it"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["code"], "user_active");
+        assert_eq!(body["error"], "a person is using this browser right now");
+        assert!(body["retry_after_ms"].as_u64().unwrap() > 0, "{body}");
+        let info = state
+            .manager
+            .agent_browser_info("machine-a", "b1")
+            .await
+            .unwrap();
+        assert_eq!(info.controller_device_id.as_deref(), Some("dev-a"));
+
+        let (status, body) = request(
+            &state,
+            Method::POST,
+            RECLAIM,
+            Some(json!({"reason": "  need it  ", "force": true})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["controller"], "agent");
+        assert!(body.get("controller_device_id").is_none());
+        assert_eq!(body["reclaimed"]["reason"], "need it");
+        assert_eq!(body["reclaimed"]["device_id"], "dev-a");
+        assert!(body["reclaimed"]["at"].as_i64().unwrap() > 0);
+
+        // A person taking control clears it.
+        let (_, body) = request(
+            &state,
+            Method::POST,
+            CONTROL,
+            Some(json!({"action": "take", "device_id": "dev-b"})),
+        )
+        .await;
+        assert!(body.get("reclaimed").is_none());
+    }
+
+    #[tokio::test]
+    async fn reclaim_route_clears_a_pending_handoff_when_the_agent_controls() {
+        let (state, _rx) = state_with_browser().await;
+        request(
+            &state,
+            Method::POST,
+            "/api/machines/machine-a/agent-browser/b1/handoff",
+            Some(json!({"reason": "help"})),
+        )
+        .await;
+        let (status, body) = request(
+            &state,
+            Method::POST,
+            RECLAIM,
+            Some(json!({"reason": "never mind"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["controller"], "agent");
+        assert!(body.get("handoff").is_none());
+        assert!(body.get("reclaimed").is_none());
+    }
+
+    #[tokio::test]
+    async fn reclaim_reason_is_validated() {
+        let (state, _rx) = state_with_browser().await;
+        for body in [
+            json!({"reason": "   "}),
+            json!({"reason": "x".repeat(501)}),
+            json!({}),
+        ] {
+            let (status, _) = request(&state, Method::POST, RECLAIM, Some(body.clone())).await;
+            assert!(status.is_client_error(), "{body}: {status}");
+        }
+        let (status, _) = request(
+            &state,
+            Method::POST,
+            RECLAIM,
+            Some(json!({"reason": "   "})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, _) = request(
+            &state,
+            Method::POST,
+            RECLAIM,
+            Some(json!({"reason": "x".repeat(500)})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = request(
+            &state,
+            Method::POST,
+            "/api/machines/machine-a/agent-browser/nope/reclaim",
+            Some(json!({"reason": "x"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

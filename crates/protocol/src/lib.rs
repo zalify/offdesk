@@ -322,6 +322,10 @@ pub struct AgentBrowserInfo {
     /// control back.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<AgentBrowserHandoff>,
+    /// The agent took control back from a person (or from a pending
+    /// handoff). Owned by the hub; cleared when a person takes control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reclaimed: Option<AgentBrowserReclaim>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -337,6 +341,16 @@ pub struct AgentBrowserHandoff {
     pub reason: String,
     /// ms since epoch
     pub requested_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentBrowserReclaim {
+    pub reason: String,
+    /// ms since epoch
+    pub at: i64,
+    /// The device that lost control, when a person had it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
 }
 
 /// CSS viewport of every agent browser; input coordinates live in it.
@@ -1177,6 +1191,7 @@ mod tests {
         let json = serde_json::to_value(&old).unwrap();
         assert_eq!(json["controller"], "agent");
         assert!(json.get("handoff").is_none());
+        assert!(old.reclaimed.is_none() && json.get("reclaimed").is_none());
         let human: AgentBrowserInfo = serde_json::from_str(
             r#"{"id":"b","url":"u","title":"t","controller":"human","controller_device_id":"d1",
                 "controller_since":5,"handoff":{"reason":"log in","requested_at":3}}"#,

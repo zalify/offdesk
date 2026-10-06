@@ -29,6 +29,16 @@ pub enum CliError {
         browser: String,
         reason: Option<String>,
     },
+    /// `take` was refused because a person operated the page moments ago.
+    #[error("{}", user_active_message(*.retry_after_ms))]
+    UserActive { retry_after_ms: u64 },
+}
+
+fn user_active_message(retry_after_ms: u64) -> String {
+    format!(
+        "A person is using this browser right now. Try again in {} s, or pass --force to take it anyway.",
+        retry_after_ms.div_ceil(1000).max(1)
+    )
 }
 
 fn user_in_control_message(browser: &str, reason: Option<&str>) -> String {
@@ -50,7 +60,7 @@ impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
             CliError::WaitTimeout => 1,
-            CliError::UserInControl { .. } => 3,
+            CliError::UserInControl { .. } | CliError::UserActive { .. } => 3,
             _ => 2,
         }
     }
@@ -215,7 +225,8 @@ Exit codes:
   0  success (wait: matched; handoff --wait / wait-control: a person is done)
   1  timeout (wait, handoff --wait, wait-control)
   2  error
-  3  a person is controlling the browser, so goto/click/fill/press/login/close were
+  3  take: a person is using the page right now (retry later or pass --force).
+     Also: a person is controlling the browser, so goto/click/fill/press/login/close were
      refused. Run `offdesk browser wait-control <browser>` to wait for them,
      or `offdesk browser handoff <browser> --reason \"...\" --wait` to ask for
      help and wait until they hand control back. snapshot, screenshot, wait
@@ -232,8 +243,8 @@ Register it with an agent that speaks MCP, from inside an offdesk terminal:
 
 Tools: browser_open, browser_list, browser_close, browser_goto,
 browser_snapshot, browser_click, browser_fill, browser_press, browser_wait,
-browser_screenshot, browser_handoff, browser_wait_control, browser_logins,
-browser_login. They make the same
+browser_screenshot, browser_handoff, browser_wait_control, browser_take_control,
+browser_logins, browser_login. They make the same
 hub calls as `offdesk browser ...`; the hub URL and token come from the same
 flags, OFFDESK_URL / OFFDESK_TOKEN, or config.toml. Only JSON-RPC goes to
 stdout; diagnostics go to stderr.
@@ -408,6 +419,18 @@ enum BrowserAction {
         /// With --wait: give up after this many seconds
         #[arg(long, default_value = "600", requires = "wait")]
         timeout: u64,
+    },
+    /// Take control back from a person (they see the reason); refused while
+    /// they are actively using the page unless --force
+    Take {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Why you need the browser back (shown to the person)
+        #[arg(long)]
+        reason: String,
+        /// Take it even if a person is using the page right now
+        #[arg(long)]
+        force: bool,
     },
     /// Block until no person controls the browser: exit 0 when the agent may
     /// drive it, 1 on timeout
@@ -717,6 +740,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 wait,
                 timeout,
             } => commands::browser::handoff(&hub_client, &browser, reason, wait, timeout).await,
+            BrowserAction::Take {
+                browser,
+                reason,
+                force,
+            } => commands::browser::take(&hub_client, &browser, reason, force).await,
             BrowserAction::WaitControl { browser, timeout } => {
                 commands::browser::wait_control(&hub_client, &browser, timeout).await
             }
