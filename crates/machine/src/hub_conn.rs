@@ -13,6 +13,7 @@ use tokio_tungstenite::{
 };
 
 use crate::acp::AcpManager;
+use crate::agent_browser::AgentBrowserManager;
 use crate::attach::{AttachEvent, AttachManager};
 use crate::osc_title::OscTitleScanner;
 use crate::pty::{tmux_resize_window, tmux_window_size, PtyManager};
@@ -100,6 +101,7 @@ pub struct HubConnection {
     pub machine_secret: String,
     pub hub_url: String,
     pub pty_manager: Arc<PtyManager>,
+    pub agent_browser: Arc<AgentBrowserManager>,
     /// Spawn-command overrides for agent sessions (machine.json `acp_agents`).
     pub acp_agents: std::collections::HashMap<String, Vec<String>>,
 }
@@ -499,6 +501,7 @@ impl HubConnection {
 
         // Task: receive Hub messages with read timeout
         let pty_recv = pty.clone();
+        let agent_browser_recv = self.agent_browser.clone();
         let send_tx_recv = send_tx.clone();
         let attach_mgr_recv = attach_mgr.clone();
         let acp_manager_recv = acp_manager.clone();
@@ -526,6 +529,7 @@ impl HubConnection {
                                     &send_tx_recv,
                                     &attach_mgr_recv,
                                     &acp_manager_recv,
+                                    &agent_browser_recv,
                                 )
                                 .await;
                             }
@@ -580,6 +584,7 @@ async fn handle_hub_message(
     send_tx: &mpsc::Sender<OutboundHubMessage>,
     attach_mgr: &Arc<AttachManager>,
     acp_manager: &Arc<AcpManager>,
+    agent_browser: &Arc<AgentBrowserManager>,
 ) {
     match msg {
         HubToMachine::OpenPreviewStream { .. } => {}, // handled by connection-owned JoinSet
@@ -711,6 +716,27 @@ async fn handle_hub_message(
                     .send(OutboundHubMessage::Json(MachineToHub::RelayBriefResult {
                         request_id,
                         brief,
+                        error,
+                    }))
+                    .await;
+            });
+        }
+        HubToMachine::AgentBrowser {
+            request_id,
+            command,
+        } => {
+            // A slow goto/wait must not stall the hub message loop.
+            let manager = agent_browser.clone();
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let (data, error) = match manager.execute(command).await {
+                    Ok(data) => (Some(data), None),
+                    Err(error) => (None, Some(error)),
+                };
+                let _ = send_tx
+                    .send(OutboundHubMessage::Json(MachineToHub::AgentBrowserResult {
+                        request_id,
+                        data,
                         error,
                     }))
                     .await;

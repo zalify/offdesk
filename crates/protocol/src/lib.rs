@@ -292,6 +292,69 @@ pub struct BrowserStateSnapshot {
 
 // ── Hub → Machine messages ──
 
+/// One agent browser = one tab of the node's headless Chromium.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentBrowserInfo {
+    pub id: String,
+    /// Filled in by the hub; the node leaves it unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    pub url: String,
+    pub title: String,
+}
+
+/// Commands an agent can run against an agent browser. Replies:
+/// Open/Goto -> `AgentBrowserInfo`; List -> `Vec<AgentBrowserInfo>`;
+/// Snapshot -> `{"snapshot": string}`; Screenshot -> `{"png_base64": string}`;
+/// the rest (including Wait) -> `{}`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentBrowserCommand {
+    Open {
+        #[serde(default)]
+        url: Option<String>,
+    },
+    List,
+    Close {
+        browser_id: String,
+    },
+    Goto {
+        browser_id: String,
+        url: String,
+    },
+    Snapshot {
+        browser_id: String,
+    },
+    Click {
+        browser_id: String,
+        r#ref: String,
+    },
+    Fill {
+        browser_id: String,
+        r#ref: String,
+        text: String,
+    },
+    Press {
+        browser_id: String,
+        key: String,
+    },
+    Wait {
+        browser_id: String,
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        url_regex: Option<String>,
+        #[serde(default)]
+        idle_ms: Option<u64>,
+        timeout_ms: u64,
+    },
+    Screenshot {
+        browser_id: String,
+        #[serde(default)]
+        full_page: bool,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum HubToMachine {
@@ -337,6 +400,12 @@ pub enum HubToMachine {
     CheckForegroundProcess {
         request_id: String,
         terminal_id: String,
+    },
+    /// Drive an agent browser (headless Chromium owned by the node).
+    #[serde(rename = "agent_browser")]
+    AgentBrowser {
+        request_id: String,
+        command: AgentBrowserCommand,
     },
     #[serde(rename = "open_attach")]
     OpenAttach {
@@ -471,6 +540,16 @@ pub enum MachineToHub {
         request_id: String,
         has_foreground_process: bool,
         process_name: Option<String>,
+    },
+    /// Reply to `HubToMachine::AgentBrowser`. Exactly one of `data` / `error`
+    /// is set; `data` shape depends on the command (see `AgentBrowserCommand`).
+    #[serde(rename = "agent_browser_result")]
+    AgentBrowserResult {
+        request_id: String,
+        #[serde(default)]
+        data: Option<serde_json::Value>,
+        #[serde(default)]
+        error: Option<String>,
     },
     #[serde(rename = "attach_died")]
     AttachDied { attach_id: String, reason: String },

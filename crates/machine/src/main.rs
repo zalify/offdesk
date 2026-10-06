@@ -1,4 +1,5 @@
 mod acp;
+mod agent_browser;
 mod attach;
 mod config;
 mod hub_conn;
@@ -420,6 +421,7 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
     );
 
     let pty_manager = Arc::new(pty::PtyManager::new());
+    let agent_browser = Arc::new(agent_browser::AgentBrowserManager::new());
 
     // Recover tmux-backed terminals from previous run
     let recovered = pty_manager.recover_sessions(restore_on_reboot, resume_agents);
@@ -440,6 +442,7 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
         machine_secret,
         hub_url: ws_url,
         pty_manager,
+        agent_browser: agent_browser.clone(),
         acp_agents: loaded_config
             .as_ref()
             .map(|cfg| cfg.acp_agents.clone())
@@ -461,7 +464,37 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
         }
     };
 
-    conn.run().await;
+    // Stop the agent-browser Chromium on shutdown (systemd uses
+    // KillMode=process, so it would otherwise outlive the node).
+    tokio::select! {
+        _ = conn.run() => {}
+        _ = shutdown_signal() => {
+            tracing::info!("Shutting down");
+        }
+    }
+    agent_browser.shutdown().await;
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = term.recv() => {}
+                }
+            }
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 fn cmd_status() {

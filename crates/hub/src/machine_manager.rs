@@ -1721,6 +1721,10 @@ impl MachineManager {
                     },
                 );
             }
+            MachineToHub::AgentBrowserResult { request_id, .. } => {
+                // TODO(agent-browser 1b): resolve the pending request.
+                tracing::debug!(request_id = %request_id, "ignoring agent browser result");
+            }
             MachineToHub::AgentSessionExited { session_id, reason } => {
                 tracing::info!(
                     session_id = %session_id,
