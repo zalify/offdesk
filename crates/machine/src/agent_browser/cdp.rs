@@ -16,13 +16,14 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// Screenshots are large; tungstenite's default limits are far too small.
 const MAX_WS_SIZE: usize = 64 * 1024 * 1024;
+/// Synthetic event broadcast once when the connection ends.
+pub const CLOSED_EVENT: &str = "__closed";
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct CdpEvent {
     pub session_id: Option<String>,
     pub method: String,
-    #[allow(dead_code)]
     pub params: Value,
 }
 
@@ -99,6 +100,12 @@ impl CdpClient {
                     }
                 }
                 closed.store(true, Ordering::SeqCst);
+                // Lets listeners notice Chromium dying without a command.
+                let _ = events.send(CdpEvent {
+                    session_id: None,
+                    method: CLOSED_EVENT.to_string(),
+                    params: Value::Null,
+                });
                 let drained: Vec<_> = pending.lock().unwrap().drain().collect();
                 for (_, tx) in drained {
                     let _ = tx.send(Err("browser connection closed".to_string()));

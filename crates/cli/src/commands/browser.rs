@@ -47,6 +47,50 @@ fn pick_open_machine<'a>(
     )))
 }
 
+/// The id of the offdesk terminal this CLI runs in, if any: `OFFDESK_TERMINAL_ID`,
+/// else the name of the node's tmux session (`odk_<id>` / `wmx_<id>`).
+fn detect_terminal_id() -> Option<String> {
+    if let Some(id) = std::env::var("OFFDESK_TERMINAL_ID")
+        .ok()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+    {
+        return Some(id);
+    }
+    let tmux = std::env::var("TMUX").ok()?;
+    if !tmux_socket_is_ours(&tmux) {
+        return None;
+    }
+    let mut command = std::process::Command::new("tmux");
+    command.args(["display-message", "-p"]);
+    if let Some(pane) = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty()) {
+        command.args(["-t", &pane]);
+    }
+    let output = command.arg("#{session_name}").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    terminal_id_from_session(String::from_utf8_lossy(&output.stdout).trim())
+}
+
+/// `$TMUX` is `<socket path>,<server pid>,<session index>`; the node's
+/// terminals live on the `offdesk` socket (`webmux` before the rename).
+fn tmux_socket_is_ours(tmux_env: &str) -> bool {
+    let socket = tmux_env.split(',').next().unwrap_or("");
+    matches!(
+        Path::new(socket).file_name().and_then(|n| n.to_str()),
+        Some("offdesk" | "webmux")
+    )
+}
+
+fn terminal_id_from_session(session_name: &str) -> Option<String> {
+    ["odk_", "wmx_"]
+        .iter()
+        .find_map(|prefix| session_name.strip_prefix(prefix))
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
 fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, CliError> {
     serde_json::from_value(value)
         .map_err(|error| CliError::Protocol(format!("unexpected reply from hub: {error}")))
@@ -117,7 +161,17 @@ pub async fn open(
 ) -> Result<(), CliError> {
     let machines = client.machines().await?;
     let target = pick_open_machine(&machines, machine, local_machine_id)?;
-    let value = call(client, &target.id, AgentBrowserCommand::Open { url }).await?;
+    // The terminal id only means something on the machine it came from.
+    let opener_terminal_id = if local_machine_id == Some(target.id.as_str()) {
+        detect_terminal_id()
+    } else {
+        None
+    };
+    let command = AgentBrowserCommand::Open {
+        url,
+        opener_terminal_id,
+    };
+    let value = call(client, &target.id, command).await?;
     print_info(&parse(value)?, json, true)
 }
 
@@ -396,6 +450,22 @@ mod tests {
             machine_id: None,
             url: String::new(),
             title: String::new(),
+            opener_terminal_id: None,
         }
+    }
+
+    #[test]
+    fn tmux_socket_and_session_parsing() {
+        assert!(tmux_socket_is_ours("/tmp/tmux-1000/offdesk,1234,0"));
+        assert!(tmux_socket_is_ours("/tmp/tmux-1000/webmux,1,2"));
+        assert!(!tmux_socket_is_ours("/tmp/tmux-1000/default,1234,0"));
+        assert!(!tmux_socket_is_ours(""));
+        assert_eq!(
+            terminal_id_from_session("odk_3f2a-b1").as_deref(),
+            Some("3f2a-b1")
+        );
+        assert_eq!(terminal_id_from_session("wmx_abc").as_deref(), Some("abc"));
+        assert_eq!(terminal_id_from_session("work"), None);
+        assert_eq!(terminal_id_from_session("odk_"), None);
     }
 }

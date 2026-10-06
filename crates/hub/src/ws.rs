@@ -10,7 +10,8 @@ use axum::{
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use offdesk_protocol::{
-    decode_attach_output_frame, encode_terminal_preview_output_frame, BrowserEventEnvelope,
+    decode_agent_browser_frame, decode_attach_output_frame, encode_terminal_preview_output_frame,
+    AGENT_BROWSER_FRAME_MAGIC, BrowserEventEnvelope,
     BrowserEventsClientMessage, BrowserEventsPong, HubToMachine, MachineToHub,
 };
 use serde::{Deserialize, Serialize};
@@ -19,6 +20,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::agent_browser_stream::{
+    Frame, Params, ViewerMsg, DEFAULT_HEIGHT, DEFAULT_QUALITY, DEFAULT_WIDTH,
+};
 use crate::attach_router::WsSender;
 use crate::auth;
 use crate::db;
@@ -638,6 +642,144 @@ async fn handle_terminal_previews_ws(socket: WebSocket, user_id: Option<String>,
     }
 }
 
+// ── Browser ↔ Hub agent browser screencast WebSocket ──
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum AgentBrowserViewerMessage {
+    /// The viewer drew the last frame; the next may be sent.
+    #[serde(rename = "ack")]
+    Ack,
+    #[serde(rename = "params")]
+    Params {
+        max_width: Option<u32>,
+        max_height: Option<u32>,
+        quality: Option<u32>,
+    },
+}
+
+fn viewer_params(max_width: Option<u32>, max_height: Option<u32>, quality: Option<u32>) -> Params {
+    Params::clamped(
+        max_width.unwrap_or(DEFAULT_WIDTH),
+        max_height.unwrap_or(DEFAULT_HEIGHT),
+        quality.unwrap_or(DEFAULT_QUALITY),
+    )
+}
+
+/// Viewer wire format: binary `[u16 meta_len][meta JSON][jpeg]`.
+fn viewer_frame_bytes(frame: &Frame) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + frame.meta.len() + frame.jpeg.len());
+    out.extend_from_slice(&(frame.meta.len() as u16).to_be_bytes());
+    out.extend_from_slice(&frame.meta);
+    out.extend_from_slice(&frame.jpeg);
+    out
+}
+
+async fn agent_browser_ws_handler(
+    ws: WebSocketUpgrade,
+    Path((machine_id, browser_id)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+    State(state): State<AppState>,
+) -> Response {
+    let token = params.get("token").map(|s| s.as_str());
+    let user_id =
+        token.and_then(|t| auth::verify_bearer_token(t, &state.db, &state.jwt_secret).ok());
+    let reply = |status: u16, message: String| {
+        Response::builder()
+            .status(status)
+            .body(axum::body::Body::from(message))
+            .unwrap()
+    };
+    if user_id.is_none() && !state.dev_mode {
+        return reply(401, "Unauthorized".to_string());
+    }
+    if let Some(user_id) = user_id.as_deref() {
+        if !state
+            .manager
+            .user_can_access_machine(user_id, &machine_id)
+            .await
+        {
+            return match state.manager.offline_machine_name(user_id, &machine_id) {
+                Some(name) => reply(503, format!("machine {name} is offline")),
+                None => reply(404, "Machine not found".to_string()),
+            };
+        }
+    }
+    if !state
+        .manager
+        .agent_browser_exists(&machine_id, &browser_id)
+        .await
+    {
+        return reply(404, "Agent browser not found".to_string());
+    }
+    ws.on_upgrade(move |socket| handle_agent_browser_ws(socket, state, machine_id, browser_id))
+}
+
+async fn handle_agent_browser_ws(
+    socket: WebSocket,
+    state: AppState,
+    machine_id: String,
+    browser_id: String,
+) {
+    let (mut sender, mut receiver) = socket.split();
+    // The handle's Drop detaches the viewer (and stops the node's screencast
+    // when it was the last), whichever way this future ends — including
+    // being aborted by the secure channel.
+    let (viewer, mut frames) = state
+        .manager
+        .attach_agent_browser_viewer(&machine_id, &browser_id, Params::default())
+        .await;
+    // The browser may have closed between the check and the attach.
+    if !state
+        .manager
+        .agent_browser_exists(&machine_id, &browser_id)
+        .await
+    {
+        let _ = sender
+            .send(Message::Text(r#"{"type":"destroyed"}"#.into()))
+            .await;
+        let _ = sender.send(Message::Close(None)).await;
+        return;
+    }
+    loop {
+        tokio::select! {
+            outgoing = frames.recv() => match outgoing {
+                Some(ViewerMsg::Frame(frame)) => {
+                    if sender
+                        .send(Message::Binary(viewer_frame_bytes(&frame).into()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Some(ViewerMsg::Destroyed) => {
+                    let _ = sender
+                        .send(Message::Text(r#"{"type":"destroyed"}"#.into()))
+                        .await;
+                    let _ = sender.send(Message::Close(None)).await;
+                    break;
+                }
+                None => break,
+            },
+            incoming = receiver.next() => match incoming {
+                Some(Ok(Message::Text(text))) => {
+                    match serde_json::from_str::<AgentBrowserViewerMessage>(&text) {
+                        Ok(AgentBrowserViewerMessage::Ack) => viewer.ack().await,
+                        Ok(AgentBrowserViewerMessage::Params { max_width, max_height, quality }) => {
+                            viewer.set_params(viewer_params(max_width, max_height, quality)).await;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+    drop(viewer);
+}
+
 // ── Machine → Hub registration WebSocket ──
 
 async fn machine_ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
@@ -807,6 +949,8 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
 
                     // Handle incoming messages from machine
                     let router = state.router.clone();
+                    let frame_manager = state.manager.clone();
+                    let frame_machine_id = machine_id.clone();
                     let mut recv_task = tokio::spawn(async move {
                         while let Some(Ok(msg)) = receiver.next().await {
                             match msg {
@@ -818,6 +962,26 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
                                     };
                                     if ctrl_tx.send(machine_msg).await.is_err() {
                                         break;
+                                    }
+                                }
+                                Message::Binary(data) if data.first() == Some(&AGENT_BROWSER_FRAME_MAGIC) => {
+                                    match decode_agent_browser_frame(&data) {
+                                        Ok((browser_id, meta, jpeg)) => {
+                                            frame_manager
+                                                .agent_browser_frame(
+                                                    &frame_machine_id,
+                                                    &browser_id,
+                                                    meta,
+                                                    jpeg,
+                                                )
+                                                .await;
+                                        }
+                                        Err(error) => {
+                                            tracing::warn!(
+                                                "Failed to decode agent browser frame: {}",
+                                                error
+                                            );
+                                        }
                                     }
                                 }
                                 Message::Binary(data) => {
@@ -1126,12 +1290,56 @@ pub fn router() -> Router<AppState> {
             get(terminal_ws_handler),
         )
         .route("/ws/terminal-previews", get(terminal_previews_ws_handler))
+        .route(
+            "/ws/agent-browser/{machine_id}/{browser_id}",
+            get(agent_browser_ws_handler),
+        )
         .route("/ws/events", get(events_handler))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_frames_dispatch_on_their_magic_byte() {
+        let agent = Bytes::from(offdesk_protocol::encode_agent_browser_frame(
+            "b1",
+            b"{}",
+            &[0xFF, 0xD8],
+        ));
+        let attach = Bytes::from(offdesk_protocol::encode_attach_output_frame("a1", b"hi"));
+        assert_eq!(agent.first(), Some(&AGENT_BROWSER_FRAME_MAGIC));
+        assert_ne!(attach.first(), Some(&AGENT_BROWSER_FRAME_MAGIC));
+        assert!(decode_agent_browser_frame(&agent).is_ok());
+        assert!(decode_agent_browser_frame(&attach).is_err());
+        assert!(decode_attach_output_frame(&agent).is_err());
+    }
+
+    #[test]
+    fn viewer_wire_format_and_params() {
+        let frame = Frame {
+            meta: Bytes::from_static(b"{\"a\":1}"),
+            jpeg: Bytes::from_static(&[0xFF, 0xD8]),
+        };
+        let bytes = viewer_frame_bytes(&frame);
+        assert_eq!(&bytes[..2], &[0, 7]);
+        assert_eq!(&bytes[2..9], b"{\"a\":1}");
+        assert_eq!(&bytes[9..], &[0xFF, 0xD8]);
+        assert_eq!(viewer_params(None, None, None), Params::default());
+        let p = viewer_params(Some(640), Some(9000), Some(5));
+        assert_eq!((p.max_width, p.max_height, p.quality), (640, 1920, 20));
+        assert!(matches!(
+            serde_json::from_str::<AgentBrowserViewerMessage>(r#"{"type":"ack"}"#),
+            Ok(AgentBrowserViewerMessage::Ack)
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentBrowserViewerMessage>(
+                r#"{"type":"params","max_width":640,"max_height":400,"quality":50}"#
+            ),
+            Ok(AgentBrowserViewerMessage::Params { max_width: Some(640), .. })
+        ));
+    }
 
     #[test]
     fn watcher_cannot_send_command_input() {

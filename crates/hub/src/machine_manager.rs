@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
 use offdesk_protocol::{
-    AgentSessionInfo, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
+    AgentBrowserInfo, AgentSessionInfo, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
     ControlLeaseSnapshot, DirEntry, HubToMachine, MachineInfo, MachineStatsSnapshot, MachineToHub,
     TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
 };
@@ -85,12 +86,19 @@ struct MachineConnection {
     pub latest_stats: Option<offdesk_protocol::ResourceStats>,
     /// Capability tokens from the machine's Register (e.g. deflate-raw-v1).
     pub capabilities: Vec<String>,
+    /// Agent browsers (tabs of the node's headless Chromium), by id.
+    pub agent_browsers: HashMap<String, AgentBrowserInfo>,
 }
 
 pub struct MachineManager {
     machines: Arc<Mutex<HashMap<String, MachineConnection>>>,
     /// Pending request/response tracking
     pending: Arc<Mutex<HashMap<String, PendingResponse>>>,
+    /// Agent browser request id -> machine id, so a machine going offline can
+    /// fail its pending requests at once instead of after the full timeout.
+    agent_browser_requests: Arc<std::sync::Mutex<HashMap<String, String>>>,
+    /// Live screencast fan-out per agent browser.
+    streams: Streams,
     /// Browser events broadcast
     event_tx: broadcast::Sender<EventEnvelope>,
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
@@ -147,6 +155,8 @@ impl MachineManager {
         Self {
             machines: Arc::new(Mutex::new(HashMap::new())),
             pending: Arc::new(Mutex::new(HashMap::new())),
+            agent_browser_requests: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            streams: Streams::default(),
             event_tx,
             event_history: Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
                 EVENT_HISTORY_LIMIT,
@@ -200,12 +210,16 @@ impl MachineManager {
             terminals: HashMap::new(),
             latest_stats: None,
             capabilities,
+            agent_browsers: HashMap::new(),
         };
 
         {
             let mut machines = self.machines.lock().await;
             if let Some(old_conn) = machines.insert(machine_id.clone(), conn) {
                 old_conn.preview_lifetime.cancel();
+                // The new connection reports its own browsers
+                // (ExistingAgentBrowsers); drop the old connection's.
+                self.drop_agent_browsers(&machine_id, &old_conn);
                 // A reconnecting machine can register its new connection
                 // before the old connection's disconnect is detected; the
                 // later unregister_machine then no-ops on the conn_id
@@ -276,6 +290,7 @@ impl MachineManager {
         if let Some(conn) = machines.remove(machine_id) {
             conn.preview_lifetime.cancel();
             let target_user_id = conn.user_id.clone();
+            self.drop_agent_browsers(machine_id, &conn);
 
             // Agent processes die with the machine connection: their sessions
             // go Disconnected (resume brings them back).
@@ -338,6 +353,45 @@ impl MachineManager {
                     machine_id: machine_id.to_string(),
                 },
             );
+        }
+    }
+
+    /// A machine connection ended: its agent browsers are gone from the UI's
+    /// point of view, viewers are told, and its pending agent browser
+    /// requests fail now rather than after their timeout.
+    fn drop_agent_browsers(&self, machine_id: &str, conn: &MachineConnection) {
+        for browser_id in conn.agent_browsers.keys() {
+            self.send_event(
+                conn.user_id.clone(),
+                BrowserEvent::AgentBrowserDestroyed {
+                    machine_id: machine_id.to_string(),
+                    browser_id: browser_id.clone(),
+                },
+            );
+        }
+        self.streams.destroy_machine(machine_id);
+        let request_ids: Vec<String> = {
+            let mut requests = self.agent_browser_requests.lock().unwrap();
+            let ids: Vec<String> = requests
+                .iter()
+                .filter(|(_, machine)| machine.as_str() == machine_id)
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in &ids {
+                requests.remove(id);
+            }
+            ids
+        };
+        if !request_ids.is_empty() {
+            // Dropping the senders wakes the waiting requests with "machine
+            // disconnected". `pending` is a tokio mutex; don't block on it.
+            let pending = self.pending.clone();
+            tokio::spawn(async move {
+                let mut pending = pending.lock().await;
+                for id in request_ids {
+                    pending.remove(&id);
+                }
+            });
         }
     }
 
@@ -1036,6 +1090,149 @@ impl MachineManager {
         }
     }
 
+    /// Store (or refresh) one agent browser and tell the UIs.
+    async fn upsert_agent_browser(&self, machine_id: &str, mut browser: AgentBrowserInfo) {
+        browser.machine_id = Some(machine_id.to_string());
+        let (user_id, was_known) = {
+            let mut machines = self.machines.lock().await;
+            let Some(conn) = machines.get_mut(machine_id) else {
+                return;
+            };
+            let previous = conn
+                .agent_browsers
+                .insert(browser.id.clone(), browser.clone());
+            if previous.as_ref() == Some(&browser) {
+                return;
+            }
+            (conn.user_id.clone(), previous.is_some())
+        };
+        self.send_event(
+            user_id,
+            if was_known {
+                BrowserEvent::AgentBrowserUpdated { browser }
+            } else {
+                BrowserEvent::AgentBrowserCreated { browser }
+            },
+        );
+    }
+
+    /// The node's full list after (re)connecting: diff against what we know.
+    async fn replace_agent_browsers(&self, machine_id: &str, browsers: Vec<AgentBrowserInfo>) {
+        let ids: HashSet<String> = browsers.iter().map(|b| b.id.clone()).collect();
+        let (user_id, gone) = {
+            let mut machines = self.machines.lock().await;
+            let Some(conn) = machines.get_mut(machine_id) else {
+                return;
+            };
+            let gone: Vec<String> = conn
+                .agent_browsers
+                .keys()
+                .filter(|id| !ids.contains(*id))
+                .cloned()
+                .collect();
+            for id in &gone {
+                conn.agent_browsers.remove(id);
+            }
+            (conn.user_id.clone(), gone)
+        };
+        for browser_id in gone {
+            self.send_event(
+                user_id.clone(),
+                BrowserEvent::AgentBrowserDestroyed {
+                    machine_id: machine_id.to_string(),
+                    browser_id,
+                },
+            );
+        }
+        for browser in browsers {
+            self.upsert_agent_browser(machine_id, browser).await;
+        }
+        // Screencasts do not survive a reconnect: restart the watched ones.
+        let actions = self
+            .streams
+            .resync_machine(machine_id, &|id| ids.contains(id));
+        for (browser_id, action) in actions {
+            self.send_node_action(machine_id, &browser_id, action).await;
+        }
+    }
+
+    /// Whether the machine is connected and has this agent browser.
+    pub async fn agent_browser_exists(&self, machine_id: &str, browser_id: &str) -> bool {
+        self.machines
+            .lock()
+            .await
+            .get(machine_id)
+            .map(|conn| conn.agent_browsers.contains_key(browser_id))
+            .unwrap_or(false)
+    }
+
+    /// Name of a machine that belongs to `user_id` but is not connected.
+    /// `None` for unknown machines and other users' machines.
+    pub fn offline_machine_name(&self, user_id: &str, machine_id: &str) -> Option<String> {
+        let conn = self.db.get().ok()?;
+        let machine = crate::db::machines::find_machine_by_id(&conn, machine_id)
+            .ok()
+            .flatten()?;
+        (machine.user_id == user_id).then_some(machine.name)
+    }
+
+    async fn send_node_action(&self, machine_id: &str, browser_id: &str, action: NodeAction) {
+        let browser_id = browser_id.to_string();
+        let msg = match action {
+            NodeAction::Start(p) => HubToMachine::AgentBrowserScreencastStart {
+                browser_id,
+                max_width: p.max_width,
+                max_height: p.max_height,
+                quality: p.quality,
+            },
+            NodeAction::Stop => HubToMachine::AgentBrowserScreencastStop { browser_id },
+            NodeAction::Ack => HubToMachine::AgentBrowserFrameAck { browser_id },
+        };
+        let _ = self.send_to_machine(machine_id, msg).await;
+    }
+
+    async fn send_node_actions(&self, machine_id: &str, browser_id: &str, actions: Vec<NodeAction>) {
+        for action in actions {
+            self.send_node_action(machine_id, browser_id, action).await;
+        }
+    }
+
+    /// A screencast frame from the node (binary frame 0x03).
+    pub async fn agent_browser_frame(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        meta: bytes::Bytes,
+        jpeg: bytes::Bytes,
+    ) {
+        let actions = self
+            .streams
+            .on_frame(machine_id, browser_id, Frame { meta, jpeg });
+        self.send_node_actions(machine_id, browser_id, actions).await;
+    }
+
+    /// Register a viewer of an agent browser's screencast. Dropping the
+    /// returned handle detaches it (and stops the node's screencast when it
+    /// was the last), however the viewer's socket ended.
+    pub async fn attach_agent_browser_viewer(
+        self: &Arc<Self>,
+        machine_id: &str,
+        browser_id: &str,
+        params: Params,
+    ) -> (AgentBrowserViewer, mpsc::UnboundedReceiver<ViewerMsg>) {
+        let (id, rx, actions) = self.streams.add_viewer(machine_id, browser_id, params);
+        self.send_node_actions(machine_id, browser_id, actions).await;
+        (
+            AgentBrowserViewer {
+                manager: self.clone(),
+                machine_id: machine_id.to_string(),
+                browser_id: browser_id.to_string(),
+                id,
+            },
+            rx,
+        )
+    }
+
     /// Run an agent browser command on a machine and wait for the node's reply.
     pub async fn agent_browser(
         &self,
@@ -1044,6 +1241,28 @@ impl MachineManager {
         timeout: Duration,
     ) -> Result<serde_json::Value, AgentBrowserError> {
         let request_id = uuid::Uuid::new_v4().to_string();
+        self.agent_browser_requests
+            .lock()
+            .unwrap()
+            .insert(request_id.clone(), machine_id.to_string());
+        let result = self
+            .agent_browser_request(&request_id, machine_id, command, timeout)
+            .await;
+        self.agent_browser_requests
+            .lock()
+            .unwrap()
+            .remove(&request_id);
+        result
+    }
+
+    async fn agent_browser_request(
+        &self,
+        request_id: &str,
+        machine_id: &str,
+        command: offdesk_protocol::AgentBrowserCommand,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, AgentBrowserError> {
+        let request_id = request_id.to_string();
         let rx = self.register_pending(&request_id).await;
 
         let cmd_tx = {
@@ -1799,6 +2018,33 @@ impl MachineManager {
                     let _ = tx.send(Ok(PendingResult::AgentBrowser(result)));
                 }
             }
+            MachineToHub::AgentBrowserCreated { browser }
+            | MachineToHub::AgentBrowserUpdated { browser } => {
+                self.upsert_agent_browser(machine_id, browser).await;
+            }
+            MachineToHub::AgentBrowserDestroyed { browser_id } => {
+                let removed = {
+                    let mut machines = self.machines.lock().await;
+                    machines.get_mut(machine_id).and_then(|conn| {
+                        conn.agent_browsers
+                            .remove(&browser_id)
+                            .map(|_| conn.user_id.clone())
+                    })
+                };
+                if let Some(user_id) = removed {
+                    self.send_event(
+                        user_id,
+                        BrowserEvent::AgentBrowserDestroyed {
+                            machine_id: machine_id.to_string(),
+                            browser_id: browser_id.clone(),
+                        },
+                    );
+                }
+                self.streams.destroy(machine_id, &browser_id);
+            }
+            MachineToHub::ExistingAgentBrowsers { browsers } => {
+                self.replace_agent_browsers(machine_id, browsers).await;
+            }
             MachineToHub::AgentSessionExited { session_id, reason } => {
                 tracing::info!(
                     session_id = %session_id,
@@ -2210,6 +2456,11 @@ impl MachineManager {
             .ok()
             .and_then(|conn| crate::db::todos::list(&conn, user_id).ok())
             .unwrap_or_default();
+        let mut agent_browsers: Vec<AgentBrowserInfo> = visible
+            .iter()
+            .flat_map(|conn| conn.agent_browsers.values().cloned())
+            .collect();
+        agent_browsers.sort_by(|a, b| a.id.cmp(&b.id));
 
         BrowserStateSnapshot {
             snapshot_seq,
@@ -2227,6 +2478,7 @@ impl MachineManager {
             agent_sessions,
             agent_session_seen,
             todos,
+            agent_browsers,
         }
     }
 
@@ -2317,6 +2569,63 @@ fn new_mode_state() -> ModeState {
         control_leases: HashMap::new(),
         connected_devices: HashMap::new(),
         released_leases: HashMap::new(),
+    }
+}
+
+/// One viewer of an agent browser's screencast. Dropping it detaches the
+/// viewer; the last one out stops the node's screencast. Tying this to `Drop`
+/// (not to a close message) covers sockets that are aborted rather than
+/// closed.
+pub struct AgentBrowserViewer {
+    manager: Arc<MachineManager>,
+    machine_id: String,
+    browser_id: String,
+    id: u64,
+}
+
+impl AgentBrowserViewer {
+    /// The viewer drew the last frame.
+    pub async fn ack(&self) {
+        let actions = self
+            .manager
+            .streams
+            .viewer_ack(&self.machine_id, &self.browser_id, self.id);
+        self.manager
+            .send_node_actions(&self.machine_id, &self.browser_id, actions)
+            .await;
+    }
+
+    /// The viewer asked for different quality/size.
+    pub async fn set_params(&self, params: Params) {
+        let actions =
+            self.manager
+                .streams
+                .set_params(&self.machine_id, &self.browser_id, self.id, params);
+        self.manager
+            .send_node_actions(&self.machine_id, &self.browser_id, actions)
+            .await;
+    }
+}
+
+impl Drop for AgentBrowserViewer {
+    fn drop(&mut self) {
+        let actions =
+            self.manager
+                .streams
+                .remove_viewer(&self.machine_id, &self.browser_id, self.id);
+        if actions.is_empty() {
+            return;
+        }
+        let manager = self.manager.clone();
+        let machine_id = self.machine_id.clone();
+        let browser_id = self.browser_id.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                manager
+                    .send_node_actions(&machine_id, &browser_id, actions)
+                    .await;
+            });
+        }
     }
 }
 
@@ -3861,5 +4170,230 @@ mod tests {
             manager.get_controller("user-a", "machine-b"),
             Some("device-a".to_string())
         );
+    }
+
+    fn browser(id: &str, url: &str) -> AgentBrowserInfo {
+        AgentBrowserInfo {
+            id: id.to_string(),
+            machine_id: None,
+            url: url.to_string(),
+            title: String::new(),
+            opener_terminal_id: Some("term-a".to_string()),
+        }
+    }
+
+    /// Events of one kind seen since `after_seq`, as their JSON `type` tags.
+    fn event_types(manager: &MachineManager) -> Vec<String> {
+        manager
+            .subscribe_events_after("user-a", 0)
+            .replay
+            .iter()
+            .map(|e| serde_json::to_value(&e.event).unwrap()["type"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn agent_browsers_are_tracked_snapshotted_and_destroyed_on_unregister() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (conn_id, _rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .register_machine(machine("machine-b"), Some("user-b".to_string()))
+            .await;
+
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: browser("b1", "https://example.com"),
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-b",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("other", "x"),
+                },
+            )
+            .await;
+
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(snapshot.agent_browsers.len(), 1);
+        assert_eq!(snapshot.agent_browsers[0].id, "b1");
+        assert_eq!(snapshot.agent_browsers[0].url, "https://example.com");
+        assert_eq!(
+            snapshot.agent_browsers[0].machine_id.as_deref(),
+            Some("machine-a")
+        );
+        assert_eq!(
+            snapshot.agent_browsers[0].opener_terminal_id.as_deref(),
+            Some("term-a")
+        );
+        let types = event_types(&manager);
+        assert!(types.contains(&"agent_browser_created".to_string()), "{types:?}");
+        assert!(types.contains(&"agent_browser_updated".to_string()), "{types:?}");
+        // An identical report is not an event.
+        let before = event_types(&manager).len();
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: browser("b1", "https://example.com"),
+                },
+            )
+            .await;
+        assert_eq!(event_types(&manager).len(), before);
+
+        manager.unregister_machine("machine-a", &conn_id).await;
+        let types = event_types(&manager);
+        assert!(types.contains(&"agent_browser_destroyed".to_string()), "{types:?}");
+        assert!(manager.snapshot_for_user("user-a").await.agent_browsers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn existing_agent_browsers_replaces_the_list() {
+        let manager = MachineManager::new(test_db());
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        for id in ["b1", "b2"] {
+            manager
+                .handle_machine_message(
+                    "machine-a",
+                    MachineToHub::AgentBrowserCreated {
+                        browser: browser(id, "u"),
+                    },
+                )
+                .await;
+        }
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: vec![browser("b2", "u"), browser("b3", "u")],
+                },
+            )
+            .await;
+        let ids: Vec<String> = manager
+            .snapshot_for_user("user-a")
+            .await
+            .agent_browsers
+            .into_iter()
+            .map(|b| b.id)
+            .collect();
+        assert_eq!(ids, vec!["b2", "b3"]);
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserDestroyed {
+                    browser_id: "b2".to_string(),
+                },
+            )
+            .await;
+        assert!(!manager.agent_browser_exists("machine-a", "b2").await);
+        assert!(manager.agent_browser_exists("machine-a", "b3").await);
+    }
+
+    #[tokio::test]
+    async fn pending_agent_browser_requests_fail_when_the_machine_disconnects() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (conn_id, mut rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let waiting = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .agent_browser(
+                        "machine-a",
+                        offdesk_protocol::AgentBrowserCommand::List,
+                        Duration::from_secs(60),
+                    )
+                    .await
+            })
+        };
+        // The request reached the node; it never answers.
+        assert!(matches!(
+            rx.recv().await,
+            Some(HubToMachine::AgentBrowser { .. })
+        ));
+        let started = std::time::Instant::now();
+        manager.unregister_machine("machine-a", &conn_id).await;
+        let result = tokio::time::timeout(Duration::from_secs(5), waiting)
+            .await
+            .expect("request still pending")
+            .unwrap();
+        assert!(matches!(result, Err(AgentBrowserError::Offline(_))), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(manager.agent_browser_requests.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn viewer_frames_are_paced_and_the_last_drop_stops_the_node() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (_conn_id, mut node_rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let jpeg = |n: u8| bytes::Bytes::from(vec![0xFF, 0xD8, n]);
+        let meta = || bytes::Bytes::from_static(b"{}");
+
+        let (viewer, mut frames) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default())
+            .await;
+        assert!(matches!(
+            node_rx.recv().await,
+            Some(HubToMachine::AgentBrowserScreencastStart {
+                max_width: 1280,
+                max_height: 800,
+                quality: 60,
+                ..
+            })
+        ));
+        manager.agent_browser_frame("machine-a", "b1", meta(), jpeg(1)).await;
+        manager.agent_browser_frame("machine-a", "b1", meta(), jpeg(2)).await;
+        let first = frames.recv().await.unwrap();
+        assert!(matches!(first, ViewerMsg::Frame(f) if f.jpeg[2] == 1));
+        assert!(frames.try_recv().is_err(), "frame 2 sent before the ack");
+        assert!(node_rx.try_recv().is_err(), "node acked before any viewer");
+
+        viewer.ack().await;
+        assert!(matches!(
+            node_rx.recv().await,
+            Some(HubToMachine::AgentBrowserFrameAck { .. })
+        ));
+        assert!(matches!(frames.recv().await.unwrap(), ViewerMsg::Frame(f) if f.jpeg[2] == 2));
+
+        drop(viewer);
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), node_rx.recv()).await,
+            Ok(Some(HubToMachine::AgentBrowserScreencastStop { .. }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn offline_machine_name_only_for_the_owner() {
+        let manager = MachineManager::new(test_db());
+        {
+            let conn = manager.db.get().unwrap();
+            crate::db::users::create_user(&conn, "user-a", "test", "user-a", "User A", None, "user")
+                .unwrap();
+            crate::db::machines::create_machine(&conn, "m1", "user-a", "My Box", "hash").unwrap();
+        }
+        assert_eq!(
+            manager.offline_machine_name("user-a", "m1").as_deref(),
+            Some("My Box")
+        );
+        assert_eq!(manager.offline_machine_name("user-b", "m1"), None);
+        assert_eq!(manager.offline_machine_name("user-a", "nope"), None);
     }
 }

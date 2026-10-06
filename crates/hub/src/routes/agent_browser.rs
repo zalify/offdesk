@@ -73,7 +73,18 @@ async fn run_command(
         .user_can_access_machine(&auth_user.user_id, &machine_id)
         .await
     {
-        return error_response(StatusCode::NOT_FOUND, "Machine not found");
+        // Offline machines are not "visible", but their owner should be told
+        // so rather than that the machine does not exist.
+        return match state
+            .manager
+            .offline_machine_name(&auth_user.user_id, &machine_id)
+        {
+            Some(name) => error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &format!("machine {name} is offline"),
+            ),
+            None => error_response(StatusCode::NOT_FOUND, "Machine not found"),
+        };
     }
 
     let timeout = timeout_for(&command);
@@ -185,6 +196,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn own_offline_machine_is_service_unavailable() {
+        let state = test_state();
+        {
+            let conn = state.db.get().unwrap();
+            crate::db::machines::create_machine(&conn, "machine-off", "user-a", "Laptop", "hash")
+                .unwrap();
+            crate::db::machines::create_machine(&conn, "machine-theirs", "user-b", "Theirs", "hash")
+                .ok();
+        }
+        let (status, body) = post_command(&state, "machine-off", json!({"type": "list"})).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"], "machine Laptop is offline");
+        // Someone else's offline machine looks like any unknown one.
+        let (status, _) = post_command(&state, "machine-theirs", json!({"type": "list"})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
     async fn other_users_machine_is_not_found() {
         let state = test_state();
         let (_conn, _rx) = state
@@ -214,7 +243,8 @@ mod tests {
             assert_eq!(
                 command,
                 AgentBrowserCommand::Open {
-                    url: Some("https://example.com".to_string())
+                    url: Some("https://example.com".to_string()),
+                    opener_terminal_id: None,
                 }
             );
             node_state
@@ -351,7 +381,10 @@ mod tests {
     #[test]
     fn timeouts_per_command() {
         assert_eq!(
-            timeout_for(&AgentBrowserCommand::Open { url: None }),
+            timeout_for(&AgentBrowserCommand::Open {
+                url: None,
+                opener_terminal_id: None
+            }),
             Duration::from_secs(300)
         );
         assert_eq!(

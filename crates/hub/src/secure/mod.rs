@@ -249,7 +249,8 @@ fn websocket_url(path: &str, token: &str) -> Result<url::Url, String> {
         .join(path)
         .map_err(|_| "Invalid socket path")?;
     let allowed = matches!(url.path(), "/ws/events" | "/ws/terminal-previews")
-        || url.path().starts_with("/ws/terminal/");
+        || url.path().starts_with("/ws/terminal/")
+        || url.path().starts_with("/ws/agent-browser/");
     if !allowed || url.host_str() != Some("offdesk.internal") || url.fragment().is_some() {
         return Err("Unsupported socket path".into());
     }

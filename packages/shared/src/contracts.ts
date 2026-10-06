@@ -123,6 +123,16 @@ export interface ControlLeaseSnapshot {
   controller_device_id: string | null
 }
 
+/** One agent browser = one tab of a node's headless Chromium (crates/protocol AgentBrowserInfo). */
+export interface AgentBrowserInfo {
+  id: string
+  machine_id?: string
+  url: string
+  title: string
+  /** Terminal the browser was opened from, when known. */
+  opener_terminal_id?: string
+}
+
 export interface BrowserStateSnapshot {
   snapshot_seq: number
   last_focused_terminal_id?: string | null
@@ -137,6 +147,8 @@ export interface BrowserStateSnapshot {
   agent_session_seen?: Record<string, number>
   /** The user's to-dos; absent from older Hubs. */
   todos?: TodoInfo[]
+  /** Live agent browsers on online machines; absent from older Hubs. */
+  agent_browsers?: AgentBrowserInfo[]
 }
 
 // ── To-dos — mirrors crates/protocol/src/todos.rs ──
@@ -403,6 +415,9 @@ export type BrowserEvent =
   | BrowserEvent.AgentSessionSeen
   | BrowserEvent.TodoUpserted
   | BrowserEvent.TodoDeleted
+  | BrowserEvent.AgentBrowserCreated
+  | BrowserEvent.AgentBrowserUpdated
+  | BrowserEvent.AgentBrowserDestroyed
 
 export namespace BrowserEvent {
   export interface MachineOnline {
@@ -517,6 +532,22 @@ export namespace BrowserEvent {
   export interface TodoDeleted {
     type: 'todo_deleted'
     id: string
+  }
+
+  export interface AgentBrowserCreated {
+    type: 'agent_browser_created'
+    browser: AgentBrowserInfo
+  }
+
+  export interface AgentBrowserUpdated {
+    type: 'agent_browser_updated'
+    browser: AgentBrowserInfo
+  }
+
+  export interface AgentBrowserDestroyed {
+    type: 'agent_browser_destroyed'
+    machine_id: string
+    browser_id: string
   }
 }
 

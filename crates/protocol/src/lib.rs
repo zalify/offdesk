@@ -288,6 +288,9 @@ pub struct BrowserStateSnapshot {
     /// The user's to-dos; absent from older Hubs.
     #[serde(default)]
     pub todos: Vec<todos::TodoInfo>,
+    /// Live agent browsers on the user's online machines.
+    #[serde(default)]
+    pub agent_browsers: Vec<AgentBrowserInfo>,
 }
 
 // ── Hub → Machine messages ──
@@ -301,6 +304,10 @@ pub struct AgentBrowserInfo {
     pub machine_id: Option<String>,
     pub url: String,
     pub title: String,
+    /// Terminal the browser was opened from (set by `offdesk browser open`
+    /// when it runs inside an offdesk terminal on the same machine).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener_terminal_id: Option<String>,
 }
 
 /// Commands an agent can run against an agent browser. Replies:
@@ -314,6 +321,8 @@ pub enum AgentBrowserCommand {
     Open {
         #[serde(default)]
         url: Option<String>,
+        #[serde(default)]
+        opener_terminal_id: Option<String>,
     },
     List,
     Close {
@@ -408,6 +417,21 @@ pub enum HubToMachine {
         request_id: String,
         command: AgentBrowserCommand,
     },
+    /// Start (or restart with new parameters) the live JPEG screencast of an
+    /// agent browser. The node sends one frame, then waits for
+    /// `AgentBrowserFrameAck` before the next.
+    #[serde(rename = "agent_browser_screencast_start")]
+    AgentBrowserScreencastStart {
+        browser_id: String,
+        max_width: u32,
+        max_height: u32,
+        quality: u32,
+    },
+    #[serde(rename = "agent_browser_screencast_stop")]
+    AgentBrowserScreencastStop { browser_id: String },
+    /// The hub (a viewer) has taken the last screencast frame.
+    #[serde(rename = "agent_browser_frame_ack")]
+    AgentBrowserFrameAck { browser_id: String },
     #[serde(rename = "open_attach")]
     OpenAttach {
         attach_id: String,
@@ -552,6 +576,15 @@ pub enum MachineToHub {
         #[serde(default)]
         error: Option<String>,
     },
+    #[serde(rename = "agent_browser_created")]
+    AgentBrowserCreated { browser: AgentBrowserInfo },
+    #[serde(rename = "agent_browser_updated")]
+    AgentBrowserUpdated { browser: AgentBrowserInfo },
+    #[serde(rename = "agent_browser_destroyed")]
+    AgentBrowserDestroyed { browser_id: String },
+    /// Sent on every (re)connect, like `ExistingTerminals`.
+    #[serde(rename = "existing_agent_browsers")]
+    ExistingAgentBrowsers { browsers: Vec<AgentBrowserInfo> },
     #[serde(rename = "attach_died")]
     AttachDied { attach_id: String, reason: String },
     #[serde(rename = "terminal_died")]
@@ -691,6 +724,15 @@ pub enum BrowserEvent {
         session_id: String,
         last_seen_seq: u64,
     },
+    #[serde(rename = "agent_browser_created")]
+    AgentBrowserCreated { browser: AgentBrowserInfo },
+    #[serde(rename = "agent_browser_updated")]
+    AgentBrowserUpdated { browser: AgentBrowserInfo },
+    #[serde(rename = "agent_browser_destroyed")]
+    AgentBrowserDestroyed {
+        machine_id: String,
+        browser_id: String,
+    },
     #[serde(rename = "todo_upserted")]
     TodoUpserted { todo: todos::TodoInfo },
     #[serde(rename = "todo_deleted")]
@@ -723,6 +765,62 @@ pub struct BrowserEventsPong {
 /// frame variants get a different magic and dispatch trivially).
 const ATTACH_FRAME_MAGIC: u8 = 0x01;
 const TERMINAL_PREVIEW_FRAME_MAGIC: u8 = 0x02;
+/// Node → hub agent browser screencast frame.
+pub const AGENT_BROWSER_FRAME_MAGIC: u8 = 0x03;
+
+/// `[0x03][u16 id_len][browser_id][u16 meta_len][meta JSON][jpeg]`. `meta` is
+/// the CDP `Page.screencastFrame` metadata (offsetTop, pageScaleFactor,
+/// deviceWidth, deviceHeight, scrollOffsetX, scrollOffsetY, timestamp).
+pub fn encode_agent_browser_frame(browser_id: &str, meta: &[u8], jpeg: &[u8]) -> Vec<u8> {
+    let id = browser_id.as_bytes();
+    let id_len: u16 = id
+        .len()
+        .try_into()
+        .expect("browser_id is too long to encode");
+    let meta_len: u16 = meta
+        .len()
+        .try_into()
+        .expect("frame meta is too long to encode");
+    let mut frame = Vec::with_capacity(1 + 2 + id.len() + 2 + meta.len() + jpeg.len());
+    frame.push(AGENT_BROWSER_FRAME_MAGIC);
+    frame.extend_from_slice(&id_len.to_be_bytes());
+    frame.extend_from_slice(id);
+    frame.extend_from_slice(&meta_len.to_be_bytes());
+    frame.extend_from_slice(meta);
+    frame.extend_from_slice(jpeg);
+    frame
+}
+
+/// Decode to `(browser_id, meta JSON, jpeg)`; the last two are zero-copy
+/// slices of the incoming message.
+pub fn decode_agent_browser_frame(frame: &Bytes) -> Result<(String, Bytes, Bytes), String> {
+    if frame.first() != Some(&AGENT_BROWSER_FRAME_MAGIC) {
+        return Err("not an agent browser frame".to_string());
+    }
+    let body = &frame[1..];
+    if body.len() < 2 {
+        return Err("frame is missing browser id length".to_string());
+    }
+    let id_len = u16::from_be_bytes([body[0], body[1]]) as usize;
+    let meta_at = 2 + id_len;
+    if body.len() < meta_at + 2 {
+        return Err("frame is truncated".to_string());
+    }
+    let id = std::str::from_utf8(&body[2..meta_at])
+        .map_err(|error| format!("browser id is not valid utf-8: {error}"))?
+        .to_string();
+    let meta_len = u16::from_be_bytes([body[meta_at], body[meta_at + 1]]) as usize;
+    let meta_start = meta_at + 2;
+    if body.len() < meta_start + meta_len {
+        return Err("frame meta is truncated".to_string());
+    }
+    // `body` starts one byte into `frame`.
+    Ok((
+        id,
+        frame.slice(1 + meta_start..1 + meta_start + meta_len),
+        frame.slice(1 + meta_start + meta_len..),
+    ))
+}
 
 pub fn encode_attach_output_frame(attach_id: &str, data: &[u8]) -> Vec<u8> {
     let attach_id_bytes = attach_id.as_bytes();
@@ -811,12 +909,32 @@ pub fn decode_terminal_preview_output_frame(frame: &[u8]) -> Result<(String, Byt
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_attach_output_frame, decode_terminal_preview_output_frame,
+        decode_agent_browser_frame, decode_attach_output_frame,
+        decode_terminal_preview_output_frame, encode_agent_browser_frame,
         encode_attach_output_frame, encode_terminal_preview_output_frame,
         BrowserEventsClientMessage, BrowserEventsPong, MachineToHub, TerminalInfo,
         TerminalTitleSource,
     };
     use bytes::Bytes;
+
+    #[test]
+    fn agent_browser_frame_round_trips_and_is_distinct_from_attach_frames() {
+        let frame = Bytes::from(encode_agent_browser_frame(
+            "b-1",
+            br#"{"offsetTop":0}"#,
+            &[0xFF, 0xD8, 1, 2, 3],
+        ));
+        assert_eq!(frame[0], 0x03);
+        let (id, meta, jpeg) = decode_agent_browser_frame(&frame).unwrap();
+        assert_eq!(id, "b-1");
+        assert_eq!(&meta[..], br#"{"offsetTop":0}"#);
+        assert_eq!(&jpeg[..], &[0xFF, 0xD8, 1, 2, 3]);
+        assert!(decode_attach_output_frame(&frame).is_err());
+        let attach = Bytes::from(encode_attach_output_frame("a", b"x"));
+        assert!(decode_agent_browser_frame(&attach).is_err());
+        assert!(decode_agent_browser_frame(&frame.slice(..4)).is_err());
+        assert!(decode_agent_browser_frame(&frame.slice(..8)).is_err());
+    }
 
     #[test]
     fn terminal_info_title_source_defaults_to_none_when_missing() {

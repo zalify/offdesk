@@ -11,18 +11,96 @@ mod download;
 mod keys;
 mod snapshot;
 
+use base64::Engine;
+use bytes::Bytes;
 use cdp::CdpClient;
 use offdesk_protocol::{AgentBrowserCommand, AgentBrowserInfo};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::process::Child;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{broadcast, Mutex as AsyncMutex};
 
 const NAV_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
+/// Fixed CSS viewport of every agent browser, so geometry is known.
+const VIEWPORT_WIDTH: u32 = 1280;
+const VIEWPORT_HEIGHT: u32 = 800;
+/// A frame the hub never acknowledged stops blocking the stream after this.
+const TITLE_POLL: Duration = Duration::from_secs(2);
+const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+/// A started screencast that has produced no frame by then gets a screenshot.
+const REPAINT_FALLBACK_AFTER: Duration = Duration::from_millis(300);
+
+/// What the node reports about agent browsers; the hub connection forwards
+/// these. The manager outlives hub connections, so it broadcasts and each
+/// connection subscribes.
+#[derive(Debug, Clone)]
+pub enum AgentBrowserEvent {
+    Created(AgentBrowserInfo),
+    Updated(AgentBrowserInfo),
+    Destroyed(String),
+    /// One screencast JPEG with its CDP metadata (JSON bytes).
+    Frame {
+        browser_id: String,
+        meta: Bytes,
+        jpeg: Bytes,
+    },
+}
+
+type Events = broadcast::Sender<AgentBrowserEvent>;
+
+/// Live tabs by id. Shared with the Chromium supervisor task, which maps CDP
+/// events (target info changes, screencast frames) back to tabs.
+#[derive(Clone, Default)]
+struct Tabs(Arc<Mutex<HashMap<String, Arc<Tab>>>>);
+
+impl Tabs {
+    fn insert(&self, tab: Arc<Tab>) {
+        self.0.lock().unwrap().insert(tab.id.clone(), tab);
+    }
+    fn remove(&self, id: &str) -> Option<Arc<Tab>> {
+        self.0.lock().unwrap().remove(id)
+    }
+    fn get(&self, id: &str) -> Option<Arc<Tab>> {
+        self.0.lock().unwrap().get(id).cloned()
+    }
+    fn is_empty(&self) -> bool {
+        self.0.lock().unwrap().is_empty()
+    }
+    fn all(&self) -> Vec<Arc<Tab>> {
+        self.0.lock().unwrap().values().cloned().collect()
+    }
+    fn drain(&self) -> Vec<Arc<Tab>> {
+        self.0.lock().unwrap().drain().map(|(_, t)| t).collect()
+    }
+    fn by_target(&self, target_id: &str) -> Option<Arc<Tab>> {
+        self.all().into_iter().find(|t| t.target_id == target_id)
+    }
+    fn by_session(&self, session_id: &str) -> Option<Arc<Tab>> {
+        self.all().into_iter().find(|t| t.session_id == session_id)
+    }
+}
+
+/// Screencast state of one tab.
+#[derive(Default)]
+struct Screen {
+    active: bool,
+    /// Newest frame not yet handed to the hub (replaced by newer ones).
+    latest: Option<(Bytes, Bytes)>,
+    /// Set while a frame sent to the hub has not been acknowledged.
+    in_flight: Option<Instant>,
+    /// Bumped on every start; lets the repaint fallback tell runs apart.
+    run: u64,
+    /// Chromium has produced a frame since the last start.
+    got_frame: bool,
+    max_width: u32,
+    max_height: u32,
+    quality: u32,
+}
 
 struct Running {
     child: Child,
@@ -36,17 +114,27 @@ struct Tab {
     client: Arc<CdpClient>,
     /// `eN` -> backendDOMNodeId from the latest snapshot.
     refs: Mutex<HashMap<String, i64>>,
+    opener_terminal_id: Option<String>,
+    events: Events,
+    /// The hub has been told this browser exists (Created sent).
+    announced: AtomicBool,
+    /// Destroyed has been decided; never announce twice.
+    gone: AtomicBool,
+    /// url/title last reported to the hub.
+    reported: Mutex<(String, String)>,
+    screen: Mutex<Screen>,
 }
 
 #[derive(Default)]
 struct State {
     chromium: Option<Running>,
-    tabs: HashMap<String, Arc<Tab>>,
 }
 
 pub struct AgentBrowserManager {
     dir: PathBuf,
     state: AsyncMutex<State>,
+    tabs: Tabs,
+    events: Events,
 }
 
 impl AgentBrowserManager {
@@ -61,14 +149,79 @@ impl AgentBrowserManager {
         Self {
             dir,
             state: AsyncMutex::new(State::default()),
+            tabs: Tabs::default(),
+            events: broadcast::channel(256).0,
+        }
+    }
+
+    /// Created / Updated / Destroyed events and screencast frames. Subscribe
+    /// before calling [`Self::list`] so nothing falls between the two.
+    pub fn subscribe(&self) -> broadcast::Receiver<AgentBrowserEvent> {
+        self.events.subscribe()
+    }
+
+    /// Every agent browser, for the hub's full-state report.
+    pub async fn list(&self) -> Result<Vec<AgentBrowserInfo>, String> {
+        let mut out = Vec::new();
+        for tab in self.tabs.all() {
+            if let Ok(info) = tab.info().await {
+                out.push(info);
+            }
+        }
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
+    }
+
+    /// Start (or restart with new parameters) one tab's screencast.
+    pub async fn screencast_start(
+        &self,
+        browser_id: &str,
+        max_width: u32,
+        max_height: u32,
+        quality: u32,
+    ) -> Result<(), String> {
+        let tab = self
+            .tabs
+            .get(browser_id)
+            .ok_or_else(|| unknown_browser(browser_id))?;
+        let run = tab.screencast_start(max_width, max_height, quality).await?;
+        // Chromium only emits frames when the page changes: a static page
+        // would leave a new viewer with a blank screen.
+        tokio::spawn(async move {
+            tokio::time::sleep(REPAINT_FALLBACK_AFTER).await;
+            tab.fallback_frame(run).await;
+        });
+        Ok(())
+    }
+
+    pub async fn screencast_stop(&self, browser_id: &str) {
+        if let Some(tab) = self.tabs.get(browser_id) {
+            tab.screencast_stop().await;
+        }
+    }
+
+    /// The hub took the last frame; the next one may go out.
+    pub fn frame_ack(&self, browser_id: &str) {
+        if let Some(tab) = self.tabs.get(browser_id) {
+            tab.frame_ack();
+        }
+    }
+
+    /// The hub connection is gone, so nobody is watching.
+    pub async fn stop_all_screencasts(&self) {
+        for tab in self.tabs.all() {
+            tab.screencast_stop().await;
         }
     }
 
     pub async fn execute(&self, command: AgentBrowserCommand) -> Result<Value, String> {
         use AgentBrowserCommand as C;
         match command {
-            C::Open { url } => {
-                let info = self.open(url).await?;
+            C::Open {
+                url,
+                opener_terminal_id,
+            } => {
+                let info = self.open(url, opener_terminal_id).await?;
                 Ok(json!(info))
             }
             C::List => Ok(json!(self.list().await?)),
@@ -143,7 +296,9 @@ impl AgentBrowserManager {
     }
 
     async fn teardown(&self, state: &mut State) {
-        state.tabs.clear();
+        for tab in self.tabs.drain() {
+            tab.announce_destroyed();
+        }
         if let Some(mut running) = state.chromium.take() {
             let _ = tokio::time::timeout(
                 Duration::from_secs(2),
@@ -189,6 +344,14 @@ impl AgentBrowserManager {
                 return Err(e);
             }
         };
+        // Report url/title changes of tabs we own.
+        if let Err(e) = client
+            .call(None, "Target.setDiscoverTargets", json!({"discover": true}))
+            .await
+        {
+            tracing::warn!("agent-browser: Target.setDiscoverTargets failed: {e}");
+        }
+        tokio::spawn(supervise(client.subscribe(), self.tabs.clone()));
         state.chromium = Some(Running {
             child: launched.child,
             client: client.clone(),
@@ -213,54 +376,51 @@ impl AgentBrowserManager {
         download::install(&self.dir).await
     }
 
-    async fn open(&self, url: Option<String>) -> Result<AgentBrowserInfo, String> {
+    async fn open(
+        &self,
+        url: Option<String>,
+        opener_terminal_id: Option<String>,
+    ) -> Result<AgentBrowserInfo, String> {
         let tab = {
             let mut state = self.state.lock().await;
             let client = self.ensure_running(&mut state).await?;
-            match Tab::create(client).await {
+            match Tab::create(client, opener_terminal_id, self.events.clone()).await {
                 Ok(tab) => {
                     let tab = Arc::new(tab);
-                    state.tabs.insert(tab.id.clone(), tab.clone());
+                    self.tabs.insert(tab.clone());
                     tab
                 }
                 Err(e) => {
-                    if state.tabs.is_empty() {
+                    if self.tabs.is_empty() {
                         self.teardown(&mut state).await;
                     }
                     return Err(e);
                 }
             }
         };
-        match url {
-            Some(url) => match tab.goto(&url).await {
-                Ok(info) => Ok(info),
-                Err(e) => {
-                    let _ = self.close(&tab.id).await;
-                    Err(e)
-                }
-            },
+        let result = match url {
+            Some(url) => tab.goto(&url).await,
             None => tab.info().await,
-        }
-    }
-
-    async fn list(&self) -> Result<Vec<AgentBrowserInfo>, String> {
-        let tabs: Vec<Arc<Tab>> = self.state.lock().await.tabs.values().cloned().collect();
-        let mut out = Vec::new();
-        for tab in tabs {
-            if let Ok(info) = tab.info().await {
-                out.push(info);
+        };
+        match result {
+            Ok(info) => {
+                tab.announce_created(&info);
+                Ok(info)
+            }
+            Err(e) => {
+                let _ = self.close(&tab.id).await;
+                Err(e)
             }
         }
-        out.sort_by(|a, b| a.id.cmp(&b.id));
-        Ok(out)
     }
 
     async fn close(&self, browser_id: &str) -> Result<(), String> {
         let mut state = self.state.lock().await;
-        let tab = state
+        let tab = self
             .tabs
             .remove(browser_id)
             .ok_or_else(|| unknown_browser(browser_id))?;
+        tab.announce_destroyed();
         let _ = tab
             .client
             .call(
@@ -269,7 +429,7 @@ impl AgentBrowserManager {
                 json!({"targetId": tab.target_id}),
             )
             .await;
-        if state.tabs.is_empty() {
+        if self.tabs.is_empty() {
             self.teardown(&mut state).await;
         }
         Ok(())
@@ -277,10 +437,9 @@ impl AgentBrowserManager {
 
     async fn tab(&self, browser_id: &str) -> Result<Arc<Tab>, String> {
         let mut state = self.state.lock().await;
-        let tab = state
+        let tab = self
             .tabs
             .get(browser_id)
-            .cloned()
             .ok_or_else(|| unknown_browser(browser_id))?;
         if tab.client.is_closed() {
             self.teardown(&mut state).await;
@@ -292,12 +451,119 @@ impl AgentBrowserManager {
     }
 }
 
+/// Best effort: make the window's content area exactly the viewport size.
+async fn fit_window_to_viewport(client: &CdpClient, target_id: &str, session_id: &str) {
+    let ui = client
+        .call(
+            Some(session_id),
+            "Runtime.evaluate",
+            json!({
+                "expression": "[window.outerWidth - window.innerWidth, window.outerHeight - window.innerHeight]",
+                "returnByValue": true,
+            }),
+        )
+        .await
+        .ok()
+        .and_then(|r| r["result"]["value"].as_array().cloned());
+    let (Some(ui), Ok(window)) = (
+        ui,
+        client
+            .call(
+                None,
+                "Browser.getWindowForTarget",
+                json!({"targetId": target_id}),
+            )
+            .await,
+    ) else {
+        return;
+    };
+    let (Some(window_id), Some(dx), Some(dy)) = (
+        window["windowId"].as_i64(),
+        ui.first().and_then(Value::as_i64),
+        ui.get(1).and_then(Value::as_i64),
+    ) else {
+        return;
+    };
+    let _ = client
+        .call(
+            None,
+            "Browser.setWindowBounds",
+            json!({
+                "windowId": window_id,
+                "bounds": {
+                    "width": VIEWPORT_WIDTH as i64 + dx.max(0),
+                    "height": VIEWPORT_HEIGHT as i64 + dy.max(0),
+                },
+            }),
+        )
+        .await;
+}
+
 fn unknown_browser(id: &str) -> String {
     format!("unknown agent browser {id}; it may have been closed")
 }
 
+/// Maps browser-level CDP events back to tabs until Chromium goes away:
+/// url/title changes become `Updated`, screencast frames feed the tab's
+/// latest-frame slot, and a dead connection destroys every tab.
+///
+/// `Target.targetInfoChanged` reports url changes, but Chromium sends the
+/// page's real title late (observed: only when the target closes), so tabs
+/// are also re-read after each load and on a slow timer.
+async fn supervise(mut events: broadcast::Receiver<cdp::CdpEvent>, tabs: Tabs) {
+    let mut refresh = tokio::time::interval(TITLE_POLL);
+    refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let ev = tokio::select! {
+            ev = events.recv() => match ev {
+                Ok(ev) => ev,
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            _ = refresh.tick() => {
+                for tab in tabs.all() {
+                    tokio::spawn(async move { tab.refresh_info().await });
+                }
+                continue;
+            }
+        };
+        match ev.method.as_str() {
+            "Page.loadEventFired" | "Page.navigatedWithinDocument" => {
+                if let Some(tab) = ev.session_id.as_deref().and_then(|s| tabs.by_session(s)) {
+                    tokio::spawn(async move { tab.refresh_info().await });
+                }
+            }
+            cdp::CLOSED_EVENT => {
+                for tab in tabs.drain() {
+                    tab.announce_destroyed();
+                }
+                break;
+            }
+            "Target.targetInfoChanged" => {
+                let info = &ev.params["targetInfo"];
+                if let Some(tab) = info["targetId"].as_str().and_then(|t| tabs.by_target(t)) {
+                    tab.target_info_changed(
+                        info["url"].as_str().unwrap_or(""),
+                        info["title"].as_str().unwrap_or(""),
+                    );
+                }
+            }
+            "Page.screencastFrame" => {
+                if let Some(tab) = ev.session_id.as_deref().and_then(|s| tabs.by_session(s)) {
+                    tab.on_screencast_frame(&ev.params);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 impl Tab {
-    async fn create(client: Arc<CdpClient>) -> Result<Tab, String> {
+    async fn create(
+        client: Arc<CdpClient>,
+        opener_terminal_id: Option<String>,
+        events: Events,
+    ) -> Result<Tab, String> {
         let created = client
             .call(None, "Target.createTarget", json!({"url": "about:blank"}))
             .await?;
@@ -319,13 +585,262 @@ impl Tab {
         for method in ["Page.enable", "DOM.enable", "Network.enable"] {
             client.call(Some(&session_id), method, json!({})).await?;
         }
+        // headless=new sizes the window, and the browser UI eats part of it, so
+        // the screencast would crop the emulated viewport. Grow the window by
+        // the UI's size first, then pin the viewport.
+        fit_window_to_viewport(&client, &target_id, &session_id).await;
+        client
+            .call(
+                Some(&session_id),
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": VIEWPORT_WIDTH,
+                    "height": VIEWPORT_HEIGHT,
+                    "deviceScaleFactor": 1,
+                    "mobile": false,
+                }),
+            )
+            .await?;
         Ok(Tab {
             id: uuid::Uuid::new_v4().to_string(),
             target_id,
             session_id,
             client,
             refs: Mutex::new(HashMap::new()),
+            opener_terminal_id,
+            events,
+            announced: AtomicBool::new(false),
+            gone: AtomicBool::new(false),
+            reported: Mutex::new((String::new(), String::new())),
+            screen: Mutex::new(Screen::default()),
         })
+    }
+
+    fn announce_created(&self, info: &AgentBrowserInfo) {
+        *self.reported.lock().unwrap() = (info.url.clone(), info.title.clone());
+        if !self.gone.load(Ordering::SeqCst) && !self.announced.swap(true, Ordering::SeqCst) {
+            let _ = self.events.send(AgentBrowserEvent::Created(info.clone()));
+        }
+    }
+
+    fn announce_destroyed(&self) {
+        if !self.gone.swap(true, Ordering::SeqCst) && self.announced.load(Ordering::SeqCst) {
+            let _ = self
+                .events
+                .send(AgentBrowserEvent::Destroyed(self.id.clone()));
+        }
+    }
+
+    /// Re-read url/title and report them if they changed.
+    async fn refresh_info(&self) {
+        if let Ok(info) = self.info().await {
+            self.target_info_changed(&info.url, &info.title);
+        }
+    }
+
+    fn target_info_changed(&self, url: &str, title: &str) {
+        if !self.announced.load(Ordering::SeqCst) || self.gone.load(Ordering::SeqCst) {
+            return;
+        }
+        {
+            let mut reported = self.reported.lock().unwrap();
+            if reported.0 == url && reported.1 == title {
+                return;
+            }
+            *reported = (url.to_string(), title.to_string());
+        }
+        let _ = self
+            .events
+            .send(AgentBrowserEvent::Updated(AgentBrowserInfo {
+                id: self.id.clone(),
+                machine_id: None,
+                url: url.to_string(),
+                title: title.to_string(),
+                opener_terminal_id: self.opener_terminal_id.clone(),
+            }));
+    }
+
+    async fn screencast_start(
+        &self,
+        max_width: u32,
+        max_height: u32,
+        quality: u32,
+    ) -> Result<u64, String> {
+        let (was_active, run) = {
+            let mut screen = self.screen.lock().unwrap();
+            screen.latest = None;
+            screen.in_flight = None;
+            screen.got_frame = false;
+            screen.run += 1;
+            screen.max_width = max_width;
+            screen.max_height = max_height;
+            screen.quality = quality;
+            (std::mem::replace(&mut screen.active, true), screen.run)
+        };
+        if was_active {
+            let _ = self.call("Page.stopScreencast", json!({})).await;
+        }
+        tracing::info!(
+            browser = %self.id,
+            max_width,
+            max_height,
+            quality,
+            "agent-browser screencast start"
+        );
+        // Background tabs are not painted, so no frames would come.
+        let _ = self.call("Page.bringToFront", json!({})).await;
+        let started = self
+            .call(
+                "Page.startScreencast",
+                json!({
+                    "format": "jpeg",
+                    "quality": quality,
+                    "maxWidth": max_width,
+                    "maxHeight": max_height,
+                    "everyNthFrame": 1,
+                }),
+            )
+            .await;
+        if started.is_err() {
+            self.screen.lock().unwrap().active = false;
+        }
+        started.map(|_| run)
+    }
+
+    /// Screenshot stand-in for the first screencast frame of a page that is
+    /// not repainting. Same metadata shape as `Page.screencastFrame`.
+    async fn fallback_frame(&self, run: u64) {
+        let (max_width, max_height, quality) = {
+            let screen = self.screen.lock().unwrap();
+            if !screen.active || screen.got_frame || screen.run != run {
+                return;
+            }
+            (screen.max_width, screen.max_height, screen.quality)
+        };
+        let Ok(metrics) = self.call("Page.getLayoutMetrics", json!({})).await else {
+            return;
+        };
+        let viewport = &metrics["cssVisualViewport"];
+        let (Some(width), Some(height)) = (
+            viewport["clientWidth"].as_f64(),
+            viewport["clientHeight"].as_f64(),
+        ) else {
+            return;
+        };
+        let (x, y) = (
+            viewport["pageX"].as_f64().unwrap_or(0.0),
+            viewport["pageY"].as_f64().unwrap_or(0.0),
+        );
+        let scale = (max_width as f64 / width)
+            .min(max_height as f64 / height)
+            .min(1.0);
+        let Ok(shot) = self
+            .call(
+                "Page.captureScreenshot",
+                json!({
+                    "format": "jpeg",
+                    "quality": quality,
+                    "clip": {"x": x, "y": y, "width": width, "height": height, "scale": scale},
+                }),
+            )
+            .await
+        else {
+            return;
+        };
+        let Some(jpeg) = shot["data"]
+            .as_str()
+            .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
+        else {
+            return;
+        };
+        let meta = json!({
+            "offsetTop": 0,
+            "pageScaleFactor": 1,
+            "deviceWidth": width,
+            "deviceHeight": height,
+            "scrollOffsetX": x,
+            "scrollOffsetY": y,
+            "timestamp": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+        });
+        let mut screen = self.screen.lock().unwrap();
+        if !screen.active || screen.got_frame || screen.run != run {
+            return;
+        }
+        screen.latest = Some((Bytes::from(meta.to_string()), Bytes::from(jpeg)));
+        self.flush_frame(&mut screen);
+    }
+
+    async fn screencast_stop(&self) {
+        let was_active = {
+            let mut screen = self.screen.lock().unwrap();
+            screen.latest = None;
+            screen.in_flight = None;
+            std::mem::replace(&mut screen.active, false)
+        };
+        if was_active {
+            tracing::info!(browser = %self.id, "agent-browser screencast stop");
+            let _ = self.call("Page.stopScreencast", json!({})).await;
+        }
+    }
+
+    fn frame_ack(&self) {
+        let mut screen = self.screen.lock().unwrap();
+        screen.in_flight = None;
+        self.flush_frame(&mut screen);
+    }
+
+    /// Hand the newest frame to the hub unless one is still unacknowledged.
+    fn flush_frame(&self, screen: &mut Screen) {
+        let blocked = screen
+            .in_flight
+            .map(|since| since.elapsed() < FRAME_ACK_TIMEOUT)
+            .unwrap_or(false);
+        if blocked || !screen.active {
+            return;
+        }
+        if let Some((meta, jpeg)) = screen.latest.take() {
+            screen.in_flight = Some(Instant::now());
+            let _ = self.events.send(AgentBrowserEvent::Frame {
+                browser_id: self.id.clone(),
+                meta,
+                jpeg,
+            });
+        }
+    }
+
+    /// Chromium keeps producing frames only while we ack them, so ack right
+    /// away; the hub's pacing is separate (one frame in flight to the hub).
+    fn on_screencast_frame(&self, params: &Value) {
+        if let Some(chromium_session) = params["sessionId"].as_i64() {
+            let client = self.client.clone();
+            let session = self.session_id.clone();
+            tokio::spawn(async move {
+                let _ = client
+                    .call(
+                        Some(&session),
+                        "Page.screencastFrameAck",
+                        json!({"sessionId": chromium_session}),
+                    )
+                    .await;
+            });
+        }
+        let Some(jpeg) = params["data"]
+            .as_str()
+            .and_then(|d| base64::engine::general_purpose::STANDARD.decode(d).ok())
+        else {
+            return;
+        };
+        let meta = Bytes::from(params["metadata"].to_string());
+        let mut screen = self.screen.lock().unwrap();
+        if !screen.active {
+            return;
+        }
+        screen.got_frame = true;
+        screen.latest = Some((meta, Bytes::from(jpeg)));
+        self.flush_frame(&mut screen);
     }
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, String> {
@@ -349,6 +864,7 @@ impl Tab {
             machine_id: None,
             url: info["url"].as_str().unwrap_or("").to_string(),
             title: info["title"].as_str().unwrap_or("").to_string(),
+            opener_terminal_id: self.opener_terminal_id.clone(),
         })
     }
 
@@ -673,6 +1189,7 @@ mod tests {
         let info = mgr
             .execute(AgentBrowserCommand::Open {
                 url: Some("data:text/html,<title>CfT</title><button>Go</button>".to_string()),
+                opener_terminal_id: None,
             })
             .await
             .unwrap();
@@ -713,15 +1230,39 @@ mod tests {
             <input id=q aria-label=Search>\
             <button onclick=\"document.getElementById('out').textContent='Clicked: '+document.getElementById('q').value\">Go</button>\
             <p id=out>idle</p>";
+        let mut events = mgr.subscribe();
         let info = mgr
             .execute(AgentBrowserCommand::Open {
                 url: Some(page.to_string()),
+                opener_terminal_id: Some("term-7".to_string()),
             })
             .await
             .unwrap();
         let id = info["id"].as_str().unwrap().to_string();
         assert_eq!(info["title"], "Fixture");
+        assert_eq!(info["opener_terminal_id"], "term-7");
         let pid = mgr.chromium_pid().await.expect("chromium running");
+
+        // Created is announced exactly once, after the page loaded.
+        match events.recv().await.unwrap() {
+            AgentBrowserEvent::Created(c) => {
+                assert_eq!(c.id, id);
+                assert_eq!(c.title, "Fixture");
+                assert_eq!(c.opener_terminal_id.as_deref(), Some("term-7"));
+            }
+            other => panic!("expected Created, got {other:?}"),
+        }
+
+        // The viewport is pinned, whatever the window size is.
+        let tab = mgr.tabs.get(&id).unwrap();
+        let size = tab
+            .evaluate("[window.innerWidth, window.innerHeight].join('x')")
+            .await
+            .unwrap();
+        assert_eq!(size, "1280x800");
+        let metrics = tab.call("Page.getLayoutMetrics", json!({})).await.unwrap();
+        assert_eq!(metrics["cssVisualViewport"]["clientWidth"], 1280);
+        assert_eq!(metrics["cssVisualViewport"]["clientHeight"], 800);
 
         let snap = mgr
             .execute(AgentBrowserCommand::Snapshot {
@@ -851,9 +1392,89 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("is stale; run snapshot again"), "{err}");
 
+        // url/title changes are reported as Updated.
+        let updated = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let AgentBrowserEvent::Updated(u) = events.recv().await.unwrap() {
+                    if u.url.contains("other") {
+                        return u;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("no Updated event after goto");
+        assert_eq!(updated.id, id);
+        assert_eq!(updated.opener_terminal_id.as_deref(), Some("term-7"));
+
+        // Screencast: a JPEG frame with CDP metadata, one in flight at a time.
+        mgr.screencast_start(&id, 640, 400, 50).await.unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let AgentBrowserEvent::Frame { meta, jpeg, .. } = events.recv().await.unwrap() {
+                    return (meta, jpeg);
+                }
+            }
+        })
+        .await
+        .expect("no screencast frame");
+        assert_eq!(&frame.1[..2], &[0xFF, 0xD8]);
+        let meta: Value = serde_json::from_slice(&frame.0).unwrap();
+        assert_eq!(meta["deviceWidth"], 1280, "{meta}");
+        assert_eq!(meta["deviceHeight"], 800, "{meta}");
+        // Make the page repaint: without an ack no second frame goes out.
+        mgr.tabs
+            .get(&id)
+            .unwrap()
+            .evaluate("document.body.style.background='red'; 1")
+            .await
+            .unwrap();
+        let second_frame = tokio::time::timeout(Duration::from_millis(800), async {
+            loop {
+                if let AgentBrowserEvent::Frame { .. } = events.recv().await.unwrap() {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            second_frame.is_err(),
+            "frame sent before the previous was acked"
+        );
+        mgr.frame_ack(&id);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let AgentBrowserEvent::Frame { .. } = events.recv().await.unwrap() {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("no frame after ack");
+        mgr.screencast_stop(&id).await;
+
+        // A static page repaints nothing on restart; the fallback screenshot
+        // still gives the new viewer a frame.
+        while events.try_recv().is_ok() {}
+        mgr.screencast_start(&id, 640, 400, 50).await.unwrap();
+        let again = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if let AgentBrowserEvent::Frame { jpeg, .. } = events.recv().await.unwrap() {
+                    return jpeg;
+                }
+            }
+        })
+        .await
+        .expect("no frame after restarting the screencast of a static page");
+        assert_eq!(&again[..2], &[0xFF, 0xD8]);
+        mgr.screencast_stop(&id).await;
+
         // Second tab, list, close both.
         let second = mgr
-            .execute(AgentBrowserCommand::Open { url: None })
+            .execute(AgentBrowserCommand::Open {
+                url: None,
+                opener_terminal_id: None,
+            })
             .await
             .unwrap();
         let listed = mgr.execute(AgentBrowserCommand::List).await.unwrap();
@@ -867,9 +1488,18 @@ mod tests {
             pid_alive(pid),
             "chromium should stay up while a browser remains"
         );
-        mgr.execute(AgentBrowserCommand::Close { browser_id: id })
-            .await
-            .unwrap();
+        mgr.execute(AgentBrowserCommand::Close {
+            browser_id: id.clone(),
+        })
+        .await
+        .unwrap();
+        let mut destroyed = Vec::new();
+        while let Ok(ev) = events.try_recv() {
+            if let AgentBrowserEvent::Destroyed(d) = ev {
+                destroyed.push(d);
+            }
+        }
+        assert!(destroyed.contains(&id), "{destroyed:?}");
         assert!(mgr.chromium_pid().await.is_none());
         assert!(!pid_alive(pid), "chromium should exit after the last close");
         let _ = std::fs::remove_dir_all(dir);
