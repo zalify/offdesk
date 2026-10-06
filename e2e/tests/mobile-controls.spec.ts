@@ -4,6 +4,7 @@ import type { Page } from "@playwright/test";
 import {
   createWorkspaceGroupViaApi,
   createTerminalViaApi,
+  destroyAllTerminals,
   expandTerminalById,
   getImmersiveTerminal,
   listTerminals,
@@ -379,6 +380,28 @@ test("session switcher row closes its terminal", async ({ page }) => {
   await expect(
     page.getByTestId(`mobile-session-row-${keptTerminalId}`),
   ).toBeVisible();
+});
+
+test("a terminal closed elsewhere hands the title bar to the next terminal", async ({
+  page,
+}) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+
+  const closedTerminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await expandTerminalById(page, closedTerminalId);
+
+  // Another device closes the terminal this phone is showing, then a new one
+  // starts. The phone must follow the terminal that exists, not the closed one.
+  await destroyAllTerminals(page);
+  const nextTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
+
+  await expect(page.getByTestId("mobile-title-bar-label")).not.toHaveText(/No terminal/);
+  await page.getByTestId("mobile-title-bar-label").click();
+  const switcher = page.getByTestId("mobile-session-switcher");
+  await expect(switcher.getByTestId(`mobile-session-row-${nextTerminalId}`)).toBeVisible();
+  await expect(switcher.getByTestId("mobile-session-position")).toHaveText("1/1");
 });
 
 test("mobile title bar and grouped switcher expose titles, host stats, and create-current-group", async ({
@@ -972,12 +995,13 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
         await expect(machines).toHaveText("");
         await expect(bar).toHaveCSS("height", "44px");
-        // All five header elements must be contained, non-overlapping and in
+        // All six header elements (title, control state, Browser, new terminal,
+        // machines, status dot) must be contained, non-overlapping and in
         // one row; a clipped title is intentional, clipped controls are not.
         await expect.poll(() => bar.evaluate(element => {
           const outer = element.getBoundingClientRect();
           const children = Array.from(element.children).map(child => child.getBoundingClientRect());
-          return children.length === 5 && children[0].width > 40 &&
+          return children.length === 6 && children[0].width > 40 &&
             children.every((child, i) => child.y >= outer.y && child.bottom <= outer.bottom &&
               child.left >= outer.left && child.right <= outer.right &&
               (i === 0 || child.left >= children[i - 1].right));

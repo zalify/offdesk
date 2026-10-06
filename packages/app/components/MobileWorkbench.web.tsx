@@ -3,7 +3,7 @@ import { isSecureConnection } from "../lib/secureTransport";
 import { isTauriMobile } from "../lib/platform";
 import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
 import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
-import { AgentBrowserMobileView } from "./AgentBrowserMobileView.web";
+import { AgentBrowserMobileSurface } from "./AgentBrowserMobileSurface.web";
 // Mobile workbench shell (P1). Rendered when the viewport is below 768px.
 // Permanent chrome is exactly two elements: the session title bar on top and
 // the extended key bar at the bottom (the key bar renders inside
@@ -47,18 +47,15 @@ import {
   Terminal as TerminalIcon,
   X,
 } from "lucide-react";
-import { colors } from "@/lib/colors";
+import { colors, colorAlpha } from "@/lib/colors";
+import { pickSelectedBrowserId } from "@/lib/agentBrowserOverlay";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { diskPercent, diskTooltip } from "@/lib/resourceStats";
 import {
   buildMobileSessionGroups,
   type MobileSessionPane,
 } from "@/lib/mobileSessionSwitcher";
-import {
-  browserLabel,
-  isBrowserTabId,
-  type WorkspaceGroup,
-} from "@/lib/terminalWorkspaceLayout";
+import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { WorkspaceManager } from "./WorkspaceManager.web";
 import { Button, fontDisplay } from "./Warm.web";
 
@@ -76,15 +73,20 @@ interface MobileWorkbenchProps {
   // (same grouping the desktop TabBar renders).
   groups: WorkspaceGroup[];
   activeTerminalId: string | null;
-  // Agent browsers of the active machine, and the one shown instead of the
-  // terminal workspace (null = a terminal is shown).
+  // The active machine's agent browsers. They are machine-wide, not sessions:
+  // the title bar's Globe button opens a full-screen surface for them.
   browsers: AgentBrowserInfo[];
-  activeBrowserId: string | null;
+  browserButton?: { count: number; needsPerson: boolean; open: boolean };
+  browserSurfaceOpen: boolean;
+  /** The tab the person last picked on the active machine; may be gone. */
+  selectedBrowserId: string | null;
+  onToggleBrowser: () => void;
+  onOpenBrowser: (id: string) => void;
+  onSelectBrowser: (id: string) => void;
+  onCloseBrowserSurface: () => void;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
   onPickTerminal: (id: string) => void;
-  onPickBrowser: (id: string) => void;
-  onCloseBrowser: (browser: AgentBrowserInfo) => void;
   onSelectGroup: (groupId: string) => void;
   // null group = machine home directory (empty state / no active group).
   onNewTerminal: (group: WorkspaceGroup | null) => void;
@@ -125,12 +127,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     groups,
     activeTerminalId,
     browsers,
-    activeBrowserId,
+    browserButton,
+    browserSurfaceOpen,
+    selectedBrowserId,
+    onToggleBrowser,
+    onOpenBrowser,
+    onSelectBrowser,
+    onCloseBrowserSurface,
     canCreateTerminal,
     canSendAttention,
     onPickTerminal,
-    onPickBrowser,
-    onCloseBrowser,
     onSelectGroup,
     onNewTerminal,
     onCloseTerminal,
@@ -201,48 +207,31 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   );
 
   const sessionGroups = useMemo(
-    () => buildMobileSessionGroups(groups, terminals, browsers),
-    [groups, terminals, browsers],
-  );
-  // Tabs the workspace manager and "new terminal" know about: terminals only.
-  const terminalGroups = useMemo(
-    () => groups.filter((group) => !isBrowserTabId(group.id)),
-    [groups],
+    () => buildMobileSessionGroups(groups, terminals),
+    [groups, terminals],
   );
   const chips = useMemo(
     () => sessionGroups.flatMap((sessionGroup) => sessionGroup.panes),
     [sessionGroups],
   );
 
-  const activeBrowser = activeBrowserId
-    ? browsers.find((browser) => browser.id === activeBrowserId) ?? null
-    : null;
-  const activeSessionId = activeBrowser ? activeBrowser.id : activeTerminalId;
-  const activeChip = chips.find((chip) => chip.id === activeSessionId) ?? null;
-  // A browser's own tab holds no terminals, so new terminals never go there.
-  const activeGroup =
-    activeChip && !isBrowserTabId(activeChip.group.id) ? activeChip.group : null;
+  const activeChip =
+    chips.find((chip) => chip.terminal.id === activeTerminalId) ?? null;
+  const activeGroup = activeChip?.group ?? null;
   const activePosition = activeChip
-    ? chips.findIndex((chip) => chip.id === activeChip.id) + 1
+    ? chips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
     : 0;
-  const pickSession = useCallback(
-    (id: string) => {
-      if (browsers.some((browser) => browser.id === id)) onPickBrowser(id);
-      else onPickTerminal(id);
-    },
-    [browsers, onPickBrowser, onPickTerminal],
-  );
 
   // Prev/next in strip order; no wraparound at either end.
   const switchTerminalByOffset = useCallback(
     (offset: number) => {
-      const ids = chips.map((chip) => chip.id);
-      const index = ids.indexOf(activeSessionId ?? "");
+      const ids = chips.map((chip) => chip.terminal.id);
+      const index = ids.indexOf(activeTerminalId ?? "");
       if (index === -1) return;
       const next = ids[index + offset];
-      if (next) pickSession(next);
+      if (next) onPickTerminal(next);
     },
-    [chips, activeSessionId, pickSession],
+    [chips, activeTerminalId, onPickTerminal],
   );
 
   const titleBarTimerRef = useRef<number | null>(null);
@@ -337,14 +326,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     const MIN_SWIPE_PX = 48;
     const onTouchStart = (event: TouchEvent) => {
       if (event.touches.length !== 1) {
-        edgeSwipeRef.current = null;
-        return;
-      }
-      // The browser view takes every touch itself (taps, drags, zoom).
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-edge-swipe='off']")
-      ) {
         edgeSwipeRef.current = null;
         return;
       }
@@ -478,9 +459,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   lineHeight: 1.1,
                 }}
               >
-                {activeChip.kind === "browser"
-                  ? browserLabel(activeChip.browser)
-                  : displayTerminalTitle(activeChip.terminal)}
+                {displayTerminalTitle(activeChip.terminal)}
               </span>
               <span
                 style={{
@@ -538,6 +517,84 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             )}
           </span>
         ) : null}
+
+        {browserButton && (
+          <span
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            style={{ position: "relative", width: 34, height: 34, flexShrink: 0 }}
+          >
+            <button
+              type="button"
+              data-testid="mobile-title-bar-browser"
+              data-open={browserButton.open ? "true" : "false"}
+              aria-label="Browser"
+              aria-pressed={browserButton.open}
+              title={browserButton.needsPerson ? "The agent needs you" : "Browser"}
+              onClick={onToggleBrowser}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 999,
+                border: `1.5px solid ${browserButton.open ? colorAlpha.accentLine : colors.line}`,
+                background: browserButton.open ? colorAlpha.accentSoft : colors.bg1,
+                color: browserButton.open ? colors.accent : colors.fg0,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              <Globe size={16} aria-hidden />
+            </button>
+            {browserButton.count > 0 && (
+              <span
+                data-testid="mobile-title-bar-browser-count"
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  top: -4,
+                  right: -4,
+                  minWidth: 16,
+                  height: 16,
+                  padding: "0 4px",
+                  boxSizing: "border-box",
+                  borderRadius: 8,
+                  background: colors.accent,
+                  color: colors.onAccent,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  lineHeight: "16px",
+                  textAlign: "center",
+                  pointerEvents: "none",
+                }}
+              >
+                {browserButton.count}
+              </span>
+            )}
+            {browserButton.needsPerson && (
+              <span
+                role="img"
+                aria-label="The agent needs you"
+                data-testid="mobile-title-bar-browser-attention"
+                style={{
+                  position: "absolute",
+                  bottom: 0,
+                  right: 0,
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: colors.warn,
+                  border: `1.5px solid ${colors.bg1}`,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
+          </span>
+        )}
 
         <span
           onClick={(event) => event.stopPropagation()}
@@ -611,11 +668,15 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       {/* Terminal area (edge swipes switch terminals in strip order) */}
       <MobileTerminalAttention terminals={terminals} machines={machines}
         deviceId={deviceId} canSend={canSendAttention}
-        activeTerminalId={activeBrowser ? null : activeTerminalId}
+        activeTerminalId={activeTerminalId}
         browsers={browsers}
-        activeBrowserId={activeBrowser?.id ?? null}
-        onPickBrowser={onPickBrowser}
-        groupLabels={new Map(chips.map((chip) => [chip.id, chip.group.label]))}
+        activeBrowserId={
+          browserSurfaceOpen
+            ? pickSelectedBrowserId(browsers, selectedBrowserId)
+            : null
+        }
+        onPickBrowser={onOpenBrowser}
+        groupLabels={new Map(chips.map(({ terminal, group }) => [terminal.id, group.label]))}
         onPick={(id) => {
           const terminal = terminals.find(t => t.id === id);
           if (!terminal) return;
@@ -670,10 +731,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             </div>
           </div>
         ) : children}
-        {activeBrowser && (
+        {browserSurfaceOpen && activeMachine && (
           // Over the terminal workspace, which stays mounted underneath so
           // its terminals keep their connections and size.
-          <AgentBrowserMobileView key={activeBrowser.id} browser={activeBrowser} />
+          <AgentBrowserMobileSurface
+            machineId={activeMachine.id}
+            browsers={browsers}
+            selectedId={selectedBrowserId}
+            deviceId={deviceId}
+            onSelect={onSelectBrowser}
+            onClose={onCloseBrowserSurface}
+          />
         )}
       </div>
 
@@ -764,106 +832,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {panes.length} {panes.length === 1 ? "pane" : "panes"}
                 </span>
               </div>
-              {panes.map((pane) => {
-                if (pane.kind === "browser") {
-                  const { browser } = pane;
-                  const active = browser.id === activeBrowser?.id;
-                  return (
-                    <div
-                      key={browser.id}
-                      style={{
-                        display: "flex",
-                        alignItems: "stretch",
-                        minHeight: 52,
-                        marginBottom: 6,
-                        borderRadius: 14,
-                        background: active ? colors.bg3 : colors.bg1,
-                        border: `1px solid ${active ? colors.line : colors.lineSoft}`,
-                        overflow: "hidden",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        data-testid={`mobile-session-row-${browser.id}`}
-                        aria-current={active ? "true" : undefined}
-                        onClick={() => {
-                          onPickBrowser(browser.id);
-                          setSessionSwitcherOpen(false);
-                        }}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 10,
-                          flex: 1,
-                          minWidth: 0,
-                          padding: "10px 8px 10px 14px",
-                          color: colors.fg1,
-                          textAlign: "left",
-                          background: "transparent",
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <Globe size={18} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
-                        <span style={{ minWidth: 0, flex: 1 }}>
-                          <span
-                            style={{
-                              display: "block",
-                              color: colors.fg0,
-                              fontFamily: fontDisplay,
-                              fontSize: 15.5,
-                              fontWeight: active ? 700 : 600,
-                              whiteSpace: "normal",
-                              overflowWrap: "anywhere",
-                            }}
-                          >
-                            {browserLabel(browser)}
-                            {browser.handoff && (
-                              <span style={{ display: "block", fontFamily: "inherit", color: colors.accent, fontSize: 11 }}>
-                                Needs you: {browser.handoff.reason}
-                              </span>
-                            )}
-                          </span>
-                          <span
-                            style={{
-                              display: "block",
-                              marginTop: 3,
-                              color: colors.fg3,
-                              fontFamily: "var(--font-mono)",
-                              fontSize: 11,
-                              whiteSpace: "normal",
-                              overflowWrap: "anywhere",
-                            }}
-                          >
-                            {browser.url}
-                          </span>
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        data-testid={`mobile-session-close-${browser.id}`}
-                        title="Close browser"
-                        aria-label={`Close ${browserLabel(browser)}`}
-                        onClick={() => onCloseBrowser(browser)}
-                        style={{
-                          flexShrink: 0,
-                          width: 48,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          background: "transparent",
-                          border: "none",
-                          color: colors.fg3,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  );
-                }
-                const { terminal } = pane;
-                const active = !activeBrowser && terminal.id === activeTerminalId;
+              {panes.map(({ terminal }) => {
+                const active = terminal.id === activeTerminalId;
                 return (
                   // Row = pick button + its own close button. Long-pressing the
                   // title bar closes only the *active* session and nobody finds
@@ -965,10 +935,10 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         open={workspaceManagerOpen}
         placement="sheet"
         machineName={activeMachine?.name ?? ""}
-        groups={terminalGroups}
+        groups={groups}
         terminalsById={scopedTerminalsById}
         activeGroupId={activeGroup?.id ?? null}
-        activeTerminalId={activeBrowser ? null : activeTerminalId}
+        activeTerminalId={activeTerminalId}
         canManage={isController}
         onClose={() => setWorkspaceManagerOpen(false)}
         onSelectGroup={onSelectGroup}
@@ -1139,7 +1109,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             label="Reconnect"
             onClick={() => window.location.reload()}
           />
-          {activeTerminalId && !activeBrowser && <MenuRow
+          {activeTerminalId && <MenuRow
             icon={<ExternalLink size={17} />}
             label="Open web preview"
             onClick={() => {
@@ -1171,26 +1141,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       {/* Chip long-press sheet */}
       {chipSheet && (
         <Sheet
-          title={`${chipSheet.group.label} · ${
-            chipSheet.kind === "browser"
-              ? browserLabel(chipSheet.browser)
-              : displayTerminalTitle(chipSheet.terminal)
-          }`}
+          title={`${chipSheet.group.label} · ${displayTerminalTitle(chipSheet.terminal)}`}
           onClose={() => setChipSheet(null)}
         >
-          {chipSheet.kind === "browser" ? (
-            <MenuRow
-              icon={<X size={17} />}
-              label="Close browser"
-              danger
-              testid="mobile-chip-close-browser"
-              onClick={() => {
-                const { browser } = chipSheet;
-                setChipSheet(null);
-                onCloseBrowser(browser);
-              }}
-            />
-          ) : (
           <MenuRow
             icon={<X size={17} />}
             label="Close terminal"
@@ -1203,8 +1156,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               onCloseTerminal(terminal);
             }}
           />
-          )}
-          {chipSheet.kind === "terminal" && <MenuRow
+          <MenuRow
             icon={<Plus size={17} />}
             label="New terminal here"
             disabled={!canCreateTerminal}
@@ -1212,9 +1164,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             onClick={() => {
               const { group } = chipSheet;
               setChipSheet(null);
-              onNewTerminal(isBrowserTabId(group.id) ? null : group);
+              onNewTerminal(group);
             }}
-          />}
+          />
         </Sheet>
       )}
     </div>

@@ -455,6 +455,14 @@ export const controlAgentBrowser = (
     body,
   );
 
+/** Opens a new agent browser tab on the machine; resolves to its record (with `id`). */
+export const openAgentBrowser = (machineId: string, url: string) =>
+  request<AgentBrowserInfo>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-browser`,
+    { type: "open", url, opener_terminal_id: null },
+  );
+
 export const closeAgentBrowser = (machineId: string, browserId: string) =>
   request<unknown>(
     "POST",

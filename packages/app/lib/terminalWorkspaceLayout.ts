@@ -1,6 +1,5 @@
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 import type {
-  AgentBrowserInfo,
   TerminalInfo,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
@@ -58,20 +57,14 @@ export function createTerminalWorkspace(
   activeTerminalId: string | null,
   workspaceGroups: WorkspaceGroupInfo[] = [],
   workspaceLayouts: WorkspaceLayoutInfo[] = [],
-  browsers: AgentBrowserInfo[] = [],
 ): TerminalWorkspace {
-  const groups = createGroups(
-    terminals,
-    workspaceGroups,
-    workspaceLayouts,
-    browsers,
-  );
+  const groups = createGroups(terminals, workspaceGroups, workspaceLayouts);
   const activeGroup =
     groups.find((group) => groupContainsTerminal(group, activeTerminalId ?? "")) ??
     groups[0] ??
     null;
   const activeTerminal =
-    activeTerminalId && paneExists(terminals, browsers, activeTerminalId)
+    activeTerminalId && terminalExists(terminals, activeTerminalId)
       ? activeTerminalId
       : firstTerminalId(activeGroup?.root ?? null);
 
@@ -184,7 +177,7 @@ export function closeWorkspacePane(
       (group) =>
         group.persistent ||
         group.paneCount > 0 ||
-        (group.id === workspace.activeGroupId && !isBrowserTabId(group.id)),
+        group.id === workspace.activeGroupId,
     );
 
   const activeGroup =
@@ -312,14 +305,8 @@ export function reconcileTerminalWorkspace(
   // Groups with a local layout save in flight: a saved layout arriving now
   // may predate that save, so adopting it would undo the local change.
   skipLayoutAdoptionGroupIds: ReadonlySet<string> = new Set(),
-  browsers: AgentBrowserInfo[] = [],
 ): TerminalWorkspace {
-  const grouped = createGroups(
-    terminals,
-    workspaceGroups,
-    workspaceLayouts,
-    browsers,
-  );
+  const grouped = createGroups(terminals, workspaceGroups, workspaceLayouts);
   let fallbackForRemovedActive: string | null = null;
   let groups = grouped.map((group) => {
     const previous = workspace.groups.find(
@@ -380,16 +367,16 @@ export function reconcileTerminalWorkspace(
       layoutUpdatedAt: previous.layoutUpdatedAt,
     };
   });
-  groups = preserveActiveEmptyGroup(groups, workspace, terminals, browsers);
+  groups = preserveActiveEmptyGroup(groups, workspace, terminals);
 
   const requestedActive =
-    activeTerminalId && paneExists(terminals, browsers, activeTerminalId)
+    activeTerminalId && terminalExists(terminals, activeTerminalId)
       ? activeTerminalId
       : workspace.activeTerminalId &&
-          paneExists(terminals, browsers, workspace.activeTerminalId)
+          terminalExists(terminals, workspace.activeTerminalId)
         ? workspace.activeTerminalId
         : fallbackForRemovedActive &&
-            paneExists(terminals, browsers, fallbackForRemovedActive)
+            terminalExists(terminals, fallbackForRemovedActive)
           ? fallbackForRemovedActive
           : null;
   const activeGroup =
@@ -410,20 +397,14 @@ function preserveActiveEmptyGroup(
   groups: WorkspaceGroup[],
   workspace: TerminalWorkspace,
   terminals: TerminalInfo[],
-  browsers: AgentBrowserInfo[],
 ): WorkspaceGroup[] {
   if (!workspace.activeGroupId) return groups;
-  // A browser's tab goes away with its browser; never keep it empty.
-  if (isBrowserTabId(workspace.activeGroupId)) return groups;
   if (groups.some((group) => group.id === workspace.activeGroupId)) return groups;
   const activeGroup = workspace.groups.find(
     (group) => group.id === workspace.activeGroupId,
   );
   if (!activeGroup) return groups;
-  const availableIds = new Set([
-    ...terminals.map((terminal) => terminal.id),
-    ...browsers.map((browser) => browser.id),
-  ]);
+  const availableIds = new Set(terminals.map((terminal) => terminal.id));
   const hasRemainingPane = collectPaneTerminalIds(activeGroup.root).some((id) =>
     availableIds.has(id),
   );
@@ -670,7 +651,6 @@ function createGroups(
   terminals: TerminalInfo[],
   workspaceGroups: WorkspaceGroupInfo[] = [],
   workspaceLayouts: WorkspaceLayoutInfo[] = [],
-  browsers: AgentBrowserInfo[] = [],
 ): WorkspaceGroup[] {
   const byGroup = new Map<string, CreatedWorkspaceGroup>();
   const layoutsByGroupKey = new Map<
@@ -699,7 +679,7 @@ function createGroups(
       workspaceGroupId: group.id,
       persistent: true,
       order: group.sort_order,
-      panes: [],
+      terminals: [],
     });
   }
 
@@ -711,7 +691,7 @@ function createGroups(
         : null;
     if (persistedGroup) {
       if (!persistedGroup.cwd) persistedGroup.cwd = terminal.cwd;
-      persistedGroup.panes.push(terminal);
+      persistedGroup.terminals.push(terminal);
       continue;
     }
 
@@ -726,42 +706,16 @@ function createGroups(
         workspaceGroupId: null,
         persistent: false,
         order: sortedWorkspaceGroups.length + byGroup.size,
-        panes: [],
+        terminals: [],
       };
-    fallbackGroup.panes.push(terminal);
+    fallbackGroup.terminals.push(terminal);
     byGroup.set(key, fallbackGroup);
-  }
-
-  // Agent browsers: a pane in the opener terminal's tab while it has room,
-  // otherwise a tab of their own. The id rides in the leaf's terminalId slot.
-  for (const browser of browsers) {
-    const opener = browser.opener_terminal_id;
-    const openerGroup = opener
-      ? Array.from(byGroup.values()).find((group) =>
-          group.panes.some((pane) => pane.id === opener),
-        )
-      : undefined;
-    if (openerGroup && openerGroup.panes.length < MAX_PANES_PER_TAB) {
-      openerGroup.panes.push({ id: browser.id, cwd: "" });
-      continue;
-    }
-    const key = `${BROWSER_TAB_PREFIX}${browser.id}`;
-    byGroup.set(key, {
-      id: key,
-      label: browserLabel(browser),
-      cwd: "",
-      workspaceGroupId: null,
-      persistent: false,
-      order: sortedWorkspaceGroups.length + byGroup.size,
-      panes: [{ id: browser.id, cwd: "" }],
-      browserTab: true,
-    });
   }
 
   return Array.from(byGroup.values())
     .sort(compareCreatedGroups)
     .map((group) => {
-      const terminalIds = group.panes.map((pane) => pane.id);
+      const terminalIds = group.terminals.map((terminal) => terminal.id);
       const layoutEntry = layoutsByGroupKey.get(group.id);
       const root = restorePaneLayout(
         terminalIds,
@@ -769,7 +723,7 @@ function createGroups(
       );
       const cwd =
         group.cwd ||
-        group.panes.find((pane) => pane.cwd)?.cwd ||
+        group.terminals.find((terminal) => terminal.cwd)?.cwd ||
         "";
       return {
         id: group.id,
@@ -778,7 +732,7 @@ function createGroups(
         workspaceGroupId: group.workspaceGroupId,
         persistent: group.persistent,
         root,
-        paneCount: group.panes.length,
+        paneCount: group.terminals.length,
         layoutUpdatedAt: layoutEntry?.updatedAt ?? null,
       };
     });
@@ -791,27 +745,7 @@ interface CreatedWorkspaceGroup {
   workspaceGroupId: string | null;
   persistent: boolean;
   order: number;
-  /** Terminals, plus agent browsers (cwd ""), by id. */
-  panes: { id: string; cwd: string }[];
-  /** A tab that exists only to hold one agent browser. */
-  browserTab?: boolean;
-}
-
-/** Id prefix of the never-persisted tab holding an agent browser alone. */
-export const BROWSER_TAB_PREFIX = "browser:";
-
-export function isBrowserTabId(groupId: string): boolean {
-  return groupId.startsWith(BROWSER_TAB_PREFIX);
-}
-
-export function browserLabel(browser: AgentBrowserInfo): string {
-  const title = browser.title.trim();
-  if (title) return title;
-  try {
-    return new URL(browser.url).host || browser.url || "browser";
-  } catch {
-    return browser.url || "browser";
-  }
+  terminals: TerminalInfo[];
 }
 
 function compareCreatedGroups(
@@ -819,9 +753,6 @@ function compareCreatedGroups(
   b: CreatedWorkspaceGroup,
 ): number {
   if (a.persistent !== b.persistent) return a.persistent ? -1 : 1;
-  if (!!a.browserTab !== !!b.browserTab) return a.browserTab ? 1 : -1;
-  // Browser tabs keep arrival order: titles change as pages load.
-  if (a.browserTab && b.browserTab) return a.order - b.order;
   if (a.persistent) {
     return (
       a.order - b.order ||
@@ -1187,15 +1118,8 @@ function firstTerminalId(root: WorkspacePaneNode | null): string | null {
   return collectPaneTerminalIds(root)[0] ?? null;
 }
 
-function paneExists(
-  terminals: TerminalInfo[],
-  browsers: AgentBrowserInfo[],
-  id: string,
-): boolean {
-  return (
-    terminals.some((terminal) => terminal.id === id) ||
-    browsers.some((browser) => browser.id === id)
-  );
+function terminalExists(terminals: TerminalInfo[], id: string): boolean {
+  return terminals.some((terminal) => terminal.id === id);
 }
 
 // A home directory is "~", not the user's login name: a terminal called

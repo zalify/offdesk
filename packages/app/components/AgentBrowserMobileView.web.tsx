@@ -7,7 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
-import { Globe, Hand, Keyboard as KeyboardIcon, X } from "lucide-react";
+import { Globe, Hand, Keyboard as KeyboardIcon } from "lucide-react";
 import {
   IDENTITY_VIEW_ZOOM,
   classifyTouchGesture,
@@ -35,7 +35,7 @@ import {
   STREAM_STATE_LABEL,
   useAgentBrowserStream,
 } from "@/lib/useAgentBrowserStream";
-import { browserLabel } from "@/lib/terminalWorkspaceLayout";
+import { browserLabel } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
@@ -66,15 +66,13 @@ const headerButton = {
 // Full-width, phone-sized view of one agent browser: live frames, local
 // pinch / double-tap zoom, take over and hand back, and, while this device
 // is in control, touch input (tap, drag to scroll, long press for a right
-// click) and the soft keyboard. Mounted over the terminal area of the mobile
-// workbench; the stream, control and close logic is the same hook the
-// desktop pane uses.
+// click) and the soft keyboard. Shown below the tab strip of the phone's
+// browser surface; the stream and control logic is the same hook the desktop
+// pane uses. Closing a tab is the strip's job.
 export function AgentBrowserMobileView({
   browser,
-  onClosed,
 }: {
   browser: AgentBrowserInfo;
-  onClosed?: () => void;
 }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -91,8 +89,6 @@ export function AgentBrowserMobileView({
     changeControl,
     controlBusy,
     error,
-    closing,
-    closeBrowser,
   } = useAgentBrowserStream({
     browser,
     visible: true,
@@ -481,11 +477,6 @@ export function AgentBrowserMobileView({
     else textarea.focus({ preventScroll: true });
   };
 
-  const handleClose = async () => {
-    await closeBrowser();
-    onClosed?.();
-  };
-
   const label = browserLabel(browser);
   const stateText = mine
     ? "In control"
@@ -499,9 +490,8 @@ export function AgentBrowserMobileView({
       data-browser-id={browser.id}
       data-controlling={mine ? "true" : "false"}
       style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 5,
+        position: "relative",
+        flex: 1,
         display: "flex",
         flexDirection: "column",
         minWidth: 0,
@@ -523,29 +513,6 @@ export function AgentBrowserMobileView({
           flexShrink: 0,
         }}
       >
-        <button
-          type="button"
-          data-testid="mobile-agent-browser-close"
-          aria-label="Close browser"
-          title="Close browser"
-          disabled={closing}
-          onClick={() => void handleClose()}
-          style={{
-            width: 32,
-            height: 32,
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: "none",
-            background: "transparent",
-            color: colors.danger,
-            opacity: closing ? 0.3 : 0.8,
-            cursor: "pointer",
-          }}
-        >
-          <X size={16} aria-hidden />
-        </button>
         <Globe size={14} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
         <span
           data-testid="mobile-agent-browser-title"

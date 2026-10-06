@@ -93,9 +93,17 @@ async function touch(
   });
 }
 
+const surface = (page: Page) => page.getByTestId("mobile-agent-browser-surface");
+const browserButton = (page: Page) => page.getByTestId("mobile-title-bar-browser");
+
+async function openSurface(page: Page): Promise<void> {
+  if ((await surface(page).count()) === 0) await browserButton(page).click();
+  await expect(surface(page)).toBeVisible();
+}
+
 async function openBrowserView(page: Page, browserId: string): Promise<void> {
-  await page.getByTestId("mobile-title-bar-label").click();
-  await page.getByTestId(`mobile-session-row-${browserId}`).click();
+  await openSurface(page);
+  await page.getByTestId(`mobile-browser-tab-${browserId}`).click();
   await expect(page.getByTestId("mobile-agent-browser")).toHaveAttribute(
     "data-browser-id",
     browserId,
@@ -119,63 +127,87 @@ test.describe("agent browser on the phone", () => {
     await resetMachineState(page);
   });
 
-  test("shows up in the session switcher, beside its opener, and opens full width", async ({
+  test("lives behind a title-bar button, not in the session switcher", async ({
     page,
   }) => {
     const terminalId = await createTerminalViaApi(page, { cwd: "/root" });
     await expect(getImmersiveTerminal(page)).toBeVisible();
+    // No browsers yet: the button is there without a count.
+    await expect(browserButton(page)).toBeVisible();
+    await expect(page.getByTestId("mobile-title-bar-browser-count")).toHaveCount(0);
 
-    const opened = await openAgentBrowserViaApi(page, {
-      url: phonePage("Opened page"),
+    const first = await openAgentBrowserViaApi(page, {
+      url: phonePage("First page"),
       openerTerminalId: terminalId,
     });
-    const solo = await openAgentBrowserViaApi(page, {
-      url: phonePage("Solo page"),
+    const second = await openAgentBrowserViaApi(page, {
+      url: phonePage("Second page"),
     });
+    await expect(page.getByTestId("mobile-title-bar-browser-count")).toHaveText("2");
 
+    // Not a session: not in the switcher, and the title bar stays the terminal's.
     await page.getByTestId("mobile-title-bar-label").click();
     const switcher = page.getByTestId("mobile-session-switcher");
-    const openedRow = switcher.getByTestId(`mobile-session-row-${opened.id}`);
-    await expect(openedRow).toBeVisible();
-    await expect(openedRow).toContainText("Opened page");
-    // Same tab as its opener terminal.
-    const openerSection = switcher
-      .locator("section")
-      .filter({ has: page.getByTestId(`mobile-session-row-${terminalId}`) });
-    await expect(openerSection.getByTestId(`mobile-session-row-${opened.id}`)).toBeVisible();
-    // A browser without an opener gets a tab of its own.
-    const soloSection = switcher
-      .locator("section")
-      .filter({ has: page.getByTestId(`mobile-session-row-${solo.id}`) });
-    await expect(soloSection.locator("[data-testid^='mobile-session-row-']")).toHaveCount(1);
+    await expect(switcher.getByTestId(`mobile-session-row-${terminalId}`)).toBeVisible();
+    await expect(switcher.locator("[data-testid^='mobile-session-row-']")).toHaveCount(1);
+    await expect(switcher.getByTestId("mobile-session-position")).toHaveText("1/1");
+    await page.getByTestId(`mobile-session-row-${terminalId}`).click();
 
-    await openedRow.click();
-    const view = page.getByTestId("mobile-agent-browser");
-    await expect(view).toBeVisible();
-    await expect(view).toHaveAttribute("data-browser-id", opened.id);
-    await expect(page.getByTestId("mobile-agent-browser-title")).toHaveText("Opened page");
-    await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Opened page");
+    // The button opens a full-screen surface over the terminal area.
+    await browserButton(page).click();
+    await expect(surface(page)).toBeVisible();
+    const area = await page.getByTestId("mobile-terminal-area").boundingBox();
+    const shown = await surface(page).boundingBox();
+    expect(Math.round(shown!.width)).toBe(Math.round(area!.width));
+    expect(Math.round(shown!.height)).toBe(Math.round(area!.height));
+    await expect(page.getByTestId(`mobile-browser-tab-${first.id}`)).toContainText("First page");
+    await expect(page.getByTestId(`mobile-browser-tab-${second.id}`)).toContainText("Second page");
+    // No duplicate close control in the view itself.
+    await expect(page.getByTestId("mobile-agent-browser-close")).toHaveCount(0);
+
+    // Switch between the two tabs; each streams live frames.
+    await page.getByTestId(`mobile-browser-tab-${first.id}`).click();
+    await expect(page.getByTestId("mobile-agent-browser")).toHaveAttribute(
+      "data-browser-id",
+      first.id,
+    );
+    await expect(page.getByTestId("mobile-agent-browser-title")).toHaveText("First page");
     await expect.poll(() => frames(page)).toBeGreaterThan(0);
     const before = await frames(page);
     await expect.poll(() => frames(page)).toBeGreaterThan(before);
-
-    // Full width of the terminal area.
-    const area = await page.getByTestId("mobile-terminal-area").boundingBox();
-    const shown = await view.boundingBox();
-    expect(Math.round(shown!.width)).toBe(Math.round(area!.width));
-    expect(Math.round(shown!.height)).toBe(Math.round(area!.height));
     await page.screenshot({ path: "e2e/artifacts/agent-browser-mobile-view.png" });
+    await page.getByTestId(`mobile-browser-tab-${second.id}`).click();
+    await expect(page.getByTestId("mobile-agent-browser")).toHaveAttribute(
+      "data-browser-id",
+      second.id,
+    );
+    await expect(page.getByTestId("mobile-agent-browser-title")).toHaveText("Second page");
+    await expect.poll(() => frames(page)).toBeGreaterThan(0);
 
-    // Back to the terminal through the switcher; the terminal still works.
-    await page.getByTestId("mobile-title-bar-label").click();
-    await page.getByTestId(`mobile-session-row-${terminalId}`).click();
-    await expect(page.getByTestId("mobile-agent-browser")).toHaveCount(0);
+    // "+" opens an address field; the new page becomes the selected tab.
+    await page.getByTestId("mobile-browser-new-tab").click();
+    await page.getByTestId("mobile-browser-url-input").fill(phonePage("Third page"));
+    await page.getByTestId("mobile-browser-url-submit").click();
+    await expect(page.getByTestId("mobile-agent-browser-title")).toHaveText("Third page");
+    await expect(page.getByTestId("mobile-title-bar-browser-count")).toHaveText("3");
+    await expect(page.getByTestId("mobile-browser-url-input")).toHaveCount(0);
+    await expect.poll(() => frames(page)).toBeGreaterThan(0);
+
+    // x closes a tab (here the selected one); another takes over.
+    const tabs = page.locator("[data-testid^='mobile-browser-tab-'][role='tab']");
+    await expect(tabs).toHaveCount(3);
+    await page
+      .locator("[role='tab'][data-selected='true'] [data-testid^='mobile-browser-tab-close-']")
+      .click();
+    await expect(tabs).toHaveCount(2);
+    await expect(page.getByTestId("mobile-title-bar-browser-count")).toHaveText("2");
+    await expect(page.getByTestId("mobile-agent-browser")).toBeVisible();
+
+    // Back returns to the terminal, which still works.
+    await page.getByTestId("mobile-agent-browser-surface-back").click();
+    await expect(surface(page)).toHaveCount(0);
     await expect(getImmersiveTerminal(page)).toBeVisible();
-
-    // Closing a browser from the switcher removes its row.
-    await page.getByTestId("mobile-title-bar-label").click();
-    await page.getByTestId(`mobile-session-close-${solo.id}`).click();
-    await expect(page.getByTestId(`mobile-session-row-${solo.id}`)).toHaveCount(0);
+    await expect(page.getByTestId("mobile-title-bar-browser-count")).toHaveText("2");
   });
 
   test("double tap zooms the view locally and taps still land on the right spot", async ({
@@ -357,33 +389,46 @@ test.describe("agent browser on the phone", () => {
       .poll(async () => (await getAgentBrowserViaApi(page, opened.id))?.controller)
       .toBe("agent");
 
-    // Close from the view.
-    await page.getByTestId("mobile-agent-browser-close").click();
+    // Close from the tab strip.
+    await page.getByTestId(`mobile-browser-tab-close-${opened.id}`).click();
     await expect(page.getByTestId("mobile-agent-browser")).toHaveCount(0);
+    await expect(surface(page)).toBeVisible();
+    await expect(page.getByTestId("mobile-browser-surface-empty")).toBeVisible();
     await expect.poll(async () => getAgentBrowserViaApi(page, opened.id)).toBeUndefined();
   });
 
-  test("a handoff shows in the phone's attention bar and opens the browser", async ({
+  test("a handoff shows a dot, a toast and an attention entry that opens the tab", async ({
     page,
   }) => {
     const terminalId = await createTerminalViaApi(page, { cwd: "/root" });
     await expect(getImmersiveTerminal(page)).toBeVisible();
+    const other = await openAgentBrowserViaApi(page, {
+      url: phonePage("Other page"),
+      openerTerminalId: terminalId,
+    });
     const opened = await openAgentBrowserViaApi(page, {
-      url: phonePage(),
+      url: phonePage("Needs help"),
       openerTerminalId: terminalId,
     });
     const attention = page.getByTestId("mobile-terminal-attention");
     await expect(attention).toHaveCount(0);
+    await expect(page.getByTestId("mobile-title-bar-browser-attention")).toHaveCount(0);
 
     await requestAgentBrowserHandoffViaApi(page, opened.id, "Please log in");
+    await expect(page.getByTestId("mobile-title-bar-browser-attention")).toBeVisible();
+    await expect(page.getByTestId("workspace-toast")).toContainText(
+      "The agent needs you in Needs help: Please log in",
+    );
     const chip = page.getByTestId(`mobile-attention-browser-${opened.id}`);
     await expect(chip).toBeVisible();
     await expect(chip).toContainText("Please log in");
     await page.screenshot({ path: "e2e/artifacts/agent-browser-mobile-attention.png" });
 
     await chip.click();
+    await expect(surface(page)).toBeVisible();
     const view = page.getByTestId("mobile-agent-browser");
     await expect(view).toHaveAttribute("data-browser-id", opened.id);
+    await expect(page.getByTestId(`mobile-browser-tab-attention-${opened.id}`)).toBeVisible();
     await expect(page.getByTestId("mobile-agent-browser-handoff")).toContainText(
       "The agent needs you: Please log in",
     );
@@ -398,14 +443,28 @@ test.describe("agent browser on the phone", () => {
     const record = await getAgentBrowserViaApi(page, opened.id);
     expect(record?.controller).toBe("agent");
     expect(record?.handoff).toBeUndefined();
+    await expect(page.getByTestId("mobile-title-bar-browser-attention")).toHaveCount(0);
+
+    // A handoff on the tab that is not showing: its tab strip dot and the chip.
+    await requestAgentBrowserHandoffViaApi(page, other.id, "Solve the captcha");
+    await expect(page.getByTestId(`mobile-browser-tab-attention-${other.id}`)).toBeVisible();
+    await expect(page.getByTestId(`mobile-attention-browser-${other.id}`)).toBeVisible();
 
     await closeAgentBrowserViaApi(page, opened.id);
+    await closeAgentBrowserViaApi(page, other.id);
     await expect(page.getByTestId("mobile-agent-browser")).toHaveCount(0);
+    await page.getByTestId("mobile-agent-browser-surface-back").click();
     await expect(getImmersiveTerminal(page)).toBeVisible();
   });
 
-  test("a machine with only a browser opens it straight away", async ({ page }) => {
+  test("a machine with no terminals still opens its browser from the title bar", async ({
+    page,
+  }) => {
     const opened = await openAgentBrowserViaApi(page, { url: phonePage("Lonely") });
+    await expect(page.getByTestId("mobile-agent-browser-surface")).toHaveCount(0);
+    await expect(browserButton(page)).toBeVisible();
+    await expect(page.getByTestId("mobile-title-bar-browser-count")).toHaveText("1");
+    await browserButton(page).click();
     await expect(page.getByTestId("mobile-agent-browser")).toHaveAttribute(
       "data-browser-id",
       opened.id,

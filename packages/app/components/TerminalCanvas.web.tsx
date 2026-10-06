@@ -80,7 +80,13 @@ import { CheatSheetOverlay } from "./CheatSheetOverlay.web";
 import { UpdateNotification } from "./UpdateNotification";
 import { useAuth } from "@/lib/auth";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
-import { releaseAndCloseAgentBrowser } from "@/lib/useAgentBrowserStream";
+import {
+  browserLabel,
+  browserNeedsPerson,
+  findNewHandoffs,
+  pickBrowserToOpen,
+} from "@/lib/agentBrowserOverlay";
+import { AgentBrowserOverlay } from "./AgentBrowserOverlay.web";
 import {
   MAX_PANES_PER_TAB,
   buildReorderPersistentGroupIds,
@@ -651,6 +657,12 @@ function TerminalCanvasInner() {
               type: "TERMINAL_DESTROYED",
               terminalId: envelope.event.terminal_id,
             });
+            // Closed without asking to keep its workspace (e.g. from another
+            // device): stop anchoring on it so the next terminal takes over.
+            const destroyedId = envelope.event.terminal_id;
+            setWorkspaceAnchorTerminal((anchor) =>
+              anchor?.id === destroyedId ? null : anchor,
+            );
           }
           if (zoomedTerminalIdRef.current === envelope.event.terminal_id) {
             window.history.replaceState(null, "", window.location.pathname);
@@ -734,9 +746,9 @@ function TerminalCanvasInner() {
     return terminals.filter((t) => t.machine_id === activeMachine.id);
   }, [terminals, activeMachine]);
 
-  // Agent browsers of the active machine. Compact/mobile feeds them to the
-  // session switcher and shows one full-width (the terminal workspace there
-  // still gets none: it stays terminal-only).
+  // Agent browsers of the active machine. They are machine-global, not part of
+  // the terminal tabs: desktop shows them in the top-bar overlay, the phone in
+  // a full-screen surface opened from the title bar.
   const scopedAgentBrowsers = useMemo<AgentBrowserInfo[]>(() => {
     if (!activeMachine) return NO_AGENT_BROWSERS;
     const own = browserState.agentBrowsers.filter(
@@ -771,13 +783,11 @@ function TerminalCanvasInner() {
         null,
         activeMachineWorkspaceGroups,
         activeMachineWorkspaceLayouts,
-        scopedAgentBrowsers,
       ).groups,
     [
       scopedTerminals,
       activeMachineWorkspaceGroups,
       activeMachineWorkspaceLayouts,
-      scopedAgentBrowsers,
     ],
   );
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
@@ -1134,51 +1144,89 @@ function TerminalCanvasInner() {
     window.history.pushState(null, "", `#/t/${id}`);
   }, []);
 
-  // Mobile: the agent browser shown instead of the terminal workspace. A
-  // browser id is not a terminal, so it has no zoom state or #/t/ route.
-  const [mobileBrowserId, setMobileBrowserId] = useState<string | null>(null);
-  const mobileBrowser = useMemo<AgentBrowserInfo | null>(() => {
-    if (!isCompact) return null;
-    const picked = scopedAgentBrowsers.find(
-      (browser) => browser.id === mobileBrowserId,
+  // The agent browser overlay (desktop) / full-screen surface (phone), opened
+  // from the top bar or title bar. Browsers are machine-global, so the last
+  // picked tab is remembered per machine (memory only) and it shows the active
+  // machine's.
+  const [browserOverlayOpen, setBrowserOverlayOpen] = useState(false);
+  const [rememberedBrowserIds, setRememberedBrowserIds] = useState<
+    Record<string, string>
+  >({});
+  const overlayMachineId = activeMachine?.id ?? null;
+  const browserNeedsYou = useMemo(
+    () => scopedAgentBrowsers.some(browserNeedsPerson),
+    [scopedAgentBrowsers],
+  );
+  const handleSelectOverlayBrowser = useCallback(
+    (browserId: string) => {
+      if (!overlayMachineId) return;
+      setRememberedBrowserIds((prev) => ({ ...prev, [overlayMachineId]: browserId }));
+    },
+    [overlayMachineId],
+  );
+  const handleToggleBrowserOverlay = useCallback(() => {
+    if (browserOverlayOpen) {
+      setBrowserOverlayOpen(false);
+      return;
+    }
+    if (overlayMachineId) {
+      // A tab the agent needs you in comes first.
+      const pick = pickBrowserToOpen(
+        scopedAgentBrowsers,
+        rememberedBrowserIds[overlayMachineId],
+      );
+      if (pick) handleSelectOverlayBrowser(pick);
+    }
+    setBrowserOverlayOpen(true);
+  }, [
+    overlayMachineId,
+    browserOverlayOpen,
+    handleSelectOverlayBrowser,
+    rememberedBrowserIds,
+    scopedAgentBrowsers,
+  ]);
+  // The overlay is for the machine it was opened on.
+  useEffect(() => {
+    setBrowserOverlayOpen(false);
+  }, [overlayMachineId]);
+  // The desktop overlay and the phone surface are different views of the
+  // same state; resizing across the breakpoint starts closed.
+  useEffect(() => {
+    setBrowserOverlayOpen(false);
+  }, [isCompact]);
+  // A tab asked for from outside (the phone's attention bar): open on it.
+  const handleOpenBrowserTab = useCallback(
+    (browserId: string) => {
+      const active = document.activeElement;
+      // Drop the terminal's soft keyboard; the browser view opens its own.
+      if (active instanceof HTMLElement) active.blur();
+      handleSelectOverlayBrowser(browserId);
+      setBrowserOverlayOpen(true);
+    },
+    [handleSelectOverlayBrowser],
+  );
+  // A browser that starts asking for help while the overlay is closed is easy
+  // to miss: say so (the top-bar button also shows a dot).
+  const previousScopedBrowsersRef = useRef<{
+    machineId: string | null;
+    browsers: AgentBrowserInfo[];
+  }>({ machineId: null, browsers: NO_AGENT_BROWSERS });
+  useEffect(() => {
+    const previous = previousScopedBrowsersRef.current;
+    previousScopedBrowsersRef.current = {
+      machineId: overlayMachineId,
+      browsers: scopedAgentBrowsers,
+    };
+    if (browserOverlayOpen) return;
+    if (previous.machineId !== overlayMachineId) return;
+    const fresh = findNewHandoffs(previous.browsers, scopedAgentBrowsers);
+    if (fresh.length === 0) return;
+    const first = fresh[0];
+    showWorkspaceToast(
+      `The agent needs you in ${browserLabel(first)}: ${first.handoff?.reason ?? ""}`,
+      6000,
     );
-    if (picked) return picked;
-    // A machine with only browsers has no terminal to show instead.
-    return scopedTerminals.length === 0 ? (scopedAgentBrowsers[0] ?? null) : null;
-  }, [isCompact, scopedAgentBrowsers, mobileBrowserId, scopedTerminals]);
-  const handleMobilePickTerminal = useCallback(
-    (id: string) => {
-      setMobileBrowserId(null);
-      handleZoomTerminal(id);
-    },
-    [handleZoomTerminal],
-  );
-  const handleMobilePickBrowser = useCallback((id: string) => {
-    // Drop the terminal's soft keyboard; the browser view opens its own.
-    const active = document.activeElement;
-    if (active instanceof HTMLElement) active.blur();
-    setMobileBrowserId(id);
-  }, []);
-  const handleMobileCloseBrowser = useCallback(
-    (browser: AgentBrowserInfo) => {
-      void releaseAndCloseAgentBrowser(browser, deviceId).catch((error) => {
-        showWorkspaceToast(
-          `Could not close the browser: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-    },
-    [deviceId],
-  );
-
-  // Desktop workspace focus: a browser pane id is not a terminal, so it has
-  // no zoom state or #/t/ route.
-  const handlePickWorkspacePane = useCallback(
-    (id: string) => {
-      if (scopedAgentBrowsers.some((browser) => browser.id === id)) return;
-      handleZoomTerminal(id);
-    },
-    [handleZoomTerminal, scopedAgentBrowsers],
-  );
+  }, [overlayMachineId, browserOverlayOpen, scopedAgentBrowsers]);
 
   // Create a tab named after the first free "tab N" slot and select it. The
   // group also arrives via workspace_group_created; selecting by the response
@@ -1796,12 +1844,28 @@ function TerminalCanvasInner() {
               groups={tabGroups}
               activeTerminalId={workspaceTerminal?.id ?? null}
               browsers={scopedAgentBrowsers}
-              activeBrowserId={mobileBrowser?.id ?? null}
+              browserButton={
+                activeMachine && machineOnline[activeMachine.id]
+                  ? {
+                      count: scopedAgentBrowsers.length,
+                      needsPerson: browserNeedsYou,
+                      open: browserOverlayOpen,
+                    }
+                  : undefined
+              }
+              browserSurfaceOpen={browserOverlayOpen}
+              selectedBrowserId={
+                activeMachine
+                  ? (rememberedBrowserIds[activeMachine.id] ?? null)
+                  : null
+              }
+              onToggleBrowser={handleToggleBrowserOverlay}
+              onOpenBrowser={handleOpenBrowserTab}
+              onSelectBrowser={handleSelectOverlayBrowser}
+              onCloseBrowserSurface={() => setBrowserOverlayOpen(false)}
               canCreateTerminal={isActiveController}
               canSendAttention={(machineId) => !eventsReconnecting && canTypeOnMachine(machineId)}
-              onPickTerminal={handleMobilePickTerminal}
-              onPickBrowser={handleMobilePickBrowser}
-              onCloseBrowser={handleMobileCloseBrowser}
+              onPickTerminal={handleZoomTerminal}
               onSelectGroup={(groupId) =>
                 workspaceCommandsRef.current.selectGroup?.(groupId)
               }
@@ -1828,7 +1892,6 @@ function TerminalCanvasInner() {
                 <TerminalWorkspace
                   key={workspaceTerminal.machine_id}
                   terminal={workspaceTerminal}
-                  machineId={workspaceTerminal.machine_id}
                   siblings={scopedTerminals}
                   workspaceGroups={activeMachineWorkspaceGroups}
                   workspaceLayouts={activeMachineWorkspaceLayouts}
@@ -1870,7 +1933,6 @@ function TerminalCanvasInner() {
                 activeGroupId={activeGroupId}
                 activeTerminalId={workspaceTerminal?.id ?? null}
                 terminalsById={scopedTerminalsById}
-                agentBrowsers={scopedAgentBrowsers}
                 terminals={terminals}
                 machines={machines}
                 activeMachineId={activeMachineId}
@@ -1899,6 +1961,16 @@ function TerminalCanvasInner() {
                 onOpenSettings={() => setShowSettings(true)}
                 onOpenTodos={() => setTodosOpen(true)}
                 openTodoCount={openTodoCount}
+                browserButton={
+                  activeMachine && machineOnline[activeMachine.id]
+                    ? {
+                        count: scopedAgentBrowsers.length,
+                        needsPerson: browserNeedsYou,
+                        open: browserOverlayOpen,
+                      }
+                    : undefined
+                }
+                onToggleBrowser={handleToggleBrowserOverlay}
                 onRemoveHost={handleRemoveHost}
                 onRequestControl={() => {
                   if (activeMachine) void handleRequestControl(activeMachine.id);
@@ -1961,8 +2033,7 @@ function TerminalCanvasInner() {
                 </div>
               )}
 
-              {scopedTerminals.length === 0 &&
-              (scopedAgentBrowsers.length === 0 || !activeMachine) ? (
+              {scopedTerminals.length === 0 ? (
                 <EmptyState
                   scopeLabel={scopeLabel}
                   canCreate={isActiveController}
@@ -1974,29 +2045,17 @@ function TerminalCanvasInner() {
                 />
               ) : (
                 <TerminalWorkspace
-                  terminal={workspaceTerminal}
-                  machineId={workspaceTerminal?.machine_id ?? activeMachine!.id}
-                  siblings={
-                    scopedTerminals.length > 0
-                      ? scopedTerminals
-                      : workspaceTerminal
-                        ? [workspaceTerminal]
-                        : []
-                  }
-                  agentBrowsers={scopedAgentBrowsers}
+                  terminal={workspaceTerminal!}
+                  siblings={scopedTerminals}
                   workspaceGroups={activeMachineWorkspaceGroups}
                   workspaceLayouts={activeMachineWorkspaceLayouts}
-                  isController={isMachineController(
-                    workspaceTerminal?.machine_id ?? activeMachine!.id,
-                  )}
-                  canType={canTypeOnMachine(
-                    workspaceTerminal?.machine_id ?? activeMachine!.id,
-                  )}
+                  isController={isMachineController(workspaceTerminal!.machine_id)}
+                  canType={canTypeOnMachine(workspaceTerminal!.machine_id)}
                   eventsReconnecting={eventsReconnecting}
                   deviceId={deviceId ?? ""}
                   isCompact={isCompact}
                   isTouch={isTouch}
-                  onPick={handlePickWorkspacePane}
+                  onPick={handleZoomTerminal}
                   onRelay={handleRelay}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
@@ -2036,6 +2095,18 @@ function TerminalCanvasInner() {
         )}
 
         {phoneOpen && <MobileAppDialog onClose={() => setPhoneOpen(false)} />}
+
+        {!isCompact && browserOverlayOpen && activeMachine && (
+          <AgentBrowserOverlay
+            machineId={activeMachine.id}
+            machineName={activeMachine.name}
+            browsers={scopedAgentBrowsers}
+            selectedId={rememberedBrowserIds[activeMachine.id] ?? null}
+            deviceId={deviceId}
+            onSelect={handleSelectOverlayBrowser}
+            onClose={() => setBrowserOverlayOpen(false)}
+          />
+        )}
 
         {!isCompact && paletteState.open && (
           <CommandPalette

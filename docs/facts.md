@@ -19,6 +19,11 @@ rename mapping is at the bottom.
 - Chromium is taken from `OFFDESK_CHROMIUM`, then `PATH`, then macOS app
   locations; `OFFDESK_CHROMIUM_NO_SANDBOX` (or running as root) adds
   `--no-sandbox` (`crates/machine/src/agent_browser/chromium.rs`).
+- Desktop web shows agent browsers in an overlay opened from the top-bar Browser
+  button, one tab per browser of the active machine; they are never workspace
+  panes or tabs (`packages/app/components/AgentBrowserOverlay.web.tsx`). The
+  phone opens them in a full-screen surface from a title-bar Browser button
+  (`packages/app/components/AgentBrowserMobileSurface.web.tsx`).
 - Hub time limits: `open` five minutes, `wait` its timeout plus fifteen
   seconds, other commands sixty seconds (`crates/hub/src/routes/agent_browser.rs`).
 

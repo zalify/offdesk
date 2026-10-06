@@ -14,25 +14,78 @@ machine's network (localhost dev servers, LAN hosts) and keeps its logins.
 - Requests go CLI to hub to node, so the CLI needs the usual `OFFDESK_URL` and
   `OFFDESK_TOKEN`, and the node must be online.
 
-The web UI shows each agent browser live as a pane: in the tab of the terminal
-that opened it, or in a tab of its own when it was opened without one. Its
-header has the page title, URL, who is in control, a **Take over** / **Hand
-back** button, connection state and a close button (see
-[Taking over](#taking-over-and-handing-off)). A pane streams only while it is
-visible: a hidden tab or a hidden browser window holds no connection, and the
-node stops the screencast when the last viewer leaves.
+Agent browsers belong to the machine, not to a terminal: they are never panes,
+tabs or sessions of the workspace, on the desktop or the phone. The desktop's top
+bar and the phone's title bar each have a **Browser** button (see below).
+`opener_terminal_id` (the terminal that ran `offdesk browser open`) is
+informational only.
+
+### On the desktop
+
+The **Browser** (globe) button sits in the top bar whenever the active machine is
+online. It shows how many browser tabs the machine has, and a warning dot while an
+agent is waiting for a person (see [Taking over](#taking-over-and-handing-off)).
+Clicking it opens a large floating panel over the workspace, with a light
+backdrop. The terminals underneath stay mounted and keep their connections.
+
+- **Tab strip.** One tab per agent browser of the machine, labelled with the page
+  title (or the host), a dot when the agent needs you and a "you" chip while this
+  device controls it. Click a tab to show it, its **x** to close that browser (the
+  control is handed back first when you hold it). The last tab you looked at on a
+  machine is remembered while the page stays open; if it goes away the first
+  remaining tab is shown. Opening the overlay lands on a tab that is asking for
+  help, if there is one.
+- **New tab.** The **+** button shows an address field; Enter opens the page on the
+  machine (`POST /api/machines/{machine}/agent-browser` with `{"type":"open","url":...}`)
+  and selects the new tab. A bare host such as `aliyun.com` gets `https://`;
+  `localhost` and IPv4 addresses get `http://`. Errors show under the field.
+- **Body.** The selected browser, live, with the page title, URL, who is in
+  control, **Take over** / **Hand back**, the connection state and the handoff
+  banner. Only the selected tab streams: other tabs hold no connection, and the
+  node stops the screencast when the last viewer leaves.
+- **Empty state.** With no browser tabs it says "No browser tabs on this machine"
+  and shows the address field.
+- **Closing the overlay.** The **x** in the corner, a click on the backdrop, or
+  Esc. While *this device is in control*, Esc (like every key) goes to the page and
+  does not close the overlay; hand back first, or use the **x** or the backdrop.
+  Closing the overlay stops streaming but does not hand control back: it is
+  released automatically 2 minutes after this device stops watching (see
+  Auto-release).
+- **Shortcuts.** Workspace shortcuts (including the Ctrl+B prefix) do not fire while
+  you type in the address field or control a page.
+- **Handoffs while the overlay is closed.** A new handoff shows a toast, "The agent
+  needs you in <title>: <reason>", and the dot on the button.
 
 ### On the phone
 
-The mobile web UI (and the Android app, which wraps it) lists the agent browsers
-of the active machine in the session switcher, with a globe icon: in the tab of
-the terminal that opened it, or in a tab of its own. Picking one shows it
-full-width in place of the terminal (terminals stay connected underneath); a
-machine that has only browsers opens its browser straight away. The header has
-the page title, who is in control, **Take over** / **Hand back** and close; a
-handoff shows the same banner as on the desktop, and also appears in the bar of
-sessions needing attention at the top of the phone UI with its reason (tap it to
-open the browser).
+The mobile web UI (and the Android app, which wraps it) puts a **Browser** (globe)
+button in the title bar, next to **New terminal**, whenever the active machine is
+online. Like the desktop button it shows how many browser tabs the machine has and
+a warning dot while an agent is waiting for a person. Browsers are not in the
+session switcher, its chips, the swipe gestures or the long-press sheet.
+
+Tapping it opens a full-screen surface over the terminal area (terminals stay
+mounted and connected underneath; tap the button again to close it):
+
+- **Top row.** A back button (returns to the terminal), a horizontally scrolling
+  tab strip with the same tabs as the desktop (page title or host, a dot when the
+  agent needs you, a "you" chip while this device controls it, an **x** that
+  closes that browser and hands control back first) and a **+**. The last tab you
+  looked at on a machine is remembered while the page stays open; the surface
+  lands on a tab that is asking for help, if there is one.
+- **New tab.** **+** shows an address field with the same rules as the desktop
+  (bare hosts get `https://`, `localhost` and IPv4 get `http://`); the new tab is
+  selected once the browser exists. With no tabs the field is shown with the
+  empty state "No browser tabs on this machine".
+- **Body.** The selected tab: page title, who is in control, **Take over** /
+  **Hand back**, the connection state and the handoff banner. Closing a tab is
+  done from the strip only.
+- **Handoffs.** A handoff also shows in the bar of sessions needing attention at
+  the top of the phone UI with its reason; tapping it opens the surface on that
+  tab. While the surface is closed, a new handoff also raises the same toast as
+  on the desktop.
+- The phone app has no back-gesture mapping for its sheets, so the Android back
+  button does not close the surface; use the back button in its top row.
 
 - **Zoom** is local, a view aid that is never sent to the page. The page is
   1280x800, so on a phone it is small: pinch to zoom 1x to 3x around your
@@ -113,7 +166,7 @@ resulting URL and title separated by a tab.
 
 ## Taking over and handing off
 
-A person watching the pane can take control of the browser, click and type in
+A person watching a browser can take control of the browser, click and type in
 it, and give it back. This is for what an agent cannot do: logging in, solving
 a captcha, entering a 2FA code.
 
@@ -130,21 +183,22 @@ a captcha, entering a 2FA code.
   controlling this browser. Wait for them with `offdesk browser wait-control
   <browser>`." and exits `3`. `snapshot`, `screenshot`, `wait`, `ls` and
   `open` keep working, so an agent can watch what the person does.
-- **In the web UI** the pane header shows "Agent in control" with a **Take
+- **In the web UI** the overlay's browser header shows "Agent in control" with a **Take
   over** button; "You're in control" with **Hand back** while this device
   controls it; "Controlled on another device" with **Take over** while another
-  one does (taking it is last-writer-wins). While you control it, the pane
+  one does (taking it is last-writer-wins). While you control it, the page
   takes focus and sends your mouse (move, press, release, drag), wheel,
   keyboard, IME composition and paste to the page; the context menu is
-  suppressed on it. The workspace prefix key (Ctrl+B) still belongs to the
-  workspace and is never sent to the page. Closing the pane while in control
-  hands it back first, then closes the browser.
-- **A handoff** shows a banner in the pane, "The agent needs you: <reason>",
-  with a **Take over** button, and a small dot on the workspace tab that holds
-  the browser until a person has taken over. **Hand back** (header or banner)
+  suppressed on it. Every key, Esc and the workspace prefix key (Ctrl+B)
+  included, is sent to the page. Closing a tab while in control hands it back
+  first, then closes the browser.
+- **A handoff** shows a banner above the page, "The agent needs you: <reason>",
+  with a **Take over** button, and a warning dot on the top-bar **Browser**
+  button and on the browser's tab until a person has taken over (a toast says so
+  too when the overlay is closed). **Hand back** (header or banner)
   clears the handoff.
 - **Auto-release.** If the controlling device has no open viewer WebSocket for
-  the browser for 2 minutes (the pane was closed or hidden, the app quit, the
+  the browser for 2 minutes (the overlay was closed, the tab hidden, the app quit, the
   network dropped), the hub hands control back to the agent exactly like
   `release` (the handoff is cleared too) and tells every client. Reconnecting
   within the 2 minutes cancels it. Control taken over REST with no viewer
@@ -153,8 +207,8 @@ a captcha, entering a 2FA code.
   the browser again: exit `0`, or `1` on timeout (default 600 s).
 - **`handoff <browser> --reason "Please log in"`** asks a person for help: the
   reason is stored with the browser as `handoff` (`reason`, `requested_at`) and
-  every client is told, so the pane can show a banner. It does not take control
-  itself; the person does that from the pane. With `--wait` the command blocks
+  every client is told, so the overlay can show a banner. It does not take control
+  itself; the person does that from the overlay. With `--wait` the command blocks
   until a person has taken control and handed it back (control back to the
   agent, handoff cleared): exit `0`, or `1` after `--timeout` seconds (default
   600). Without `--wait` it returns at once.
@@ -204,7 +258,7 @@ on its own task, so it is never held up by screencast frames; a backlog of
 mouse moves collapses to the latest one. Ctrl or Cmd with A, C, X, V, Z, Y runs
 the matching editing command.
 
-If the controlling person closes the pane without releasing, the hub releases
+If the controlling person closes the overlay without releasing, the hub releases
 control after 2 minutes without a viewer from that device (see Auto-release
 above); until then `wait-control` and `handoff --wait` keep waiting.
 
