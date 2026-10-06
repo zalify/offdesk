@@ -22,7 +22,8 @@ rename mapping is at the bottom.
 - Desktop web shows agent browsers in an overlay opened from the top-bar Browser
   button, one tab per browser of the active machine; they are never workspace
   panes or tabs (`packages/app/components/AgentBrowserOverlay.web.tsx`). The
-  phone lists them in its session switcher beside the opener terminal.
+  phone opens them in a full-screen surface from a title-bar Browser button
+  (`packages/app/components/AgentBrowserMobileSurface.web.tsx`).
 - Hub time limits: `open` five minutes, `wait` its timeout plus fifteen
   seconds, other commands sixty seconds (`crates/hub/src/routes/agent_browser.rs`).
 

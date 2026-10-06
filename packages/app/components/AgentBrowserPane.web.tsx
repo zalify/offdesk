@@ -24,7 +24,7 @@ import {
   STREAM_STATE_LABEL,
   useAgentBrowserStream,
 } from "@/lib/useAgentBrowserStream";
-import { browserLabel } from "@/lib/terminalWorkspaceLayout";
+import { browserLabel } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
 
 const bannerButton = {

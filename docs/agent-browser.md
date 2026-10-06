@@ -14,12 +14,11 @@ machine's network (localhost dev servers, LAN hosts) and keeps its logins.
 - Requests go CLI to hub to node, so the CLI needs the usual `OFFDESK_URL` and
   `OFFDESK_TOKEN`, and the node must be online.
 
-Agent browsers belong to the machine, not to a terminal: they are never panes or
-tabs of the workspace. On the desktop web UI (and the desktop app) the **Browser**
-button in the top bar opens them in an overlay; the phone has its own view (see
-below). `opener_terminal_id` (the terminal that ran `offdesk browser open`) is
-informational on the desktop; only the phone uses it, to list a browser beside its
-terminal.
+Agent browsers belong to the machine, not to a terminal: they are never panes,
+tabs or sessions of the workspace, on the desktop or the phone. The desktop's top
+bar and the phone's title bar each have a **Browser** button (see below).
+`opener_terminal_id` (the terminal that ran `offdesk browser open`) is
+informational only.
 
 ### On the desktop
 
@@ -59,15 +58,34 @@ backdrop. The terminals underneath stay mounted and keep their connections.
 
 ### On the phone
 
-The mobile web UI (and the Android app, which wraps it) lists the agent browsers
-of the active machine in the session switcher, with a globe icon: in the tab of
-the terminal that opened it, or in a tab of its own. Picking one shows it
-full-width in place of the terminal (terminals stay connected underneath); a
-machine that has only browsers opens its browser straight away. The header has
-the page title, who is in control, **Take over** / **Hand back** and close; a
-handoff shows the same banner as on the desktop, and also appears in the bar of
-sessions needing attention at the top of the phone UI with its reason (tap it to
-open the browser).
+The mobile web UI (and the Android app, which wraps it) puts a **Browser** (globe)
+button in the title bar, next to **New terminal**, whenever the active machine is
+online. Like the desktop button it shows how many browser tabs the machine has and
+a warning dot while an agent is waiting for a person. Browsers are not in the
+session switcher, its chips, the swipe gestures or the long-press sheet.
+
+Tapping it opens a full-screen surface over the terminal area (terminals stay
+mounted and connected underneath; tap the button again to close it):
+
+- **Top row.** A back button (returns to the terminal), a horizontally scrolling
+  tab strip with the same tabs as the desktop (page title or host, a dot when the
+  agent needs you, a "you" chip while this device controls it, an **x** that
+  closes that browser and hands control back first) and a **+**. The last tab you
+  looked at on a machine is remembered while the page stays open; the surface
+  lands on a tab that is asking for help, if there is one.
+- **New tab.** **+** shows an address field with the same rules as the desktop
+  (bare hosts get `https://`, `localhost` and IPv4 get `http://`); the new tab is
+  selected once the browser exists. With no tabs the field is shown with the
+  empty state "No browser tabs on this machine".
+- **Body.** The selected tab: page title, who is in control, **Take over** /
+  **Hand back**, the connection state and the handoff banner. Closing a tab is
+  done from the strip only.
+- **Handoffs.** A handoff also shows in the bar of sessions needing attention at
+  the top of the phone UI with its reason; tapping it opens the surface on that
+  tab. While the surface is closed, a new handoff also raises the same toast as
+  on the desktop.
+- The phone app has no back-gesture mapping for its sheets, so the Android back
+  button does not close the surface; use the back button in its top row.
 
 - **Zoom** is local, a view aid that is never sent to the page. The page is
   1280x800, so on a phone it is small: pinch to zoom 1x to 3x around your

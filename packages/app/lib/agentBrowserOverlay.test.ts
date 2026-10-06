@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentBrowserInfo } from "@offdesk/shared";
 import {
   browserControlledBy,
+  browserLabel,
   browserNeedsPerson,
   findNewHandoffs,
   normalizeBrowserUrl,
@@ -94,5 +95,18 @@ describe("normalizeBrowserUrl", () => {
   it("rejects empty or spaced input", () => {
     expect(normalizeBrowserUrl("  ")).toBeNull();
     expect(normalizeBrowserUrl("foo bar")).toBeNull();
+  });
+});
+
+describe("browserLabel", () => {
+  it("prefers the title, then the host, then the raw url", () => {
+    expect(browserLabel(browser("a", { title: " Docs " }))).toBe("Docs");
+    expect(
+      browserLabel(browser("a", { title: "", url: "https://example.com/x?y=1" })),
+    ).toBe("example.com");
+    expect(browserLabel(browser("a", { title: "", url: "about:blank" }))).toBe(
+      "about:blank",
+    );
+    expect(browserLabel(browser("a", { title: "", url: "" }))).toBe("browser");
   });
 });

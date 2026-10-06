@@ -4,7 +4,7 @@ import type { AgentBrowserInfo, MachineInfo, TerminalInfo } from "@offdesk/share
 import { CircleAlert, ChevronRight, Globe } from "lucide-react";
 import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
-import { browserLabel } from "@/lib/terminalWorkspaceLayout";
+import { browserLabel } from "@/lib/agentBrowserOverlay";
 
 const NO_BROWSERS: AgentBrowserInfo[] = [];
 

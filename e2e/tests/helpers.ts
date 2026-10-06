@@ -626,8 +626,11 @@ export async function swipeTitleBar(
       const rect = element.getBoundingClientRect();
       const startX =
         swipeDirection === "left" ? rect.right - 12 : rect.left + 12;
-      const endX =
-        swipeDirection === "left" ? rect.left + 12 : rect.right - 12;
+      // The swipe starts on the title but may run on over the bar's buttons: a
+      // title squeezed by the bar's actions on a 320px phone is narrower than
+      // the 48px the gesture needs.
+      const travel = Math.max(rect.width - 24, 60);
+      const endX = swipeDirection === "left" ? startX - travel : startX + travel;
       const y = rect.top + rect.height / 2;
 
       function dispatch(

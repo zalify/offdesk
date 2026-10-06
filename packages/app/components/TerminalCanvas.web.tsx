@@ -80,14 +80,13 @@ import { CheatSheetOverlay } from "./CheatSheetOverlay.web";
 import { UpdateNotification } from "./UpdateNotification";
 import { useAuth } from "@/lib/auth";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
-import { releaseAndCloseAgentBrowser } from "@/lib/useAgentBrowserStream";
 import {
+  browserLabel,
   browserNeedsPerson,
   findNewHandoffs,
   pickBrowserToOpen,
 } from "@/lib/agentBrowserOverlay";
 import { AgentBrowserOverlay } from "./AgentBrowserOverlay.web";
-import { browserLabel } from "@/lib/terminalWorkspaceLayout";
 import {
   MAX_PANES_PER_TAB,
   buildReorderPersistentGroupIds,
@@ -658,6 +657,12 @@ function TerminalCanvasInner() {
               type: "TERMINAL_DESTROYED",
               terminalId: envelope.event.terminal_id,
             });
+            // Closed without asking to keep its workspace (e.g. from another
+            // device): stop anchoring on it so the next terminal takes over.
+            const destroyedId = envelope.event.terminal_id;
+            setWorkspaceAnchorTerminal((anchor) =>
+              anchor?.id === destroyedId ? null : anchor,
+            );
           }
           if (zoomedTerminalIdRef.current === envelope.event.terminal_id) {
             window.history.replaceState(null, "", window.location.pathname);
@@ -742,8 +747,8 @@ function TerminalCanvasInner() {
   }, [terminals, activeMachine]);
 
   // Agent browsers of the active machine. They are machine-global, not part of
-  // the terminal tabs: desktop shows them in the top-bar overlay, compact/mobile
-  // feeds them to the session switcher and shows one full-width.
+  // the terminal tabs: desktop shows them in the top-bar overlay, the phone in
+  // a full-screen surface opened from the title bar.
   const scopedAgentBrowsers = useMemo<AgentBrowserInfo[]>(() => {
     if (!activeMachine) return NO_AGENT_BROWSERS;
     const own = browserState.agentBrowsers.filter(
@@ -778,15 +783,11 @@ function TerminalCanvasInner() {
         null,
         activeMachineWorkspaceGroups,
         activeMachineWorkspaceLayouts,
-        // Only the phone groups browsers with their opener terminal's tab.
-        isCompact ? scopedAgentBrowsers : NO_AGENT_BROWSERS,
       ).groups,
     [
       scopedTerminals,
       activeMachineWorkspaceGroups,
       activeMachineWorkspaceLayouts,
-      isCompact,
-      scopedAgentBrowsers,
     ],
   );
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
@@ -1143,45 +1144,10 @@ function TerminalCanvasInner() {
     window.history.pushState(null, "", `#/t/${id}`);
   }, []);
 
-  // Mobile: the agent browser shown instead of the terminal workspace. A
-  // browser id is not a terminal, so it has no zoom state or #/t/ route.
-  const [mobileBrowserId, setMobileBrowserId] = useState<string | null>(null);
-  const mobileBrowser = useMemo<AgentBrowserInfo | null>(() => {
-    if (!isCompact) return null;
-    const picked = scopedAgentBrowsers.find(
-      (browser) => browser.id === mobileBrowserId,
-    );
-    if (picked) return picked;
-    // A machine with only browsers has no terminal to show instead.
-    return scopedTerminals.length === 0 ? (scopedAgentBrowsers[0] ?? null) : null;
-  }, [isCompact, scopedAgentBrowsers, mobileBrowserId, scopedTerminals]);
-  const handleMobilePickTerminal = useCallback(
-    (id: string) => {
-      setMobileBrowserId(null);
-      handleZoomTerminal(id);
-    },
-    [handleZoomTerminal],
-  );
-  const handleMobilePickBrowser = useCallback((id: string) => {
-    // Drop the terminal's soft keyboard; the browser view opens its own.
-    const active = document.activeElement;
-    if (active instanceof HTMLElement) active.blur();
-    setMobileBrowserId(id);
-  }, []);
-  const handleMobileCloseBrowser = useCallback(
-    (browser: AgentBrowserInfo) => {
-      void releaseAndCloseAgentBrowser(browser, deviceId).catch((error) => {
-        showWorkspaceToast(
-          `Could not close the browser: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      });
-    },
-    [deviceId],
-  );
-
-  // Desktop: the agent browser overlay opened from the top bar. Browsers are
-  // machine-global, so the last picked tab is remembered per machine (memory
-  // only) and the overlay shows the active machine's.
+  // The agent browser overlay (desktop) / full-screen surface (phone), opened
+  // from the top bar or title bar. Browsers are machine-global, so the last
+  // picked tab is remembered per machine (memory only) and it shows the active
+  // machine's.
   const [browserOverlayOpen, setBrowserOverlayOpen] = useState(false);
   const [rememberedBrowserIds, setRememberedBrowserIds] = useState<
     Record<string, string>
@@ -1223,9 +1189,22 @@ function TerminalCanvasInner() {
   useEffect(() => {
     setBrowserOverlayOpen(false);
   }, [overlayMachineId]);
+  // The desktop overlay and the phone surface are different views of the
+  // same state; resizing across the breakpoint starts closed.
   useEffect(() => {
-    if (isCompact) setBrowserOverlayOpen(false);
+    setBrowserOverlayOpen(false);
   }, [isCompact]);
+  // A tab asked for from outside (the phone's attention bar): open on it.
+  const handleOpenBrowserTab = useCallback(
+    (browserId: string) => {
+      const active = document.activeElement;
+      // Drop the terminal's soft keyboard; the browser view opens its own.
+      if (active instanceof HTMLElement) active.blur();
+      handleSelectOverlayBrowser(browserId);
+      setBrowserOverlayOpen(true);
+    },
+    [handleSelectOverlayBrowser],
+  );
   // A browser that starts asking for help while the overlay is closed is easy
   // to miss: say so (the top-bar button also shows a dot).
   const previousScopedBrowsersRef = useRef<{
@@ -1238,7 +1217,7 @@ function TerminalCanvasInner() {
       machineId: overlayMachineId,
       browsers: scopedAgentBrowsers,
     };
-    if (isCompact || browserOverlayOpen) return;
+    if (browserOverlayOpen) return;
     if (previous.machineId !== overlayMachineId) return;
     const fresh = findNewHandoffs(previous.browsers, scopedAgentBrowsers);
     if (fresh.length === 0) return;
@@ -1247,7 +1226,7 @@ function TerminalCanvasInner() {
       `The agent needs you in ${browserLabel(first)}: ${first.handoff?.reason ?? ""}`,
       6000,
     );
-  }, [overlayMachineId, browserOverlayOpen, isCompact, scopedAgentBrowsers]);
+  }, [overlayMachineId, browserOverlayOpen, scopedAgentBrowsers]);
 
   // Create a tab named after the first free "tab N" slot and select it. The
   // group also arrives via workspace_group_created; selecting by the response
@@ -1865,12 +1844,28 @@ function TerminalCanvasInner() {
               groups={tabGroups}
               activeTerminalId={workspaceTerminal?.id ?? null}
               browsers={scopedAgentBrowsers}
-              activeBrowserId={mobileBrowser?.id ?? null}
+              browserButton={
+                activeMachine && machineOnline[activeMachine.id]
+                  ? {
+                      count: scopedAgentBrowsers.length,
+                      needsPerson: browserNeedsYou,
+                      open: browserOverlayOpen,
+                    }
+                  : undefined
+              }
+              browserSurfaceOpen={browserOverlayOpen}
+              selectedBrowserId={
+                activeMachine
+                  ? (rememberedBrowserIds[activeMachine.id] ?? null)
+                  : null
+              }
+              onToggleBrowser={handleToggleBrowserOverlay}
+              onOpenBrowser={handleOpenBrowserTab}
+              onSelectBrowser={handleSelectOverlayBrowser}
+              onCloseBrowserSurface={() => setBrowserOverlayOpen(false)}
               canCreateTerminal={isActiveController}
               canSendAttention={(machineId) => !eventsReconnecting && canTypeOnMachine(machineId)}
-              onPickTerminal={handleMobilePickTerminal}
-              onPickBrowser={handleMobilePickBrowser}
-              onCloseBrowser={handleMobileCloseBrowser}
+              onPickTerminal={handleZoomTerminal}
               onSelectGroup={(groupId) =>
                 workspaceCommandsRef.current.selectGroup?.(groupId)
               }

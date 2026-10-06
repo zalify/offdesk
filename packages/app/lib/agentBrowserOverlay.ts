@@ -4,6 +4,17 @@
 
 import type { AgentBrowserInfo } from "@offdesk/shared";
 
+/** What a tab or row calls a browser: its title, else the host of its URL. */
+export function browserLabel(browser: AgentBrowserInfo): string {
+  const title = browser.title.trim();
+  if (title) return title;
+  try {
+    return new URL(browser.url).host || browser.url || "browser";
+  } catch {
+    return browser.url || "browser";
+  }
+}
+
 /** The agent asked for help and nobody has taken over yet. */
 export function browserNeedsPerson(browser: AgentBrowserInfo): boolean {
   return browser.handoff !== undefined && browser.controller !== "human";

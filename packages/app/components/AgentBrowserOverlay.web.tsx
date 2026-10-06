@@ -1,20 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useRef } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { AgentBrowserInfo } from "@offdesk/shared";
 import { Globe, Plus, X } from "lucide-react";
 import { AgentBrowserPane } from "./AgentBrowserPane.web";
-import { openAgentBrowser } from "@/lib/api";
 import {
   browserControlledBy,
+  browserLabel,
   browserNeedsPerson,
-  normalizeBrowserUrl,
-  pickSelectedBrowserId,
 } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
-import { browserLabel } from "@/lib/terminalWorkspaceLayout";
-import { releaseAndCloseAgentBrowser } from "@/lib/useAgentBrowserStream";
-
-const AWAIT_CREATED_MS = 5000;
+import { useAgentBrowserTabs } from "@/lib/useAgentBrowserTabs";
 
 const iconButton = {
   background: "none",
@@ -51,33 +46,28 @@ export function AgentBrowserOverlay({
   onClose: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [adding, setAdding] = useState(false);
-  const [address, setAddress] = useState("");
-  const [opening, setOpening] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [closingIds, setClosingIds] = useState<ReadonlySet<string>>(new Set());
-  // A tab this overlay just opened whose created event has not arrived yet.
-  const [awaitingId, setAwaitingId] = useState<string | null>(null);
-
-  const selectedBrowserId = pickSelectedBrowserId(
+  const {
+    selectedBrowserId,
+    selected,
+    controlling,
+    showForm,
+    setAdding,
+    address,
+    setAddress,
+    opening,
+    error,
+    setError,
+    closingIds,
+    awaitingId,
+    submit,
+    closeTab,
+  } = useAgentBrowserTabs({
+    machineId,
     browsers,
     rememberedId,
-    awaitingId,
-  );
-  const selected =
-    browsers.find((browser) => browser.id === selectedBrowserId) ?? null;
-  const controlling = selected ? browserControlledBy(selected, deviceId) : false;
-  const showForm = adding || browsers.length === 0;
-
-  useEffect(() => {
-    if (awaitingId === null) return;
-    if (browsers.some((browser) => browser.id === awaitingId)) {
-      setAwaitingId(null);
-      return;
-    }
-    const timer = window.setTimeout(() => setAwaitingId(null), AWAIT_CREATED_MS);
-    return () => window.clearTimeout(timer);
-  }, [awaitingId, browsers]);
+    deviceId,
+    onSelect,
+  });
 
   // Take focus off whatever is below (an xterm would keep eating keystrokes)
   // and give it back on close.
@@ -104,54 +94,6 @@ export function AgentBrowserOverlay({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [controlling, onClose]);
-
-  const submit = useCallback(
-    async (event: FormEvent) => {
-      event.preventDefault();
-      if (opening) return;
-      const url = normalizeBrowserUrl(address);
-      if (!url) {
-        setError("Enter a web address, for example example.com");
-        return;
-      }
-      setOpening(true);
-      setError(null);
-      try {
-        const created = await openAgentBrowser(machineId, url);
-        setAddress("");
-        setAdding(false);
-        setAwaitingId(created.id);
-        onSelect(created.id);
-      } catch (e) {
-        setError(
-          `Could not open the page: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      } finally {
-        setOpening(false);
-      }
-    },
-    [address, machineId, onSelect, opening],
-  );
-
-  const closeTab = useCallback(
-    async (browser: AgentBrowserInfo) => {
-      setClosingIds((ids) => new Set(ids).add(browser.id));
-      setError(null);
-      try {
-        await releaseAndCloseAgentBrowser(browser, deviceId);
-      } catch (e) {
-        setError(
-          `Could not close the tab: ${e instanceof Error ? e.message : String(e)}`,
-        );
-        setClosingIds((ids) => {
-          const next = new Set(ids);
-          next.delete(browser.id);
-          return next;
-        });
-      }
-    },
-    [deviceId],
-  );
 
   const onAddressKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Escape") return;
