@@ -114,8 +114,71 @@ export async function destroyAllTerminals(page: Page): Promise<void> {
   }
 }
 
+export interface AgentBrowserRecord {
+  id: string;
+  machine_id?: string;
+  url: string;
+  title: string;
+  opener_terminal_id?: string;
+}
+
+async function agentBrowserCommand(
+  page: Page,
+  command: Record<string, unknown>,
+): Promise<unknown> {
+  const response = await page.request.post(
+    `/api/machines/${MACHINE_ID}/agent-browser`,
+    { headers: await getAuthHeaders(page), data: command, timeout: 120_000 },
+  );
+  expect(response.ok(), await response.text()).toBeTruthy();
+  return response.json();
+}
+
+export async function openAgentBrowserViaApi(
+  page: Page,
+  opts: { url?: string; openerTerminalId?: string } = {},
+): Promise<AgentBrowserRecord> {
+  return (await agentBrowserCommand(page, {
+    type: "open",
+    ...(opts.url ? { url: opts.url } : {}),
+    ...(opts.openerTerminalId
+      ? { opener_terminal_id: opts.openerTerminalId }
+      : {}),
+  })) as AgentBrowserRecord;
+}
+
+export async function gotoAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+  url: string,
+): Promise<AgentBrowserRecord> {
+  return (await agentBrowserCommand(page, {
+    type: "goto",
+    browser_id: browserId,
+    url,
+  })) as AgentBrowserRecord;
+}
+
+export async function closeAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+): Promise<void> {
+  await agentBrowserCommand(page, { type: "close", browser_id: browserId });
+}
+
+/** Close every agent browser on the e2e node (no-op if none ever opened). */
+export async function closeAllAgentBrowsers(page: Page): Promise<void> {
+  const browsers = (await agentBrowserCommand(page, {
+    type: "list",
+  })) as AgentBrowserRecord[];
+  for (const browser of browsers) {
+    await closeAgentBrowserViaApi(page, browser.id);
+  }
+}
+
 export async function resetMachineState(page: Page): Promise<void> {
   await requestMachineControl(page);
+  await closeAllAgentBrowsers(page);
   await destroyAllTerminals(page);
   await deleteAllWorkspaceGroups(page);
   await deleteAllWorkspaceLayouts(page);

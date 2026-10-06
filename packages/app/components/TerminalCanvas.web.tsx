@@ -1786,6 +1786,7 @@ function TerminalCanvasInner() {
                 <TerminalWorkspace
                   key={workspaceTerminal.machine_id}
                   terminal={workspaceTerminal}
+                  machineId={workspaceTerminal.machine_id}
                   siblings={scopedTerminals}
                   workspaceGroups={activeMachineWorkspaceGroups}
                   workspaceLayouts={activeMachineWorkspaceLayouts}
@@ -1918,7 +1919,8 @@ function TerminalCanvasInner() {
                 </div>
               )}
 
-              {scopedTerminals.length === 0 ? (
+              {scopedTerminals.length === 0 &&
+              (scopedAgentBrowsers.length === 0 || !activeMachine) ? (
                 <EmptyState
                   scopeLabel={scopeLabel}
                   canCreate={isActiveController}
@@ -1930,7 +1932,8 @@ function TerminalCanvasInner() {
                 />
               ) : (
                 <TerminalWorkspace
-                  terminal={workspaceTerminal!}
+                  terminal={workspaceTerminal}
+                  machineId={workspaceTerminal?.machine_id ?? activeMachine!.id}
                   siblings={
                     scopedTerminals.length > 0
                       ? scopedTerminals
@@ -1941,8 +1944,12 @@ function TerminalCanvasInner() {
                   agentBrowsers={scopedAgentBrowsers}
                   workspaceGroups={activeMachineWorkspaceGroups}
                   workspaceLayouts={activeMachineWorkspaceLayouts}
-                  isController={isMachineController(workspaceTerminal!.machine_id)}
-                  canType={canTypeOnMachine(workspaceTerminal!.machine_id)}
+                  isController={isMachineController(
+                    workspaceTerminal?.machine_id ?? activeMachine!.id,
+                  )}
+                  canType={canTypeOnMachine(
+                    workspaceTerminal?.machine_id ?? activeMachine!.id,
+                  )}
                   eventsReconnecting={eventsReconnecting}
                   deviceId={deviceId ?? ""}
                   isCompact={isCompact}

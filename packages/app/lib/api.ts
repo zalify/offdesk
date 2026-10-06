@@ -428,6 +428,21 @@ export function terminalPreviewsWsUrl(deviceId?: string): string {
   return `${base}/ws/terminal-previews${qs ? '?' + qs : ''}`;
 }
 
+export function agentBrowserWsUrl(machineId: string, browserId: string): string {
+  const base = _baseUrl.replace(/^http/, "ws");
+  const params = new URLSearchParams();
+  if (_token) params.set("token", _token);
+  const qs = params.toString();
+  return `${base}/ws/agent-browser/${encodeURIComponent(machineId)}/${encodeURIComponent(browserId)}${qs ? "?" + qs : ""}`;
+}
+
+export const closeAgentBrowser = (machineId: string, browserId: string) =>
+  request<unknown>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-browser`,
+    { type: "close", browser_id: browserId },
+  );
+
 export function eventsWsUrl(deviceId?: string, afterSeq?: number): string {
   const base = _baseUrl.replace(/^http/, "ws");
   const params = new URLSearchParams();

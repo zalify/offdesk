@@ -53,7 +53,9 @@ import { useLongPress } from "@/lib/longPress";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
 
 interface TerminalWorkspaceProps {
-  terminal: TerminalInfo;
+  /** Anchor terminal; null while the machine has only agent browsers. */
+  terminal: TerminalInfo | null;
+  machineId: string;
   siblings: TerminalInfo[];
   /** Live agent browsers on this machine; never passed in compact mode. */
   agentBrowsers?: AgentBrowserInfo[];
@@ -174,6 +176,7 @@ interface WorkspaceDestroyOptions {
 
 function TerminalWorkspaceComponent({
   terminal,
+  machineId,
   siblings,
   agentBrowsers = NO_BROWSERS,
   workspaceGroups,
@@ -201,7 +204,7 @@ function TerminalWorkspaceComponent({
   const [workspace, setWorkspace] = useState(() =>
     createTerminalWorkspace(
       siblings,
-      terminal.id,
+      terminal?.id ?? null,
       workspaceGroups,
       workspaceLayouts,
       agentBrowsers,
@@ -267,15 +270,17 @@ function TerminalWorkspaceComponent({
   // elsewhere; the panes then need the same refit a local layout change gets.
   const adoptedLayoutGroupIdRef = useRef<string | null>(null);
   const layoutSaveQueuesRef = useRef(new Map<string, Promise<void>>());
-  const previousTerminalIdRef = useRef(terminal.id);
+  const anchorTerminalId = terminal?.id ?? null;
+  const previousTerminalIdRef = useRef(anchorTerminalId);
   useEffect(() => {
-    const externalTerminalChanged = previousTerminalIdRef.current !== terminal.id;
-    previousTerminalIdRef.current = terminal.id;
+    const externalTerminalChanged =
+      previousTerminalIdRef.current !== anchorTerminalId;
+    previousTerminalIdRef.current = anchorTerminalId;
     setWorkspace((prev) => {
       let next = reconcileTerminalWorkspace(
         prev,
         siblings,
-        externalTerminalChanged ? terminal.id : prev.activeTerminalId,
+        externalTerminalChanged ? anchorTerminalId : prev.activeTerminalId,
         workspaceGroups,
         workspaceLayouts,
         pendingLayoutSaveGroupIds(layoutSaveQueuesRef.current),
@@ -305,7 +310,7 @@ function TerminalWorkspaceComponent({
       workspaceRef.current = next;
       return next;
     });
-  }, [siblings, agentBrowsers, terminal.id, workspaceGroups, workspaceLayouts]);
+  }, [siblings, agentBrowsers, anchorTerminalId, workspaceGroups, workspaceLayouts]);
 
   const activeGroup = getActiveWorkspaceGroup(workspace);
   // Keep-alive LRU (size 2): the group active on the previous render stays
@@ -338,7 +343,7 @@ function TerminalWorkspaceComponent({
   const activeTerminal = workspace.activeTerminalId
     ? terminalsById.get(workspace.activeTerminalId) ?? null
     : null;
-  const commandMachineId = activeTerminal?.machine_id ?? terminal.machine_id;
+  const commandMachineId = activeTerminal?.machine_id ?? machineId;
   // Panes in the active group — a group with a single pane renders no
   // focused-pane accent border (a lone pane needs no focus indicator).
   const activeGroupPaneCount = activeGroup
@@ -519,7 +524,7 @@ function TerminalWorkspaceComponent({
         if (!activeGroup) return;
         const created = await onCreatePane({
           machineId: commandMachineId,
-          cwd: activeGroup.cwd || terminal.cwd,
+          cwd: activeGroup.cwd || terminal?.cwd || "",
           workspaceGroupId: activeGroup.workspaceGroupId,
         });
         if (!created) return;
@@ -613,7 +618,7 @@ function TerminalWorkspaceComponent({
       onSplit,
       persistGroupLayout,
       requestPaneFit,
-      terminal.cwd,
+      terminal?.cwd,
       updateWorkspace,
     ],
   );
@@ -853,6 +858,14 @@ function TerminalWorkspaceComponent({
     // size change needs an explicit refit — mount-time fit doesn't happen.
     requestPaneFit(activeTerminal.id, { focusTerminalId: activeTerminal.id });
   }, [activeTerminal, requestPaneFit]);
+
+  const toggleMaximizeBrowser = useCallback(
+    (browserId: string) => {
+      activateTerminal(browserId);
+      setMaximizedTerminalId((value) => (value === browserId ? null : browserId));
+    },
+    [activateTerminal],
+  );
 
   workspacePrefixActionsRef.current = {
     splitRight: () => void handleSplit("right"),
@@ -1200,6 +1213,8 @@ function TerminalWorkspaceComponent({
                               ),
                             )
                       }
+                      groupVisible={isActiveGroup}
+                      onToggleMaximizeBrowser={toggleMaximizeBrowser}
                       browsersById={
                         isActiveGroup
                           ? browsersById
@@ -1234,14 +1249,15 @@ function TerminalWorkspaceComponent({
               );
             })}
           </div>
-        ) : maximizedTerminalId ? (
+        ) : maximizedTerminalId &&
+          (terminalsById.get(maximizedTerminalId) ?? activeTerminal ?? terminal) ? (
           // Defensive: a zoom without a layout tree (shouldn't happen in
           // practice) still renders the terminal full-size.
           <WorkspacePaneLeaf
             terminal={
-              terminalsById.get(maximizedTerminalId) ??
-              activeTerminal ??
-              terminal
+              (terminalsById.get(maximizedTerminalId) ??
+                activeTerminal ??
+                terminal)!
             }
             isActive
             isController={isController}
@@ -1311,6 +1327,8 @@ function WorkspacePaneTree({
   maximizedTerminalId,
   terminalsById,
   browsersById,
+  groupVisible,
+  onToggleMaximizeBrowser,
   activeTerminalId,
   isController,
   canType,
@@ -1331,6 +1349,9 @@ function WorkspacePaneTree({
   maximizedTerminalId: string | null;
   terminalsById: Map<string, TerminalInfo>;
   browsersById: Map<string, AgentBrowserInfo>;
+  /** False for a kept-alive group whose tab is not the shown one. */
+  groupVisible: boolean;
+  onToggleMaximizeBrowser: (browserId: string) => void;
   activeTerminalId: string | null;
   isController: boolean;
   canType: boolean;
@@ -1395,6 +1416,9 @@ function WorkspacePaneTree({
                     : browser.id === activeTerminalId
                 }
                 focusRing={focusRing}
+                visible={groupVisible}
+                isMaximized={isMaximized}
+                onToggleMaximize={onToggleMaximizeBrowser}
                 onFocus={onFocus}
               />
             ) : terminal ? (

@@ -14,8 +14,12 @@ machine's network (localhost dev servers, LAN hosts) and keeps its logins.
 - Requests go CLI to hub to node, so the CLI needs the usual `OFFDESK_URL` and
   `OFFDESK_TOKEN`, and the node must be online.
 
-A web UI to watch and take over an agent browser is planned; it is not part of
-this feature yet.
+The web UI shows each agent browser live as a pane: in the tab of the terminal
+that opened it, or in a tab of its own when it was opened without one. The
+pane is view only for now (taking over to click and type is planned). Its
+header has the page title, URL, connection state and a close button. A pane
+streams only while it is visible: a hidden tab or a hidden browser window holds
+no connection, and the node stops the screencast when the last viewer leaves.
 
 ## Commands
 
