@@ -22,17 +22,16 @@ import {
 } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
 import type {
-  AgentBrowserInfo,
   MachineInfo,
   ResourceStats,
   TerminalInfo,
 } from "@offdesk/shared";
-import { FolderTree, ListChecks, Lock, Plus, Settings, Smartphone } from "lucide-react";
+import { FolderTree, Globe, ListChecks, Lock, Plus, Settings, Smartphone } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { diskPercent, diskTooltip } from "@/lib/resourceStats";
-import { browserLabel, collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
+import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { HostSwitcher } from "./HostSwitcher.web";
 import { useLongPress } from "@/lib/longPress";
 import { WorkspaceManager } from "./WorkspaceManager.web";
@@ -47,8 +46,6 @@ interface TabBarProps {
   activeGroupId: string | null;
   activeTerminalId: string | null;
   terminalsById: Map<string, TerminalInfo>;
-  /** Agent browsers shown as panes in the tabs (desktop only). */
-  agentBrowsers?: AgentBrowserInfo[];
   // All terminals across machines (HostSwitcher shows per-machine counts).
   terminals: TerminalInfo[];
   machines: MachineInfo[];
@@ -80,6 +77,9 @@ interface TabBarProps {
   onOpenSettings: () => void;
   onOpenTodos: () => void;
   openTodoCount: number;
+  /** The active machine's agent browser tabs; the button shows when set. */
+  browserButton?: { count: number; needsPerson: boolean; open: boolean };
+  onToggleBrowser?: () => void;
   onRemoveHost: (machineId: string) => void;
   onRequestControl: () => void;
   onEngageViewOnly: () => void;
@@ -91,7 +91,6 @@ function TabBarComponent({
   activeGroupId,
   activeTerminalId,
   terminalsById,
-  agentBrowsers,
   terminals,
   machines,
   activeMachineId,
@@ -118,6 +117,8 @@ function TabBarComponent({
   onOpenSettings,
   onOpenTodos,
   openTodoCount,
+  browserButton,
+  onToggleBrowser,
   onRemoveHost,
   onRequestControl,
   onEngageViewOnly,
@@ -360,7 +361,7 @@ function TabBarComponent({
       >
         {groups.map((group) => {
           const active = group.id === activeGroupId;
-          const annotation = groupAnnotation(group, terminalsById, agentBrowsers);
+          const annotation = groupAnnotation(group, terminalsById);
           return (
             <div
               key={group.id}
@@ -452,21 +453,6 @@ function TabBarComponent({
                   color: active ? terminalTheme.foreground : colors.fg2,
                 }}
               >
-                {groupNeedsPerson(group, agentBrowsers) && (
-                  <span
-                    role="img"
-                    aria-label="The agent needs you"
-                    title="The agent needs you"
-                    data-testid={`workspace-tab-attention-${group.id}`}
-                    style={{
-                      width: 7,
-                      height: 7,
-                      borderRadius: "50%",
-                      background: colors.warn,
-                      flexShrink: 0,
-                    }}
-                  />
-                )}
                 <span style={truncateStyle}>{group.label}</span>
                 {annotation && (
                   <span
@@ -567,6 +553,79 @@ function TabBarComponent({
           onRemoveHost={onRemoveHost}
         />
         <MicroMeters stats={stats} />
+        {browserButton && onToggleBrowser && (
+          <button
+            type="button"
+            data-testid="tab-bar-browser"
+            data-open={browserButton.open ? "true" : "false"}
+            onClick={onToggleBrowser}
+            title={
+              browserButton.needsPerson ? "The agent needs you" : "Browser"
+            }
+            aria-label="Browser"
+            aria-pressed={browserButton.open}
+            style={{
+              position: "relative",
+              width: isTouch ? 40 : 30,
+              height: isTouch ? 40 : 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              border: `1px solid ${browserButton.open ? colorAlpha.accentLine : colors.line}`,
+              borderRadius: 6,
+              background: browserButton.open ? colorAlpha.accentSoft : "transparent",
+              color: browserButton.open ? colors.accent : colors.fg2,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Globe size={15} />
+            {browserButton.count > 0 && (
+              <span
+                data-testid="tab-bar-browser-count"
+                aria-hidden="true"
+                style={{
+                  position: "absolute",
+                  top: -6,
+                  right: -6,
+                  minWidth: 16,
+                  height: 16,
+                  padding: "0 4px",
+                  boxSizing: "border-box",
+                  borderRadius: 8,
+                  background: colors.accent,
+                  color: colors.onAccent,
+                  fontSize: 10,
+                  fontWeight: 700,
+                  lineHeight: "16px",
+                  textAlign: "center",
+                }}
+              >
+                {browserButton.count > 99 ? "99+" : browserButton.count}
+              </span>
+            )}
+            {browserButton.needsPerson && (
+              <span
+                role="img"
+                aria-label="The agent needs you"
+                title="The agent needs you"
+                data-testid="tab-bar-browser-attention"
+                style={{
+                  position: "absolute",
+                  bottom: -2,
+                  right: -2,
+                  width: 9,
+                  height: 9,
+                  borderRadius: "50%",
+                  background: colors.warn,
+                  border: `1.5px solid ${colors.bg1}`,
+                  boxSizing: "border-box",
+                }}
+              />
+            )}
+          </button>
+        )}
         <button
           type="button"
           data-testid="tab-bar-todos"
@@ -751,23 +810,6 @@ const controlPillStyle: CSSProperties = {
 
 /* ---------- tab attention ---------- */
 
-// An agent browser in the tab has asked a person for help and nobody has
-// taken over yet.
-function groupNeedsPerson(
-  group: WorkspaceGroup,
-  agentBrowsers: AgentBrowserInfo[] = [],
-): boolean {
-  if (agentBrowsers.length === 0) return false;
-  return collectPaneTerminalIds(group.root).some((id) =>
-    agentBrowsers.some(
-      (browser) =>
-        browser.id === id &&
-        browser.handoff !== undefined &&
-        browser.controller !== "human",
-    ),
-  );
-}
-
 /* ---------- tab annotation ---------- */
 
 // Distinct pane titles joined with ▏ (deduped, max 2 shown then +N).
@@ -775,19 +817,13 @@ function groupNeedsPerson(
 function groupAnnotation(
   group: WorkspaceGroup,
   terminalsById: Map<string, TerminalInfo>,
-  agentBrowsers: AgentBrowserInfo[] = [],
 ): string | null {
   const paneIds = collectPaneTerminalIds(group.root);
   const titles: string[] = [];
   for (const id of paneIds) {
     const terminal = terminalsById.get(id);
-    const browser = terminal
-      ? undefined
-      : agentBrowsers.find((candidate) => candidate.id === id);
-    if (!terminal && !browser) continue;
-    const title = terminal
-      ? displayTerminalTitle(terminal)
-      : browserLabel(browser!);
+    if (!terminal) continue;
+    const title = displayTerminalTitle(terminal);
     if (!titles.includes(title)) titles.push(title);
   }
   if (titles.length === 0) return null;

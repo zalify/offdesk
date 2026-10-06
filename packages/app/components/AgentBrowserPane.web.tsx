@@ -9,7 +9,7 @@ import {
   type PointerEvent,
 } from "react";
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
-import { Globe, Hand, Maximize2, Minimize2, X } from "lucide-react";
+import { Globe, Hand } from "lucide-react";
 import {
   containedImageRect,
   isComposingKey,
@@ -19,7 +19,6 @@ import {
   textEvent,
   wheelEvent,
 } from "@/lib/agentBrowserInput";
-import { usePrefixKey } from "@/lib/prefixKeyContext";
 import {
   DESKTOP_STREAM_QUALITY,
   STREAM_STATE_LABEL,
@@ -54,36 +53,25 @@ function shortUrl(url: string): string {
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
 
-// Live screencast of one agent browser. View only until the person takes
-// control, then pointer, wheel, keyboard, IME and paste input goes to the
-// page. Streams only while the pane is visible (its tab is active and the
-// document is not hidden): a hidden pane holds no WebSocket, and the hub
-// stops the screencast once the last viewer disconnects (and hands control
-// back to the agent if the controlling device stays away for 2 minutes).
+// Live screencast of one agent browser, the body of the browser overlay. View
+// only until the person takes control, then pointer, wheel, keyboard, IME and
+// paste input goes to the page (every key, the workspace prefix key included).
+// Streams only while `visible` and the document is not hidden: a hidden view
+// holds no WebSocket, and the hub stops the screencast once the last viewer
+// disconnects (and hands control back to the agent if the controlling device
+// stays away for 2 minutes).
 export function AgentBrowserPane({
   browser,
-  isActive,
-  focusRing = true,
   visible = true,
-  isMaximized = false,
-  onToggleMaximize,
-  onFocus,
 }: {
   browser: AgentBrowserInfo;
-  isActive: boolean;
-  focusRing?: boolean;
-  /** False while the pane's workspace tab is not the shown one. */
   visible?: boolean;
-  isMaximized?: boolean;
-  onToggleMaximize?: (id: string) => void;
-  onFocus: (id: string) => void;
 }) {
   const browserId = browser.id;
 
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const prefixKey = usePrefixKey();
   const [inputFocused, setInputFocused] = useState(false);
 
   const {
@@ -97,8 +85,6 @@ export function AgentBrowserPane({
     changeControl,
     controlBusy,
     error,
-    closing,
-    closeBrowser,
   } = useAgentBrowserStream({
     browser,
     visible,
@@ -134,8 +120,8 @@ export function AgentBrowserPane({
   // Take focus into the hidden textarea whenever the person is in control, so
   // typing and IME land there.
   useEffect(() => {
-    if (mine && isActive) textareaRef.current?.focus({ preventScroll: true });
-  }, [mine, isActive]);
+    if (mine) textareaRef.current?.focus({ preventScroll: true });
+  }, [mine]);
 
   // Mouse moves and wheel deltas coalesce to one message per animation frame.
   const pendingMoveRef = useRef<AgentBrowserInputEvent | null>(null);
@@ -225,12 +211,6 @@ export function AgentBrowserPane({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (!mine) return;
-    // The workspace's own prefix key (Ctrl+B ...) is never sent to the page.
-    if (prefixKey.handleKeydown(event.nativeEvent).type !== "pass") {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
     if (isComposingKey(event.nativeEvent) || composingRef.current) return;
     if (isPasteShortcut(event)) return;
     event.preventDefault();
@@ -276,22 +256,11 @@ export function AgentBrowserPane({
   };
 
   const label = browserLabel(browser);
-  const highlighted = isActive && focusRing;
-  const iconButton = {
-    background: "none",
-    border: "none",
-    color: colors.foregroundMuted,
-    cursor: "pointer",
-    padding: "2px 4px",
-    display: "flex",
-    alignItems: "center",
-  } as const;
 
   return (
     <div
       data-testid={`agent-browser-pane-${browserId}`}
       data-browser-id={browserId}
-      onMouseDown={() => onFocus(browserId)}
       style={{
         width: "100%",
         height: "100%",
@@ -302,8 +271,6 @@ export function AgentBrowserPane({
         boxSizing: "border-box",
         background: colors.bg0,
         color: colors.fg0,
-        border: `1px solid ${highlighted ? colorAlpha.accentLine : colors.line}`,
-        boxShadow: highlighted ? `0 0 0 1px ${colorAlpha.accentLine}` : "none",
         overflow: "hidden",
       }}
     >
@@ -320,20 +287,6 @@ export function AgentBrowserPane({
           gap: 6,
         }}
       >
-        <button
-          type="button"
-          data-testid="agent-browser-close"
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!closing) void closeBrowser();
-          }}
-          disabled={closing}
-          style={{ ...iconButton, color: colors.danger, opacity: closing ? 0.3 : 0.6 }}
-          title="Close browser"
-          aria-label="Close browser"
-        >
-          <X size={14} aria-hidden />
-        </button>
         <div
           style={{
             display: "flex",
@@ -427,25 +380,6 @@ export function AgentBrowserPane({
         >
           {STREAM_STATE_LABEL[state]}
         </span>
-        {onToggleMaximize && (
-          <button
-            type="button"
-            data-testid="agent-browser-maximize"
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleMaximize(browserId);
-            }}
-            style={iconButton}
-            title={isMaximized ? "Restore pane" : "Maximize pane"}
-            aria-label={isMaximized ? "Restore pane" : "Maximize pane"}
-          >
-            {isMaximized ? (
-              <Minimize2 size={14} aria-hidden />
-            ) : (
-              <Maximize2 size={14} aria-hidden />
-            )}
-          </button>
-        )}
       </div>
       {error && (
         <div
