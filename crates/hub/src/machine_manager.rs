@@ -28,6 +28,8 @@ pub struct EventEnvelope {
 
 /// Pending request waiting for a Machine response
 type PendingResponse = oneshot::Sender<Result<PendingResult, String>>;
+/// Open viewer sockets per device id, keyed by (machine, browser).
+type AgentBrowserViewers = HashMap<(String, String), HashMap<String, usize>>;
 
 pub enum PendingResult {
     Composer(offdesk_protocol::ComposerReceipt),
@@ -144,7 +146,7 @@ pub struct MachineManager {
     agent_browser_changes: watch::Sender<u64>,
     /// Open viewer sockets per (machine, browser) and device id, to notice a
     /// controlling device that has gone away.
-    agent_browser_viewers: Arc<std::sync::Mutex<HashMap<(String, String), HashMap<String, usize>>>>,
+    agent_browser_viewers: Arc<std::sync::Mutex<AgentBrowserViewers>>,
     /// Auto-release timers per (machine, browser).
     agent_browser_timers: Arc<std::sync::Mutex<HashMap<(String, String), ControlTimer>>>,
     control_grace: Duration,
