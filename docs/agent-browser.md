@@ -205,6 +205,63 @@ If the controlling person closes the pane without releasing, the hub releases
 control after 2 minutes without a viewer from that device (see Auto-release
 above); until then `wait-control` and `handoff --wait` keep waiting.
 
+## MCP
+
+`offdesk mcp` serves the same commands as MCP tools over stdio, for agents
+that prefer MCP to shelling out. It makes the same hub calls as
+`offdesk browser ...` and uses the same hub URL and token (`--url`/`--token`,
+`OFFDESK_URL`/`OFFDESK_TOKEN`, or `config.toml`). Register it from inside an
+offdesk terminal (the server then knows which terminal opened a browser, as the
+CLI does):
+
+```
+claude mcp add offdesk -- offdesk mcp
+codex mcp add offdesk -- offdesk mcp      # or in ~/.codex/config.toml:
+                                          #   [mcp_servers.offdesk]
+                                          #   command = "offdesk"
+                                          #   args = ["mcp"]
+```
+
+Tools (arguments in brackets are optional):
+
+| Tool | Arguments | Like |
+| --- | --- | --- |
+| `browser_open` | `[url]`, `[machine]` | `open --json` (returns the record, use its `id`) |
+| `browser_list` | `[machine]` | `ls --json` |
+| `browser_close` | `browser_id` | `close` |
+| `browser_goto` | `browser_id`, `url` | `goto` (returns url and title) |
+| `browser_snapshot` | `browser_id` | `snapshot` |
+| `browser_click` | `browser_id`, `ref` | `click` |
+| `browser_fill` | `browser_id`, `ref`, `text` | `fill` |
+| `browser_press` | `browser_id`, `key` | `press` |
+| `browser_wait` | `browser_id`, `[text]`, `[url_regex]`, `[idle_ms]`, `[timeout_ms]` (default 30000) | `wait` |
+| `browser_screenshot` | `browser_id`, `[full_page]` | `screenshot` (returned as an MCP image, no file) |
+| `browser_handoff` | `browser_id`, `reason`, `[wait]`, `[timeout_ms]` (default 600000) | `handoff` |
+| `browser_wait_control` | `browser_id`, `[timeout_ms]` (default 600000) | `wait-control` |
+
+`browser_id` is an id or unique prefix, resolved across all online machines
+like the CLI. Timeouts are in milliseconds here (seconds in the CLI).
+
+Results and errors:
+
+- Success is a text result with what the CLI prints (the snapshot, JSON for
+  `browser_open`/`browser_list`, `url<TAB>title` for `browser_goto`, a short
+  confirmation for click/fill/press/close).
+- A person controlling the browser (CLI exit 3) is a tool error (`isError`)
+  saying so and telling the agent not to retry until `browser_wait_control`
+  returns.
+- Timeouts (CLI exit 1) are **not** errors: `browser_wait` returns
+  `did not match before the timeout: ...`, and `browser_wait_control` /
+  `browser_handoff` with `wait` say a person is still in control or has not
+  helped yet. The agent decides whether to wait again.
+- Everything else (no hub configured, unreachable hub, stale ref, unknown tool,
+  bad arguments) is a tool error with the message.
+
+Requests run concurrently, so a long `browser_wait` or `browser_wait_control`
+does not block `ping` or other calls. On stdin EOF the server gives running
+calls up to 5 seconds to answer, then exits. `notifications/cancelled` is
+accepted but does not interrupt a running call.
+
 ## Snapshots and refs
 
 `snapshot` prints a pruned accessibility tree: one line per meaningful node,

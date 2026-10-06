@@ -3,6 +3,7 @@ mod client;
 mod commands;
 mod config;
 mod keys;
+mod mcp;
 mod resolve;
 
 use clap::{ArgGroup, Parser, Subcommand};
@@ -223,6 +224,23 @@ Exit codes:
         #[command(subcommand)]
         action: BrowserAction,
     },
+    /// Serve the agent browser as MCP tools over stdio (for Claude Code, Codex, ...)
+    #[command(after_help = "\
+Register it with an agent that speaks MCP, from inside an offdesk terminal:
+  claude mcp add offdesk -- offdesk mcp
+  codex mcp add offdesk -- offdesk mcp
+
+Tools: browser_open, browser_list, browser_close, browser_goto,
+browser_snapshot, browser_click, browser_fill, browser_press, browser_wait,
+browser_screenshot, browser_handoff, browser_wait_control. They make the same
+hub calls as `offdesk browser ...`; the hub URL and token come from the same
+flags, OFFDESK_URL / OFFDESK_TOKEN, or config.toml. Only JSON-RPC goes to
+stdout; diagnostics go to stderr.
+
+A tool result with isError says a person is controlling the browser (wait with
+browser_wait_control) or the call failed. browser_wait, browser_handoff and
+browser_wait_control that time out are not errors; their text says so.")]
+    Mcp,
     /// Open the hub in a browser. On the machine that runs the hub this is
     /// `offdesk-hub link`: the sign-in link, with the code for a phone;
     /// elsewhere it opens the hub's address
@@ -531,6 +549,23 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return link(no_open, url.as_deref());
     }
     let env_token = env_with_legacy("OFFDESK_TOKEN", "WEBMUX_TOKEN");
+    // MCP starts even without a usable config: initialize and tools/list
+    // work, and tool calls report the problem.
+    if let Commands::Mcp = cli.command {
+        let client = config::resolve(
+            cli.url.as_deref(),
+            cli.token.as_deref(),
+            env_url.as_deref(),
+            env_token.as_deref(),
+            file.as_ref(),
+        )
+        .and_then(|resolved| client::HubClient::new(&resolved))
+        .map(std::sync::Arc::new)
+        .map_err(|error| error.to_string());
+        let local = commands::todo::read_local_machine(&commands::todo::local_machine_path());
+        mcp::serve(mcp::Server::new(client, local.map(|m| m.machine_id))).await;
+        return Ok(());
+    }
     // To-dos also work with this machine's own credentials, so they are
     // resolved before the token-only path below.
     if let Commands::Todo { action } = cli.command {
@@ -588,6 +623,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
         Commands::Todo { .. } => unreachable!("todo returns early"),
+        Commands::Mcp => unreachable!("mcp returns early"),
         Commands::Browser { action } => match action {
             BrowserAction::Open {
                 page,
@@ -635,7 +671,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     text,
                     url_regex,
                     idle_ms: idle,
-                    timeout_secs: timeout,
+                    timeout_ms: timeout.saturating_mul(1000),
                 };
                 commands::browser::wait(&hub_client, &browser, options).await
             }

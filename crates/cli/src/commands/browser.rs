@@ -15,7 +15,30 @@ pub struct WaitOptions {
     pub text: Option<String>,
     pub url_regex: Option<String>,
     pub idle_ms: Option<u64>,
-    pub timeout_secs: u64,
+    pub timeout_ms: u64,
+}
+
+/// How a `wait` ended when it did not fail outright.
+pub enum WaitOutcome {
+    Matched,
+    /// The condition did not hold before the timeout; carries the node's message.
+    TimedOut(String),
+}
+
+/// How a `handoff` ended when it did not fail outright.
+pub enum HandoffOutcome {
+    /// The request is posted (no `wait`).
+    Requested,
+    /// A person took control and handed it back.
+    HandedBack,
+    /// Nobody handed control back before the timeout.
+    TimedOut,
+}
+
+/// A screenshot as the node delivered it.
+pub struct Screenshot {
+    pub browser_id: String,
+    pub bytes: Vec<u8>,
 }
 
 /// Where `open` goes: the named machine; else the only online machine; else
@@ -120,8 +143,8 @@ async fn call(
 
 /// Agent browsers on one machine, or on every online machine. When listing
 /// everything, a machine whose node cannot answer (an older node, say) is
-/// skipped with a warning rather than failing the whole listing.
-async fn list_browsers(
+/// skipped with a warning (stderr) rather than failing the whole listing.
+pub async fn list_browsers(
     client: &HubClient,
     machine: Option<&str>,
 ) -> Result<Vec<(MachineInfo, AgentBrowserInfo)>, CliError> {
@@ -166,13 +189,18 @@ fn print_info(info: &AgentBrowserInfo, json: bool, id_only: bool) -> Result<(), 
     Ok(())
 }
 
-pub async fn open(
+// ---------------------------------------------------------------------------
+// Shared core: each function does the hub round trips and returns data. The
+// CLI wrappers below print it and map outcomes to exit codes; `offdesk mcp`
+// formats the same data as tool results.
+// ---------------------------------------------------------------------------
+
+pub async fn open_browser(
     client: &HubClient,
     machine: Option<&str>,
     local_machine_id: Option<&str>,
     url: Option<String>,
-    json: bool,
-) -> Result<(), CliError> {
+) -> Result<AgentBrowserInfo, CliError> {
     let machines = client.machines().await?;
     let target = pick_open_machine(&machines, machine, local_machine_id)?;
     // The terminal id only means something on the machine it came from.
@@ -186,22 +214,17 @@ pub async fn open(
         opener_terminal_id,
     };
     let value = call(client, &target.id, command).await?;
-    print_info(&parse(value)?, json, true)
+    parse(value)
 }
 
-pub async fn ls(client: &HubClient, machine: Option<&str>, json: bool) -> Result<(), CliError> {
-    let browsers = list_browsers(client, machine).await?;
-    if json {
-        let infos: Vec<&AgentBrowserInfo> = browsers.iter().map(|(_, info)| info).collect();
-        super::out_line(&super::json_pretty(&infos)?);
-        return Ok(());
-    }
-    super::out_line(&format!(
+/// The `offdesk browser ls` table (no trailing newline).
+fn format_table(browsers: &[(MachineInfo, AgentBrowserInfo)]) -> String {
+    let mut lines = vec![format!(
         "{:<10} {:<16} {:<40} {}",
         "ID", "MACHINE", "URL", "TITLE"
-    ));
-    for (machine, info) in &browsers {
-        super::out_line(&format!(
+    )];
+    for (machine, info) in browsers {
+        lines.push(format!(
             "{:<10} {:<16} {:<40} {}",
             short_id(&info.id),
             machine.name,
@@ -209,10 +232,10 @@ pub async fn ls(client: &HubClient, machine: Option<&str>, json: bool) -> Result
             info.title
         ));
     }
-    Ok(())
+    lines.join("\n")
 }
 
-pub async fn close(client: &HubClient, browser: &str) -> Result<(), CliError> {
+pub async fn close_browser(client: &HubClient, browser: &str) -> Result<(), CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     call(
         client,
@@ -223,12 +246,11 @@ pub async fn close(client: &HubClient, browser: &str) -> Result<(), CliError> {
     Ok(())
 }
 
-pub async fn goto(
+pub async fn goto_browser(
     client: &HubClient,
     browser: &str,
     url: String,
-    json: bool,
-) -> Result<(), CliError> {
+) -> Result<AgentBrowserInfo, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     let value = call(
         client,
@@ -236,10 +258,11 @@ pub async fn goto(
         AgentBrowserCommand::Goto { browser_id, url },
     )
     .await?;
-    print_info(&parse(value)?, json, false)
+    parse(value)
 }
 
-pub async fn snapshot(client: &HubClient, browser: &str) -> Result<(), CliError> {
+/// The page as text, without trailing newlines.
+pub async fn snapshot_text(client: &HubClient, browser: &str) -> Result<String, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     let value = call(
         client,
@@ -251,11 +274,14 @@ pub async fn snapshot(client: &HubClient, browser: &str) -> Result<(), CliError>
         .get("snapshot")
         .and_then(Value::as_str)
         .ok_or_else(|| CliError::Protocol("reply has no snapshot".to_string()))?;
-    super::out_line(text.trim_end_matches('\n'));
-    Ok(())
+    Ok(text.trim_end_matches('\n').to_string())
 }
 
-pub async fn click(client: &HubClient, browser: &str, element: String) -> Result<(), CliError> {
+pub async fn click_element(
+    client: &HubClient,
+    browser: &str,
+    element: String,
+) -> Result<(), CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     call(
         client,
@@ -269,7 +295,7 @@ pub async fn click(client: &HubClient, browser: &str, element: String) -> Result
     Ok(())
 }
 
-pub async fn fill(
+pub async fn fill_element(
     client: &HubClient,
     browser: &str,
     element: String,
@@ -289,7 +315,7 @@ pub async fn fill(
     Ok(())
 }
 
-pub async fn press(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
+pub async fn press_key(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     call(
         client,
@@ -300,9 +326,11 @@ pub async fn press(client: &HubClient, browser: &str, key: String) -> Result<(),
     Ok(())
 }
 
-/// Exit 0 when the condition matched, 1 on timeout (message on stderr), 2 on
-/// error.
-pub async fn wait(client: &HubClient, browser: &str, options: WaitOptions) -> Result<(), CliError> {
+pub async fn wait_for_page(
+    client: &HubClient,
+    browser: &str,
+    options: WaitOptions,
+) -> Result<WaitOutcome, CliError> {
     if options.text.is_none() && options.url_regex.is_none() && options.idle_ms.is_none() {
         return Err(CliError::Usage(
             "wait needs at least one of --text, --url, --idle".to_string(),
@@ -317,7 +345,7 @@ pub async fn wait(client: &HubClient, browser: &str, options: WaitOptions) -> Re
             text: options.text,
             url_regex: options.url_regex,
             idle_ms: options.idle_ms,
-            timeout_ms: options.timeout_secs.saturating_mul(1000),
+            timeout_ms: options.timeout_ms,
         },
     )
     .await?;
@@ -325,27 +353,29 @@ pub async fn wait(client: &HubClient, browser: &str, options: WaitOptions) -> Re
         .get("matched")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let message = value.get("message").and_then(Value::as_str);
     if matched {
-        return Ok(());
+        return Ok(WaitOutcome::Matched);
     }
-    eprintln!("{}", message.unwrap_or("wait timed out"));
-    std::process::exit(1);
+    let message = value
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("wait timed out");
+    Ok(WaitOutcome::TimedOut(message.to_string()))
 }
 
 /// Longest single long-poll; the hub caps one at 60 s.
 const CONTROL_POLL_MS: u64 = 50_000;
 
-/// Long-poll the hub until `wait_for` holds (true) or `timeout_secs` pass
+/// Long-poll the hub until `wait_for` holds (true) or `timeout_ms` pass
 /// (false).
 async fn wait_for_control(
     client: &HubClient,
     machine_id: &str,
     browser_id: &str,
     wait_for: &str,
-    timeout_secs: u64,
+    timeout_ms: u64,
 ) -> Result<bool, CliError> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let poll_ms = (remaining.as_millis() as u64).min(CONTROL_POLL_MS);
@@ -361,14 +391,145 @@ async fn wait_for_control(
     }
 }
 
+/// True once no person controls the browser, false on timeout.
+pub async fn wait_until_agent_controls(
+    client: &HubClient,
+    browser: &str,
+    timeout_ms: u64,
+) -> Result<bool, CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    wait_for_control(client, &machine_id, &browser_id, "agent", timeout_ms).await
+}
+
+/// Ask a person for help. With `wait`, block until they have taken control
+/// and handed it back, or `timeout_ms` pass.
+pub async fn request_handoff(
+    client: &HubClient,
+    browser: &str,
+    reason: &str,
+    wait: bool,
+    timeout_ms: u64,
+) -> Result<HandoffOutcome, CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    client
+        .agent_browser_handoff(&machine_id, &browser_id, reason)
+        .await?;
+    if !wait {
+        return Ok(HandoffOutcome::Requested);
+    }
+    if wait_for_control(client, &machine_id, &browser_id, "resolved", timeout_ms).await? {
+        Ok(HandoffOutcome::HandedBack)
+    } else {
+        Ok(HandoffOutcome::TimedOut)
+    }
+}
+
+pub async fn take_screenshot(
+    client: &HubClient,
+    browser: &str,
+    full_page: bool,
+) -> Result<Screenshot, CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    let value = call(
+        client,
+        &machine_id,
+        AgentBrowserCommand::Screenshot {
+            browser_id: browser_id.clone(),
+            full_page,
+        },
+    )
+    .await?;
+    let encoded = value
+        .get("png_base64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| CliError::Protocol("reply has no screenshot".to_string()))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| CliError::Protocol(format!("invalid screenshot data: {error}")))?;
+    Ok(Screenshot { browser_id, bytes })
+}
+
+// ---------------------------------------------------------------------------
+// CLI commands
+// ---------------------------------------------------------------------------
+
+pub async fn open(
+    client: &HubClient,
+    machine: Option<&str>,
+    local_machine_id: Option<&str>,
+    url: Option<String>,
+    json: bool,
+) -> Result<(), CliError> {
+    let info = open_browser(client, machine, local_machine_id, url).await?;
+    print_info(&info, json, true)
+}
+
+pub async fn ls(client: &HubClient, machine: Option<&str>, json: bool) -> Result<(), CliError> {
+    let browsers = list_browsers(client, machine).await?;
+    if json {
+        let infos: Vec<&AgentBrowserInfo> = browsers.iter().map(|(_, info)| info).collect();
+        super::out_line(&super::json_pretty(&infos)?);
+        return Ok(());
+    }
+    super::out_line(&format_table(&browsers));
+    Ok(())
+}
+
+pub async fn close(client: &HubClient, browser: &str) -> Result<(), CliError> {
+    close_browser(client, browser).await
+}
+
+pub async fn goto(
+    client: &HubClient,
+    browser: &str,
+    url: String,
+    json: bool,
+) -> Result<(), CliError> {
+    let info = goto_browser(client, browser, url).await?;
+    print_info(&info, json, false)
+}
+
+pub async fn snapshot(client: &HubClient, browser: &str) -> Result<(), CliError> {
+    super::out_line(&snapshot_text(client, browser).await?);
+    Ok(())
+}
+
+pub async fn click(client: &HubClient, browser: &str, element: String) -> Result<(), CliError> {
+    click_element(client, browser, element).await
+}
+
+pub async fn fill(
+    client: &HubClient,
+    browser: &str,
+    element: String,
+    text: String,
+) -> Result<(), CliError> {
+    fill_element(client, browser, element, text).await
+}
+
+pub async fn press(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
+    press_key(client, browser, key).await
+}
+
+/// Exit 0 when the condition matched, 1 on timeout (message on stderr), 2 on
+/// error.
+pub async fn wait(client: &HubClient, browser: &str, options: WaitOptions) -> Result<(), CliError> {
+    match wait_for_page(client, browser, options).await? {
+        WaitOutcome::Matched => Ok(()),
+        WaitOutcome::TimedOut(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Exit 0 once no person controls the browser, 1 on timeout.
 pub async fn wait_control(
     client: &HubClient,
     browser: &str,
     timeout_secs: u64,
 ) -> Result<(), CliError> {
-    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
-    if wait_for_control(client, &machine_id, &browser_id, "agent", timeout_secs).await? {
+    if wait_until_agent_controls(client, browser, timeout_secs.saturating_mul(1000)).await? {
         return Ok(());
     }
     eprintln!("a person is still controlling this browser");
@@ -384,18 +545,15 @@ pub async fn handoff(
     wait: bool,
     timeout_secs: u64,
 ) -> Result<(), CliError> {
-    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
-    client
-        .agent_browser_handoff(&machine_id, &browser_id, &reason)
-        .await?;
-    if !wait {
-        return Ok(());
+    match request_handoff(client, browser, &reason, wait, timeout_secs.saturating_mul(1000))
+        .await?
+    {
+        HandoffOutcome::Requested | HandoffOutcome::HandedBack => Ok(()),
+        HandoffOutcome::TimedOut => {
+            eprintln!("timed out waiting for a person to help");
+            std::process::exit(1);
+        }
     }
-    if wait_for_control(client, &machine_id, &browser_id, "resolved", timeout_secs).await? {
-        return Ok(());
-    }
-    eprintln!("timed out waiting for a person to help");
-    std::process::exit(1);
 }
 
 fn unix_seconds() -> u64 {
@@ -418,27 +576,11 @@ pub async fn screenshot(
     output: Option<&Path>,
     full_page: bool,
 ) -> Result<(), CliError> {
-    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    let shot = take_screenshot(client, browser, full_page).await?;
     let path = output
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_screenshot_path(&browser_id, unix_seconds()));
-    let value = call(
-        client,
-        &machine_id,
-        AgentBrowserCommand::Screenshot {
-            browser_id,
-            full_page,
-        },
-    )
-    .await?;
-    let encoded = value
-        .get("png_base64")
-        .and_then(Value::as_str)
-        .ok_or_else(|| CliError::Protocol("reply has no screenshot".to_string()))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|error| CliError::Protocol(format!("invalid screenshot data: {error}")))?;
-    std::fs::write(&path, bytes).map_err(|error| {
+        .unwrap_or_else(|| default_screenshot_path(&shot.browser_id, unix_seconds()));
+    std::fs::write(&path, shot.bytes).map_err(|error| {
         CliError::Config(format!("could not write {}: {error}", path.display()))
     })?;
     super::out_line(&path.display().to_string());
