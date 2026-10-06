@@ -5,12 +5,12 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Router,
 };
-use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use offdesk_protocol::{
     DirEntry, MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo,
     WorkspaceLayoutNode,
 };
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 use crate::auth::AuthUser;
 use crate::AppState;
@@ -386,6 +386,37 @@ async fn list_workspace_groups(
     .collect();
 
     Ok(Json(groups))
+}
+
+async fn list_workspace_layouts(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+) -> Result<Json<Vec<WorkspaceLayoutInfo>>, (StatusCode, String)> {
+    ensure_machine_row(&state, &auth_user.user_id, &machine_id).await?;
+
+    let conn = state.db.get().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("DB error: {}", e),
+        )
+    })?;
+    let layouts = crate::db::workspace_layouts::find_workspace_layouts_by_machine(
+        &conn,
+        &auth_user.user_id,
+        &machine_id,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("DB error: {}", e),
+        )
+    })?
+    .into_iter()
+    .map(workspace_layout_info_from_row)
+    .collect();
+
+    Ok(Json(layouts))
 }
 
 async fn save_workspace_layout(
@@ -1026,7 +1057,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/machines/{machine_id}/workspace-layouts",
-            put(save_workspace_layout),
+            get(list_workspace_layouts).put(save_workspace_layout),
         )
         .route(
             "/api/machines/{machine_id}/workspace-groups/{group_id}",
@@ -1058,10 +1089,12 @@ mod tests {
         http::{header, Method, Request, StatusCode},
         Json,
     };
+    use offdesk_protocol::{
+        HubToMachine, MachineInfo, MachineToHub, TerminalInfo, WorkspaceLayoutNode,
+    };
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
     use serde_json::{json, Value};
-    use offdesk_protocol::{HubToMachine, MachineInfo, MachineToHub, TerminalInfo, WorkspaceLayoutNode};
     use tower::ServiceExt;
 
     use super::{
@@ -1179,6 +1212,27 @@ mod tests {
             serde_json::from_slice(&bytes)
                 .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()))
         };
+        (status, body)
+    }
+
+    async fn get_workspace_layouts(state: &AppState) -> (StatusCode, Value) {
+        let token = sign_jwt("user-a", &state.jwt_secret);
+        let response = super::router()
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::GET)
+                    .uri("/api/machines/machine-a/workspace-layouts")
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&bytes).to_string()));
         (status, body)
     }
 
@@ -1476,6 +1530,40 @@ mod tests {
             false,
         )
         .is_ok());
+    }
+
+    #[tokio::test]
+    async fn workspace_layout_route_lists_saved_layouts() {
+        let state = state_with_terminals(vec![
+            terminal("repo-a", "/repo", None),
+            terminal("repo-b", "/repo", None),
+        ])
+        .await;
+
+        let (status, body) = get_workspace_layouts(&state).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!([]));
+
+        let (status, saved) = put_workspace_layout(
+            &state,
+            json!({
+                "group_key": "cwd:/repo",
+                "root": {
+                    "type": "split",
+                    "direction": "horizontal",
+                    "ratio": 0.5,
+                    "first": { "type": "leaf", "terminalId": "repo-a" },
+                    "second": { "type": "leaf", "terminalId": "repo-b" }
+                },
+                "base_updated_at": -1
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, body) = get_workspace_layouts(&state).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!([saved]));
     }
 
     #[tokio::test]
