@@ -3,6 +3,7 @@ pub mod key;
 pub mod kill;
 pub mod layout;
 pub mod ls;
+pub mod onepassword;
 pub mod machines;
 pub mod open;
 pub mod read;

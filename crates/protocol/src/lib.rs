@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod compression;
+pub mod domain;
 pub mod keep_awake;
 pub mod local_host;
 pub mod preview;
@@ -491,6 +492,39 @@ impl AgentBrowserInputEvent {
     }
 }
 
+/// A string that never shows up in `Debug` output (logs, panics, test
+/// failures). Serializes as the plain string.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(<redacted>)")
+    }
+}
+
+impl Drop for Secret {
+    /// Best effort: overwrite the bytes before the memory is freed.
+    fn drop(&mut self) {
+        let mut bytes = std::mem::take(&mut self.0).into_bytes();
+        for byte in bytes.iter_mut() {
+            // SAFETY: `byte` is a valid, aligned, exclusive reference.
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+    }
+}
+
 /// Commands an agent can run against an agent browser. Replies:
 /// Open/Goto -> `AgentBrowserInfo`; List -> `Vec<AgentBrowserInfo>`;
 /// Snapshot -> `{"snapshot": string}`; Screenshot -> `{"png_base64": string}`;
@@ -516,9 +550,29 @@ pub enum AgentBrowserCommand {
     Snapshot {
         browser_id: String,
     },
+    /// Click by `ref` (from a snapshot) or by visible `text`; exactly one of
+    /// the two. Replies `{}` for a ref, `{"clicked": "<tag> \"<text>\""}` for
+    /// text.
     Click {
         browser_id: String,
-        r#ref: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    /// Fill a saved login into the page's username / password fields, in any
+    /// frame whose registrable domain is in `allowed_domains`. Replies
+    /// `{"filled": ["username","password"], "frames": ["host", ...],
+    /// "submitted": bool}`; never the values.
+    Login {
+        browser_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        username: Option<Secret>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        password: Option<Secret>,
+        allowed_domains: Vec<String>,
+        #[serde(default)]
+        submit: bool,
     },
     Fill {
         browser_id: String,
@@ -1587,4 +1641,77 @@ pub fn config_dir() -> std::path::PathBuf {
         }
     });
     dir
+}
+
+#[cfg(test)]
+mod login_command_tests {
+    use super::*;
+
+    fn login() -> AgentBrowserCommand {
+        AgentBrowserCommand::Login {
+            browser_id: "b1".into(),
+            username: Some(Secret::new("alice@example.com")),
+            password: Some(Secret::new("hunter2-very-secret")),
+            allowed_domains: vec!["aliyun.com".into()],
+            submit: true,
+        }
+    }
+
+    #[test]
+    fn debug_output_never_contains_the_secrets() {
+        let command = login();
+        for rendered in [
+            format!("{command:?}"),
+            format!("{command:#?}"),
+            format!(
+                "{:?}",
+                HubToMachine::AgentBrowser {
+                    request_id: "r".into(),
+                    command: command.clone()
+                }
+            ),
+        ] {
+            assert!(!rendered.contains("hunter2"), "{rendered}");
+            assert!(!rendered.contains("alice@"), "{rendered}");
+            assert!(rendered.contains("aliyun.com"), "{rendered}");
+            assert!(rendered.contains("redacted"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn login_and_click_wire_format() {
+        let wire = serde_json::to_value(login()).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "type": "login",
+                "browser_id": "b1",
+                "username": "alice@example.com",
+                "password": "hunter2-very-secret",
+                "allowed_domains": ["aliyun.com"],
+                "submit": true,
+            })
+        );
+        assert_eq!(serde_json::from_value::<AgentBrowserCommand>(wire).unwrap(), login());
+        // Optional fields may be left out; an old-style click still parses.
+        let minimal: AgentBrowserCommand = serde_json::from_value(serde_json::json!({
+            "type": "login", "browser_id": "b", "allowed_domains": []
+        }))
+        .unwrap();
+        assert!(matches!(minimal, AgentBrowserCommand::Login { submit: false, username: None, password: None, .. }));
+        let click: AgentBrowserCommand =
+            serde_json::from_value(serde_json::json!({"type": "click", "browser_id": "b", "ref": "e3"}))
+                .unwrap();
+        assert_eq!(
+            click,
+            AgentBrowserCommand::Click { browser_id: "b".into(), r#ref: Some("e3".into()), text: None }
+        );
+        let by_text = serde_json::to_value(AgentBrowserCommand::Click {
+            browser_id: "b".into(),
+            r#ref: None,
+            text: Some("账密登录".into()),
+        })
+        .unwrap();
+        assert_eq!(by_text, serde_json::json!({"type": "click", "browser_id": "b", "text": "账密登录"}));
+    }
 }

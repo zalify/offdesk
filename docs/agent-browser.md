@@ -59,12 +59,15 @@ offdesk browser close <browser>
 offdesk browser goto <browser> <url> [--json]
 offdesk browser snapshot <browser>                  # the page as text
 offdesk browser click <browser> <ref>
+offdesk browser click <browser> --text TEXT         # by visible text, for tabs/toggles without a ref
 offdesk browser fill <browser> <ref> <text>
 offdesk browser press <browser> <key>               # Enter, Tab, Escape, ArrowDown, a, ...
 offdesk browser wait <browser> [--text T] [--url-regex REGEX] [--idle MS] [--timeout SEC]
 offdesk browser screenshot <browser> [-o FILE] [--full]
 offdesk browser handoff <browser> --reason TEXT [--wait] [--timeout SEC]   # ask a person for help
 offdesk browser wait-control <browser> [--timeout SEC]                      # wait until no person is in control
+offdesk browser logins <browser> [--json]           # saved 1Password logins for this page (no secrets)
+offdesk browser login <browser> --item ITEM [--submit]   # fill a 1Password login into the page
 ```
 
 `--machine` takes a machine id, unique id prefix, or name. Without it, `open`
@@ -82,7 +85,7 @@ Exit codes for every `offdesk browser` command (also in `offdesk browser --help`
 | `0` | Success (`wait`: matched; `handoff --wait` / `wait-control`: the person is done) |
 | `1` | Timeout (`wait`, `handoff --wait`, `wait-control`) |
 | `2` | Error |
-| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `press` and `close` were refused |
+| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `login`, `press` and `close` were refused |
 
 `screenshot` writes a PNG and prints its path; the default file is
 `./browser-<id8>-<timestamp>.png`, `--full` captures the whole page.
@@ -231,12 +234,14 @@ Tools (arguments in brackets are optional):
 | `browser_close` | `browser_id` | `close` |
 | `browser_goto` | `browser_id`, `url` | `goto` (returns url and title) |
 | `browser_snapshot` | `browser_id` | `snapshot` |
-| `browser_click` | `browser_id`, `ref` | `click` |
+| `browser_click` | `browser_id`, `ref` or `text` (exactly one) | `click` / `click --text` |
 | `browser_fill` | `browser_id`, `ref`, `text` | `fill` |
 | `browser_press` | `browser_id`, `key` | `press` |
 | `browser_wait` | `browser_id`, `[text]`, `[url_regex]`, `[idle_ms]`, `[timeout_ms]` (default 30000) | `wait` |
 | `browser_screenshot` | `browser_id`, `[full_page]` | `screenshot` (returned as an MCP image, no file) |
 | `browser_handoff` | `browser_id`, `reason`, `[wait]`, `[timeout_ms]` (default 600000) | `handoff` |
+| `browser_logins` | `browser_id` | `logins --json` |
+| `browser_login` | `browser_id`, `item`, `[submit]` | `login` |
 | `browser_wait_control` | `browser_id`, `[timeout_ms]` (default 600000) | `wait-control` |
 
 `browser_id` is an id or unique prefix, resolved across all online machines
@@ -273,6 +278,108 @@ and so on) carry a handle such as `[ref=e12]`; pass that handle to `click` and
 snapshot was taken. After navigation or any change to the DOM, run `snapshot`
 again and use the new refs. A stale ref makes the command fail with an error.
 Very large pages are truncated.
+Iframe contents are included (see Iframes).
+
+## Iframes
+
+Login forms and payment widgets often live in iframes (Aliyun's login box is
+`passport.aliyun.com` inside `account.aliyun.com`). `snapshot` reads them: each
+iframe's tree is nested under its `Iframe` line, which names the frame's host,
+and refs keep counting across frames:
+
+```
+- Iframe [frame=passport.aliyun.com]
+  - textbox "+86" [ref=e2]
+  - textbox "验证码" [ref=e3]
+  - button "获取验证码" [ref=e4]
+```
+
+`click`, `fill` and `press` work on those refs like any other. Same-process
+iframes and out-of-process iframes (cross-site, each its own CDP target; the
+node enables `Target.setAutoAttach` and follows the child sessions) are both
+supported, nested up to 3 deep. A click inside an out-of-process iframe is
+translated to page coordinates by adding the content-box offset of each
+iframe element, and the iframes on the way are scrolled into view. Iframes
+that are hidden or 0 pixels large are skipped. Shadow DOM is only searched by
+`click --text` and `login`, not shown specially in snapshots beyond what the
+accessibility tree already exposes.
+
+## Click by text
+
+Many tabs and toggles are clickable `div`s with no accessibility role, so they
+get no ref. `click <browser> --text "账密登录"` (MCP: `browser_click` with
+`text`) finds the smallest visible element, in any frame, whose trimmed text
+equals the given text (else the smallest one that contains it, an exact match
+always wins) and clicks its centre. It prints what it clicked (tag and text,
+for example `clicked div "账密登录"`). Give exactly one of a ref and `--text`.
+
+## Logging in with 1Password
+
+An agent can log in without taking over and without ever seeing the password:
+
+```
+offdesk browser logins <browser>                    # which saved logins fit this site?
+ITEM ID    TITLE         USERNAME           VAULT
+fakeid111  Fake Console  alice@example.com  Personal
+
+offdesk browser login <browser> --item fakeid111 --submit
+{"filled":["username","password"],"frames":["passport.aliyun.com"],"submitted":true}
+```
+
+**Setup.** The CLI side uses the 1Password CLI, `op`, on the machine where
+`offdesk` (or `offdesk mcp`) runs. Either install `op` and turn on
+*Integrate with 1Password CLI* in the 1Password desktop app (Settings >
+Developer; the app may ask you to approve each request), or export
+`OP_SERVICE_ACCOUNT_TOKEN` for a service account that can read the vault. With
+`op` missing or not signed in, the command prints this setup hint and exits
+`2`. `op`'s own stderr is passed through (that is where the desktop approval
+prompt message appears), and it gets 120 seconds.
+
+**What the agent sees.** `logins` runs `op item list --categories Login` and
+keeps the items with a website on the same registrable domain as the browser's
+page. It prints item id, title, username (the account name from
+`additional_information`) and vault, and `--json` prints the same as JSON.
+No secret field is requested or printed. `login` fetches the one item with
+`op item get <id> --reveal` and keeps username and password in memory only:
+never on a command line, never printed, wiped after use. The node's reply
+names the fields filled and the hosts of the frames, never values.
+
+**Domain check.** The password is typed only into a frame whose registrable
+domain (eTLD+1) is one of the item's website domains. The CLI refuses when
+the page itself is on another domain, and the node checks again for every
+frame it fills (using the frame's origin) and refuses with an error naming
+the frame's domain, so an iframe from an unrelated site embedded in a trusted
+page never gets the secret. The registrable domain is computed by
+`offdesk_protocol::domain`, shared by CLI and node: the last two labels of a
+host, or three under a short built-in list of common multi-part suffixes
+(`com.cn`, `net.cn`, `org.cn`, `com.hk`, `co.uk`, `com.au`, `co.jp`, ...).
+IP addresses and `localhost` are their own domain. For a site under a
+multi-part suffix that is not on the list, the domain comes out too broad;
+add the suffix to `MULTI_PART_SUFFIXES`.
+
+**What `login` does.** In every frame it looks for a visible password field
+and the username field before it (same form, `autocomplete=username|email`
+first); it prefers a frame on an allowed domain. Each field is focused,
+cleared and filled with `Input.insertText`, which fires the same trusted
+`beforeinput`/`input` events as typing (React-style controlled inputs keep the
+value), then a `change` event. If the page shows only a username field
+(two-step logins), only the username is filled and the reply says so: wait
+for the next step and call `login` again. `--submit` presses Enter in the last
+field. `login` is a mutating command: it is refused with exit `3` while a
+person controls the browser, like `fill`.
+
+**Redaction.** `AgentBrowserCommand::Login` carries the credentials as a
+`Secret`, whose `Debug` prints `Secret(<redacted>)` (so no `{:?}` of a command
+or message leaks it) and which is zeroed on drop. The hub only forwards the
+command (it neither logs nor stores bodies), the node does not log CDP
+parameters, error messages never include the values, and the `op` output is
+never quoted in errors.
+
+**Not covered.** Sites that distrust synthetic input (they listen for
+`isTrusted` keystrokes with timing checks, or block paste/insert) may still
+reject the fill; captchas and 2FA codes need `handoff`. Fields inside closed
+shadow roots are not found. A password manager item with several accounts for
+one site needs the right `--item`; titles must be exact (and unique).
 
 ## Chromium discovery
 

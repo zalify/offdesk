@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::client::HubClient;
-use crate::commands::browser::{self, HandoffOutcome, WaitOptions, WaitOutcome};
+use crate::commands::browser::{self, ClickTarget, HandoffOutcome, WaitOptions, WaitOutcome};
 use crate::commands::json_pretty;
 use crate::CliError;
 
@@ -34,7 +34,16 @@ refs, then browser_wait (text, url_regex or idle_ms) for the result and \
 snapshot again; refs are only valid for the latest snapshot. If a tool says a \
 person has taken over the browser, stop driving it and call \
 browser_wait_control; if you are stuck (login, captcha), ask with \
-browser_handoff. Close the browser with browser_close when done.";
+browser_handoff. Close the browser with browser_close when done. Pages inside \
+iframes appear in the snapshot under their Iframe line, with refs you can use \
+as usual; tabs and toggles without a role can be clicked by their visible \
+text (browser_click with text). To log in: on the login page call \
+browser_logins to see which saved 1Password logins match the site (titles and \
+usernames only, never secrets); pick one (ask the user if several fit), then \
+browser_login with its item id; it fills username and password, even inside \
+iframes, without the secret ever reaching you, then check the result with \
+browser_wait / browser_snapshot. Never ask the user to paste a password in \
+chat; if there is no saved login, use browser_handoff.";
 
 // ---------------------------------------------------------------------------
 // Tool results
@@ -152,10 +161,14 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "browser_click",
-            "Click an element by its ref from the latest browser_snapshot.",
+            "Click an element by its ref from the latest browser_snapshot, or by its visible text (give exactly one of ref and text). Text finds the smallest visible element, in any frame, whose text equals it (else contains it); use it for tabs and toggles that have no ref. Returns what was clicked when clicking by text.",
             schema(
-                json!({"browser_id": id(), "ref": {"type": "string", "description": "Element ref, e.g. e12"}}),
-                &["browser_id", "ref"],
+                json!({
+                    "browser_id": id(),
+                    "ref": {"type": "string", "description": "Element ref, e.g. e12"},
+                    "text": {"type": "string", "description": "Visible text of the element to click, e.g. 账密登录"},
+                }),
+                &["browser_id"],
             ),
         ),
         tool(
@@ -217,6 +230,23 @@ pub fn tool_definitions() -> Vec<Value> {
             ),
         ),
         tool(
+            "browser_logins",
+            "List the user's saved 1Password logins that match the site the browser is on, as JSON: id, title, username (an account name, not a secret) and vault. Never returns passwords.",
+            schema(json!({"browser_id": id()}), &["browser_id"]),
+        ),
+        tool(
+            "browser_login",
+            "Log in with a saved 1Password item (an `id` from browser_logins): fills the username and password into the page's login form, including forms inside iframes, without showing you the secret. Refuses when the page is not on the item's site. Replies with which fields were filled and whether the form was submitted. A two-step login may fill only the username; call it again on the next step. Not for pages where a person must solve a captcha: use browser_handoff.",
+            schema(
+                json!({
+                    "browser_id": id(),
+                    "item": {"type": "string", "description": "1Password item id (or exact title) from browser_logins"},
+                    "submit": {"type": "boolean", "description": "Press Enter after filling (default false)"},
+                }),
+                &["browser_id", "item"],
+            ),
+        ),
+        tool(
             "browser_wait_control",
             "Block until no person controls the browser, so you may drive it again. Use after a tool reported that a person took over. Returns when control is back, or after timeout_ms (default 600000) saying a person is still in control.",
             schema(
@@ -264,7 +294,17 @@ struct GotoArgs {
 #[serde(deny_unknown_fields)]
 struct ClickArgs {
     browser_id: String,
-    r#ref: String,
+    r#ref: Option<String>,
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LoginArgs {
+    browser_id: String,
+    item: String,
+    #[serde(default)]
+    submit: bool,
 }
 
 #[derive(Deserialize)]
@@ -508,9 +548,21 @@ impl Server {
             "browser_click" => {
                 let a = args!(ClickArgs);
                 let id = a.browser_id.clone();
+                let target = match ClickTarget::from_args(a.r#ref.clone(), a.text.clone()) {
+                    Ok(target) => target,
+                    Err(_) => {
+                        return ToolResult::error(
+                            "browser_click needs exactly one of ref or text",
+                        )
+                    }
+                };
                 self.run(Some(&id), |client, _| async move {
-                    browser::click_element(&client, &a.browser_id, a.r#ref.clone()).await?;
-                    Ok(ToolResult::text(format!("clicked {}", a.r#ref)))
+                    let clicked = browser::click_element(&client, &a.browser_id, target).await?;
+                    Ok(ToolResult::text(match (a.r#ref, clicked) {
+                        (Some(r), _) => format!("clicked {r}"),
+                        (None, Some(what)) => format!("clicked {what}"),
+                        (None, None) => "clicked".to_string(),
+                    }))
                 })
                 .await
             }
@@ -600,6 +652,30 @@ impl Server {
                              pending, call browser_wait_control to keep waiting"
                         }
                     }))
+                })
+                .await
+            }
+            "browser_logins" => {
+                let a = args!(IdArgs);
+                let id = a.browser_id.clone();
+                self.run(Some(&id), |client, _| async move {
+                    let (url, items) = browser::find_logins(&client, &a.browser_id).await?;
+                    if items.is_empty() {
+                        return Ok(ToolResult::text(format!(
+                            "no saved 1Password login matches {url}; use browser_handoff to ask a person to log in"
+                        )));
+                    }
+                    ToolResult::ok_json(&items)
+                })
+                .await
+            }
+            "browser_login" => {
+                let a = args!(LoginArgs);
+                let id = a.browser_id.clone();
+                self.run(Some(&id), |client, _| async move {
+                    let outcome =
+                        browser::login_with_item(&client, &a.browser_id, &a.item, a.submit).await?;
+                    ToolResult::ok_json(&outcome.reply)
                 })
                 .await
             }
@@ -789,7 +865,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_has_all_twelve_with_valid_schemas() {
+    async fn tools_list_has_all_fourteen_with_valid_schemas() {
         let reply = send(&server(), json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
             .await
             .unwrap();
@@ -809,6 +885,8 @@ mod tests {
                 "browser_wait",
                 "browser_screenshot",
                 "browser_handoff",
+                "browser_logins",
+                "browser_login",
                 "browser_wait_control",
             ]
         );

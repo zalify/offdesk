@@ -8,6 +8,7 @@
 mod cdp;
 mod chromium;
 mod download;
+mod frames;
 mod input;
 mod keys;
 mod snapshot;
@@ -84,6 +85,10 @@ impl Tabs {
     fn by_session(&self, session_id: &str) -> Option<Arc<Tab>> {
         self.all().into_iter().find(|t| t.session_id == session_id)
     }
+    /// The tab a session belongs to: its page or one of its iframe targets.
+    fn by_any_session(&self, session_id: &str) -> Option<Arc<Tab>> {
+        self.all().into_iter().find(|t| t.owns_session(session_id))
+    }
 }
 
 /// Screencast state of one tab.
@@ -108,13 +113,23 @@ struct Running {
     client: Arc<CdpClient>,
 }
 
+/// What a ref points at: an element of a frame.
+struct RefTarget {
+    frame: String,
+    backend: i64,
+}
+
 struct Tab {
     id: String,
     target_id: String,
     session_id: String,
     client: Arc<CdpClient>,
-    /// `eN` -> backendDOMNodeId from the latest snapshot.
-    refs: Mutex<HashMap<String, i64>>,
+    /// `eN` -> (frame, backendDOMNodeId) from the latest snapshot.
+    refs: Mutex<HashMap<String, RefTarget>>,
+    /// Frames of the latest snapshot (sessions, parents) for refs to resolve.
+    frames: Mutex<frames::FrameMap>,
+    /// Out-of-process iframes of this tab by frame id.
+    children: Mutex<HashMap<String, frames::ChildSession>>,
     opener_terminal_id: Option<String>,
     events: Events,
     /// The hub has been told this browser exists (Created sent).
@@ -257,9 +272,36 @@ impl AgentBrowserManager {
                 let tab = self.tab(&browser_id).await?;
                 Ok(json!({"snapshot": tab.snapshot().await?}))
             }
-            C::Click { browser_id, r#ref } => {
-                self.tab(&browser_id).await?.click(&r#ref).await?;
-                Ok(json!({}))
+            C::Click {
+                browser_id,
+                r#ref,
+                text,
+            } => {
+                let tab = self.tab(&browser_id).await?;
+                match (r#ref, text) {
+                    (Some(r), None) => {
+                        tab.click(&r).await?;
+                        Ok(json!({}))
+                    }
+                    (None, Some(text)) => Ok(json!({"clicked": tab.click_text(&text).await?})),
+                    _ => Err("click needs exactly one of ref or text".to_string()),
+                }
+            }
+            C::Login {
+                browser_id,
+                username,
+                password,
+                allowed_domains,
+                submit,
+            } => {
+                let tab = self.tab(&browser_id).await?;
+                tab.login(
+                    username.as_ref().map(|s| s.expose()),
+                    password.as_ref().map(|s| s.expose()),
+                    &allowed_domains,
+                    submit,
+                )
+                .await
             }
             C::Fill {
                 browser_id,
@@ -568,6 +610,27 @@ async fn supervise(mut events: broadcast::Receiver<cdp::CdpEvent>, tabs: Tabs) {
                     );
                 }
             }
+            "Target.attachedToTarget" => {
+                let info = &ev.params["targetInfo"];
+                if info["type"] == "iframe" {
+                    if let (Some(parent), Some(session), Some(frame)) = (
+                        ev.session_id.as_deref(),
+                        ev.params["sessionId"].as_str(),
+                        info["targetId"].as_str(),
+                    ) {
+                        if let Some(tab) = tabs.by_any_session(parent) {
+                            tab.child_attached(frame, session);
+                        }
+                    }
+                }
+            }
+            "Target.detachedFromTarget" => {
+                if let Some(session) = ev.params["sessionId"].as_str() {
+                    for tab in tabs.all() {
+                        tab.child_detached(session);
+                    }
+                }
+            }
             "Page.screencastFrame" => {
                 if let Some(tab) = ev.session_id.as_deref().and_then(|s| tabs.by_session(s)) {
                     tab.on_screencast_frame(&ev.params);
@@ -605,6 +668,14 @@ impl Tab {
         for method in ["Page.enable", "DOM.enable", "Network.enable"] {
             client.call(Some(&session_id), method, json!({})).await?;
         }
+        // Out-of-process iframes arrive as child sessions (see `frames`).
+        let _ = client
+            .call(
+                Some(&session_id),
+                "Target.setAutoAttach",
+                json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
+            )
+            .await;
         // headless=new sizes the window, and the browser UI eats part of it, so
         // the screencast would crop the emulated viewport. Grow the window by
         // the UI's size first, then pin the viewport.
@@ -628,6 +699,8 @@ impl Tab {
             session_id,
             client,
             refs: Mutex::new(HashMap::new()),
+            frames: Mutex::new(HashMap::new()),
+            children: Mutex::new(HashMap::new()),
             opener_terminal_id,
             events,
             announced: AtomicBool::new(false),
@@ -939,25 +1012,35 @@ impl Tab {
     }
 
     async fn snapshot(&self) -> Result<String, String> {
-        let tree = self.call("Accessibility.getFullAXTree", json!({})).await?;
-        let nodes = tree["nodes"].as_array().cloned().unwrap_or_default();
-        let result = snapshot::ax_tree_to_text(&nodes);
-        *self.refs.lock().unwrap() = result.refs.into_iter().collect();
-        Ok(result.text)
+        self.snapshot_frames().await
     }
 
-    fn backend_id(&self, r: &str) -> Result<i64, String> {
-        self.refs
+    /// The element and frame a ref points at (from the latest snapshot).
+    fn ref_target(&self, r: &str) -> Result<(frames::FrameMeta, i64), String> {
+        let target = self
+            .refs
             .lock()
             .unwrap()
             .get(r)
-            .copied()
-            .ok_or_else(|| format!("unknown ref {r}; run snapshot again"))
+            .map(|t| (t.frame.clone(), t.backend))
+            .ok_or_else(|| format!("unknown ref {r}; run snapshot again"))?;
+        let frame = self
+            .frames
+            .lock()
+            .unwrap()
+            .get(&target.0)
+            .cloned()
+            .ok_or_else(|| format!("ref {r} is stale; run snapshot again"))?;
+        Ok((frame, target.1))
     }
 
     fn map_node_err(r: &str, e: String) -> String {
         let l = e.to_lowercase();
-        if l.contains("no node") || l.contains("could not find node") || l.contains("not found") {
+        if l.contains("no node")
+            || l.contains("could not find node")
+            || l.contains("not found")
+            || l.contains("session with given id")
+        {
             format!("ref {r} is stale; run snapshot again")
         } else {
             format!("ref {r}: {e}")
@@ -965,75 +1048,18 @@ impl Tab {
     }
 
     async fn click(&self, r: &str) -> Result<(), String> {
-        let backend = self.backend_id(r)?;
-        let params = json!({"backendNodeId": backend});
-        self.call("DOM.scrollIntoViewIfNeeded", params.clone())
+        let (frame, backend) = self.ref_target(r)?;
+        let map = self.frames.lock().unwrap().clone();
+        self.click_node(&frame, &map, json!({"backendNodeId": backend}))
             .await
-            .map_err(|e| Self::map_node_err(r, e))?;
-        let model = self
-            .call("DOM.getBoxModel", params)
-            .await
-            .map_err(|e| Self::map_node_err(r, e))?;
-        let quad: Vec<f64> = model["model"]["content"]
-            .as_array()
-            .map(|a| a.iter().filter_map(Value::as_f64).collect())
-            .unwrap_or_default();
-        if quad.len() < 8 {
-            return Err(format!("ref {r} has no visible box; it may be hidden"));
-        }
-        let x = (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0;
-        let y = (quad[1] + quad[3] + quad[5] + quad[7]) / 4.0;
-        self.call(
-            "Input.dispatchMouseEvent",
-            json!({"type": "mouseMoved", "x": x, "y": y}),
-        )
-        .await?;
-        for kind in ["mousePressed", "mouseReleased"] {
-            self.call(
-                "Input.dispatchMouseEvent",
-                json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}),
-            )
-            .await?;
-        }
-        Ok(())
+            .map_err(|e| Self::map_node_err(r, e))
     }
 
     async fn fill(&self, r: &str, text: &str) -> Result<(), String> {
-        let backend = self.backend_id(r)?;
-        self.call("DOM.focus", json!({"backendNodeId": backend}))
+        let (frame, backend) = self.ref_target(r)?;
+        self.fill_node(&frame.session, &json!({"backendNodeId": backend}), text)
             .await
-            .map_err(|e| Self::map_node_err(r, e))?;
-        let resolved = self
-            .call("DOM.resolveNode", json!({"backendNodeId": backend}))
-            .await
-            .map_err(|e| Self::map_node_err(r, e))?;
-        let object_id = resolved["object"]["objectId"]
-            .as_str()
-            .ok_or_else(|| format!("ref {r} is stale; run snapshot again"))?;
-        // Select existing content so the insertion replaces it.
-        let selected = self
-            .call(
-                "Runtime.callFunctionOn",
-                json!({
-                    "objectId": object_id,
-                    "returnByValue": true,
-                    "functionDeclaration": "function(){ this.focus && this.focus(); \
-                        if (this.isContentEditable) { document.execCommand('selectAll', false, null); return true; } \
-                        if (typeof this.select === 'function') { this.select(); return true; } \
-                        return false; }",
-                }),
-            )
-            .await?;
-        if let Some(ex) = selected.get("exceptionDetails") {
-            return Err(format!("ref {r}: could not select contents: {ex}"));
-        }
-        if text.is_empty() {
-            self.dispatch_key(&keys::parse_key("Backspace")?).await
-        } else {
-            self.call("Input.insertText", json!({"text": text}))
-                .await
-                .map(|_| ())
-        }
+            .map_err(|e| Self::map_node_err(r, e))
     }
 
     async fn dispatch_key(&self, key: &keys::KeyDef) -> Result<(), String> {
@@ -1341,7 +1367,8 @@ mod tests {
         .unwrap();
         mgr.execute(AgentBrowserCommand::Click {
             browser_id: id.clone(),
-            r#ref: button,
+            r#ref: Some(button),
+            text: None,
         })
         .await
         .unwrap();
@@ -1403,7 +1430,8 @@ mod tests {
         let err = mgr
             .execute(AgentBrowserCommand::Click {
                 browser_id: id.clone(),
-                r#ref: "e999".into(),
+                r#ref: Some("e999".into()),
+                text: None,
             })
             .await
             .unwrap_err();
@@ -1426,7 +1454,8 @@ mod tests {
         let err = mgr
             .execute(AgentBrowserCommand::Click {
                 browser_id: id.clone(),
-                r#ref: "e2".into(),
+                r#ref: Some("e2".into()),
+                text: None,
             })
             .await
             .unwrap_err();

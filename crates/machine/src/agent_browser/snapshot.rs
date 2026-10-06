@@ -31,18 +31,58 @@ const INTERACTIVE_ROLES: &[&str] = &[
 const VALUE_ROLES: &[&str] = &["textbox", "searchbox", "combobox", "slider", "spinbutton"];
 const LEAF_ROLES: &[&str] = &["textbox", "searchbox", "slider", "spinbutton"];
 
+/// One frame's accessibility tree, plus the trees of the iframes inside it.
+pub struct FrameData {
+    /// Opaque id of the frame; refs inside it carry it.
+    pub key: String,
+    /// `nodes` of `Accessibility.getFullAXTree` for this frame.
+    pub nodes: Vec<Value>,
+    /// Iframe element's backendDOMNodeId -> the frame it shows.
+    pub children: HashMap<i64, FrameData>,
+    /// Shown on the iframe line (the frame's host).
+    pub label: Option<String>,
+}
+
+/// One `[ref=eN]` handle: which frame it lives in, and the element there.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefEntry {
+    pub name: String,
+    pub frame: String,
+    pub backend: i64,
+}
+
 pub struct SnapshotResult {
     pub text: String,
-    /// `eN` -> backendDOMNodeId, in assignment order.
-    pub refs: Vec<(String, i64)>,
+    /// In assignment order (`e1`, `e2`, ...); numbering runs on across frames.
+    pub refs: Vec<RefEntry>,
 }
 
 struct Ctx<'a> {
     by_id: HashMap<&'a str, &'a Value>,
+    /// Iframes of the frame being rendered.
+    children: &'a HashMap<i64, FrameData>,
+    frame_key: &'a str,
     lines: Vec<String>,
     size: usize,
-    refs: Vec<(String, i64)>,
+    refs: Vec<RefEntry>,
     truncated: bool,
+}
+
+fn index_nodes(nodes: &[Value]) -> HashMap<&str, &Value> {
+    let mut by_id: HashMap<&str, &Value> = HashMap::new();
+    for n in nodes {
+        if let Some(id) = n.get("nodeId").and_then(Value::as_str) {
+            by_id.insert(id, n);
+        }
+    }
+    by_id
+}
+
+fn root_of(nodes: &[Value]) -> Option<&Value> {
+    nodes
+        .iter()
+        .find(|n| n.get("parentId").is_none())
+        .or_else(|| nodes.first())
 }
 
 fn str_of<'a>(node: &'a Value, field: &str) -> &'a str {
@@ -193,6 +233,20 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Render another frame's tree at `depth`, then go back to this frame.
+    fn render_frame(&mut self, frame: &'a FrameData, depth: usize) {
+        let by_id = std::mem::replace(&mut self.by_id, index_nodes(&frame.nodes));
+        let children = std::mem::replace(&mut self.children, &frame.children);
+        let key = std::mem::replace(&mut self.frame_key, frame.key.as_str());
+        if let Some(root) = root_of(&frame.nodes) {
+            let items = self.items(root);
+            self.render_items(items, depth, "");
+        }
+        self.by_id = by_id;
+        self.children = children;
+        self.frame_key = key;
+    }
+
     fn render_node(&mut self, node: &'a Value, depth: usize) {
         if self.truncated {
             return;
@@ -200,6 +254,14 @@ impl<'a> Ctx<'a> {
         let role = role_of(node).to_string();
         let name = norm(str_of(node, "name"));
         let items = self.items(node);
+        let child_frame: Option<&'a FrameData> = if role.eq_ignore_ascii_case("iframe") {
+            let children: &'a HashMap<i64, FrameData> = self.children;
+            node.get("backendDOMNodeId")
+                .and_then(Value::as_i64)
+                .and_then(|backend| children.get(&backend))
+        } else {
+            None
+        };
 
         let mut line = format!("- {role}");
         if !name.is_empty() {
@@ -212,7 +274,11 @@ impl<'a> Ctx<'a> {
             if let Some(backend) = node.get("backendDOMNodeId").and_then(Value::as_i64) {
                 let r = format!("e{}", self.refs.len() + 1);
                 line.push_str(&format!(" [ref={r}]"));
-                self.refs.push((r, backend));
+                self.refs.push(RefEntry {
+                    name: r,
+                    frame: self.frame_key.to_string(),
+                    backend,
+                });
             }
         }
         match prop_text(node, "checked").as_deref() {
@@ -241,6 +307,15 @@ impl<'a> Ctx<'a> {
             }
         }
 
+        // An iframe shows what is inside it, in its own tree.
+        if let Some(child) = child_frame {
+            if let Some(label) = &child.label {
+                line.push_str(&format!(" [frame={label}]"));
+            }
+            self.push(depth, line);
+            self.render_frame(child, depth + 1);
+            return;
+        }
         // Text fields already show their value; their text children repeat it.
         if LEAF_ROLES.contains(&role.as_str()) {
             self.push(depth, line);
@@ -260,29 +335,31 @@ impl<'a> Ctx<'a> {
 }
 
 /// Convert the `nodes` array of `Accessibility.getFullAXTree` to text.
+#[cfg(test)]
 pub fn ax_tree_to_text(nodes: &[Value]) -> SnapshotResult {
-    let mut by_id: HashMap<&str, &Value> = HashMap::new();
-    for n in nodes {
-        if let Some(id) = n.get("nodeId").and_then(Value::as_str) {
-            by_id.insert(id, n);
-        }
-    }
+    let main = FrameData {
+        key: String::new(),
+        nodes: nodes.to_vec(),
+        children: HashMap::new(),
+        label: None,
+    };
+    frames_to_text(&main)
+}
+
+/// Convert a page's tree, with the trees of its iframes nested under their
+/// `Iframe` nodes, to text. Refs are numbered across all frames.
+pub fn frames_to_text(main: &FrameData) -> SnapshotResult {
     let mut ctx = Ctx {
-        by_id,
+        by_id: HashMap::new(),
+        children: &main.children,
+        frame_key: main.key.as_str(),
         lines: Vec::new(),
         size: 0,
         refs: Vec::new(),
         truncated: false,
     };
-    let root = nodes
-        .iter()
-        .find(|n| n.get("parentId").is_none())
-        .or_else(|| nodes.first());
-    if let Some(root) = root {
-        // The root is itself transparent (RootWebArea); render its content.
-        let items = ctx.items(root);
-        ctx.render_items(items, 0, "");
-    }
+    // The root is itself transparent (RootWebArea); render its content.
+    ctx.render_frame(main, 0);
     let mut text = ctx.lines.join("\n");
     if ctx.truncated {
         text.push_str("\n… (truncated)");
@@ -381,15 +458,8 @@ mod tests {
         ]
         .join("\n");
         assert_eq!(res.text, expected);
-        assert_eq!(
-            res.refs,
-            vec![
-                ("e1".to_string(), 17),
-                ("e2".to_string(), 20),
-                ("e3".to_string(), 21),
-                ("e4".to_string(), 23)
-            ]
-        );
+        let refs: Vec<(&str, i64)> = res.refs.iter().map(|r| (r.name.as_str(), r.backend)).collect();
+        assert_eq!(refs, vec![("e1", 17), ("e2", 20), ("e3", 21), ("e4", 23)]);
     }
 
     #[test]
@@ -449,5 +519,62 @@ mod tests {
     #[test]
     fn empty_tree_is_empty() {
         assert_eq!(ax_tree_to_text(&[]).text, "");
+    }
+
+    #[test]
+    fn iframes_are_nested_and_refs_continue() {
+        let main_nodes = vec![
+            node("1", None, "RootWebArea", "", &["2", "3", "4"], 1),
+            node("2", Some("1"), "button", "Top", &[], 10),
+            node("3", Some("1"), "Iframe", "", &[], 11),
+            node("4", Some("1"), "button", "After", &[], 12),
+        ];
+        let inner_nodes = vec![
+            node("1", None, "RootWebArea", "", &["2", "3"], 1),
+            node("2", Some("1"), "textbox", "User", &[], 20),
+            node("3", Some("1"), "button", "Go", &[], 21),
+        ];
+        let mut children = HashMap::new();
+        children.insert(
+            11,
+            FrameData {
+                key: "frame-a".into(),
+                nodes: inner_nodes,
+                children: HashMap::new(),
+                label: Some("login.example.com".into()),
+            },
+        );
+        let main = FrameData {
+            key: "main".into(),
+            nodes: main_nodes,
+            children,
+            label: None,
+        };
+        let res = frames_to_text(&main);
+        assert_eq!(
+            res.text,
+            [
+                "- button \"Top\" [ref=e1]",
+                "- Iframe [frame=login.example.com]",
+                "  - textbox \"User\" [ref=e2]",
+                "  - button \"Go\" [ref=e3]",
+                "- button \"After\" [ref=e4]",
+            ]
+            .join("\n")
+        );
+        let refs: Vec<(&str, &str, i64)> = res
+            .refs
+            .iter()
+            .map(|r| (r.name.as_str(), r.frame.as_str(), r.backend))
+            .collect();
+        assert_eq!(
+            refs,
+            vec![
+                ("e1", "main", 10),
+                ("e2", "frame-a", 20),
+                ("e3", "frame-a", 21),
+                ("e4", "main", 12),
+            ]
+        );
     }
 }
