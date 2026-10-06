@@ -452,6 +452,21 @@ function TabBarComponent({
                   color: active ? terminalTheme.foreground : colors.fg2,
                 }}
               >
+                {groupNeedsPerson(group, agentBrowsers) && (
+                  <span
+                    role="img"
+                    aria-label="The agent needs you"
+                    title="The agent needs you"
+                    data-testid={`workspace-tab-attention-${group.id}`}
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: colors.warn,
+                      flexShrink: 0,
+                    }}
+                  />
+                )}
                 <span style={truncateStyle}>{group.label}</span>
                 {annotation && (
                   <span
@@ -733,6 +748,25 @@ const controlPillStyle: CSSProperties = {
   whiteSpace: "nowrap",
   cursor: "pointer",
 };
+
+/* ---------- tab attention ---------- */
+
+// An agent browser in the tab has asked a person for help and nobody has
+// taken over yet.
+function groupNeedsPerson(
+  group: WorkspaceGroup,
+  agentBrowsers: AgentBrowserInfo[] = [],
+): boolean {
+  if (agentBrowsers.length === 0) return false;
+  return collectPaneTerminalIds(group.root).some((id) =>
+    agentBrowsers.some(
+      (browser) =>
+        browser.id === id &&
+        browser.handoff !== undefined &&
+        browser.controller !== "human",
+    ),
+  );
+}
 
 /* ---------- tab annotation ---------- */
 

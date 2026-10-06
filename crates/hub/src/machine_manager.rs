@@ -101,6 +101,16 @@ const EVENT_HISTORY_LIMIT: usize = 1024;
 /// (flush cadence is every 100 events or 5 seconds).
 const SEQ_RECOVERY_OFFSET: u64 = 200;
 
+/// How long a person may control an agent browser without any open viewer
+/// socket from their device before the hub hands it back to the agent.
+pub const AGENT_BROWSER_CONTROL_GRACE: Duration = Duration::from_secs(120);
+
+/// A pending auto-release: the device whose absence it waits out.
+struct ControlTimer {
+    device_id: String,
+    handle: tokio::task::AbortHandle,
+}
+
 /// A connected machine
 struct MachineConnection {
     preview_lifetime: tokio_util::sync::CancellationToken,
@@ -132,6 +142,12 @@ pub struct MachineManager {
     /// Bumped on every agent browser event, so long-polls on the control
     /// state re-check it.
     agent_browser_changes: watch::Sender<u64>,
+    /// Open viewer sockets per (machine, browser) and device id, to notice a
+    /// controlling device that has gone away.
+    agent_browser_viewers: Arc<std::sync::Mutex<HashMap<(String, String), HashMap<String, usize>>>>,
+    /// Auto-release timers per (machine, browser).
+    agent_browser_timers: Arc<std::sync::Mutex<HashMap<(String, String), ControlTimer>>>,
+    control_grace: Duration,
     /// Browser events broadcast
     event_tx: broadcast::Sender<EventEnvelope>,
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
@@ -191,6 +207,9 @@ impl MachineManager {
             agent_browser_requests: Arc::new(std::sync::Mutex::new(HashMap::new())),
             streams: Streams::default(),
             agent_browser_changes: watch::channel(0).0,
+            agent_browser_viewers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            agent_browser_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            control_grace: AGENT_BROWSER_CONTROL_GRACE,
             event_tx,
             event_history: Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
                 EVENT_HISTORY_LIMIT,
@@ -1257,6 +1276,105 @@ impl MachineManager {
     /// Apply a control change and tell the UIs. `None` when the browser is
     /// unknown. Taking is last-writer-wins between devices.
     pub async fn change_agent_browser_control(
+        self: &Arc<Self>,
+        machine_id: &str,
+        browser_id: &str,
+        change: ControlChange,
+    ) -> Option<AgentBrowserInfo> {
+        let info = self
+            .apply_agent_browser_control(machine_id, browser_id, change)
+            .await?;
+        self.reconcile_control_timer(machine_id, browser_id).await;
+        Some(info)
+    }
+
+    /// Override the auto-release grace period (tests).
+    #[cfg(test)]
+    fn with_control_grace(mut self, grace: Duration) -> Self {
+        self.control_grace = grace;
+        self
+    }
+
+    fn device_viewers(&self, machine_id: &str, browser_id: &str, device_id: &str) -> usize {
+        self.agent_browser_viewers
+            .lock()
+            .unwrap()
+            .get(&(machine_id.to_string(), browser_id.to_string()))
+            .and_then(|devices| devices.get(device_id))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Keep the auto-release timer in line with the control state: it runs
+    /// exactly while a person controls the browser and their device has no
+    /// open viewer socket.
+    async fn reconcile_control_timer(self: &Arc<Self>, machine_id: &str, browser_id: &str) {
+        let key = (machine_id.to_string(), browser_id.to_string());
+        let absent_controller = self
+            .agent_browser_info(machine_id, browser_id)
+            .await
+            .filter(|info| info.controller == AgentBrowserController::Human)
+            .and_then(|info| info.controller_device_id)
+            .filter(|device| self.device_viewers(machine_id, browser_id, device) == 0);
+        let mut timers = self.agent_browser_timers.lock().unwrap();
+        match absent_controller {
+            None => {
+                if let Some(timer) = timers.remove(&key) {
+                    timer.handle.abort();
+                }
+            }
+            Some(device_id) => {
+                if timers.get(&key).is_some_and(|t| t.device_id == device_id) {
+                    return;
+                }
+                if let Some(timer) = timers.remove(&key) {
+                    timer.handle.abort();
+                }
+                let manager = self.clone();
+                let grace = self.control_grace;
+                let (m, b, d) = (
+                    machine_id.to_string(),
+                    browser_id.to_string(),
+                    device_id.clone(),
+                );
+                let task = tokio::spawn(async move {
+                    tokio::time::sleep(grace).await;
+                    manager.expire_control(&m, &b, &d).await;
+                });
+                timers.insert(
+                    key,
+                    ControlTimer {
+                        device_id,
+                        handle: task.abort_handle(),
+                    },
+                );
+            }
+        }
+    }
+
+    /// The grace period ran out: release exactly like a person's `release`,
+    /// unless the device came back or control moved on meanwhile.
+    async fn expire_control(&self, machine_id: &str, browser_id: &str, device_id: &str) {
+        let key = (machine_id.to_string(), browser_id.to_string());
+        let still_absent = self
+            .agent_browser_info(machine_id, browser_id)
+            .await
+            .is_some_and(|info| {
+                info.controller == AgentBrowserController::Human
+                    && info.controller_device_id.as_deref() == Some(device_id)
+            })
+            && self.device_viewers(machine_id, browser_id, device_id) == 0;
+        if still_absent {
+            self.apply_agent_browser_control(machine_id, browser_id, ControlChange::Release)
+                .await;
+        }
+        let mut timers = self.agent_browser_timers.lock().unwrap();
+        if timers.get(&key).is_some_and(|t| t.device_id == device_id) {
+            timers.remove(&key);
+        }
+    }
+
+    async fn apply_agent_browser_control(
         &self,
         machine_id: &str,
         browser_id: &str,
@@ -1383,13 +1501,16 @@ impl MachineManager {
     async fn send_node_action(&self, machine_id: &str, browser_id: &str, action: NodeAction) {
         let browser_id = browser_id.to_string();
         let msg = match action {
-            NodeAction::Start(p) => HubToMachine::AgentBrowserScreencastStart {
+            NodeAction::Start(p, epoch) => HubToMachine::AgentBrowserScreencastStart {
                 browser_id,
                 max_width: p.max_width,
                 max_height: p.max_height,
                 quality: p.quality,
+                epoch,
             },
-            NodeAction::Stop => HubToMachine::AgentBrowserScreencastStop { browser_id },
+            NodeAction::Stop(epoch) => {
+                HubToMachine::AgentBrowserScreencastStop { browser_id, epoch }
+            }
             NodeAction::Ack => HubToMachine::AgentBrowserFrameAck { browser_id },
         };
         let _ = self.send_to_machine(machine_id, msg).await;
@@ -1423,15 +1544,30 @@ impl MachineManager {
         machine_id: &str,
         browser_id: &str,
         params: Params,
+        device_id: Option<&str>,
     ) -> (AgentBrowserViewer, mpsc::UnboundedReceiver<ViewerMsg>) {
         let (id, rx, actions) = self.streams.add_viewer(machine_id, browser_id, params);
         self.send_node_actions(machine_id, browser_id, actions).await;
+        let device_id = device_id.map(str::to_string);
+        if let Some(device) = &device_id {
+            *self
+                .agent_browser_viewers
+                .lock()
+                .unwrap()
+                .entry((machine_id.to_string(), browser_id.to_string()))
+                .or_default()
+                .entry(device.clone())
+                .or_insert(0) += 1;
+            // A returning controller cancels its pending auto-release.
+            self.reconcile_control_timer(machine_id, browser_id).await;
+        }
         (
             AgentBrowserViewer {
                 manager: self.clone(),
                 machine_id: machine_id.to_string(),
                 browser_id: browser_id.to_string(),
                 id,
+                device_id,
             },
             rx,
         )
@@ -2793,6 +2929,7 @@ pub struct AgentBrowserViewer {
     machine_id: String,
     browser_id: String,
     id: u64,
+    device_id: Option<String>,
 }
 
 impl AgentBrowserViewer {
@@ -2821,6 +2958,32 @@ impl AgentBrowserViewer {
 
 impl Drop for AgentBrowserViewer {
     fn drop(&mut self) {
+        if let Some(device) = &self.device_id {
+            let key = (self.machine_id.clone(), self.browser_id.clone());
+            {
+                let mut viewers = self.manager.agent_browser_viewers.lock().unwrap();
+                if let Some(devices) = viewers.get_mut(&key) {
+                    if let Some(count) = devices.get_mut(device) {
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            devices.remove(device);
+                        }
+                    }
+                    if devices.is_empty() {
+                        viewers.remove(&key);
+                    }
+                }
+            }
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let manager = self.manager.clone();
+                let (machine_id, browser_id) = key;
+                handle.spawn(async move {
+                    manager
+                        .reconcile_control_timer(&machine_id, &browser_id)
+                        .await;
+                });
+            }
+        }
         let actions =
             self.manager
                 .streams
@@ -4867,7 +5030,7 @@ mod tests {
         let meta = || bytes::Bytes::from_static(b"{}");
 
         let (viewer, mut frames) = manager
-            .attach_agent_browser_viewer("machine-a", "b1", Params::default())
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), None)
             .await;
         assert!(matches!(
             node_rx.recv().await,
@@ -4914,5 +5077,121 @@ mod tests {
         );
         assert_eq!(manager.offline_machine_name("user-b", "m1"), None);
         assert_eq!(manager.offline_machine_name("user-a", "nope"), None);
+    }
+
+    async fn grace_manager(grace: Duration) -> Arc<MachineManager> {
+        let manager = Arc::new(MachineManager::new(test_db()).with_control_grace(grace));
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        manager
+    }
+
+    async fn grace_controller(manager: &MachineManager) -> AgentBrowserController {
+        manager
+            .agent_browser_info("machine-a", "b1")
+            .await
+            .unwrap()
+            .controller
+    }
+
+    fn grace_take(device: &str) -> ControlChange {
+        ControlChange::Take {
+            device_id: device.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn control_is_released_after_the_controller_has_no_viewer_for_the_grace_period() {
+        let grace = Duration::from_millis(150);
+        let manager = grace_manager(grace).await;
+        // Taken with no viewer socket at all, and a pending handoff.
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-a"))
+            .await;
+        assert_eq!(
+            grace_controller(&manager).await,
+            AgentBrowserController::Human
+        );
+        tokio::time::sleep(grace * 3).await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert!(info.controller_device_id.is_none());
+        assert!(info.handoff.is_none(), "behaves like release");
+        assert!(event_types(&manager)
+            .iter()
+            .any(|t| t == "agent_browser_updated"));
+    }
+
+    #[tokio::test]
+    async fn reconnecting_within_the_grace_period_keeps_control() {
+        let grace = Duration::from_millis(300);
+        let manager = grace_manager(grace).await;
+        let (viewer, _rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-a"))
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-a"))
+            .await;
+        // Socket drops: the clock starts. Another device watching does not help.
+        let (_other, _other_rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-b"))
+            .await;
+        drop(viewer);
+        tokio::time::sleep(grace / 3).await;
+        let (viewer, _rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-a"))
+            .await;
+        tokio::time::sleep(grace * 2).await;
+        assert_eq!(
+            grace_controller(&manager).await,
+            AgentBrowserController::Human
+        );
+
+        // Dropping the viewer for good releases after the grace period.
+        drop(viewer);
+        tokio::time::sleep(grace * 2).await;
+        assert_eq!(
+            grace_controller(&manager).await,
+            AgentBrowserController::Agent
+        );
+    }
+
+    #[tokio::test]
+    async fn a_takeover_by_another_device_is_not_released_by_the_old_timer() {
+        let grace = Duration::from_millis(300);
+        let manager = grace_manager(grace).await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-a"))
+            .await;
+        tokio::time::sleep(grace / 2).await;
+        let (_viewer, _rx) = manager
+            .attach_agent_browser_viewer("machine-a", "b1", Params::default(), Some("dev-b"))
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", grace_take("dev-b"))
+            .await;
+        tokio::time::sleep(grace * 2).await;
+        // dev-b has a live viewer, so dev-a's old timer must not release it.
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.controller, AgentBrowserController::Human);
+        assert_eq!(info.controller_device_id.as_deref(), Some("dev-b"));
     }
 }

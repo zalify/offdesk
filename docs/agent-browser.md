@@ -15,12 +15,12 @@ machine's network (localhost dev servers, LAN hosts) and keeps its logins.
   `OFFDESK_TOKEN`, and the node must be online.
 
 The web UI shows each agent browser live as a pane: in the tab of the terminal
-that opened it, or in a tab of its own when it was opened without one. A person
-can take control of it (see [Taking over](#taking-over-and-handing-off)); until
-the pane offers that, it is view only. Its
-header has the page title, URL, connection state and a close button. A pane
-streams only while it is visible: a hidden tab or a hidden browser window holds
-no connection, and the node stops the screencast when the last viewer leaves.
+that opened it, or in a tab of its own when it was opened without one. Its
+header has the page title, URL, who is in control, a **Take over** / **Hand
+back** button, connection state and a close button (see
+[Taking over](#taking-over-and-handing-off)). A pane streams only while it is
+visible: a hidden tab or a hidden browser window holds no connection, and the
+node stops the screencast when the last viewer leaves.
 
 ## Commands
 
@@ -99,6 +99,25 @@ a captcha, entering a 2FA code.
   controlling this browser. Wait for them with `offdesk browser wait-control
   <browser>`." and exits `3`. `snapshot`, `screenshot`, `wait`, `ls` and
   `open` keep working, so an agent can watch what the person does.
+- **In the web UI** the pane header shows "Agent in control" with a **Take
+  over** button; "You're in control" with **Hand back** while this device
+  controls it; "Controlled on another device" with **Take over** while another
+  one does (taking it is last-writer-wins). While you control it, the pane
+  takes focus and sends your mouse (move, press, release, drag), wheel,
+  keyboard, IME composition and paste to the page; the context menu is
+  suppressed on it. The workspace prefix key (Ctrl+B) still belongs to the
+  workspace and is never sent to the page. Closing the pane while in control
+  hands it back first, then closes the browser.
+- **A handoff** shows a banner in the pane, "The agent needs you: <reason>",
+  with a **Take over** button, and a small dot on the workspace tab that holds
+  the browser until a person has taken over. **Hand back** (header or banner)
+  clears the handoff.
+- **Auto-release.** If the controlling device has no open viewer WebSocket for
+  the browser for 2 minutes (the pane was closed or hidden, the app quit, the
+  network dropped), the hub hands control back to the agent exactly like
+  `release` (the handoff is cleared too) and tells every client. Reconnecting
+  within the 2 minutes cancels it. Control taken over REST with no viewer
+  connected is released after the same 2 minutes.
 - **`wait-control <browser> [--timeout SEC]`** blocks until the agent controls
   the browser again: exit `0`, or `1` on timeout (default 600 s).
 - **`handoff <browser> --reason "Please log in"`** asks a person for help: the
@@ -154,9 +173,9 @@ on its own task, so it is never held up by screencast frames; a backlog of
 mouse moves collapses to the latest one. Ctrl or Cmd with A, C, X, V, Z, Y runs
 the matching editing command.
 
-If the controlling person closes the pane without releasing, the browser stays
-under their control until someone releases it or takes it over; `wait-control`
-and `handoff --wait` keep waiting.
+If the controlling person closes the pane without releasing, the hub releases
+control after 2 minutes without a viewer from that device (see Auto-release
+above); until then `wait-control` and `handoff --wait` keep waiting.
 
 ## Snapshots and refs
 

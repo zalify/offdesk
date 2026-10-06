@@ -14,6 +14,8 @@ import type {
   RelayBrief,
   TodoInfo,
   TodoStatus,
+  AgentBrowserInfo,
+  AgentBrowserControlRequest,
 } from "@offdesk/shared";
 
 import { generateDeviceId } from "./deviceIdShared";
@@ -428,13 +430,30 @@ export function terminalPreviewsWsUrl(deviceId?: string): string {
   return `${base}/ws/terminal-previews${qs ? '?' + qs : ''}`;
 }
 
-export function agentBrowserWsUrl(machineId: string, browserId: string): string {
+export function agentBrowserWsUrl(
+  machineId: string,
+  browserId: string,
+  deviceId?: string,
+): string {
   const base = _baseUrl.replace(/^http/, "ws");
   const params = new URLSearchParams();
   if (_token) params.set("token", _token);
+  if (deviceId) params.set("device_id", deviceId);
   const qs = params.toString();
   return `${base}/ws/agent-browser/${encodeURIComponent(machineId)}/${encodeURIComponent(browserId)}${qs ? "?" + qs : ""}`;
 }
+
+/** A person takes control of an agent browser (last writer wins) or hands it back. */
+export const controlAgentBrowser = (
+  machineId: string,
+  browserId: string,
+  body: AgentBrowserControlRequest,
+) =>
+  request<AgentBrowserInfo>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-browser/${encodeURIComponent(browserId)}/control`,
+    body,
+  );
 
 export const closeAgentBrowser = (machineId: string, browserId: string) =>
   request<unknown>(

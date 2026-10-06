@@ -741,7 +741,12 @@ async fn handle_agent_browser_ws(
     // being aborted by the secure channel.
     let (viewer, mut frames) = state
         .manager
-        .attach_agent_browser_viewer(&machine_id, &browser_id, Params::default())
+        .attach_agent_browser_viewer(
+            &machine_id,
+            &browser_id,
+            Params::default(),
+            device_id.as_deref(),
+        )
         .await;
     // The browser may have closed between the check and the attach.
     if !state
