@@ -830,20 +830,21 @@ async fn handle_hub_message(
             max_width,
             max_height,
             quality,
+            epoch,
         } => {
             let manager = agent_browser.clone();
             tokio::spawn(async move {
                 if let Err(error) = manager
-                    .screencast_start(&browser_id, max_width, max_height, quality)
+                    .screencast_start(&browser_id, max_width, max_height, quality, epoch)
                     .await
                 {
                     tracing::warn!(%browser_id, "screencast start failed: {error}");
                 }
             });
         }
-        HubToMachine::AgentBrowserScreencastStop { browser_id } => {
+        HubToMachine::AgentBrowserScreencastStop { browser_id, epoch } => {
             let manager = agent_browser.clone();
-            tokio::spawn(async move { manager.screencast_stop(&browser_id).await });
+            tokio::spawn(async move { manager.screencast_stop(&browser_id, epoch).await });
         }
         HubToMachine::AgentBrowserInput { browser_id, event } => {
             agent_browser.input(&browser_id, event);

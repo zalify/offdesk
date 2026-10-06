@@ -72,8 +72,10 @@ pub enum ViewerMsg {
 /// What the caller must tell the node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NodeAction {
-    Start(Params),
-    Stop,
+    /// Start/restart the screencast; the `u64` is the epoch that orders
+    /// this against other Start/Stop messages for the same browser.
+    Start(Params, u64),
+    Stop(u64),
     Ack,
 }
 
@@ -97,6 +99,8 @@ pub struct Fanout {
     /// Highest frame sequence the node has been told about (acked).
     node_acked: u64,
     last_frame: Option<(u64, Arc<Frame>)>,
+    /// Epoch of the latest Start/Stop sent to the node.
+    epoch: u64,
 }
 
 impl Fanout {
@@ -118,9 +122,10 @@ impl Fanout {
             return Vec::new();
         }
         self.started = wanted;
+        self.epoch += 1;
         vec![match wanted {
-            Some(p) => NodeAction::Start(p),
-            None => NodeAction::Stop,
+            Some(p) => NodeAction::Start(p, self.epoch),
+            None => NodeAction::Stop(self.epoch),
         }]
     }
 
@@ -234,10 +239,44 @@ pub struct Streams {
     inner: Mutex<StreamsInner>,
 }
 
-#[derive(Default)]
 struct StreamsInner {
     next_viewer: u64,
     fanouts: HashMap<(String, String), Fanout>,
+    /// Highest epoch ever issued. New fan-outs start from it, so epochs stay
+    /// increasing per browser across fan-out removal, and (seeded from the
+    /// clock) across hub restarts: a node that outlives the hub has seen
+    /// older epochs only.
+    epoch_clock: u64,
+    /// Last epoch of fan-outs that ended because their viewers left, for a
+    /// straggler frame's Stop.
+    last_epochs: HashMap<(String, String), u64>,
+}
+
+impl Default for StreamsInner {
+    fn default() -> Self {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        Self {
+            next_viewer: 0,
+            fanouts: HashMap::new(),
+            epoch_clock: millis,
+            last_epochs: HashMap::new(),
+        }
+    }
+}
+
+impl StreamsInner {
+    /// A fan-out ended; keep its epoch ordering.
+    fn retire(&mut self, key: &(String, String), fanout: &Fanout, remember: bool) {
+        self.epoch_clock = self.epoch_clock.max(fanout.epoch);
+        if remember {
+            self.last_epochs.insert(key.clone(), fanout.epoch);
+        } else {
+            self.last_epochs.remove(key);
+        }
+    }
 }
 
 impl Streams {
@@ -251,10 +290,19 @@ impl Streams {
         let mut inner = self.inner.lock().unwrap();
         inner.next_viewer += 1;
         let id = inner.next_viewer;
+        let key = (machine_id.to_string(), browser_id.to_string());
+        let seed = inner
+            .last_epochs
+            .remove(&key)
+            .unwrap_or(0)
+            .max(inner.epoch_clock);
         let actions = inner
             .fanouts
-            .entry((machine_id.to_string(), browser_id.to_string()))
-            .or_default()
+            .entry(key)
+            .or_insert_with(|| Fanout {
+                epoch: seed,
+                ..Fanout::default()
+            })
             .add_viewer(id, params, tx);
         (id, rx, actions)
     }
@@ -272,7 +320,9 @@ impl Streams {
         };
         let result = f(fanout);
         if fanout.is_empty() {
-            inner.fanouts.remove(&key);
+            if let Some(fanout) = inner.fanouts.remove(&key) {
+                inner.retire(&key, &fanout, true);
+            }
         }
         result
     }
@@ -299,24 +349,28 @@ impl Streams {
     /// streaming at all, so tell it to stop.
     pub fn on_frame(&self, machine_id: &str, browser_id: &str, frame: Frame) -> Vec<NodeAction> {
         let mut inner = self.inner.lock().unwrap();
-        match inner
-            .fanouts
-            .get_mut(&(machine_id.to_string(), browser_id.to_string()))
-        {
-            Some(fanout) => fanout.on_frame(frame),
-            None => vec![NodeAction::Stop],
+        let key = (machine_id.to_string(), browser_id.to_string());
+        if let Some(fanout) = inner.fanouts.get_mut(&key) {
+            return fanout.on_frame(frame);
         }
+        // Reuse (do not advance) the last epoch: a newer Start still wins.
+        let epoch = inner
+            .last_epochs
+            .get(&key)
+            .copied()
+            .unwrap_or(inner.epoch_clock);
+        vec![NodeAction::Stop(epoch)]
     }
 
     /// The browser went away: viewers get `Destroyed` and the fan-out ends.
     pub fn destroy(&self, machine_id: &str, browser_id: &str) {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(mut fanout) = inner
-            .fanouts
-            .remove(&(machine_id.to_string(), browser_id.to_string()))
-        {
+        let key = (machine_id.to_string(), browser_id.to_string());
+        if let Some(mut fanout) = inner.fanouts.remove(&key) {
             fanout.destroy();
+            inner.retire(&key, &fanout, false);
         }
+        inner.last_epochs.remove(&key);
     }
 
     /// Every browser of a machine went away (it disconnected).
@@ -331,8 +385,10 @@ impl Streams {
         for key in keys {
             if let Some(mut fanout) = inner.fanouts.remove(&key) {
                 fanout.destroy();
+                inner.retire(&key, &fanout, false);
             }
         }
+        inner.last_epochs.retain(|(m, _), _| m != machine_id);
     }
 
     /// The node (re)connected and reported which browsers it has: viewers of
@@ -358,6 +414,7 @@ impl Streams {
                 }
             } else if let Some(mut fanout) = inner.fanouts.remove(&key) {
                 fanout.destroy();
+                inner.retire(&key, &fanout, false);
             }
         }
         actions
@@ -401,7 +458,7 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         assert_eq!(
             f.add_viewer(1, Params::default(), tx),
-            vec![NodeAction::Start(Params::default())]
+            vec![NodeAction::Start(Params::default(), 1)]
         );
         assert!(f.on_frame(frame(1)).is_empty());
         assert_eq!(jpeg_of(rx.try_recv().unwrap()), 1);
@@ -450,13 +507,16 @@ mod tests {
         let big = Params::clamped(1600, 900, 80);
         let (a_tx, _a) = mpsc::unbounded_channel();
         let (b_tx, _b) = mpsc::unbounded_channel();
-        assert_eq!(f.add_viewer(1, small, a_tx), vec![NodeAction::Start(small)]);
-        assert_eq!(f.add_viewer(2, big, b_tx), vec![NodeAction::Start(big)]);
+        assert_eq!(
+            f.add_viewer(1, small, a_tx),
+            vec![NodeAction::Start(small, 1)]
+        );
+        assert_eq!(f.add_viewer(2, big, b_tx), vec![NodeAction::Start(big, 2)]);
         // Dropping the big one falls back to the small one's parameters.
-        assert_eq!(f.remove_viewer(2), vec![NodeAction::Start(small)]);
-        assert_eq!(f.set_params(1, big), vec![NodeAction::Start(big)]);
+        assert_eq!(f.remove_viewer(2), vec![NodeAction::Start(small, 3)]);
+        assert_eq!(f.set_params(1, big), vec![NodeAction::Start(big, 4)]);
         assert!(f.set_params(1, big).is_empty());
-        assert_eq!(f.remove_viewer(1), vec![NodeAction::Stop]);
+        assert_eq!(f.remove_viewer(1), vec![NodeAction::Stop(5)]);
         assert!(f.remove_viewer(1).is_empty());
     }
 
@@ -478,13 +538,20 @@ mod tests {
     fn streams_stop_on_last_viewer_and_destroy_notifies() {
         let streams = Streams::default();
         let (a, mut a_rx, actions) = streams.add_viewer("m", "b", Params::default());
-        assert_eq!(actions, vec![NodeAction::Start(Params::default())]);
+        let NodeAction::Start(_, e1) = actions[0] else {
+            panic!("{actions:?}")
+        };
         let (b, _b_rx, actions) = streams.add_viewer("m", "b", Params::default());
         assert!(actions.is_empty());
         assert!(streams.remove_viewer("m", "b", a).is_empty());
-        assert_eq!(streams.remove_viewer("m", "b", b), vec![NodeAction::Stop]);
-        // The fan-out is gone; a straggler frame makes us tell the node to stop.
-        assert_eq!(streams.on_frame("m", "b", frame(1)), vec![NodeAction::Stop]);
+        let stop = streams.remove_viewer("m", "b", b);
+        assert_eq!(stop, vec![NodeAction::Stop(e1 + 1)]);
+        // The fan-out is gone; a straggler frame makes us tell the node to
+        // stop, with the last epoch.
+        assert_eq!(
+            streams.on_frame("m", "b", frame(1)),
+            vec![NodeAction::Stop(e1 + 1)]
+        );
 
         let (_c, mut c_rx, _) = streams.add_viewer("m", "b2", Params::default());
         streams.destroy("m", "b2");
@@ -505,7 +572,54 @@ mod tests {
         let (_a, _a_rx, _) = streams.add_viewer("m", "kept", p);
         let (_b, mut b_rx, _) = streams.add_viewer("m", "lost", p);
         let actions = streams.resync_machine("m", &|id| id == "kept");
-        assert_eq!(actions, vec![("kept".to_string(), NodeAction::Start(p))]);
+        assert!(matches!(
+            actions.as_slice(),
+            [(id, NodeAction::Start(q, _))] if id == "kept" && *q == p
+        ));
         assert!(matches!(b_rx.try_recv().unwrap(), ViewerMsg::Destroyed));
+    }
+
+    fn epoch_of(action: &NodeAction) -> u64 {
+        match action {
+            NodeAction::Start(_, e) | NodeAction::Stop(e) => *e,
+            NodeAction::Ack => panic!("ack has no epoch"),
+        }
+    }
+
+    #[test]
+    fn start_stop_start_epochs_strictly_increase_across_fanout_removal() {
+        let streams = Streams::default();
+        let p = Params::default();
+        let (a, _a_rx, start1) = streams.add_viewer("m", "b", p);
+        let stop = streams.remove_viewer("m", "b", a);
+        let (_c, _c_rx, start2) = streams.add_viewer("m", "b", p);
+        let epochs = [&start1[0], &stop[0], &start2[0]].map(epoch_of);
+        assert!(epochs[0] < epochs[1] && epochs[1] < epochs[2], "{epochs:?}");
+    }
+
+    #[test]
+    fn straggler_stop_reuses_last_epoch_and_loses_to_a_newer_start() {
+        let streams = Streams::default();
+        let p = Params::default();
+        let (a, _a_rx, _) = streams.add_viewer("m", "b", p);
+        let stop = streams.remove_viewer("m", "b", a);
+        let straggler = streams.on_frame("m", "b", frame(1));
+        assert_eq!(epoch_of(&straggler[0]), epoch_of(&stop[0]));
+        // Repeated stragglers do not advance it either.
+        assert_eq!(streams.on_frame("m", "b", frame(2)), straggler);
+        // A viewer joins afterwards; a straggler Stop sent before it (lower
+        // epoch) is older than the Start.
+        let (_c, _c_rx, start) = streams.add_viewer("m", "b", p);
+        assert!(epoch_of(&straggler[0]) < epoch_of(&start[0]));
+    }
+
+    #[test]
+    fn epochs_stay_ahead_after_the_browser_is_destroyed() {
+        let streams = Streams::default();
+        let p = Params::default();
+        let (_a, _rx, start1) = streams.add_viewer("m", "b", p);
+        streams.destroy("m", "b");
+        let (_b, _rx2, start2) = streams.add_viewer("m", "b", p);
+        assert!(epoch_of(&start1[0]) < epoch_of(&start2[0]));
     }
 }

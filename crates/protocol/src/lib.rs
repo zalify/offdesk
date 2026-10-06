@@ -607,9 +607,18 @@ pub enum HubToMachine {
         max_width: u32,
         max_height: u32,
         quality: u32,
+        /// Orders start/stop pairs that may arrive out of order: the node
+        /// ignores one older than the newest it has seen. 0 (an old hub)
+        /// means "apply in arrival order".
+        #[serde(default)]
+        epoch: u64,
     },
     #[serde(rename = "agent_browser_screencast_stop")]
-    AgentBrowserScreencastStop { browser_id: String },
+    AgentBrowserScreencastStop {
+        browser_id: String,
+        #[serde(default)]
+        epoch: u64,
+    },
     /// The hub (a viewer) has taken the last screencast frame.
     #[serde(rename = "agent_browser_frame_ack")]
     AgentBrowserFrameAck { browser_id: String },

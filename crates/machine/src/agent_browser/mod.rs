@@ -124,6 +124,8 @@ struct Tab {
     /// url/title last reported to the hub.
     reported: Mutex<(String, String)>,
     screen: Mutex<Screen>,
+    /// Serializes screencast start/stop; holds the newest epoch applied.
+    cast_gate: tokio::sync::Mutex<u64>,
     /// A person's input, applied in order by this tab's dispatcher task.
     input: input::InputTx,
 }
@@ -182,12 +184,18 @@ impl AgentBrowserManager {
         max_width: u32,
         max_height: u32,
         quality: u32,
+        epoch: u64,
     ) -> Result<(), String> {
         let tab = self
             .tabs
             .get(browser_id)
             .ok_or_else(|| unknown_browser(browser_id))?;
-        let run = tab.screencast_start(max_width, max_height, quality).await?;
+        let Some(run) = tab
+            .screencast_start(max_width, max_height, quality, epoch)
+            .await?
+        else {
+            return Ok(()); // superseded by a newer start/stop
+        };
         // Chromium only emits frames when the page changes: a static page
         // would leave a new viewer with a blank screen.
         tokio::spawn(async move {
@@ -197,9 +205,9 @@ impl AgentBrowserManager {
         Ok(())
     }
 
-    pub async fn screencast_stop(&self, browser_id: &str) {
+    pub async fn screencast_stop(&self, browser_id: &str, epoch: u64) {
         if let Some(tab) = self.tabs.get(browser_id) {
-            tab.screencast_stop().await;
+            tab.screencast_stop(epoch).await;
         }
     }
 
@@ -222,7 +230,7 @@ impl AgentBrowserManager {
     /// The hub connection is gone, so nobody is watching.
     pub async fn stop_all_screencasts(&self) {
         for tab in self.tabs.all() {
-            tab.screencast_stop().await;
+            tab.screencast_stop(0).await;
         }
     }
 
@@ -626,6 +634,7 @@ impl Tab {
             gone: AtomicBool::new(false),
             reported: Mutex::new((String::new(), String::new())),
             screen: Mutex::new(Screen::default()),
+            cast_gate: tokio::sync::Mutex::new(0),
             input,
         })
     }
@@ -680,7 +689,15 @@ impl Tab {
         max_width: u32,
         max_height: u32,
         quality: u32,
-    ) -> Result<u64, String> {
+        epoch: u64,
+    ) -> Result<Option<u64>, String> {
+        let mut latest = self.cast_gate.lock().await;
+        if epoch != 0 {
+            if epoch < *latest {
+                return Ok(None);
+            }
+            *latest = epoch;
+        }
         let (was_active, run) = {
             let mut screen = self.screen.lock().unwrap();
             screen.latest = None;
@@ -719,7 +736,7 @@ impl Tab {
         if started.is_err() {
             self.screen.lock().unwrap().active = false;
         }
-        started.map(|_| run)
+        started.map(|_| Some(run))
     }
 
     /// Screenshot stand-in for the first screencast frame of a page that is
@@ -788,7 +805,14 @@ impl Tab {
         self.flush_frame(&mut screen);
     }
 
-    async fn screencast_stop(&self) {
+    async fn screencast_stop(&self, epoch: u64) {
+        let mut latest = self.cast_gate.lock().await;
+        if epoch != 0 {
+            if epoch < *latest {
+                return;
+            }
+            *latest = epoch;
+        }
         let was_active = {
             let mut screen = self.screen.lock().unwrap();
             screen.latest = None;
@@ -1424,7 +1448,7 @@ mod tests {
         assert_eq!(updated.opener_terminal_id.as_deref(), Some("term-7"));
 
         // Screencast: a JPEG frame with CDP metadata, one in flight at a time.
-        mgr.screencast_start(&id, 640, 400, 50).await.unwrap();
+        mgr.screencast_start(&id, 640, 400, 50, 0).await.unwrap();
         let frame = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if let AgentBrowserEvent::Frame { meta, jpeg, .. } = events.recv().await.unwrap() {
@@ -1467,12 +1491,12 @@ mod tests {
         })
         .await
         .expect("no frame after ack");
-        mgr.screencast_stop(&id).await;
+        mgr.screencast_stop(&id, 0).await;
 
         // A static page repaints nothing on restart; the fallback screenshot
         // still gives the new viewer a frame.
         while events.try_recv().is_ok() {}
-        mgr.screencast_start(&id, 640, 400, 50).await.unwrap();
+        mgr.screencast_start(&id, 640, 400, 50, 0).await.unwrap();
         let again = tokio::time::timeout(Duration::from_secs(3), async {
             loop {
                 if let AgentBrowserEvent::Frame { jpeg, .. } = events.recv().await.unwrap() {
@@ -1483,7 +1507,45 @@ mod tests {
         .await
         .expect("no frame after restarting the screencast of a static page");
         assert_eq!(&again[..2], &[0xFF, 0xD8]);
-        mgr.screencast_stop(&id).await;
+        mgr.screencast_stop(&id, 0).await;
+
+        // Out-of-order start/stop: a stale message never undoes a newer one.
+        while events.try_recv().is_ok() {}
+        mgr.screencast_stop(&id, 2).await;
+        mgr.screencast_start(&id, 640, 400, 50, 1).await.unwrap();
+        let stale = tokio::time::timeout(Duration::from_millis(1500), async {
+            loop {
+                if let AgentBrowserEvent::Frame { .. } = events.recv().await.unwrap() {
+                    return;
+                }
+            }
+        })
+        .await;
+        assert!(
+            stale.is_err(),
+            "stale start (epoch 1 < 2) restarted the screencast"
+        );
+        mgr.screencast_start(&id, 640, 400, 50, 4).await.unwrap();
+        mgr.screencast_stop(&id, 3).await;
+        for round in 0..3 {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let AgentBrowserEvent::Frame { .. } = events.recv().await.unwrap() {
+                        return;
+                    }
+                }
+            })
+            .await
+            .unwrap_or_else(|_| panic!("frames stopped after stale stop (round {round})"));
+            mgr.frame_ack(&id);
+            mgr.tabs
+                .get(&id)
+                .unwrap()
+                .evaluate(&format!("document.body.style.background='#0{round}0'; 1"))
+                .await
+                .unwrap();
+        }
+        mgr.screencast_stop(&id, 5).await;
 
         // Second tab, list, close both.
         let second = mgr
