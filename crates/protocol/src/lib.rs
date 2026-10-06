@@ -306,7 +306,8 @@ pub struct AgentBrowserInfo {
 /// Commands an agent can run against an agent browser. Replies:
 /// Open/Goto -> `AgentBrowserInfo`; List -> `Vec<AgentBrowserInfo>`;
 /// Snapshot -> `{"snapshot": string}`; Screenshot -> `{"png_base64": string}`;
-/// the rest (including Wait) -> `{}`.
+/// Wait -> `{"matched": bool, "message"?: string}` (a timeout is not an
+/// error); the rest -> `{}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentBrowserCommand {

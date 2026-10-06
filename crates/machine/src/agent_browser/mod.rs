@@ -107,8 +107,10 @@ impl AgentBrowserManager {
                 timeout_ms,
             } => {
                 let tab = self.tab(&browser_id).await?;
-                tab.wait(text, url_regex, idle_ms, timeout_ms).await?;
-                Ok(json!({}))
+                Ok(match tab.wait(text, url_regex, idle_ms, timeout_ms).await? {
+                    None => json!({"matched": true}),
+                    Some(message) => json!({"matched": false, "message": message}),
+                })
             }
             C::Screenshot {
                 browser_id,
@@ -512,7 +514,7 @@ impl Tab {
         url_regex: Option<String>,
         idle_ms: Option<u64>,
         timeout_ms: u64,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         if text.is_none() && url_regex.is_none() && idle_ms.is_none() {
             return Err("wait needs at least one of text, url_regex or idle_ms".to_string());
         }
@@ -562,7 +564,7 @@ impl Tab {
                 }
             }
             if ok {
-                return Ok(());
+                return Ok(None);
             }
             if Instant::now() >= deadline {
                 let mut what = Vec::new();
@@ -575,10 +577,10 @@ impl Tab {
                 if let Some(i) = idle_ms {
                     what.push(format!("{i}ms of network idle"));
                 }
-                return Err(format!(
+                return Ok(Some(format!(
                     "timed out after {timeout_ms}ms waiting for {}",
                     what.join(" and ")
-                ));
+                )));
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
@@ -726,8 +728,9 @@ mod tests {
                 timeout_ms: 400,
             })
             .await
-            .unwrap_err();
-        assert!(timeout.contains("timed out"), "{timeout}");
+            .unwrap();
+        assert_eq!(timeout["matched"], false);
+        assert!(timeout["message"].as_str().unwrap().contains("timed out"));
         mgr.execute(AgentBrowserCommand::Press {
             browser_id: id.clone(),
             key: "Tab".into(),
