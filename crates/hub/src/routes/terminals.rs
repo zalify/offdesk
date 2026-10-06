@@ -6,7 +6,7 @@ use axum::{
     Router,
 };
 use offdesk_protocol::{
-    DirEntry, MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo,
+    AgentBrowserInfo, DirEntry, MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo,
     WorkspaceLayoutNode,
 };
 use serde::{Deserialize, Serialize};
@@ -454,6 +454,12 @@ async fn save_workspace_layout(
         req.root.is_some(),
     )
     .map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    let agent_browsers = state
+        .manager
+        .list_agent_browsers_for_user(&auth_user.user_id, &machine_id)
+        .await;
+    let allowed_terminal_ids =
+        with_agent_browser_pane_ids(allowed_terminal_ids, &agent_browsers);
 
     if let Some(root) = req.root.as_ref() {
         let mut seen = HashSet::new();
@@ -567,6 +573,28 @@ fn workspace_layout_terminal_ids_for_group_key(
     }
 
     Err("Workspace layout group key does not match this machine".to_string())
+}
+
+/// A live agent browser rides in a tab as a pane of its opener terminal, so
+/// a layout for that tab may reference its id. Browsers whose opener is not
+/// one of the tab's terminals (or that have none) stay in their own,
+/// never-saved tab.
+fn with_agent_browser_pane_ids(
+    mut allowed: HashSet<String>,
+    browsers: &[AgentBrowserInfo],
+) -> HashSet<String> {
+    let extra: Vec<String> = browsers
+        .iter()
+        .filter(|browser| {
+            browser
+                .opener_terminal_id
+                .as_ref()
+                .is_some_and(|opener| allowed.contains(opener))
+        })
+        .map(|browser| browser.id.clone())
+        .collect();
+    allowed.extend(extra);
+    allowed
 }
 
 fn validate_workspace_layout_node(
@@ -1090,7 +1118,8 @@ mod tests {
         Json,
     };
     use offdesk_protocol::{
-        HubToMachine, MachineInfo, MachineToHub, TerminalInfo, WorkspaceLayoutNode,
+        AgentBrowserInfo, HubToMachine, MachineInfo, MachineToHub, TerminalInfo,
+        WorkspaceLayoutNode,
     };
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
@@ -1100,7 +1129,8 @@ mod tests {
     use super::{
         assign_terminal_workspace_group, control_action_allowed, create_terminal,
         create_workspace_group, rename_workspace_group, validate_workspace_layout_node,
-        workspace_layout_terminal_ids_for_group_key, AssignWorkspaceGroupRequest,
+        with_agent_browser_pane_ids, workspace_layout_terminal_ids_for_group_key,
+        AssignWorkspaceGroupRequest,
         CreateTerminalRequest, CreateWorkspaceGroupRequest, RenameWorkspaceGroupRequest,
         MAX_PANES_PER_TAB,
     };
@@ -1495,6 +1525,72 @@ mod tests {
             0,
         )
         .is_err());
+    }
+
+    #[test]
+    fn workspace_layout_allows_live_browsers_opened_from_the_tabs_terminals() {
+        let state = test_state();
+        let conn = state.db.get().unwrap();
+        crate::db::machines::ensure_machine_for_user(
+            &conn,
+            "machine-a",
+            "user-a",
+            "Machine A",
+            Some("linux"),
+            Some("/tmp"),
+        )
+        .unwrap();
+        crate::db::workspace_groups::create_workspace_group(
+            &conn,
+            "group-a",
+            "user-a",
+            "machine-a",
+            "Group A",
+            0,
+        )
+        .unwrap();
+        let terminals = vec![
+            terminal("tab-a", "/repo", Some("group-a")),
+            terminal("other", "/repo", Some("group-b")),
+        ];
+        let browser = |id: &str, opener: Option<&str>| AgentBrowserInfo {
+            id: id.to_string(),
+            machine_id: Some("machine-a".to_string()),
+            url: "https://example.com".to_string(),
+            title: String::new(),
+            opener_terminal_id: opener.map(str::to_string),
+        };
+        let browsers = vec![
+            browser("from-tab", Some("tab-a")),
+            browser("from-other", Some("other")),
+            browser("no-opener", None),
+        ];
+
+        let allowed = workspace_layout_terminal_ids_for_group_key(
+            &conn,
+            "user-a",
+            "machine-a",
+            "group-a",
+            &terminals,
+            true,
+        )
+        .unwrap();
+        let allowed = with_agent_browser_pane_ids(allowed, &browsers);
+
+        assert!(allowed.contains("tab-a"));
+        assert!(allowed.contains("from-tab"));
+        assert!(!allowed.contains("from-other"));
+        assert!(!allowed.contains("no-opener"));
+        let mut seen = Default::default();
+        assert!(validate_workspace_layout_node(
+            &WorkspaceLayoutNode::Leaf {
+                terminal_id: "from-tab".to_string(),
+            },
+            &allowed,
+            &mut seen,
+            0,
+        )
+        .is_ok());
     }
 
     #[test]

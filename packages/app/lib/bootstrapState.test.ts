@@ -508,3 +508,56 @@ describe("to-dos", () => {
     expect(state.todos).toEqual([]);
   });
 });
+
+describe("agent browsers", () => {
+  const browser = (id: string, url = "https://a.test/", machine = "m1") => ({
+    id,
+    machine_id: machine,
+    url,
+    title: "",
+  });
+
+  it("loads from the snapshot, defaulting to empty for older Hubs", () => {
+    const base = {
+      snapshot_seq: 1,
+      machines: [],
+      terminals: [],
+      machine_stats: [],
+      control_leases: [],
+    };
+    expect(applyBootstrapSnapshot(base).agentBrowsers).toEqual([]);
+    expect(
+      applyBootstrapSnapshot({ ...base, agent_browsers: [browser("b1")] }).agentBrowsers,
+    ).toEqual([browser("b1")]);
+  });
+
+  it("applies created, updated and destroyed events", () => {
+    let state = applyBrowserEventEnvelope(
+      EMPTY_BROWSER_SESSION_STATE,
+      envelope(1, { type: "agent_browser_created", browser: browser("b1") }),
+    );
+    state = applyBrowserEventEnvelope(
+      state,
+      envelope(2, { type: "agent_browser_created", browser: browser("b2", "https://b.test/") }),
+    );
+    expect(state.agentBrowsers.map((b) => b.id)).toEqual(["b1", "b2"]);
+
+    state = applyBrowserEventEnvelope(
+      state,
+      envelope(3, { type: "agent_browser_updated", browser: browser("b1", "https://c.test/") }),
+    );
+    expect(state.agentBrowsers.map((b) => b.url)).toEqual(["https://c.test/", "https://b.test/"]);
+
+    // Same id on another machine is a different browser.
+    state = applyBrowserEventEnvelope(
+      state,
+      envelope(4, { type: "agent_browser_destroyed", machine_id: "m2", browser_id: "b1" }),
+    );
+    expect(state.agentBrowsers).toHaveLength(2);
+    state = applyBrowserEventEnvelope(
+      state,
+      envelope(5, { type: "agent_browser_destroyed", machine_id: "m1", browser_id: "b1" }),
+    );
+    expect(state.agentBrowsers.map((b) => b.id)).toEqual(["b2"]);
+  });
+});

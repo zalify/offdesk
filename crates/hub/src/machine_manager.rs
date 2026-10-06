@@ -1156,6 +1156,20 @@ impl MachineManager {
         }
     }
 
+    /// Live agent browsers of one of `user_id`'s machines.
+    pub async fn list_agent_browsers_for_user(
+        &self,
+        user_id: &str,
+        machine_id: &str,
+    ) -> Vec<AgentBrowserInfo> {
+        let machines = self.machines.lock().await;
+        machines
+            .get(machine_id)
+            .filter(|conn| connection_visible_to(conn, user_id))
+            .map(|conn| conn.agent_browsers.values().cloned().collect())
+            .unwrap_or_default()
+    }
+
     /// Whether the machine is connected and has this agent browser.
     pub async fn agent_browser_exists(&self, machine_id: &str, browser_id: &str) -> bool {
         self.machines
