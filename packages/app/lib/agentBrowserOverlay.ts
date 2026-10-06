@@ -1,6 +1,6 @@
 // Pure helpers behind the desktop agent-browser overlay (the top-bar Browser
 // button): which tab is selected, what a typed address means, and which
-// handoffs are new.
+// handoffs and reclaims are new.
 
 import type { AgentBrowserInfo } from "@offdesk/shared";
 
@@ -74,6 +74,19 @@ export function findNewHandoffs(
       old.handoff === undefined ||
       old.handoff.requested_at !== browser.handoff!.requested_at
     );
+  });
+}
+
+/** Browsers in `next` whose `reclaimed` is new since `prev`: absent before, or a different `at`. */
+export function findNewReclaims(
+  prev: AgentBrowserInfo[],
+  next: AgentBrowserInfo[],
+): AgentBrowserInfo[] {
+  const before = new Map(prev.map((browser) => [browser.id, browser]));
+  return next.filter((browser) => {
+    if (!browser.reclaimed) return false;
+    const old = before.get(browser.id);
+    return !old || old.reclaimed === undefined || old.reclaimed.at !== browser.reclaimed.at;
   });
 }
 

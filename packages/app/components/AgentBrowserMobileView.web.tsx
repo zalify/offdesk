@@ -7,7 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
-import { Globe, Hand, Keyboard as KeyboardIcon } from "lucide-react";
+import { Bot, Globe, Hand, Keyboard as KeyboardIcon, X } from "lucide-react";
 import {
   IDENTITY_VIEW_ZOOM,
   classifyTouchGesture,
@@ -36,6 +36,10 @@ import {
   useAgentBrowserStream,
 } from "@/lib/useAgentBrowserStream";
 import { browserLabel } from "@/lib/agentBrowserOverlay";
+import {
+  reclaimNoticeText,
+  useAgentBrowserReclaimNotice,
+} from "@/lib/useAgentBrowserReclaimNotice";
 import { colors, colorAlpha } from "@/lib/colors";
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
@@ -110,9 +114,15 @@ export function AgentBrowserMobileView({
   const sendInputRef = useRef(sendInput);
   sendInputRef.current = sendInput;
 
-  // Hand back (or lose control): drop the keyboard.
+  const reclaimNotice = useAgentBrowserReclaimNotice(browser, deviceId, mine);
+
+  // Hand back (or lose control): drop the keyboard and cancel any drag or
+  // long press in progress (the touch effect installs `cancelInputRef`).
+  const cancelInputRef = useRef<() => void>(() => {});
   useEffect(() => {
-    if (!mine) textareaRef.current?.blur();
+    if (mine) return;
+    textareaRef.current?.blur();
+    cancelInputRef.current();
   }, [mine]);
 
   // ---- touch: tap / drag / long press / pinch / pan / double tap ----
@@ -366,6 +376,14 @@ export function AgentBrowserMobileView({
       reset();
     };
 
+    cancelInputRef.current = () => {
+      if (frame !== 0) window.cancelAnimationFrame(frame);
+      frame = 0;
+      pendingWheel = null;
+      cancelLongPress();
+      if (gesture && gesture.mode !== "zoom") gesture.mode = "none";
+    };
+
     body.addEventListener("touchstart", onStart, { passive: false });
     body.addEventListener("touchmove", onMove, { passive: false });
     body.addEventListener("touchend", onEnd, { passive: false });
@@ -375,6 +393,7 @@ export function AgentBrowserMobileView({
       body.removeEventListener("touchmove", onMove);
       body.removeEventListener("touchend", onEnd);
       body.removeEventListener("touchcancel", onCancel);
+      cancelInputRef.current = () => {};
       if (frame !== 0) window.cancelAnimationFrame(frame);
       window.clearTimeout(longTimer);
     };
@@ -585,6 +604,50 @@ export function AgentBrowserMobileView({
           }}
         >
           {error}
+        </div>
+      )}
+      {reclaimNotice && (
+        <div
+          role="status"
+          data-testid="mobile-agent-browser-reclaimed"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            fontSize: 12,
+            color: colors.fg0,
+            background: colorAlpha.warningLight12,
+            borderBottom: `1px solid ${colorAlpha.warningBorder}`,
+            flexShrink: 0,
+          }}
+        >
+          <Bot size={14} aria-hidden style={{ flexShrink: 0, color: colors.warning }} />
+          <span
+            data-testid="mobile-agent-browser-reclaimed-reason"
+            style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}
+          >
+            {reclaimNoticeText(reclaimNotice.reason, reclaimNotice.fromYou)}
+          </span>
+          <button
+            type="button"
+            data-testid="mobile-agent-browser-reclaimed-dismiss"
+            aria-label="Dismiss"
+            onClick={reclaimNotice.dismiss}
+            style={{
+              ...headerButton,
+              minHeight: 30,
+              minWidth: 30,
+              padding: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "transparent",
+              color: colors.accent,
+            }}
+          >
+            <X size={14} aria-hidden />
+          </button>
         </div>
       )}
       {browser.handoff && (

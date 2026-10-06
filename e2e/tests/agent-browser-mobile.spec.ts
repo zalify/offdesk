@@ -14,6 +14,7 @@ import {
   getImmersiveTerminal,
   openAgentBrowserViaApi,
   openApp,
+  reclaimAgentBrowserViaApi,
   requestAgentBrowserHandoffViaApi,
   requestMachineControl,
   resetMachineState,
@@ -395,6 +396,41 @@ test.describe("agent browser on the phone", () => {
     await expect(surface(page)).toBeVisible();
     await expect(page.getByTestId("mobile-browser-surface-empty")).toBeVisible();
     await expect.poll(async () => getAgentBrowserViaApi(page, opened.id)).toBeUndefined();
+  });
+
+  test("the agent taking control back is announced and the keyboard is released", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: phonePage() });
+    await openBrowserView(page, opened.id);
+    await page.getByTestId("mobile-agent-browser-take").click();
+    await expect(page.getByTestId("mobile-agent-browser-control-state")).toHaveText("In control");
+    await expect(page.getByTestId("mobile-agent-browser-reclaimed")).toHaveCount(0);
+
+    // Keyboard open, then the agent takes the browser back.
+    await page.getByTestId("mobile-agent-browser-keyboard").click();
+    await expect(page.getByTestId("mobile-agent-browser-input")).toBeFocused();
+    const result = await reclaimAgentBrowserViaApi(page, opened.id, {
+      reason: "Checking the page myself",
+    });
+    expect(result.status).toBe(200);
+
+    await expect(page.getByTestId("mobile-agent-browser-reclaimed-reason")).toHaveText(
+      "The agent took control back from you: Checking the page myself",
+    );
+    await expect(page.getByTestId("mobile-agent-browser-control-state")).toHaveText("Agent");
+    await expect(page.getByTestId("mobile-agent-browser-keybar")).toHaveCount(0);
+    await expect(page.getByTestId("mobile-agent-browser-input")).not.toBeFocused();
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-mobile-reclaimed.png" });
+
+    // A tap on the page no longer reaches it.
+    const button = await viewportToClient(page, 180, 230);
+    await page.touchscreen.tap(button.x, button.y);
+    await page.waitForTimeout(300);
+    expect(await agentBrowserSnapshotViaApi(page, opened.id)).toContain("idle");
+
+    await page.getByTestId("mobile-agent-browser-reclaimed-dismiss").click();
+    await expect(page.getByTestId("mobile-agent-browser-reclaimed")).toHaveCount(0);
   });
 
   test("a handoff shows a dot, a toast and an attention entry that opens the tab", async ({

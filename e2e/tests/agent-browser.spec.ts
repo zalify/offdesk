@@ -10,6 +10,7 @@ import {
   gotoAgentBrowserViaApi,
   openAgentBrowserViaApi,
   openApp,
+  reclaimAgentBrowserViaApi,
   requestAgentBrowserHandoffViaApi,
   resetMachineState,
   takeControlFromHeader,
@@ -375,6 +376,107 @@ test.describe("agent browser", () => {
     const record = await getAgentBrowserViaApi(page, opened.id);
     expect(record?.controller).toBe("agent");
     expect(record?.handoff).toBeUndefined();
+  });
+
+  test("the agent taking control back is announced and stops the pane's input", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: formPage() });
+    await openOverlay(page);
+    const pane = page.getByTestId(`agent-browser-pane-${opened.id}`);
+    const header = pane.getByTestId("agent-browser-control-state");
+    const notice = pane.getByTestId("agent-browser-reclaimed");
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(0);
+
+    // Taken over but untouched: the agent may take it back right away.
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(header).toHaveText("You're in control");
+    await expect(pane.getByTestId("agent-browser-input")).toBeFocused();
+    await expect(notice).toHaveCount(0);
+    const first = await reclaimAgentBrowserViaApi(page, opened.id, {
+      reason: "Checking the page myself",
+    });
+    expect(first.status).toBe(200);
+    await expect(header).toHaveText("Agent in control");
+    await expect(notice).toBeVisible();
+    await expect(pane.getByTestId("agent-browser-reclaimed-reason")).toHaveText(
+      "The agent took control back from you: Checking the page myself",
+    );
+    await expect(pane.getByTestId("agent-browser-input")).not.toBeFocused();
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-overlay-reclaimed.png" });
+
+    // No longer in control: a click on the page does nothing.
+    const button = await viewportToClient(page, opened.id, 160, 220);
+    await page.mouse.click(button.x, button.y);
+    await page.waitForTimeout(500);
+    expect(await agentBrowserSnapshotViaApi(page, opened.id)).toContain("idle");
+
+    // Dismissing hides the notice.
+    await pane.getByTestId("agent-browser-reclaimed-dismiss").click();
+    await expect(notice).toHaveCount(0);
+
+    // Taking over again clears the reclaim; a click is recorded as activity.
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(header).toHaveText("You're in control");
+    await expect(notice).toHaveCount(0);
+    await expect
+      .poll(async () => (await getAgentBrowserViaApi(page, opened.id))?.reclaimed)
+      .toBeUndefined();
+    // The notice is gone, so the page area moved: map the point again.
+    const again = await viewportToClient(page, opened.id, 160, 220);
+    await page.mouse.click(again.x, again.y);
+    await expect
+      .poll(() => agentBrowserSnapshotViaApi(page, opened.id))
+      .toContain("clicked");
+
+    // The person just acted: refused unless forced.
+    const refused = await reclaimAgentBrowserViaApi(page, opened.id, {
+      reason: "Need the page",
+    });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe("user_active");
+    expect(Number(refused.body.retry_after_ms)).toBeGreaterThan(0);
+    await expect(header).toHaveText("You're in control");
+    await expect(notice).toHaveCount(0);
+
+    const forced = await reclaimAgentBrowserViaApi(page, opened.id, {
+      reason: "Need the page",
+      force: true,
+    });
+    expect(forced.status).toBe(200);
+    await expect(header).toHaveText("Agent in control");
+    await expect(pane.getByTestId("agent-browser-reclaimed-reason")).toHaveText(
+      "The agent took control back from you: Need the page",
+    );
+
+    // Reopening the overlay does not replay the stale record.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+    await openOverlay(page);
+    await expect(
+      page.getByTestId(`agent-browser-pane-${opened.id}`).getByTestId("agent-browser-header"),
+    ).toBeVisible();
+    await expect(page.getByTestId("agent-browser-reclaimed")).toHaveCount(0);
+  });
+
+  test("a reclaim while the overlay is closed toasts the person who lost control", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: formPage() });
+    await openOverlay(page);
+    const pane = page.getByTestId(`agent-browser-pane-${opened.id}`);
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(pane.getByTestId("agent-browser-release")).toBeVisible();
+    await page.getByTestId("agent-browser-overlay-close").click();
+    await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+
+    const result = await reclaimAgentBrowserViaApi(page, opened.id, {
+      reason: "Back to me",
+    });
+    expect(result.status).toBe(200);
+    await expect(page.getByTestId("workspace-toast")).toHaveText(
+      "The agent took control back from you: Back to me",
+    );
   });
 
   test("another device's control is shown and can be taken over", async ({

@@ -80,10 +80,12 @@ import { CheatSheetOverlay } from "./CheatSheetOverlay.web";
 import { UpdateNotification } from "./UpdateNotification";
 import { useAuth } from "@/lib/auth";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
+import { reclaimNoticeText } from "@/lib/useAgentBrowserReclaimNotice";
 import {
   browserLabel,
   browserNeedsPerson,
   findNewHandoffs,
+  findNewReclaims,
   pickBrowserToOpen,
 } from "@/lib/agentBrowserOverlay";
 import { AgentBrowserOverlay } from "./AgentBrowserOverlay.web";
@@ -1220,13 +1222,25 @@ function TerminalCanvasInner() {
     if (browserOverlayOpen) return;
     if (previous.machineId !== overlayMachineId) return;
     const fresh = findNewHandoffs(previous.browsers, scopedAgentBrowsers);
-    if (fresh.length === 0) return;
-    const first = fresh[0];
-    showWorkspaceToast(
-      `The agent needs you in ${browserLabel(first)}: ${first.handoff?.reason ?? ""}`,
-      6000,
+    if (fresh.length > 0) {
+      const first = fresh[0];
+      showWorkspaceToast(
+        `The agent needs you in ${browserLabel(first)}: ${first.handoff?.reason ?? ""}`,
+        6000,
+      );
+    }
+    // The agent took control from this device while its view is closed. The
+    // phone surface shares `browserOverlayOpen`, so this covers it too.
+    const lost = findNewReclaims(previous.browsers, scopedAgentBrowsers).find(
+      (browser) => deviceId !== null && browser.reclaimed?.device_id === deviceId,
     );
-  }, [overlayMachineId, browserOverlayOpen, scopedAgentBrowsers]);
+    if (lost?.reclaimed) {
+      showWorkspaceToast(
+        reclaimNoticeText(lost.reclaimed.reason, true),
+        6000,
+      );
+    }
+  }, [overlayMachineId, browserOverlayOpen, scopedAgentBrowsers, deviceId]);
 
   // Create a tab named after the first free "tab N" slot and select it. The
   // group also arrives via workspace_group_created; selecting by the response

@@ -9,7 +9,7 @@ import {
   type PointerEvent,
 } from "react";
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
-import { Globe, Hand } from "lucide-react";
+import { Bot, Globe, Hand, X } from "lucide-react";
 import {
   containedImageRect,
   isComposingKey,
@@ -25,6 +25,10 @@ import {
   useAgentBrowserStream,
 } from "@/lib/useAgentBrowserStream";
 import { browserLabel } from "@/lib/agentBrowserOverlay";
+import {
+  reclaimNoticeText,
+  useAgentBrowserReclaimNotice,
+} from "@/lib/useAgentBrowserReclaimNotice";
 import { colors, colorAlpha } from "@/lib/colors";
 
 const bannerButton = {
@@ -93,6 +97,8 @@ export function AgentBrowserPane({
     canvasRef,
   });
 
+  const reclaimNotice = useAgentBrowserReclaimNotice(browser, deviceId, mine);
+
   /** Viewport point of a client position; `clamp` pins it to the image edge (drags). */
   const viewportPoint = useCallback(
     (clientX: number, clientY: number, clamp: boolean) => {
@@ -116,6 +122,8 @@ export function AgentBrowserPane({
     },
     [metaRef],
   );
+
+  const composingRef = useRef(false);
 
   // Take focus into the hidden textarea whenever the person is in control, so
   // typing and IME land there.
@@ -147,10 +155,13 @@ export function AgentBrowserPane({
     },
     [],
   );
+  // Hand back (or lose control): drop queued moves, stop capturing the keyboard.
   useEffect(() => {
     if (!mine) {
       pendingMoveRef.current = null;
       pendingWheelRef.current = null;
+      composingRef.current = false;
+      textareaRef.current?.blur();
     }
   }, [mine]);
 
@@ -203,7 +214,6 @@ export function AgentBrowserPane({
     return () => body.removeEventListener("wheel", onWheel);
   }, [mine, viewportPoint, scheduleFlush]);
 
-  const composingRef = useRef(false);
   const justComposedRef = useRef(false);
   // Ctrl/Cmd+V is delivered by the `paste` event, not as a key press.
   const isPasteShortcut = (event: { key: string; ctrlKey: boolean; metaKey: boolean }) =>
@@ -394,6 +404,44 @@ export function AgentBrowserPane({
           }}
         >
           {error}
+        </div>
+      )}
+      {reclaimNotice && (
+        <div
+          role="status"
+          data-testid="agent-browser-reclaimed"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "5px 8px",
+            fontSize: 11,
+            color: colors.fg0,
+            background: colorAlpha.warningLight12,
+            borderBottom: `1px solid ${colorAlpha.warningBorder}`,
+            flexShrink: 0,
+          }}
+        >
+          <Bot size={12} aria-hidden style={{ flexShrink: 0, color: colors.warning }} />
+          <span
+            data-testid="agent-browser-reclaimed-reason"
+            style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
+            title={reclaimNotice.reason}
+          >
+            {reclaimNoticeText(reclaimNotice.reason, reclaimNotice.fromYou)}
+          </span>
+          <button
+            type="button"
+            data-testid="agent-browser-reclaimed-dismiss"
+            aria-label="Dismiss"
+            onClick={(e) => {
+              e.stopPropagation();
+              reclaimNotice.dismiss();
+            }}
+            style={{ ...bannerButton, display: "flex", alignItems: "center", padding: 2 }}
+          >
+            <X size={12} aria-hidden />
+          </button>
         </div>
       )}
       {browser.handoff && (
