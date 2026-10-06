@@ -257,6 +257,18 @@ pub fn tool_definitions() -> Vec<Value> {
                 &["browser_id"],
             ),
         ),
+        tool(
+            "browser_take_control",
+            "Take the browser back from a person. Use it when you need the browser and a person took over but did not hand it back, e.g. they finished logging in and left. The person sees your reason. Without force it is refused while the person is actively using the page (the error says how long to wait); call it again then, or call browser_wait_control. force interrupts a person: use it only when waiting is not acceptable, never to cut someone off mid-login. After it succeeds, take a new browser_snapshot before continuing.",
+            schema(
+                json!({
+                    "browser_id": id(),
+                    "reason": {"type": "string", "description": "Why you need the browser back; shown to the person (1 to 500 characters)"},
+                    "force": {"type": "boolean", "description": "Take it even if a person is using the page right now (default false)"},
+                }),
+                &["browser_id", "reason"],
+            ),
+        ),
     ]
 }
 
@@ -348,6 +360,15 @@ struct HandoffArgs {
     #[serde(default)]
     wait: bool,
     timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TakeControlArgs {
+    browser_id: String,
+    reason: String,
+    #[serde(default)]
+    force: bool,
 }
 
 #[derive(Deserialize)]
@@ -679,6 +700,17 @@ impl Server {
                 })
                 .await
             }
+            "browser_take_control" => {
+                let a = args!(TakeControlArgs);
+                let id = a.browser_id.clone();
+                self.run(Some(&id), |client, _| async move {
+                    browser::take_control(&client, &a.browser_id, &a.reason, a.force).await?;
+                    Ok(ToolResult::text(
+                        "you control the browser again; take a new browser_snapshot before continuing",
+                    ))
+                })
+                .await
+            }
             "browser_wait_control" => {
                 let a = args!(WaitControlArgs);
                 let id = a.browser_id.clone();
@@ -888,6 +920,7 @@ mod tests {
                 "browser_logins",
                 "browser_login",
                 "browser_wait_control",
+                "browser_take_control",
             ]
         );
         for tool in tools {
@@ -970,6 +1003,16 @@ mod tests {
         let text = result.content[0]["text"].as_str().unwrap();
         assert!(text.contains("taken over") && text.contains("browser_wait_control"));
         assert!(text.contains("\"abcd\"") && text.contains("log in"), "{text}");
+    }
+
+    #[test]
+    fn user_active_result_is_an_error_with_the_retry_hint() {
+        let result = error_result(CliError::UserActive { retry_after_ms: 9000 }, Some("abcd"));
+        assert!(result.is_error);
+        assert_eq!(
+            result.content[0]["text"],
+            "A person is using this browser right now. Try again in 9 s, or pass --force to take it anyway."
+        );
     }
 
     #[test]

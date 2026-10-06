@@ -123,6 +123,7 @@ export interface AgentBrowserRecord {
   controller?: "agent" | "human";
   controller_device_id?: string;
   handoff?: { reason: string; requested_at: number };
+  reclaimed?: { reason: string; at: number; device_id?: string };
 }
 
 async function agentBrowserCommand(
@@ -232,6 +233,25 @@ export async function requestAgentBrowserHandoffViaApi(
   );
   expect(response.ok(), await response.text()).toBeTruthy();
   return response.json();
+}
+
+/**
+ * The agent takes control back from a person (`offdesk browser take`). Returns
+ * status and body so a test can assert the 409 `user_active` refusal.
+ */
+export async function reclaimAgentBrowserViaApi(
+  page: Page,
+  browserId: string,
+  opts: { reason: string; force?: boolean },
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await page.request.post(
+    `/api/machines/${MACHINE_ID}/agent-browser/${browserId}/reclaim`,
+    {
+      headers: await getAuthHeaders(page),
+      data: { reason: opts.reason, force: opts.force ?? false },
+    },
+  );
+  return { status: response.status(), body: await response.json() };
 }
 
 /** Close every agent browser on the e2e node (no-op if none ever opened). */

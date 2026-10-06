@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
 use offdesk_protocol::{
     AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
-    AgentSessionInfo, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
+    AgentBrowserReclaim, AgentSessionInfo, MouseAction, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
     ControlLeaseSnapshot, DirEntry, HubToMachine, MachineInfo, MachineStatsSnapshot, MachineToHub,
     TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
 };
@@ -72,6 +72,19 @@ pub enum ControlWait {
     Agent,
     /// The agent controls it and no handoff is pending.
     Resolved,
+}
+
+/// A person who operated the page this recently counts as using it: an
+/// agent's reclaim is refused unless forced.
+pub const RECLAIM_IDLE: Duration = Duration::from_secs(30);
+
+/// What `reclaim_agent_browser_control` did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReclaimOutcome {
+    /// The agent controls the browser now (or already did).
+    Reclaimed(AgentBrowserInfo),
+    /// A person operated the page too recently; nothing changed.
+    UserActive { retry_after_ms: u64 },
 }
 
 fn now_ms() -> i64 {
@@ -150,6 +163,14 @@ pub struct MachineManager {
     /// Auto-release timers per (machine, browser).
     agent_browser_timers: Arc<std::sync::Mutex<HashMap<(String, String), ControlTimer>>>,
     control_grace: Duration,
+    /// How long a person must have left the page alone before the agent may
+    /// reclaim it without `force`.
+    reclaim_idle: Duration,
+    /// When a person last operated each agent browser (hub-internal, never
+    /// sent to clients). Only the controlling device's input is recorded, and
+    /// the entry goes when control changes hands or the browser goes away.
+    /// Always locked after `machines`, never before.
+    agent_browser_activity: Arc<std::sync::Mutex<HashMap<(String, String), Instant>>>,
     /// Browser events broadcast
     event_tx: broadcast::Sender<EventEnvelope>,
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
@@ -212,6 +233,8 @@ impl MachineManager {
             agent_browser_viewers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_browser_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             control_grace: AGENT_BROWSER_CONTROL_GRACE,
+            reclaim_idle: RECLAIM_IDLE,
+            agent_browser_activity: Arc::new(std::sync::Mutex::new(HashMap::new())),
             event_tx,
             event_history: Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
                 EVENT_HISTORY_LIMIT,
@@ -415,6 +438,10 @@ impl MachineManager {
     /// point of view, viewers are told, and its pending agent browser
     /// requests fail now rather than after their timeout.
     fn drop_agent_browsers(&self, machine_id: &str, conn: &MachineConnection) {
+        self.agent_browser_activity
+            .lock()
+            .unwrap()
+            .retain(|(machine, _), _| machine != machine_id);
         for browser_id in conn.agent_browsers.keys() {
             self.send_event(
                 conn.user_id.clone(),
@@ -1159,6 +1186,7 @@ impl MachineManager {
                 browser.controller_device_id = known.controller_device_id.clone();
                 browser.controller_since = known.controller_since;
                 browser.handoff = known.handoff.clone();
+                browser.reclaimed = known.reclaimed.clone();
             }
             let previous = conn
                 .agent_browsers
@@ -1194,6 +1222,7 @@ impl MachineManager {
                 .collect();
             for id in &gone {
                 conn.agent_browsers.remove(id);
+                self.forget_activity(machine_id, id);
             }
             (conn.user_id.clone(), gone)
         };
@@ -1271,6 +1300,7 @@ impl MachineManager {
                 info.controller_device_id = known.controller_device_id.clone();
                 info.controller_since = known.controller_since;
                 info.handoff = known.handoff.clone();
+                info.reclaimed = known.reclaimed.clone();
             }
         }
     }
@@ -1295,6 +1325,78 @@ impl MachineManager {
     fn with_control_grace(mut self, grace: Duration) -> Self {
         self.control_grace = grace;
         self
+    }
+
+    /// Override the reclaim idle window (tests).
+    #[cfg(test)]
+    fn with_reclaim_idle(mut self, idle: Duration) -> Self {
+        self.reclaim_idle = idle;
+        self
+    }
+
+    fn forget_activity(&self, machine_id: &str, browser_id: &str) {
+        self.agent_browser_activity
+            .lock()
+            .unwrap()
+            .remove(&(machine_id.to_string(), browser_id.to_string()));
+    }
+
+    /// The agent takes control back. Atomic: the idle check and the switch
+    /// happen under the same `machines` lock that `agent_browser_input` holds
+    /// when it records activity, so no input can land in between. `None` when
+    /// the browser is unknown.
+    pub async fn reclaim_agent_browser_control(
+        self: &Arc<Self>,
+        machine_id: &str,
+        browser_id: &str,
+        reason: String,
+        force: bool,
+    ) -> Option<ReclaimOutcome> {
+        let now = now_ms();
+        let (user_id, info, changed) = {
+            let mut machines = self.machines.lock().await;
+            let conn = machines.get_mut(machine_id)?;
+            let user_id = conn.user_id.clone();
+            let browser = conn.agent_browsers.get_mut(browser_id)?;
+            let before = browser.clone();
+            if browser.controller == AgentBrowserController::Agent {
+                browser.handoff = None;
+            } else {
+                if !force {
+                    let key = (machine_id.to_string(), browser_id.to_string());
+                    let last = self.agent_browser_activity.lock().unwrap().get(&key).copied();
+                    if let Some(elapsed) = last.map(|at| at.elapsed()) {
+                        if elapsed < self.reclaim_idle {
+                            let wait = self.reclaim_idle - elapsed;
+                            // Never 0, so the caller does not retry a hair early.
+                            let retry_after_ms = wait.as_millis() as u64 + 1;
+                            return Some(ReclaimOutcome::UserActive { retry_after_ms });
+                        }
+                    }
+                }
+                let device_id = browser.controller_device_id.take();
+                browser.controller = AgentBrowserController::Agent;
+                browser.controller_since = None;
+                browser.handoff = None;
+                browser.reclaimed = Some(AgentBrowserReclaim {
+                    reason,
+                    at: now,
+                    device_id,
+                });
+                self.forget_activity(machine_id, browser_id);
+            }
+            (user_id, browser.clone(), *browser != before)
+        };
+        if changed {
+            self.send_event(
+                user_id,
+                BrowserEvent::AgentBrowserUpdated {
+                    browser: info.clone(),
+                },
+            );
+        }
+        self.reconcile_control_timer(machine_id, browser_id).await;
+        Some(ReclaimOutcome::Reclaimed(info))
     }
 
     fn device_viewers(&self, machine_id: &str, browser_id: &str, device_id: &str) -> usize {
@@ -1395,8 +1497,10 @@ impl MachineManager {
                         && browser.controller_device_id.as_deref() == Some(device_id.as_str());
                     browser.controller = AgentBrowserController::Human;
                     browser.controller_device_id = Some(device_id);
+                    browser.reclaimed = None;
                     if !same {
                         browser.controller_since = Some(now);
+                        self.forget_activity(machine_id, browser_id);
                     }
                 }
                 ControlChange::Release => {
@@ -1404,6 +1508,7 @@ impl MachineManager {
                     browser.controller_device_id = None;
                     browser.controller_since = None;
                     browser.handoff = None;
+                    self.forget_activity(machine_id, browser_id);
                 }
                 ControlChange::Handoff { reason } => {
                     browser.handoff = Some(AgentBrowserHandoff {
@@ -1478,6 +1583,23 @@ impl MachineManager {
             });
             if !allowed {
                 return false;
+            }
+            // Recorded under the `machines` lock so a reclaim cannot slip in
+            // between the check above and this timestamp. Resting or
+            // hovering is not operating.
+            let operating = !matches!(
+                event,
+                AgentBrowserInputEvent::Mouse {
+                    action: MouseAction::Move,
+                    buttons: 0,
+                    ..
+                }
+            );
+            if operating {
+                self.agent_browser_activity.lock().unwrap().insert(
+                    (machine_id.to_string(), browser_id.to_string()),
+                    Instant::now(),
+                );
             }
             conn.cmd_tx.clone()
         };
@@ -2367,6 +2489,7 @@ impl MachineManager {
             MachineToHub::AgentBrowserDestroyed { browser_id } => {
                 let removed = {
                     let mut machines = self.machines.lock().await;
+                    self.forget_activity(machine_id, &browser_id);
                     machines.get_mut(machine_id).and_then(|conn| {
                         conn.agent_browsers
                             .remove(&browser_id)
@@ -4875,6 +4998,240 @@ mod tests {
                 .agent_browser_input("machine-a", "b1", "dev-a", click_event())
                 .await
         );
+    }
+
+    fn mouse_move(buttons: u32) -> AgentBrowserInputEvent {
+        AgentBrowserInputEvent::Mouse {
+            action: MouseAction::Move,
+            x: 1.0,
+            y: 1.0,
+            button: Default::default(),
+            buttons,
+            click_count: 1,
+            modifiers: 0,
+        }
+    }
+
+    async fn reclaim(
+        manager: &Arc<MachineManager>,
+        force: bool,
+    ) -> Option<ReclaimOutcome> {
+        manager
+            .reclaim_agent_browser_control("machine-a", "b1", "need it back".to_string(), force)
+            .await
+    }
+
+    fn reclaimed(outcome: Option<ReclaimOutcome>) -> AgentBrowserInfo {
+        match outcome {
+            Some(ReclaimOutcome::Reclaimed(info)) => info,
+            other => panic!("expected reclaimed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reclaim_while_the_agent_controls_only_clears_the_handoff() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await;
+        let info = reclaimed(reclaim(&manager, false).await);
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert!(info.handoff.is_none());
+        assert!(info.reclaimed.is_none(), "nothing was taken from anyone");
+        assert!(reclaim(&manager, false).await.is_some());
+        assert!(manager
+            .reclaim_agent_browser_control("machine-a", "nope", "x".into(), false)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn reclaim_from_a_person_with_no_input_switches_control() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        let info = reclaimed(reclaim(&manager, false).await);
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert!(info.controller_device_id.is_none());
+        assert!(info.controller_since.is_none());
+        assert!(info.handoff.is_none());
+        let reclaim_info = info.reclaimed.clone().unwrap();
+        assert_eq!(reclaim_info.reason, "need it back");
+        assert_eq!(reclaim_info.device_id.as_deref(), Some("dev-a"));
+        assert!(reclaim_info.at > 0);
+        // Stored and carried over a node re-send.
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: vec![browser("b1", "https://example.com")],
+                },
+            )
+            .await;
+        let stored = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(stored.reclaimed, info.reclaimed);
+        assert!(event_types(&manager)
+            .iter()
+            .any(|t| t == "agent_browser_updated"));
+        // A person taking control clears it.
+        let taken = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await
+            .unwrap();
+        assert!(taken.reclaimed.is_none());
+    }
+
+    #[tokio::test]
+    async fn reclaim_is_refused_while_a_person_is_operating_unless_forced() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        assert!(
+            manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+        let before = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        match reclaim(&manager, false).await {
+            Some(ReclaimOutcome::UserActive { retry_after_ms }) => {
+                assert!(retry_after_ms > 0 && retry_after_ms <= 30_001, "{retry_after_ms}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            manager.agent_browser_info("machine-a", "b1").await.unwrap(),
+            before,
+            "a refusal changes nothing"
+        );
+        let info = reclaimed(reclaim(&manager, true).await);
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert_eq!(info.reclaimed.unwrap().device_id.as_deref(), Some("dev-a"));
+        assert!(
+            manager.agent_browser_activity.lock().unwrap().is_empty(),
+            "activity is forgotten when control changes hands"
+        );
+    }
+
+    #[tokio::test]
+    async fn reclaim_succeeds_once_the_idle_window_has_passed() {
+        let manager = Arc::new(
+            MachineManager::new(test_db()).with_reclaim_idle(Duration::from_millis(80)),
+        );
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        manager
+            .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+            .await;
+        assert!(matches!(
+            reclaim(&manager, false).await,
+            Some(ReclaimOutcome::UserActive { .. })
+        ));
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        reclaimed(reclaim(&manager, false).await);
+    }
+
+    #[tokio::test]
+    async fn hovering_and_foreign_input_do_not_count_as_activity() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        // Resting or hovering: forwarded, but not operating.
+        assert!(
+            manager
+                .agent_browser_input("machine-a", "b1", "dev-a", mouse_move(0))
+                .await
+        );
+        // Another device's input is dropped and does not count.
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-b", click_event())
+                .await
+        );
+        assert!(manager.agent_browser_activity.lock().unwrap().is_empty());
+        // Dragging (a button held) does count.
+        assert!(
+            manager
+                .agent_browser_input("machine-a", "b1", "dev-a", mouse_move(1))
+                .await
+        );
+        assert!(matches!(
+            reclaim(&manager, false).await,
+            Some(ReclaimOutcome::UserActive { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn activity_is_forgotten_when_control_changes_or_the_browser_goes() {
+        let (manager, _rx) = manager_with_browser().await;
+        let activity = |m: &MachineManager| m.agent_browser_activity.lock().unwrap().len();
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        manager
+            .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+            .await;
+        assert_eq!(activity(&manager), 1);
+        // The same device taking again keeps it; another device resets it.
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        assert_eq!(activity(&manager), 1);
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await;
+        assert_eq!(activity(&manager), 0);
+        manager
+            .agent_browser_input("machine-a", "b1", "dev-b", click_event())
+            .await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        assert_eq!(activity(&manager), 0);
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await;
+        manager
+            .agent_browser_input("machine-a", "b1", "dev-b", click_event())
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserDestroyed {
+                    browser_id: "b1".to_string(),
+                },
+            )
+            .await;
+        assert_eq!(activity(&manager), 0);
     }
 
     #[tokio::test]

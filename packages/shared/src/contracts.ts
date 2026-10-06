@@ -139,6 +139,8 @@ export interface AgentBrowserInfo {
   controller_since?: number
   /** The agent is asking a person for help; cleared when a person hands control back. */
   handoff?: AgentBrowserHandoff
+  /** The agent took control back; cleared when a person takes control. */
+  reclaimed?: AgentBrowserReclaim
 }
 
 export type AgentBrowserController = 'agent' | 'human'
@@ -147,6 +149,14 @@ export interface AgentBrowserHandoff {
   reason: string
   /** ms since epoch */
   requested_at: number
+}
+
+export interface AgentBrowserReclaim {
+  reason: string
+  /** ms since epoch */
+  at: number
+  /** The device that lost control, when a person had it. */
+  device_id?: string
 }
 
 /** `POST /api/machines/{m}/agent-browser/{b}/control` body. */

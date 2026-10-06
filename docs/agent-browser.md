@@ -40,8 +40,8 @@ backdrop. The terminals underneath stay mounted and keep their connections.
   and selects the new tab. A bare host such as `aliyun.com` gets `https://`;
   `localhost` and IPv4 addresses get `http://`. Errors show under the field.
 - **Body.** The selected browser, live, with the page title, URL, who is in
-  control, **Take over** / **Hand back**, the connection state and the handoff
-  banner. Only the selected tab streams: other tabs hold no connection, and the
+  control, **Take over** / **Hand back**, the connection state, the handoff
+  banner and the notice that the agent took control back. Only the selected tab streams: other tabs hold no connection, and the
   node stops the screencast when the last viewer leaves.
 - **Empty state.** With no browser tabs it says "No browser tabs on this machine"
   and shows the address field.
@@ -78,12 +78,12 @@ mounted and connected underneath; tap the button again to close it):
   selected once the browser exists. With no tabs the field is shown with the
   empty state "No browser tabs on this machine".
 - **Body.** The selected tab: page title, who is in control, **Take over** /
-  **Hand back**, the connection state and the handoff banner. Closing a tab is
-  done from the strip only.
+  **Hand back**, the connection state, the handoff banner and the notice that
+  the agent took control back. Closing a tab is done from the strip only.
 - **Handoffs.** A handoff also shows in the bar of sessions needing attention at
   the top of the phone UI with its reason; tapping it opens the surface on that
   tab. While the surface is closed, a new handoff also raises the same toast as
-  on the desktop.
+  on the desktop, and so does the agent taking control back from this phone.
 - The phone app has no back-gesture mapping for its sheets, so the Android back
   button does not close the surface; use the back button in its top row.
 
@@ -119,6 +119,7 @@ offdesk browser wait <browser> [--text T] [--url-regex REGEX] [--idle MS] [--tim
 offdesk browser screenshot <browser> [-o FILE] [--full]
 offdesk browser handoff <browser> --reason TEXT [--wait] [--timeout SEC]   # ask a person for help
 offdesk browser wait-control <browser> [--timeout SEC]                      # wait until no person is in control
+offdesk browser take <browser> --reason TEXT [--force]                      # take control back from a person
 offdesk browser logins <browser> [--json]           # saved 1Password logins for this page (no secrets)
 offdesk browser login <browser> --item ITEM [--submit]   # fill a 1Password login into the page
 ```
@@ -138,7 +139,7 @@ Exit codes for every `offdesk browser` command (also in `offdesk browser --help`
 | `0` | Success (`wait`: matched; `handoff --wait` / `wait-control`: the person is done) |
 | `1` | Timeout (`wait`, `handoff --wait`, `wait-control`) |
 | `2` | Error |
-| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `login`, `press` and `close` were refused |
+| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `login`, `press` and `close` were refused. Also `take` when a person is using the page right now |
 
 `screenshot` writes a PNG and prints its path; the default file is
 `./browser-<id8>-<timestamp>.png`, `--full` captures the whole page.
@@ -197,6 +198,16 @@ a captcha, entering a 2FA code.
   button and on the browser's tab until a person has taken over (a toast says so
   too when the overlay is closed). **Hand back** (header or banner)
   clears the handoff.
+- **The agent taking control back** (`offdesk browser take`) shows a notice in
+  the same place, "The agent took control back: <reason>", or "The agent took
+  control back from you: <reason>" on the device that lost control. The
+  view stops sending input and drops keyboard focus (on the phone, the soft
+  keyboard and any drag or long press in progress), and the header goes back to
+  "Agent in control". The notice appears only when the reclaim happens while
+  the view is open, so reopening the overlay does not replay an old one; it
+  goes away with its **x**, after about 20 seconds, or when this device takes
+  control again. While the overlay or phone surface is closed, the device that
+  lost control gets a toast with the "from you" text.
 - **Auto-release.** If the controlling device has no open viewer WebSocket for
   the browser for 2 minutes (the overlay was closed, the tab hidden, the app quit, the
   network dropped), the hub hands control back to the agent exactly like
@@ -205,6 +216,20 @@ a captcha, entering a 2FA code.
   connected is released after the same 2 minutes.
 - **`wait-control <browser> [--timeout SEC]`** blocks until the agent controls
   the browser again: exit `0`, or `1` on timeout (default 600 s).
+- **`take <browser> --reason "..." [--force]`** takes control back from a
+  person, for when they finished but did not hand back. The reason is stored
+  with the browser, and the web UI shows it to the person as a notice (and a
+  toast when its view is closed). The hub refuses while a person has operated
+  the page in the last 30 seconds (clicks, drags, wheel, keys and text count; moving the
+  mouse without a button held does not): HTTP 409 `user_active`, and the CLI
+  prints "A person is using this browser right now. Try again in N s, or pass
+  --force to take it anyway." and exits `3`. `--force` takes it regardless and
+  interrupts the person; use it only when waiting is not acceptable, never to
+  cut someone off mid-login. On success the browser record has
+  `controller: "agent"`, the handoff is cleared, and `reclaimed` is set
+  (`reason`, `at`, and `device_id` of the device that lost control); every
+  client is told, and `reclaimed` is cleared when a person takes control again.
+  If the agent already controls the browser, `take` only clears a pending handoff.
 - **`handoff <browser> --reason "Please log in"`** asks a person for help: the
   reason is stored with the browser as `handoff` (`reason`, `requested_at`) and
   every client is told, so the overlay can show a banner. It does not take control
@@ -230,6 +255,15 @@ polling.
   `take`). `release` also clears a pending handoff. Returns the browser record.
 - `POST /api/machines/{machine}/agent-browser/{browser}/handoff`, body
   `{"reason": "..."}` (1 to 500 characters). Returns the browser record.
+- `POST /api/machines/{machine}/agent-browser/{browser}/reclaim`, body
+  `{"reason": "...", "force": false}` (`reason` 1 to 500 characters, `force`
+  optional). The agent takes control back. Returns the browser record, which
+  carries `reclaimed: {"reason", "at", "device_id"}` (`device_id` only when a
+  person had control). Refused with 409
+  `{"error": "a person is using this browser right now", "code": "user_active", "retry_after_ms": N}`
+  and no change when a person operated the page less than 30 s ago and `force`
+  is not set; `retry_after_ms` is the time left until 30 s have passed. The
+  hub keeps the time of the last counted input per browser in memory only.
 - `GET /api/machines/{machine}/agent-browser/{browser}/control`
   `?wait_for=agent|resolved&timeout_ms=`: `{"controller", "ready", "browser"}`.
   Without `wait_for` it answers at once. `agent` is ready when the agent controls
@@ -297,6 +331,7 @@ Tools (arguments in brackets are optional):
 | `browser_logins` | `browser_id` | `logins --json` |
 | `browser_login` | `browser_id`, `item`, `[submit]` | `login` |
 | `browser_wait_control` | `browser_id`, `[timeout_ms]` (default 600000) | `wait-control` |
+| `browser_take_control` | `browser_id`, `reason`, `[force]` | `take` |
 
 `browser_id` is an id or unique prefix, resolved across all online machines
 like the CLI. Timeouts are in milliseconds here (seconds in the CLI).
@@ -309,6 +344,9 @@ Results and errors:
 - A person controlling the browser (CLI exit 3) is a tool error (`isError`)
   saying so and telling the agent not to retry until `browser_wait_control`
   returns.
+- `browser_take_control` refused because a person is using the page (CLI exit 3)
+  is a tool error with the same message as the CLI. The agent can call it again
+  after the stated time, or use `browser_wait_control`.
 - Timeouts (CLI exit 1) are **not** errors: `browser_wait` returns
   `did not match before the timeout: ...`, and `browser_wait_control` /
   `browser_handoff` with `wait` say a person is still in control or has not

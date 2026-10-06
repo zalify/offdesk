@@ -534,6 +534,20 @@ pub async fn request_handoff(
     }
 }
 
+/// Take control back from a person. The hub refuses with `UserActive` while
+/// they operated the page in the last 30 s, unless `force`.
+pub async fn take_control(
+    client: &HubClient,
+    browser: &str,
+    reason: &str,
+    force: bool,
+) -> Result<(), CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    client
+        .agent_browser_reclaim(&machine_id, &browser_id, reason, force)
+        .await
+}
+
 pub async fn take_screenshot(
     client: &HubClient,
     browser: &str,
@@ -702,6 +716,18 @@ pub async fn handoff(
     }
 }
 
+/// Take the browser back from a person; exit 3 when they are using it.
+pub async fn take(
+    client: &HubClient,
+    browser: &str,
+    reason: String,
+    force: bool,
+) -> Result<(), CliError> {
+    take_control(client, browser, &reason, force).await?;
+    println!("The agent now controls this browser.");
+    Ok(())
+}
+
 fn unix_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -855,6 +881,18 @@ mod tests {
         assert!(message.contains("Please log in"), "{message}");
         assert_eq!(CliError::Usage("x".into()).exit_code(), 2);
         assert_eq!(CliError::WaitTimeout.exit_code(), 1);
+    }
+
+    #[test]
+    fn user_active_exits_3_with_the_retry_hint() {
+        let error = CliError::UserActive { retry_after_ms: 4200 };
+        assert_eq!(error.exit_code(), 3);
+        assert_eq!(
+            error.to_string(),
+            "A person is using this browser right now. Try again in 5 s, or pass --force to take it anyway."
+        );
+        let zero = CliError::UserActive { retry_after_ms: 0 };
+        assert!(zero.to_string().contains("in 1 s"));
     }
 
     #[test]

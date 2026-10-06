@@ -5,6 +5,7 @@ import {
   browserLabel,
   browserNeedsPerson,
   findNewHandoffs,
+  findNewReclaims,
   normalizeBrowserUrl,
   pickBrowserToOpen,
   pickSelectedBrowserId,
@@ -74,6 +75,21 @@ describe("handoff helpers", () => {
     expect(browserControlledBy(mine, "me")).toBe(true);
     expect(browserControlledBy(mine, "other")).toBe(false);
     expect(browserControlledBy(mine, null)).toBe(false);
+  });
+});
+
+describe("findNewReclaims", () => {
+  const reclaimed = (at: number, device_id?: string) =>
+    browser("a", { reclaimed: { reason: "need it", at, device_id } });
+  it("reports a reclaim that is new or has a different time", () => {
+    expect(findNewReclaims([browser("a")], [reclaimed(1)]).map((b) => b.id)).toEqual(["a"]);
+    expect(findNewReclaims([], [reclaimed(1)])).toHaveLength(1);
+    expect(findNewReclaims([reclaimed(1)], [reclaimed(2)])).toHaveLength(1);
+  });
+  it("ignores an unchanged or cleared reclaim", () => {
+    expect(findNewReclaims([reclaimed(1)], [reclaimed(1)])).toHaveLength(0);
+    expect(findNewReclaims([reclaimed(1)], [browser("a")])).toHaveLength(0);
+    expect(findNewReclaims([], [browser("a")])).toHaveLength(0);
   });
 });
 
