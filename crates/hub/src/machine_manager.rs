@@ -4,11 +4,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
 use offdesk_protocol::{
-    AgentBrowserInfo, AgentSessionInfo, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
+    AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
+    AgentSessionInfo, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
     ControlLeaseSnapshot, DirEntry, HubToMachine, MachineInfo, MachineStatsSnapshot, MachineToHub,
     TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
 };
-use tokio::sync::{broadcast, mpsc, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
 struct ModeState {
     control_leases: HashMap<String, String>,
@@ -47,6 +48,35 @@ pub enum PendingResult {
     RelayBrief(Result<offdesk_protocol::relay::RelayBrief, String>),
     /// Node's reply to an agent browser command: its `data`, or its error text.
     AgentBrowser(Result<serde_json::Value, String>),
+}
+
+/// A change to who controls an agent browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlChange {
+    Take {
+        device_id: String,
+    },
+    Release,
+    /// The agent asks a person for help.
+    Handoff {
+        reason: String,
+    },
+}
+
+/// What a control long-poll waits for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlWait {
+    /// The agent controls the browser.
+    Agent,
+    /// The agent controls it and no handoff is pending.
+    Resolved,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Why an agent browser command did not produce data.
@@ -99,6 +129,9 @@ pub struct MachineManager {
     agent_browser_requests: Arc<std::sync::Mutex<HashMap<String, String>>>,
     /// Live screencast fan-out per agent browser.
     streams: Streams,
+    /// Bumped on every agent browser event, so long-polls on the control
+    /// state re-check it.
+    agent_browser_changes: watch::Sender<u64>,
     /// Browser events broadcast
     event_tx: broadcast::Sender<EventEnvelope>,
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
@@ -157,6 +190,7 @@ impl MachineManager {
             pending: Arc::new(Mutex::new(HashMap::new())),
             agent_browser_requests: Arc::new(std::sync::Mutex::new(HashMap::new())),
             streams: Streams::default(),
+            agent_browser_changes: watch::channel(0).0,
             event_tx,
             event_history: Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
                 EVENT_HISTORY_LIMIT,
@@ -1098,6 +1132,13 @@ impl MachineManager {
             let Some(conn) = machines.get_mut(machine_id) else {
                 return;
             };
+            // Control belongs to the hub: whatever the node reports, keep it.
+            if let Some(known) = conn.agent_browsers.get(&browser.id) {
+                browser.controller = known.controller;
+                browser.controller_device_id = known.controller_device_id.clone();
+                browser.controller_since = known.controller_since;
+                browser.handoff = known.handoff.clone();
+            }
             let previous = conn
                 .agent_browsers
                 .insert(browser.id.clone(), browser.clone());
@@ -1178,6 +1219,155 @@ impl MachineManager {
             .get(machine_id)
             .map(|conn| conn.agent_browsers.contains_key(browser_id))
             .unwrap_or(false)
+    }
+
+    /// One agent browser as the hub knows it (with its control state).
+    pub async fn agent_browser_info(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+    ) -> Option<AgentBrowserInfo> {
+        self.machines
+            .lock()
+            .await
+            .get(machine_id)
+            .and_then(|conn| conn.agent_browsers.get(browser_id).cloned())
+    }
+
+    /// Overlay the hub-owned control fields onto infos the node reported.
+    pub async fn overlay_agent_browser_control(
+        &self,
+        machine_id: &str,
+        infos: &mut [AgentBrowserInfo],
+    ) {
+        let machines = self.machines.lock().await;
+        let Some(conn) = machines.get(machine_id) else {
+            return;
+        };
+        for info in infos {
+            if let Some(known) = conn.agent_browsers.get(&info.id) {
+                info.controller = known.controller;
+                info.controller_device_id = known.controller_device_id.clone();
+                info.controller_since = known.controller_since;
+                info.handoff = known.handoff.clone();
+            }
+        }
+    }
+
+    /// Apply a control change and tell the UIs. `None` when the browser is
+    /// unknown. Taking is last-writer-wins between devices.
+    pub async fn change_agent_browser_control(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        change: ControlChange,
+    ) -> Option<AgentBrowserInfo> {
+        let now = now_ms();
+        let (user_id, info, changed) = {
+            let mut machines = self.machines.lock().await;
+            let conn = machines.get_mut(machine_id)?;
+            let user_id = conn.user_id.clone();
+            let browser = conn.agent_browsers.get_mut(browser_id)?;
+            let before = browser.clone();
+            match change {
+                ControlChange::Take { device_id } => {
+                    let same = browser.controller == AgentBrowserController::Human
+                        && browser.controller_device_id.as_deref() == Some(device_id.as_str());
+                    browser.controller = AgentBrowserController::Human;
+                    browser.controller_device_id = Some(device_id);
+                    if !same {
+                        browser.controller_since = Some(now);
+                    }
+                }
+                ControlChange::Release => {
+                    browser.controller = AgentBrowserController::Agent;
+                    browser.controller_device_id = None;
+                    browser.controller_since = None;
+                    browser.handoff = None;
+                }
+                ControlChange::Handoff { reason } => {
+                    browser.handoff = Some(AgentBrowserHandoff {
+                        reason,
+                        requested_at: now,
+                    });
+                }
+            }
+            (user_id, browser.clone(), *browser != before)
+        };
+        if changed {
+            self.send_event(
+                user_id,
+                BrowserEvent::AgentBrowserUpdated {
+                    browser: info.clone(),
+                },
+            );
+        }
+        Some(info)
+    }
+
+    /// Long-poll helper: wait until `ready(info)` holds for the browser, or
+    /// `timeout` passes. Returns the latest info and whether it was ready;
+    /// `None` when the browser does not exist (or went away meanwhile).
+    pub async fn wait_agent_browser_control(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        wait_for: ControlWait,
+        timeout: Duration,
+    ) -> Option<(AgentBrowserInfo, bool)> {
+        let mut changes = self.agent_browser_changes.subscribe();
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let info = self.agent_browser_info(machine_id, browser_id).await?;
+            let ready = match wait_for {
+                ControlWait::Agent => info.controller == AgentBrowserController::Agent,
+                ControlWait::Resolved => {
+                    info.controller == AgentBrowserController::Agent && info.handoff.is_none()
+                }
+            };
+            if ready {
+                return Some((info, true));
+            }
+            match tokio::time::timeout_at(deadline, changes.changed()).await {
+                Ok(Ok(())) => {}
+                _ => return Some((info, false)),
+            }
+        }
+    }
+
+    /// Forward a viewer's input to the node, but only from the device that
+    /// currently controls the browser. Returns whether it was forwarded.
+    pub async fn agent_browser_input(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        device_id: &str,
+        event: AgentBrowserInputEvent,
+    ) -> bool {
+        let Some(event) = event.sanitized() else {
+            return false;
+        };
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                return false;
+            };
+            let allowed = conn.agent_browsers.get(browser_id).is_some_and(|b| {
+                b.controller == AgentBrowserController::Human
+                    && b.controller_device_id.as_deref() == Some(device_id)
+            });
+            if !allowed {
+                return false;
+            }
+            conn.cmd_tx.clone()
+        };
+        cmd_tx
+            .send(HubToMachine::AgentBrowserInput {
+                browser_id: browser_id.to_string(),
+                event,
+            })
+            .await
+            .is_ok()
     }
 
     /// Name of a machine that belongs to `user_id` but is not connected.
@@ -2497,6 +2687,14 @@ impl MachineManager {
     }
 
     fn send_event(&self, target_user_id: Option<String>, event: BrowserEvent) {
+        if matches!(
+            event,
+            BrowserEvent::AgentBrowserCreated { .. }
+                | BrowserEvent::AgentBrowserUpdated { .. }
+                | BrowserEvent::AgentBrowserDestroyed { .. }
+        ) {
+            self.agent_browser_changes.send_modify(|n| *n += 1);
+        }
         let seq = self.next_event_seq.fetch_add(1, Ordering::AcqRel) + 1;
         let envelope = EventEnvelope {
             seq,
@@ -4193,6 +4391,7 @@ mod tests {
             url: url.to_string(),
             title: String::new(),
             opener_terminal_id: Some("term-a".to_string()),
+            ..Default::default()
         }
     }
 
@@ -4316,6 +4515,312 @@ mod tests {
             .await;
         assert!(!manager.agent_browser_exists("machine-a", "b2").await);
         assert!(manager.agent_browser_exists("machine-a", "b3").await);
+    }
+
+    async fn manager_with_browser() -> (Arc<MachineManager>, mpsc::Receiver<HubToMachine>) {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (_conn_id, rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserCreated {
+                    browser: browser("b1", "about:blank"),
+                },
+            )
+            .await;
+        (manager, rx)
+    }
+
+    fn take(device: &str) -> ControlChange {
+        ControlChange::Take {
+            device_id: device.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn control_take_release_and_last_writer_wins() {
+        let (manager, _rx) = manager_with_browser().await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+
+        let a = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await
+            .unwrap();
+        assert_eq!(a.controller, AgentBrowserController::Human);
+        assert_eq!(a.controller_device_id.as_deref(), Some("dev-a"));
+        let since = a.controller_since.unwrap();
+        assert!(since > 0);
+
+        // A second device wins; its since is new.
+        let b = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await
+            .unwrap();
+        assert_eq!(b.controller_device_id.as_deref(), Some("dev-b"));
+        // Re-taking by the same device keeps the original since.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let b2 = manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-b"))
+            .await
+            .unwrap();
+        assert_eq!(b2.controller_since, b.controller_since);
+
+        // The snapshot carries it.
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(
+            snapshot.agent_browsers[0].controller_device_id.as_deref(),
+            Some("dev-b")
+        );
+
+        let handoff = manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(handoff.handoff.as_ref().unwrap().reason, "log in");
+        // A handoff does not take control by itself.
+        let released = manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await
+            .unwrap();
+        assert_eq!(released.controller, AgentBrowserController::Agent);
+        assert!(released.controller_device_id.is_none());
+        assert!(released.controller_since.is_none());
+        assert!(released.handoff.is_none());
+
+        let types = event_types(&manager);
+        assert!(
+            types
+                .iter()
+                .filter(|t| *t == "agent_browser_updated")
+                .count()
+                >= 4,
+            "{types:?}"
+        );
+        assert!(manager
+            .change_agent_browser_control("machine-a", "nope", ControlChange::Release)
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn node_updates_do_not_clobber_control_fields() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "captcha".to_string(),
+                },
+            )
+            .await;
+        // The node reports a new URL without any control fields; a full
+        // list after a reconnect behaves the same.
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: browser("b1", "https://example.com/next"),
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: vec![browser("b1", "https://example.com/again")],
+                },
+            )
+            .await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.url, "https://example.com/again");
+        assert_eq!(info.controller, AgentBrowserController::Human);
+        assert_eq!(info.controller_device_id.as_deref(), Some("dev-a"));
+        assert_eq!(info.handoff.unwrap().reason, "captcha");
+    }
+
+    fn click_event() -> AgentBrowserInputEvent {
+        AgentBrowserInputEvent::Text {
+            text: "hi".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn input_is_forwarded_only_from_the_controlling_device() {
+        let (manager, mut rx) = manager_with_browser().await;
+        // Nobody controls: dropped.
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-b", click_event())
+                .await
+        );
+        assert!(
+            manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+        match rx.recv().await {
+            Some(HubToMachine::AgentBrowserInput { browser_id, event }) => {
+                assert_eq!(browser_id, "b1");
+                assert_eq!(event, click_event());
+            }
+            other => panic!("{other:?}"),
+        }
+        // Nothing else was queued for dev-b / the refused attempts.
+        assert!(rx.try_recv().is_err());
+        // Oversized text is refused even from the controller.
+        assert!(
+            !manager
+                .agent_browser_input(
+                    "machine-a",
+                    "b1",
+                    "dev-a",
+                    AgentBrowserInputEvent::Text {
+                        text: "x".repeat(10_001)
+                    }
+                )
+                .await
+        );
+        // After release, the former controller is refused too.
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        assert!(
+            !manager
+                .agent_browser_input("machine-a", "b1", "dev-a", click_event())
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn control_long_poll_wakes_on_release_and_times_out() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+
+        // Times out while a person still controls it.
+        let started = std::time::Instant::now();
+        let (info, ready) = manager
+            .wait_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlWait::Agent,
+                Duration::from_millis(80),
+            )
+            .await
+            .unwrap();
+        assert!(!ready);
+        assert_eq!(info.controller, AgentBrowserController::Human);
+        assert!(started.elapsed() >= Duration::from_millis(70));
+
+        // Wakes promptly on release.
+        let waiter = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .wait_agent_browser_control(
+                        "machine-a",
+                        "b1",
+                        ControlWait::Agent,
+                        Duration::from_secs(30),
+                    )
+                    .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let released_at = std::time::Instant::now();
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        let (info, ready) = waiter.await.unwrap().unwrap();
+        assert!(ready);
+        assert_eq!(info.controller, AgentBrowserController::Agent);
+        assert!(released_at.elapsed() < Duration::from_secs(1));
+
+        // Already satisfied: returns at once.
+        let (_, ready) = manager
+            .wait_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlWait::Agent,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap();
+        assert!(ready);
+        assert!(manager
+            .wait_agent_browser_control(
+                "machine-a",
+                "gone",
+                ControlWait::Agent,
+                Duration::from_millis(10)
+            )
+            .await
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn handoff_resolves_only_after_a_person_hands_control_back() {
+        let (manager, _rx) = manager_with_browser().await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "b1",
+                ControlChange::Handoff {
+                    reason: "log in".to_string(),
+                },
+            )
+            .await;
+        let wait = |timeout_ms| {
+            let manager = manager.clone();
+            async move {
+                manager
+                    .wait_agent_browser_control(
+                        "machine-a",
+                        "b1",
+                        ControlWait::Resolved,
+                        Duration::from_millis(timeout_ms),
+                    )
+                    .await
+                    .unwrap()
+            }
+        };
+        // The agent controls it, but the handoff is still open.
+        assert!(!wait(40).await.1);
+        // A person takes control: still open.
+        manager
+            .change_agent_browser_control("machine-a", "b1", take("dev-a"))
+            .await;
+        assert!(!wait(40).await.1);
+        let pending = tokio::spawn(wait(30_000));
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        manager
+            .change_agent_browser_control("machine-a", "b1", ControlChange::Release)
+            .await;
+        let (info, ready) = pending.await.unwrap();
+        assert!(ready);
+        assert!(info.handoff.is_none());
     }
 
     #[tokio::test]

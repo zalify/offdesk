@@ -296,7 +296,7 @@ pub struct BrowserStateSnapshot {
 // ── Hub → Machine messages ──
 
 /// One agent browser = one tab of the node's headless Chromium.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentBrowserInfo {
     pub id: String,
     /// Filled in by the hub; the node leaves it unset.
@@ -308,6 +308,187 @@ pub struct AgentBrowserInfo {
     /// when it runs inside an offdesk terminal on the same machine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opener_terminal_id: Option<String>,
+    /// Who drives the page. Owned by the hub (the node never sets it).
+    #[serde(default)]
+    pub controller: AgentBrowserController,
+    /// While `controller` is `Human`: the viewer device that took control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_device_id: Option<String>,
+    /// While `controller` is `Human`: when it took control (ms since epoch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_since: Option<i64>,
+    /// The agent is asking a person for help; cleared when a person hands
+    /// control back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<AgentBrowserHandoff>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentBrowserController {
+    #[default]
+    Agent,
+    Human,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentBrowserHandoff {
+    pub reason: String,
+    /// ms since epoch
+    pub requested_at: i64,
+}
+
+/// CSS viewport of every agent browser; input coordinates live in it.
+pub const AGENT_BROWSER_VIEWPORT_WIDTH: u32 = 1280;
+pub const AGENT_BROWSER_VIEWPORT_HEIGHT: u32 = 800;
+/// Longest `text` input event accepted.
+pub const AGENT_BROWSER_MAX_INPUT_TEXT: usize = 10_000;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseAction {
+    Move,
+    Down,
+    Up,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    #[default]
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyAction {
+    Down,
+    Up,
+}
+
+fn one() -> u32 {
+    1
+}
+
+/// A human's input to an agent browser (from a viewer). Coordinates are CSS
+/// px in the 1280x800 viewport; `modifiers` is the CDP bitmask
+/// (Alt 1, Ctrl 2, Meta 4, Shift 8).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentBrowserInputEvent {
+    Mouse {
+        action: MouseAction,
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        button: MouseButton,
+        #[serde(default)]
+        buttons: u32,
+        #[serde(default = "one")]
+        click_count: u32,
+        #[serde(default)]
+        modifiers: u32,
+    },
+    Wheel {
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        delta_x: f64,
+        #[serde(default)]
+        delta_y: f64,
+        #[serde(default)]
+        modifiers: u32,
+    },
+    /// A browser `KeyboardEvent`.
+    Key {
+        action: KeyAction,
+        key: String,
+        #[serde(default)]
+        code: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default)]
+        modifiers: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_code: Option<u32>,
+    },
+    /// Insert text as is (IME commit, paste).
+    Text { text: String },
+}
+
+impl AgentBrowserInputEvent {
+    /// Clamp coordinates into the viewport and bound field sizes; `None`
+    /// when the event is not acceptable (non-finite numbers, oversized text).
+    pub fn sanitized(self) -> Option<Self> {
+        let max_x = (AGENT_BROWSER_VIEWPORT_WIDTH - 1) as f64;
+        let max_y = (AGENT_BROWSER_VIEWPORT_HEIGHT - 1) as f64;
+        let coord = |v: f64, max: f64| v.is_finite().then(|| v.clamp(0.0, max));
+        let delta = |v: f64| v.is_finite().then(|| v.clamp(-10_000.0, 10_000.0));
+        let modifiers = |m: u32| m & 0xf;
+        match self {
+            Self::Mouse {
+                action,
+                x,
+                y,
+                button,
+                buttons,
+                click_count,
+                modifiers: m,
+            } => Some(Self::Mouse {
+                action,
+                x: coord(x, max_x)?,
+                y: coord(y, max_y)?,
+                button,
+                buttons: buttons & 0x1f,
+                click_count: click_count.clamp(1, 3),
+                modifiers: modifiers(m),
+            }),
+            Self::Wheel {
+                x,
+                y,
+                delta_x,
+                delta_y,
+                modifiers: m,
+            } => Some(Self::Wheel {
+                x: coord(x, max_x)?,
+                y: coord(y, max_y)?,
+                delta_x: delta(delta_x)?,
+                delta_y: delta(delta_y)?,
+                modifiers: modifiers(m),
+            }),
+            Self::Key {
+                action,
+                key,
+                code,
+                text,
+                modifiers: m,
+                key_code,
+            } => {
+                if key.is_empty()
+                    || key.chars().count() > 32
+                    || code.chars().count() > 32
+                    || text.as_ref().is_some_and(|t| t.chars().count() > 8)
+                    || key_code.is_some_and(|k| k > 255)
+                {
+                    return None;
+                }
+                Some(Self::Key {
+                    action,
+                    key,
+                    code,
+                    text,
+                    modifiers: modifiers(m),
+                    key_code,
+                })
+            }
+            Self::Text { text } => (!text.is_empty()
+                && text.chars().count() <= AGENT_BROWSER_MAX_INPUT_TEXT)
+                .then_some(Self::Text { text }),
+        }
+    }
 }
 
 /// Commands an agent can run against an agent browser. Replies:
@@ -432,6 +613,13 @@ pub enum HubToMachine {
     /// The hub (a viewer) has taken the last screencast frame.
     #[serde(rename = "agent_browser_frame_ack")]
     AgentBrowserFrameAck { browser_id: String },
+    /// A person's mouse / keyboard / text input for an agent browser. Sent
+    /// only while a person controls it; the node applies them in order.
+    #[serde(rename = "agent_browser_input")]
+    AgentBrowserInput {
+        browser_id: String,
+        event: AgentBrowserInputEvent,
+    },
     #[serde(rename = "open_attach")]
     OpenAttach {
         attach_id: String,
@@ -911,11 +1099,88 @@ mod tests {
     use super::{
         decode_agent_browser_frame, decode_attach_output_frame,
         decode_terminal_preview_output_frame, encode_agent_browser_frame,
-        encode_attach_output_frame, encode_terminal_preview_output_frame,
-        BrowserEventsClientMessage, BrowserEventsPong, MachineToHub, TerminalInfo,
-        TerminalTitleSource,
+        encode_attach_output_frame, encode_terminal_preview_output_frame, AgentBrowserController,
+        AgentBrowserInfo, AgentBrowserInputEvent, BrowserEventsClientMessage, BrowserEventsPong,
+        HubToMachine, MachineToHub, MouseButton, TerminalInfo, TerminalTitleSource,
     };
     use bytes::Bytes;
+
+    #[test]
+    fn agent_browser_info_control_fields_default_and_round_trip() {
+        let old: AgentBrowserInfo =
+            serde_json::from_str(r#"{"id":"b","url":"u","title":"t"}"#).unwrap();
+        assert_eq!(old.controller, AgentBrowserController::Agent);
+        assert!(old.handoff.is_none() && old.controller_device_id.is_none());
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!(json["controller"], "agent");
+        assert!(json.get("handoff").is_none());
+        let human: AgentBrowserInfo = serde_json::from_str(
+            r#"{"id":"b","url":"u","title":"t","controller":"human","controller_device_id":"d1",
+                "controller_since":5,"handoff":{"reason":"log in","requested_at":3}}"#,
+        )
+        .unwrap();
+        assert_eq!(human.controller, AgentBrowserController::Human);
+        assert_eq!(human.handoff.unwrap().reason, "log in");
+    }
+
+    #[test]
+    fn agent_browser_input_events_serde_and_sanitize() {
+        let mouse: AgentBrowserInputEvent = serde_json::from_str(
+            r#"{"kind":"mouse","action":"down","x":10.5,"y":9999,"button":"left","buttons":1,"click_count":2,"modifiers":8}"#,
+        )
+        .unwrap();
+        match mouse.clone().sanitized().unwrap() {
+            AgentBrowserInputEvent::Mouse { y, click_count, .. } => {
+                assert_eq!(y, 799.0);
+                assert_eq!(click_count, 2);
+            }
+            other => panic!("{other:?}"),
+        }
+        let defaults: AgentBrowserInputEvent =
+            serde_json::from_str(r#"{"kind":"mouse","action":"move","x":1,"y":2}"#).unwrap();
+        assert!(matches!(
+            defaults,
+            AgentBrowserInputEvent::Mouse {
+                button: MouseButton::None,
+                click_count: 1,
+                ..
+            }
+        ));
+        let wheel: AgentBrowserInputEvent =
+            serde_json::from_str(r#"{"kind":"wheel","x":-5,"y":3,"delta_x":0,"delta_y":1e9}"#)
+                .unwrap();
+        assert!(matches!(
+            wheel.sanitized().unwrap(),
+            AgentBrowserInputEvent::Wheel { x, delta_y, .. } if x == 0.0 && delta_y == 10_000.0
+        ));
+        let key: AgentBrowserInputEvent = serde_json::from_str(
+            r#"{"kind":"key","action":"down","key":"a","code":"KeyA","text":"a","modifiers":0,"key_code":65}"#,
+        )
+        .unwrap();
+        assert!(key.sanitized().is_some());
+        let long = AgentBrowserInputEvent::Text {
+            text: "x".repeat(10_001),
+        };
+        assert!(long.sanitized().is_none());
+        assert!(AgentBrowserInputEvent::Text {
+            text: "x".repeat(10_000)
+        }
+        .sanitized()
+        .is_some());
+        assert!(AgentBrowserInputEvent::Text {
+            text: String::new()
+        }
+        .sanitized()
+        .is_none());
+        let msg = HubToMachine::AgentBrowserInput {
+            browser_id: "b".into(),
+            event: AgentBrowserInputEvent::Text { text: "hi".into() },
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["type"], "agent_browser_input");
+        assert_eq!(json["event"]["kind"], "text");
+        assert!(serde_json::from_value::<HubToMachine>(json).is_ok());
+    }
 
     #[test]
     fn agent_browser_frame_round_trips_and_is_distinct_from_attach_frames() {

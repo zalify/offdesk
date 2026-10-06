@@ -201,6 +201,73 @@ impl HubClient {
         }
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        if let Some(error) = user_in_control_error(status, &body) {
+            return Err(error);
+        }
+        if status != StatusCode::UNAUTHORIZED {
+            if let Some(message) = error_message(&body) {
+                return Err(CliError::Protocol(message));
+            }
+        }
+        Err(plain_status_error(status, &body))
+    }
+
+    /// Ask a person for help with an agent browser (`reason` is shown to them).
+    pub async fn agent_browser_handoff(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        reason: &str,
+    ) -> Result<(), CliError> {
+        let response = self
+            .http
+            .post(self.url(&format!(
+                "/machines/{machine_id}/agent-browser/{browser_id}/handoff"
+            )))
+            .json(&serde_json::json!({ "reason": reason }))
+            .send()
+            .await
+            .map_err(network_error)?;
+        self.agent_browser_reply(response).await.map(|_| ())
+    }
+
+    /// One long-poll (the hub holds it up to 60 s) for the browser's control
+    /// state. `wait_for` is `agent` or `resolved`; returns the hub's `ready`.
+    pub async fn agent_browser_wait_control(
+        &self,
+        machine_id: &str,
+        browser_id: &str,
+        wait_for: &str,
+        timeout_ms: u64,
+    ) -> Result<bool, CliError> {
+        let response = self
+            .http
+            .get(self.url(&format!(
+                "/machines/{machine_id}/agent-browser/{browser_id}/control"
+            )))
+            .query(&[
+                ("wait_for", wait_for.to_string()),
+                ("timeout_ms", timeout_ms.to_string()),
+            ])
+            .send()
+            .await
+            .map_err(network_error)?;
+        let body = self.agent_browser_reply(response).await?;
+        Ok(body
+            .get("ready")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false))
+    }
+
+    async fn agent_browser_reply(&self, response: Response) -> Result<serde_json::Value, CliError> {
+        if response.status().is_success() {
+            return response
+                .json()
+                .await
+                .map_err(|error| CliError::Protocol(format!("invalid JSON from hub: {error}")));
+        }
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
         if status != StatusCode::UNAUTHORIZED {
             if let Some(message) = error_message(&body) {
                 return Err(CliError::Protocol(message));
@@ -290,6 +357,21 @@ async fn parse_json<T: DeserializeOwned>(response: Response) -> Result<T, CliErr
     Err(status_error(response.status(), response).await)
 }
 
+/// The hub's 409 `{"code":"user_in_control"}` refusal of an agent command.
+fn user_in_control_error(status: StatusCode, body: &str) -> Option<CliError> {
+    if status != StatusCode::CONFLICT {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    (value.get("code")?.as_str()? == "user_in_control").then(|| CliError::UserInControl {
+        browser: String::new(),
+        reason: value
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
+}
+
 /// The `error` field of a `{"error": "..."}` body.
 fn error_message(body: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(body).ok()?;
@@ -352,7 +434,20 @@ fn sanitize_device_id(hostname: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{error_message, sanitize_device_id};
+    use super::{error_message, sanitize_device_id, user_in_control_error, CliError, StatusCode};
+
+    #[test]
+    fn user_in_control_refusal_is_recognised() {
+        let body = r#"{"error":"a person is controlling this browser","code":"user_in_control","reason":"log in"}"#;
+        match user_in_control_error(StatusCode::CONFLICT, body) {
+            Some(CliError::UserInControl { reason, .. }) => {
+                assert_eq!(reason.as_deref(), Some("log in"));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(user_in_control_error(StatusCode::CONFLICT, r#"{"error":"x"}"#).is_none());
+        assert!(user_in_control_error(StatusCode::UNPROCESSABLE_ENTITY, body).is_none());
+    }
 
     #[test]
     fn error_message_reads_the_error_field() {

@@ -21,12 +21,35 @@ pub enum CliError {
     Protocol(String),
     #[error("wait timed out")]
     WaitTimeout,
+    /// An agent browser command was refused because a person is controlling
+    /// the browser (`browser` is filled in by the browser commands).
+    #[error("{}", user_in_control_message(.browser, .reason.as_deref()))]
+    UserInControl {
+        browser: String,
+        reason: Option<String>,
+    },
+}
+
+fn user_in_control_message(browser: &str, reason: Option<&str>) -> String {
+    let browser = if browser.is_empty() {
+        "<browser>"
+    } else {
+        browser
+    };
+    let mut message = format!(
+        "A person is controlling this browser. Wait for them with `offdesk browser wait-control {browser}`."
+    );
+    if let Some(reason) = reason {
+        message.push_str(&format!("\nPending handoff request: {reason}"));
+    }
+    message
 }
 
 impl CliError {
     fn exit_code(&self) -> i32 {
         match self {
             CliError::WaitTimeout => 1,
+            CliError::UserInControl { .. } => 3,
             _ => 2,
         }
     }
@@ -186,6 +209,16 @@ enum Commands {
         action: LayoutAction,
     },
     /// Drive a node's headless Chromium (the agent browser)
+    #[command(after_help = "\
+Exit codes:
+  0  success (wait: matched; handoff --wait / wait-control: a person is done)
+  1  timeout (wait, handoff --wait, wait-control)
+  2  error
+  3  a person is controlling the browser, so goto/click/fill/press/close were
+     refused. Run `offdesk browser wait-control <browser>` to wait for them,
+     or `offdesk browser handoff <browser> --reason \"...\" --wait` to ask for
+     help and wait until they hand control back. snapshot, screenshot, wait
+     and ls still work while a person is in control.")]
     Browser {
         #[command(subcommand)]
         action: BrowserAction,
@@ -315,6 +348,30 @@ enum BrowserAction {
         idle: Option<u64>,
         /// Give up after this many seconds
         #[arg(long, default_value = "30")]
+        timeout: u64,
+    },
+    /// Ask a person for help (log in, solve a captcha, ...); shows a banner on the browser's pane
+    Handoff {
+        /// Browser id or unique prefix
+        browser: String,
+        /// What the person should do
+        #[arg(long)]
+        reason: String,
+        /// Block until a person has taken control and handed it back
+        /// (exit 0; 1 on timeout)
+        #[arg(long)]
+        wait: bool,
+        /// With --wait: give up after this many seconds
+        #[arg(long, default_value = "600", requires = "wait")]
+        timeout: u64,
+    },
+    /// Block until no person controls the browser: exit 0 when the agent may
+    /// drive it, 1 on timeout
+    WaitControl {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Give up after this many seconds
+        #[arg(long, default_value = "600")]
         timeout: u64,
     },
     /// Save a PNG screenshot; prints the file path
@@ -581,6 +638,15 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     timeout_secs: timeout,
                 };
                 commands::browser::wait(&hub_client, &browser, options).await
+            }
+            BrowserAction::Handoff {
+                browser,
+                reason,
+                wait,
+                timeout,
+            } => commands::browser::handoff(&hub_client, &browser, reason, wait, timeout).await,
+            BrowserAction::WaitControl { browser, timeout } => {
+                commands::browser::wait_control(&hub_client, &browser, timeout).await
             }
             BrowserAction::Screenshot {
                 browser,

@@ -656,6 +656,12 @@ enum AgentBrowserViewerMessage {
         max_height: Option<u32>,
         quality: Option<u32>,
     },
+    /// A person's input. Applied only when this viewer's device controls the
+    /// browser; dropped otherwise.
+    #[serde(rename = "input")]
+    Input {
+        event: offdesk_protocol::AgentBrowserInputEvent,
+    },
 }
 
 fn viewer_params(max_width: Option<u32>, max_height: Option<u32>, quality: Option<u32>) -> Params {
@@ -712,7 +718,14 @@ async fn agent_browser_ws_handler(
     {
         return reply(404, "Agent browser not found".to_string());
     }
-    ws.on_upgrade(move |socket| handle_agent_browser_ws(socket, state, machine_id, browser_id))
+    // Without a device id the viewer can watch but never control.
+    let device_id = params
+        .get("device_id")
+        .filter(|d| !d.is_empty() && d.len() <= 128)
+        .cloned();
+    ws.on_upgrade(move |socket| {
+        handle_agent_browser_ws(socket, state, machine_id, browser_id, device_id)
+    })
 }
 
 async fn handle_agent_browser_ws(
@@ -720,6 +733,7 @@ async fn handle_agent_browser_ws(
     state: AppState,
     machine_id: String,
     browser_id: String,
+    device_id: Option<String>,
 ) {
     let (mut sender, mut receiver) = socket.split();
     // The handle's Drop detaches the viewer (and stops the node's screencast
@@ -768,6 +782,14 @@ async fn handle_agent_browser_ws(
                         Ok(AgentBrowserViewerMessage::Ack) => viewer.ack().await,
                         Ok(AgentBrowserViewerMessage::Params { max_width, max_height, quality }) => {
                             viewer.set_params(viewer_params(max_width, max_height, quality)).await;
+                        }
+                        Ok(AgentBrowserViewerMessage::Input { event }) => {
+                            if let Some(device_id) = device_id.as_deref() {
+                                state
+                                    .manager
+                                    .agent_browser_input(&machine_id, &browser_id, device_id, event)
+                                    .await;
+                            }
                         }
                         Err(_) => {}
                     }
@@ -1339,6 +1361,19 @@ mod tests {
             ),
             Ok(AgentBrowserViewerMessage::Params { max_width: Some(640), .. })
         ));
+        assert!(matches!(
+            serde_json::from_str::<AgentBrowserViewerMessage>(
+                r#"{"type":"input","event":{"kind":"text","text":"hi"}}"#
+            ),
+            Ok(AgentBrowserViewerMessage::Input {
+                event: offdesk_protocol::AgentBrowserInputEvent::Text { .. }
+            })
+        ));
+        // Unknown event kinds are ignored, not fatal.
+        assert!(serde_json::from_str::<AgentBrowserViewerMessage>(
+            r#"{"type":"input","event":{"kind":"gamepad"}}"#
+        )
+        .is_err());
     }
 
     #[test]

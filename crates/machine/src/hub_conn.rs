@@ -845,6 +845,9 @@ async fn handle_hub_message(
             let manager = agent_browser.clone();
             tokio::spawn(async move { manager.screencast_stop(&browser_id).await });
         }
+        HubToMachine::AgentBrowserInput { browser_id, event } => {
+            agent_browser.input(&browser_id, event);
+        }
         HubToMachine::AgentBrowserFrameAck { browser_id } => {
             agent_browser.frame_ack(&browser_id);
         }

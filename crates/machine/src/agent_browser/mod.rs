@@ -8,6 +8,7 @@
 mod cdp;
 mod chromium;
 mod download;
+mod input;
 mod keys;
 mod snapshot;
 
@@ -27,8 +28,8 @@ use tokio::sync::{broadcast, Mutex as AsyncMutex};
 const NAV_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Fixed CSS viewport of every agent browser, so geometry is known.
-const VIEWPORT_WIDTH: u32 = 1280;
-const VIEWPORT_HEIGHT: u32 = 800;
+const VIEWPORT_WIDTH: u32 = offdesk_protocol::AGENT_BROWSER_VIEWPORT_WIDTH;
+const VIEWPORT_HEIGHT: u32 = offdesk_protocol::AGENT_BROWSER_VIEWPORT_HEIGHT;
 /// A frame the hub never acknowledged stops blocking the stream after this.
 const TITLE_POLL: Duration = Duration::from_secs(2);
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -123,6 +124,8 @@ struct Tab {
     /// url/title last reported to the hub.
     reported: Mutex<(String, String)>,
     screen: Mutex<Screen>,
+    /// A person's input, applied in order by this tab's dispatcher task.
+    input: input::InputTx,
 }
 
 #[derive(Default)]
@@ -205,6 +208,15 @@ impl AgentBrowserManager {
         if let Some(tab) = self.tabs.get(browser_id) {
             tab.frame_ack();
         }
+    }
+
+    /// Queue a person's input for a tab. Never blocks: the tab's dispatcher
+    /// applies it in order. Unknown tabs and unacceptable events are dropped.
+    pub fn input(&self, browser_id: &str, event: offdesk_protocol::AgentBrowserInputEvent) {
+        let (Some(tab), Some(event)) = (self.tabs.get(browser_id), event.sanitized()) else {
+            return;
+        };
+        let _ = tab.input.send(event);
     }
 
     /// The hub connection is gone, so nobody is watching.
@@ -601,6 +613,7 @@ impl Tab {
                 }),
             )
             .await?;
+        let input = input::spawn(client.clone(), session_id.clone());
         Ok(Tab {
             id: uuid::Uuid::new_v4().to_string(),
             target_id,
@@ -613,6 +626,7 @@ impl Tab {
             gone: AtomicBool::new(false),
             reported: Mutex::new((String::new(), String::new())),
             screen: Mutex::new(Screen::default()),
+            input,
         })
     }
 
@@ -657,6 +671,7 @@ impl Tab {
                 url: url.to_string(),
                 title: title.to_string(),
                 opener_terminal_id: self.opener_terminal_id.clone(),
+                ..Default::default()
             }));
     }
 
@@ -865,6 +880,7 @@ impl Tab {
             url: info["url"].as_str().unwrap_or("").to_string(),
             title: info["title"].as_str().unwrap_or("").to_string(),
             opener_terminal_id: self.opener_terminal_id.clone(),
+            ..Default::default()
         })
     }
 
@@ -1502,6 +1518,141 @@ mod tests {
         assert!(destroyed.contains(&id), "{destroyed:?}");
         assert!(mgr.chromium_pid().await.is_none());
         assert!(!pid_alive(pid), "chromium should exit after the last close");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A person's mouse / keyboard / text / wheel input lands in the page.
+    #[tokio::test]
+    #[ignore]
+    async fn human_input_drives_a_real_browser() {
+        use offdesk_protocol::{AgentBrowserInputEvent as Ev, KeyAction, MouseAction, MouseButton};
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let page = "data:text/html,<body style='margin:0;height:3000px'>\
+            <button id=b style='position:absolute;left:100px;top:200px;width:120px;height:40px' \
+              onclick=\"window.clicks=(window.clicks||0)+1\">Go</button>\
+            <input id=q style='position:absolute;left:100px;top:300px;width:300px;height:30px'>";
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some(page.to_string()),
+                opener_terminal_id: None,
+            })
+            .await
+            .unwrap();
+        let id = info["id"].as_str().unwrap().to_string();
+        let tab = mgr.tabs.get(&id).unwrap();
+
+        // Input is applied asynchronously, in order: poll for the effect.
+        async fn until(tab: &Tab, expr: &str, want: Value) {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let got = tab.evaluate(expr).await.unwrap();
+                if got == want {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "{expr}: got {got}, want {want}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+        let mouse = |action, x: f64, y: f64, buttons| Ev::Mouse {
+            action,
+            x,
+            y,
+            // As in a browser: `button` names the button on down and up
+            // alike, `buttons` is the mask still held.
+            button: if action == MouseAction::Move {
+                MouseButton::None
+            } else {
+                MouseButton::Left
+            },
+            buttons,
+            click_count: 1,
+            modifiers: 0,
+        };
+        let key = |action, k: &str, text: Option<&str>, modifiers| Ev::Key {
+            action,
+            key: k.into(),
+            code: String::new(),
+            text: text.map(Into::into),
+            modifiers,
+            key_code: None,
+        };
+
+        // Click the button at its center (100+60, 200+20).
+        mgr.input(&id, mouse(MouseAction::Move, 160.0, 220.0, 0));
+        mgr.input(&id, mouse(MouseAction::Down, 160.0, 220.0, 1));
+        mgr.input(&id, mouse(MouseAction::Up, 160.0, 220.0, 0));
+        until(&tab, "window.clicks || 0", json!(1)).await;
+
+        // Focus the input by clicking it, then type: key down/up pairs.
+        for action in [MouseAction::Down, MouseAction::Up] {
+            let buttons = u32::from(action == MouseAction::Down);
+            mgr.input(&id, mouse(action, 200.0, 315.0, buttons));
+        }
+        until(&tab, "document.activeElement.id", json!("q")).await;
+        for k in ["h", "i"] {
+            mgr.input(&id, key(KeyAction::Down, k, Some(k), 0));
+            mgr.input(&id, key(KeyAction::Up, k, None, 0));
+        }
+        until(&tab, "document.getElementById('q').value", json!("hi")).await;
+        // IME commit / paste.
+        mgr.input(
+            &id,
+            Ev::Text {
+                text: " é你".into(),
+            },
+        );
+        until(&tab, "document.getElementById('q').value", json!("hi é你")).await;
+        // A named key without text.
+        mgr.input(&id, key(KeyAction::Down, "Backspace", None, 0));
+        mgr.input(&id, key(KeyAction::Up, "Backspace", None, 0));
+        until(&tab, "document.getElementById('q').value", json!("hi é")).await;
+        // Ctrl+A selects everything, so the next character replaces it.
+        mgr.input(&id, key(KeyAction::Down, "Control", None, 2));
+        mgr.input(&id, key(KeyAction::Down, "a", Some("a"), 2));
+        mgr.input(&id, key(KeyAction::Up, "a", None, 2));
+        mgr.input(&id, key(KeyAction::Up, "Control", None, 0));
+        mgr.input(&id, key(KeyAction::Down, "z", Some("z"), 0));
+        mgr.input(&id, key(KeyAction::Up, "z", None, 0));
+        until(&tab, "document.getElementById('q').value", json!("z")).await;
+
+        // Wheel scrolls the page.
+        mgr.input(
+            &id,
+            Ev::Wheel {
+                x: 600.0,
+                y: 400.0,
+                delta_x: 0.0,
+                delta_y: 300.0,
+                modifiers: 0,
+            },
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let y = tab.evaluate("window.scrollY").await.unwrap();
+            if y.as_f64().unwrap_or(0.0) > 0.0 {
+                eprintln!("scrollY = {y}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "page did not scroll: {y}");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        // Out-of-range input is clamped, not fatal.
+        mgr.input(&id, mouse(MouseAction::Move, 99999.0, -5.0, 0));
+        mgr.input(
+            &id,
+            Ev::Text {
+                text: "x".repeat(10_001),
+            },
+        );
+
+        mgr.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }
 }

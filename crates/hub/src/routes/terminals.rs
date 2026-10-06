@@ -1559,6 +1559,7 @@ mod tests {
             url: "https://example.com".to_string(),
             title: String::new(),
             opener_terminal_id: opener.map(str::to_string),
+            ..Default::default()
         };
         let browsers = vec![
             browser("from-tab", Some("tab-a")),

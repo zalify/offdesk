@@ -101,7 +101,21 @@ async fn call(
     machine_id: &str,
     command: AgentBrowserCommand,
 ) -> Result<Value, CliError> {
-    client.agent_browser(machine_id, &command).await
+    let browser = match &command {
+        AgentBrowserCommand::Goto { browser_id, .. }
+        | AgentBrowserCommand::Click { browser_id, .. }
+        | AgentBrowserCommand::Fill { browser_id, .. }
+        | AgentBrowserCommand::Press { browser_id, .. }
+        | AgentBrowserCommand::Close { browser_id } => short_id(browser_id).to_string(),
+        _ => String::new(),
+    };
+    client
+        .agent_browser(machine_id, &command)
+        .await
+        .map_err(|error| match error {
+            CliError::UserInControl { reason, .. } => CliError::UserInControl { browser, reason },
+            other => other,
+        })
 }
 
 /// Agent browsers on one machine, or on every online machine. When listing
@@ -319,6 +333,71 @@ pub async fn wait(client: &HubClient, browser: &str, options: WaitOptions) -> Re
     std::process::exit(1);
 }
 
+/// Longest single long-poll; the hub caps one at 60 s.
+const CONTROL_POLL_MS: u64 = 50_000;
+
+/// Long-poll the hub until `wait_for` holds (true) or `timeout_secs` pass
+/// (false).
+async fn wait_for_control(
+    client: &HubClient,
+    machine_id: &str,
+    browser_id: &str,
+    wait_for: &str,
+    timeout_secs: u64,
+) -> Result<bool, CliError> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let poll_ms = (remaining.as_millis() as u64).min(CONTROL_POLL_MS);
+        if client
+            .agent_browser_wait_control(machine_id, browser_id, wait_for, poll_ms)
+            .await?
+        {
+            return Ok(true);
+        }
+        if remaining.is_zero() || tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+    }
+}
+
+/// Exit 0 once no person controls the browser, 1 on timeout.
+pub async fn wait_control(
+    client: &HubClient,
+    browser: &str,
+    timeout_secs: u64,
+) -> Result<(), CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    if wait_for_control(client, &machine_id, &browser_id, "agent", timeout_secs).await? {
+        return Ok(());
+    }
+    eprintln!("a person is still controlling this browser");
+    std::process::exit(1);
+}
+
+/// Ask a person for help. With `wait`, block until they have taken control
+/// and handed it back (exit 0), or exit 1 after `timeout_secs`.
+pub async fn handoff(
+    client: &HubClient,
+    browser: &str,
+    reason: String,
+    wait: bool,
+    timeout_secs: u64,
+) -> Result<(), CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    client
+        .agent_browser_handoff(&machine_id, &browser_id, &reason)
+        .await?;
+    if !wait {
+        return Ok(());
+    }
+    if wait_for_control(client, &machine_id, &browser_id, "resolved", timeout_secs).await? {
+        return Ok(());
+    }
+    eprintln!("timed out waiting for a person to help");
+    std::process::exit(1);
+}
+
 fn unix_seconds() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -451,6 +530,7 @@ mod tests {
             url: String::new(),
             title: String::new(),
             opener_terminal_id: None,
+            ..Default::default()
         }
     }
 
@@ -467,5 +547,25 @@ mod tests {
         assert_eq!(terminal_id_from_session("wmx_abc").as_deref(), Some("abc"));
         assert_eq!(terminal_id_from_session("work"), None);
         assert_eq!(terminal_id_from_session("odk_"), None);
+    }
+
+    #[test]
+    fn user_in_control_prints_the_wait_hint_and_exits_3() {
+        let error = CliError::UserInControl {
+            browser: "abcd1234".to_string(),
+            reason: Some("Please log in".to_string()),
+        };
+        assert_eq!(error.exit_code(), 3);
+        let message = error.to_string();
+        assert!(
+            message.starts_with(
+                "A person is controlling this browser. Wait for them with \
+                 `offdesk browser wait-control abcd1234`."
+            ),
+            "{message}"
+        );
+        assert!(message.contains("Please log in"), "{message}");
+        assert_eq!(CliError::Usage("x".into()).exit_code(), 2);
+        assert_eq!(CliError::WaitTimeout.exit_code(), 1);
     }
 }
