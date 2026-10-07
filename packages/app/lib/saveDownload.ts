@@ -58,11 +58,22 @@ function saveViaBrowser({ filename, mime, dataBase64 }: SaveDownloadInput): Save
 
 async function saveViaTauri({ filename, mime, dataBase64 }: SaveDownloadInput): Promise<SavedDownload> {
   const { invoke } = await import("@tauri-apps/api/core");
-  const saved = await invoke<NativeSaved>("save_download", {
-    filename,
-    mime,
-    dataBase64,
-  });
+  let saved: NativeSaved;
+  try {
+    saved = await invoke<NativeSaved>("save_download", {
+      filename,
+      mime,
+      dataBase64,
+    });
+  } catch (error) {
+    // APKs built before the command existed reject with Tauri's
+    // "Command save_download not found".
+    const text = error instanceof Error ? error.message : String(error);
+    if (/save_download/.test(text) && /not found|not allowed|unknown/i.test(text)) {
+      throw new Error("需要更新 Offdesk App 才能保存文件");
+    }
+    throw error;
+  }
   return {
     location: saved.path,
     open: () =>
