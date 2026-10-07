@@ -20,6 +20,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useSyncExternalStore,
   useState,
 } from "react";
 import type {
@@ -35,6 +36,7 @@ import {
   Eye,
   ExternalLink,
   FolderTree,
+  FolderOpen,
   Globe,
   Keyboard as KeyboardIcon,
   Lock,
@@ -84,6 +86,10 @@ interface MobileWorkbenchProps {
   onOpenBrowser: (id: string) => void;
   onSelectBrowser: (id: string) => void;
   onCloseBrowserSurface: () => void;
+  /** The file browser: a title-bar button and a full-screen surface. */
+  filesButton?: { open: boolean };
+  onToggleFiles?: () => void;
+  filesSurface?: React.ReactNode;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
   onPickTerminal: (id: string) => void;
@@ -115,6 +121,21 @@ interface MobileWorkbenchProps {
   children: React.ReactNode;
 }
 
+const TITLE_BAR_FILES_MIN_WIDTH = 360;
+
+function useMinViewportWidth(minWidth: number): boolean {
+  const query = `(min-width: ${minWidth}px)`;
+  return useSyncExternalStore(
+    (notify) => {
+      const mql = window.matchMedia(query);
+      mql.addEventListener("change", notify);
+      return () => mql.removeEventListener("change", notify);
+    },
+    () => window.matchMedia(query).matches,
+    () => true,
+  );
+}
+
 function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const {
     machines,
@@ -134,6 +155,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     onOpenBrowser,
     onSelectBrowser,
     onCloseBrowserSurface,
+    filesButton,
+    onToggleFiles,
+    filesSurface,
     canCreateTerminal,
     canSendAttention,
     onPickTerminal,
@@ -160,6 +184,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   } = props;
 
   const [hostSheetOpen, setHostSheetOpen] = useState(false);
+  // Below 360px the title bar has no room for the Files button; the Machines
+  // sheet always offers it instead.
+  const wideTitleBar = useMinViewportWidth(TITLE_BAR_FILES_MIN_WIDTH);
   const [hubPickerOpen, setHubPickerOpen] = useState(false);
   const { switchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
@@ -518,6 +545,41 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           </span>
         ) : null}
 
+        {filesButton && onToggleFiles && wideTitleBar && (
+          <span
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            style={{ width: 34, height: 34, flexShrink: 0 }}
+          >
+            <button
+              type="button"
+              data-testid="mobile-title-bar-files"
+              data-open={filesButton.open ? "true" : "false"}
+              aria-label="文件"
+              aria-pressed={filesButton.open}
+              title="文件"
+              onClick={onToggleFiles}
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 999,
+                border: `1.5px solid ${filesButton.open ? colorAlpha.accentLine : colors.line}`,
+                background: filesButton.open ? colorAlpha.accentSoft : colors.bg1,
+                color: filesButton.open ? colors.accent : colors.fg0,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              <FolderOpen size={16} aria-hidden />
+            </button>
+          </span>
+        )}
+
         {browserButton && (
           <span
             onClick={(event) => event.stopPropagation()}
@@ -731,6 +793,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             </div>
           </div>
         ) : children}
+        {filesSurface}
         {browserSurfaceOpen && activeMachine && (
           // Over the terminal workspace, which stays mounted underneath so
           // its terminals keep their connections and size.
@@ -1064,6 +1127,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               </div>
             );
           })}
+          {filesButton && onToggleFiles && (
+            <MenuRow
+              icon={<FolderOpen size={17} />}
+              label="浏览文件"
+              testid="mobile-menu-files"
+              onClick={() => {
+                setHostSheetOpen(false);
+                onToggleFiles();
+              }}
+            />
+          )}
           <MenuRow
             icon={<Plus size={17} />}
             label="Add a machine"

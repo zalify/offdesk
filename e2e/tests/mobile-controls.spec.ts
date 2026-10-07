@@ -995,17 +995,19 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
         await expect(machines).toHaveText("");
         await expect(bar).toHaveCSS("height", "44px");
-        // All six header elements (title, control state, Browser, new terminal,
+        // All header elements (title, control state, Files (only >= 360px, below
+        // that it lives in the Machines sheet), Browser, new terminal,
         // machines, status dot) must be contained, non-overlapping and in
         // one row; a clipped title is intentional, clipped controls are not.
-        await expect.poll(() => bar.evaluate(element => {
+        const expectedChildren = size.width >= 360 ? 7 : 6;
+        await expect.poll(() => bar.evaluate((element, expected) => {
           const outer = element.getBoundingClientRect();
           const children = Array.from(element.children).map(child => child.getBoundingClientRect());
-          return children.length === 6 && children[0].width > 40 &&
+          return children.length === expected && children[0].width > 40 &&
             children.every((child, i) => child.y >= outer.y && child.bottom <= outer.bottom &&
               child.left >= outer.left && child.right <= outer.right &&
               (i === 0 || child.left >= children[i - 1].right));
-        })).toBe(true);
+        }, expectedChildren)).toBe(true);
         await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         await page.screenshot({ path: testInfo.outputPath(`navigation-${index}-${size.width}.png`) });
 

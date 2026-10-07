@@ -26,7 +26,7 @@ import type {
   ResourceStats,
   TerminalInfo,
 } from "@offdesk/shared";
-import { FolderTree, Globe, ListChecks, Lock, Plus, Settings, Smartphone } from "lucide-react";
+import { FolderOpen, FolderTree, Globe, ListChecks, Lock, Plus, Settings, Smartphone } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
@@ -80,6 +80,9 @@ interface TabBarProps {
   /** The active machine's agent browser tabs; the button shows when set. */
   browserButton?: { count: number; needsPerson: boolean; open: boolean };
   onToggleBrowser?: () => void;
+  /** The file browser button; shows when set. */
+  filesButton?: { open: boolean };
+  onToggleFiles?: () => void;
   onRemoveHost: (machineId: string) => void;
   onRequestControl: () => void;
   onEngageViewOnly: () => void;
@@ -119,6 +122,8 @@ function TabBarComponent({
   openTodoCount,
   browserButton,
   onToggleBrowser,
+  filesButton,
+  onToggleFiles,
   onRemoveHost,
   onRequestControl,
   onEngageViewOnly,
@@ -553,6 +558,33 @@ function TabBarComponent({
           onRemoveHost={onRemoveHost}
         />
         <MicroMeters stats={stats} />
+        {filesButton && onToggleFiles && (
+          <button
+            type="button"
+            data-testid="tab-bar-files"
+            data-open={filesButton.open ? "true" : "false"}
+            onClick={onToggleFiles}
+            title="文件"
+            aria-label="文件"
+            aria-pressed={filesButton.open}
+            style={{
+              width: isTouch ? 40 : 30,
+              height: isTouch ? 40 : 30,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              border: `1px solid ${filesButton.open ? colorAlpha.accentLine : colors.line}`,
+              borderRadius: 6,
+              background: filesButton.open ? colorAlpha.accentSoft : "transparent",
+              color: filesButton.open ? colors.accent : colors.fg2,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <FolderOpen size={15} />
+          </button>
+        )}
         {browserButton && onToggleBrowser && (
           <button
             type="button"
