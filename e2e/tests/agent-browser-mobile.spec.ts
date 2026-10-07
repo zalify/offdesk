@@ -128,6 +128,47 @@ test.describe("agent browser on the phone", () => {
     await resetMachineState(page);
   });
 
+  test("submits bare addresses from the Open button and keyboard", async ({ page }) => {
+    const submitted: string[] = [];
+    // Check the real form and URL normalization without depending on an
+    // external website. Stop navigation at the browser-open API boundary.
+    await page.route("**/api/machines/e2e-node/agent-browser", async (route) => {
+      const request = route.request();
+      if (request.method() === "POST" && request.postDataJSON()?.type === "open") {
+        submitted.push(request.postDataJSON().url);
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Fixture stops navigation after submission" }),
+        });
+      } else {
+        await route.continue();
+      }
+    });
+    await openSurface(page);
+    const input = page.getByTestId("mobile-browser-url-input");
+    await expect(input).toHaveAttribute("inputmode", "url");
+    for (const [address, expected, keyboard] of [
+      ["Google.com", "https://Google.com", false],
+      ["example.com/path?q=1", "https://example.com/path?q=1", true],
+      ["127.0.0.1:3000", "http://127.0.0.1:3000", false],
+    ] as const) {
+      const count = submitted.length;
+      await input.fill(address);
+      if (keyboard) await input.press("Enter");
+      else await page.getByTestId("mobile-browser-url-submit").click();
+      await expect.poll(() => submitted.slice(count)).toEqual([expected]);
+      await expect(page.getByTestId("mobile-browser-surface-error"))
+        .toContainText("Fixture stops navigation after submission");
+    }
+    const count = submitted.length;
+    await input.fill("not a url");
+    await page.getByTestId("mobile-browser-url-submit").click();
+    await expect(page.getByTestId("mobile-browser-surface-error"))
+      .toContainText("Enter a web address");
+    expect(submitted).toHaveLength(count);
+  });
+
   test("lives behind a title-bar button, not in the session switcher", async ({
     page,
   }) => {
