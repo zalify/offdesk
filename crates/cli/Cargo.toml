@@ -26,3 +26,4 @@ regex = "1"
 base64 = "0.22"
 toml = "0.8"
 uuid = { workspace = true }
+hostname = "0.4"

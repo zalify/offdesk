@@ -810,7 +810,11 @@ async fn handle_agent_browser_ws(
 // ── Machine → Hub registration WebSocket ──
 
 async fn machine_ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| handle_machine_ws(socket, state))
+    // axum's default frame cap is 16 MiB; a 20 MiB file read arrives as one
+    // ~26.7 MiB base64 text frame.
+    ws.max_message_size(32 * 1024 * 1024)
+        .max_frame_size(32 * 1024 * 1024)
+        .on_upgrade(move |socket| handle_machine_ws(socket, state))
 }
 
 async fn handle_machine_ws(socket: WebSocket, state: AppState) {

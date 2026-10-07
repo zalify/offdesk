@@ -180,6 +180,7 @@ impl HubConnection {
                 offdesk_protocol::composer::COMPOSER_V1.to_string(),
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::relay::CAPABILITY.to_string(),
+                offdesk_protocol::FS_READ_CAPABILITY.to_string(),
             ],
         };
         let msg = serde_json::to_string(&register).unwrap();
@@ -748,9 +749,41 @@ async fn handle_hub_message(
                 }))
                 .await;
         }
-        HubToMachine::FsListDir { request_id, path } => {
+        HubToMachine::FsReadFile {
+            request_id,
+            path,
+            cwd,
+        } => {
+            // Reading up to 20 MiB must not stall the hub message loop.
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let message = match read_file_for_hub(&path, cwd.as_deref()).await {
+                    Ok(file) => MachineToHub::FsReadResult {
+                        request_id,
+                        name: file.name,
+                        path: file.path,
+                        mime: file.mime,
+                        size: file.size,
+                        data_base64: file.data_base64,
+                    },
+                    Err(e) => MachineToHub::FsReadError {
+                        request_id,
+                        code: e.code,
+                        message: e.message,
+                        size: e.size,
+                        path: e.path,
+                    },
+                };
+                let _ = send_tx.send(OutboundHubMessage::Json(message)).await;
+            });
+        }
+        HubToMachine::FsListDir {
+            request_id,
+            path,
+            show_hidden,
+        } => {
             let resolved = expand_tilde(&path);
-            match read_directory(&resolved) {
+            match read_directory(&resolved, show_hidden) {
                 Ok(entries) => {
                     let _ = send_tx
                         .send(OutboundHubMessage::Json(MachineToHub::FsListResult {
@@ -1259,7 +1292,7 @@ fn handle_image_paste(base64_data: &str, _mime: &str, filename: &str) -> Result<
     result
 }
 
-fn read_directory(path: &str) -> Result<Vec<DirEntry>, String> {
+fn read_directory(path: &str, show_hidden: bool) -> Result<Vec<DirEntry>, String> {
     let entries =
         std::fs::read_dir(path).map_err(|e| format!("Failed to read directory: {}", e))?;
 
@@ -1267,17 +1300,176 @@ fn read_directory(path: &str) -> Result<Vec<DirEntry>, String> {
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
+            if !show_hidden && name.starts_with('.') {
                 return None;
             }
             let path = entry.path().to_string_lossy().to_string();
-            let is_dir = entry.file_type().ok()?.is_dir();
-            Some(DirEntry { name, path, is_dir })
+            // Follow symlinks for the type so a link to a directory is
+            // browsable; fall back to the link's own type when it dangles.
+            let meta = std::fs::metadata(entry.path()).ok();
+            let is_dir = match &meta {
+                Some(m) => m.is_dir(),
+                None => entry.file_type().ok()?.is_dir(),
+            };
+            let size = meta.as_ref().filter(|m| m.is_file()).map(|m| m.len());
+            let modified_ms = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64);
+            Some(DirEntry {
+                name,
+                path,
+                is_dir,
+                size,
+                modified_ms,
+            })
         })
         .collect();
 
     result.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
     Ok(result)
+}
+
+struct FsReadOk {
+    name: String,
+    path: String,
+    mime: String,
+    size: u64,
+    data_base64: String,
+}
+
+struct FsReadFail {
+    code: offdesk_protocol::FsReadErrorCode,
+    message: String,
+    size: Option<u64>,
+    path: Option<String>,
+}
+
+impl FsReadFail {
+    fn new(code: offdesk_protocol::FsReadErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            size: None,
+            path: None,
+        }
+    }
+
+    fn from_io(error: &std::io::Error, path: &str) -> Self {
+        use offdesk_protocol::FsReadErrorCode as Code;
+        let code = match error.kind() {
+            std::io::ErrorKind::NotFound => Code::NotFound,
+            std::io::ErrorKind::PermissionDenied => Code::PermissionDenied,
+            _ => Code::Io,
+        };
+        Self::new(code, format!("{path}: {error}"))
+    }
+}
+
+/// `~`, `~/x`, absolute, or relative-to-`cwd`.
+fn resolve_read_path(path: &str, cwd: Option<&str>) -> Result<std::path::PathBuf, FsReadFail> {
+    use std::path::{Path, PathBuf};
+    if path.is_empty() {
+        return Err(FsReadFail::new(
+            offdesk_protocol::FsReadErrorCode::NotFound,
+            "Empty path",
+        ));
+    }
+    let expanded = expand_tilde(path);
+    let p = Path::new(&expanded);
+    if p.is_absolute() {
+        return Ok(p.to_path_buf());
+    }
+    match cwd {
+        Some(cwd) if !cwd.is_empty() => {
+            let base = PathBuf::from(expand_tilde(cwd));
+            Ok(base.join(p))
+        }
+        _ => Err(FsReadFail::new(
+            offdesk_protocol::FsReadErrorCode::Io,
+            format!("Relative path {path} needs a working directory"),
+        )),
+    }
+}
+
+fn guess_mime(path: &std::path::Path) -> String {
+    mime_guess::from_path(path)
+        .first_or_octet_stream()
+        .essence_str()
+        .to_string()
+}
+
+async fn read_file_for_hub(path: &str, cwd: Option<&str>) -> Result<FsReadOk, FsReadFail> {
+    use offdesk_protocol::{FsReadErrorCode as Code, FS_READ_MAX_BYTES};
+    let candidate = resolve_read_path(path, cwd)?;
+    let resolved = tokio::fs::canonicalize(&candidate)
+        .await
+        .map_err(|e| FsReadFail::from_io(&e, &candidate.to_string_lossy()))?;
+    let resolved_str = resolved.to_string_lossy().to_string();
+    let meta = tokio::fs::metadata(&resolved)
+        .await
+        .map_err(|e| FsReadFail::from_io(&e, &resolved_str))?;
+    if meta.is_dir() {
+        let mut fail = FsReadFail::new(Code::IsDirectory, format!("{resolved_str} is a directory"));
+        fail.path = Some(resolved_str);
+        return Err(fail);
+    }
+    if !meta.is_file() {
+        return Err(FsReadFail::new(
+            Code::Io,
+            format!("{resolved_str} is not a regular file"),
+        ));
+    }
+    if meta.len() > FS_READ_MAX_BYTES {
+        let mut fail = FsReadFail::new(
+            Code::TooLarge,
+            format!(
+                "{resolved_str} is {} bytes; the limit is {FS_READ_MAX_BYTES}",
+                meta.len()
+            ),
+        );
+        fail.size = Some(meta.len());
+        fail.path = Some(resolved_str);
+        return Err(fail);
+    }
+    // Bound the read too, in case the file grew after the stat.
+    use tokio::io::AsyncReadExt;
+    let file = tokio::fs::File::open(&resolved)
+        .await
+        .map_err(|e| FsReadFail::from_io(&e, &resolved_str))?;
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    file.take(FS_READ_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .await
+        .map_err(|e| FsReadFail::from_io(&e, &resolved_str))?;
+    if bytes.len() as u64 > FS_READ_MAX_BYTES {
+        let mut fail = FsReadFail::new(
+            Code::TooLarge,
+            format!("{resolved_str} is larger than {FS_READ_MAX_BYTES} bytes"),
+        );
+        fail.path = Some(resolved_str);
+        return Err(fail);
+    }
+    let size = bytes.len() as u64;
+    let name = resolved
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| resolved_str.clone());
+    // Encoding 20 MiB is CPU work; keep it off the async workers.
+    let data_base64 = tokio::task::spawn_blocking(move || {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(&bytes)
+    })
+    .await
+    .map_err(|e| FsReadFail::new(Code::Io, format!("Encoding failed: {e}")))?;
+    Ok(FsReadOk {
+        mime: guess_mime(&resolved),
+        name,
+        path: resolved_str,
+        size,
+        data_base64,
+    })
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -1463,5 +1655,89 @@ mod tests {
                 payload: b"after".to_vec(),
             }
         );
+    }
+
+    fn scratch_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("offdesk-fsread-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[tokio::test]
+    async fn fs_read_returns_content_and_mime_for_relative_path() {
+        let dir = scratch_dir();
+        std::fs::write(dir.join("note.txt"), b"hello").unwrap();
+        let ok = read_file_for_hub("note.txt", Some(dir.to_str().unwrap()))
+            .await
+            .ok()
+            .unwrap();
+        assert_eq!(ok.name, "note.txt");
+        assert_eq!(ok.size, 5);
+        assert_eq!(ok.mime, "text/plain");
+        assert_eq!(ok.data_base64, "aGVsbG8=");
+        assert_eq!(
+            ok.path,
+            std::fs::canonicalize(dir.join("note.txt"))
+                .unwrap()
+                .to_string_lossy()
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn fs_read_reports_typed_errors() {
+        use offdesk_protocol::{FsReadErrorCode as Code, FS_READ_MAX_BYTES};
+        let dir = scratch_dir();
+        let dir_str = dir.to_str().unwrap();
+
+        let missing = read_file_for_hub("nope", Some(dir_str))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(missing.code, Code::NotFound);
+
+        let relative = read_file_for_hub("nope", None).await.err().unwrap();
+        assert_eq!(relative.code, Code::Io);
+
+        let directory = read_file_for_hub(dir_str, None).await.err().unwrap();
+        assert_eq!(directory.code, Code::IsDirectory);
+        assert_eq!(
+            directory.path.as_deref(),
+            Some(std::fs::canonicalize(&dir).unwrap().to_str().unwrap())
+        );
+
+        let big = dir.join("big.bin");
+        let file = std::fs::File::create(&big).unwrap();
+        file.set_len(FS_READ_MAX_BYTES + 1).unwrap();
+        let too_large = read_file_for_hub(big.to_str().unwrap(), None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(too_large.code, Code::TooLarge);
+        assert_eq!(too_large.size, Some(FS_READ_MAX_BYTES + 1));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn read_directory_hides_dotfiles_unless_asked_and_reports_size() {
+        let dir = scratch_dir();
+        std::fs::write(dir.join("a.txt"), b"abc").unwrap();
+        std::fs::write(dir.join(".hidden"), b"x").unwrap();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let dir_str = dir.to_str().unwrap();
+
+        let visible = read_directory(dir_str, false).unwrap();
+        assert_eq!(
+            visible.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(),
+            ["sub", "a.txt"]
+        );
+        let file = visible.iter().find(|e| e.name == "a.txt").unwrap();
+        assert_eq!(file.size, Some(3));
+        assert!(file.modified_ms.is_some());
+        assert_eq!(visible[0].size, None);
+
+        let all = read_directory(dir_str, true).unwrap();
+        assert!(all.iter().any(|e| e.name == ".hidden"));
+        std::fs::remove_dir_all(dir).ok();
     }
 }

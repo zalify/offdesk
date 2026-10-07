@@ -31,4 +31,5 @@ bytes.workspace = true
 rusqlite.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 base64 = "0.22"
+mime_guess = "2"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
