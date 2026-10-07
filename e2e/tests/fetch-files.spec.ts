@@ -72,3 +72,21 @@ test("a missing file shows an error notice instead of downloading", async ({ pag
   await page.mouse.click(x, y);
   await expect(page.getByTestId("offdesk-notice")).toContainText("找不到 such-file.txt");
 });
+
+test("clicking an OSC 8 file link downloads the file", async ({ page }) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  const id = await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    startupCommand:
+      `printf '中文内容\\n' > '/tmp/e2e osc 文件.txt'; ` +
+      `printf '\\033]8;;file://h/tmp/e2e%%20osc%%20文件.txt\\033\\\\OSC_LINK\\033]8;;\\033\\\\\\n'; sleep 600`,
+  });
+  await expandTerminalById(page, id);
+  await expect.poll(() => readTerminalBuffer(page, id)).toContain("OSC_LINK");
+
+  const download = await clickAndDownload(page, "OSC_LINK");
+  expect(download.suggestedFilename()).toBe("e2e osc 文件.txt");
+  expect(await readDownload(download)).toBe("中文内容\n");
+});

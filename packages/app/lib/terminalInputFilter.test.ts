@@ -62,4 +62,25 @@ describe("filterBrowserGeneratedTerminalInput", () => {
   it("preserves cursor-key input that is not a focus report", () => {
     expect(filterBrowserGeneratedTerminalInput("\x1b[A")).toBe("\x1b[A");
   });
+
+  it("drops OSC colour query replies with ST and BEL terminators", () => {
+    expect(filterBrowserGeneratedTerminalInput("\x1b]10;rgb:d4d4/d4d4/d4d4\x1b\\")).toBe("");
+    expect(filterBrowserGeneratedTerminalInput("\x1b]11;rgb:1e1e/1e1e/1e1e\x07")).toBe("");
+    expect(filterBrowserGeneratedTerminalInput("\x1b]12;rgb:f/f/f\x1b\\")).toBe("");
+    expect(filterBrowserGeneratedTerminalInput("\x1b]4;1;rgb:cdcd/0000/0000\x1b\\")).toBe("");
+    expect(filterBrowserGeneratedTerminalInput("\x1b]19;rgba:ffff/ffff/ffff/8000\x07")).toBe("");
+  });
+
+  it("strips only the colour reply when mixed with typed input", () => {
+    expect(
+      filterBrowserGeneratedTerminalInput(
+        "\x1b]10;rgb:d4d4/d4d4/d4d4\x1b\\\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\ls\r",
+      ),
+    ).toBe("ls\r");
+  });
+
+  it("keeps typed text that only looks like a colour reply", () => {
+    expect(filterBrowserGeneratedTerminalInput("]10;rgb:d4d4/d4d4/d4d4")).toBe("]10;rgb:d4d4/d4d4/d4d4");
+    expect(filterBrowserGeneratedTerminalInput("\x1b]0;title\x07")).toBe("\x1b]0;title\x07");
+  });
 });

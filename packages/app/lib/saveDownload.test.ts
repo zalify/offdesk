@@ -67,6 +67,14 @@ describe("saveDownloadedFile", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:x");
   });
 
+  it("asks for an app update when the native command is missing", async () => {
+    win.__TAURI_INTERNALS__ = {};
+    invoke.mockRejectedValueOnce("Command save_download not found");
+    await expect(
+      saveDownloadedFile(input),
+    ).rejects.toThrow("需要更新 Offdesk App 才能保存文件");
+  });
+
   it("invokes the native command inside Tauri and can reveal the file", async () => {
     win.__TAURI_INTERNALS__ = {};
     invoke.mockResolvedValueOnce({ path: "/home/u/Downloads/a.txt", uri: null });
