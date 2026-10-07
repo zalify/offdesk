@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Json},
+    response::{IntoResponse, Json, Response},
     routing::{delete, get, patch, post, put},
     Router,
 };
@@ -1036,12 +1036,112 @@ async fn list_directory(
     }
 
     let path = params.get("path").map(|s| s.as_str()).unwrap_or("~");
+    let show_hidden = matches!(
+        params.get("show_hidden").map(String::as_str),
+        Some("1" | "true")
+    );
     state
         .manager
-        .list_directory(&machine_id, path)
+        .list_directory(&machine_id, path, show_hidden)
         .await
         .map(Json)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))
+}
+
+fn fs_read_error(status: StatusCode, code: &str, message: String) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": code, "message": message })),
+    )
+        .into_response()
+}
+
+/// Read one file from a machine as base64 JSON. The machine caps files at
+/// `FS_READ_MAX_BYTES` so the response fits the paired-app transport.
+async fn read_file(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    use crate::machine_manager::FsReadFailure;
+    use offdesk_protocol::FsReadErrorCode as Code;
+
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, &machine_id)
+        .await
+    {
+        return fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine not found".into(),
+        );
+    }
+    let Some(path) = params.get("path").filter(|p| !p.is_empty()) else {
+        return fs_read_error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "path is required".into(),
+        );
+    };
+    let cwd = params
+        .get("cwd")
+        .map(String::as_str)
+        .filter(|c| !c.is_empty());
+
+    match state.manager.read_file(&machine_id, path, cwd).await {
+        Ok(file) => Json(serde_json::json!({
+            "name": file.name,
+            "path": file.path,
+            "mime": file.mime,
+            "size": file.size,
+            "data_base64": file.data_base64,
+        }))
+        .into_response(),
+        Err(FsReadFailure::Machine {
+            code,
+            message,
+            size,
+            path,
+        }) => {
+            let (status, name) = match code {
+                Code::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+                Code::IsDirectory => (StatusCode::BAD_REQUEST, "is_directory"),
+                Code::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+                Code::PermissionDenied => (StatusCode::FORBIDDEN, "permission_denied"),
+                Code::Io => (StatusCode::BAD_GATEWAY, "io"),
+            };
+            let mut body = serde_json::json!({ "error": name, "message": message });
+            if let Some(size) = size {
+                body["size"] = size.into();
+            }
+            if let Some(path) = path {
+                body["path"] = path.into();
+            }
+            (status, Json(body)).into_response()
+        }
+        Err(FsReadFailure::Outdated) => fs_read_error(
+            StatusCode::CONFLICT,
+            "machine_outdated",
+            "This machine needs to be updated before it can send files".into(),
+        ),
+        Err(FsReadFailure::NoMachine) => fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine is not connected".into(),
+        ),
+        Err(FsReadFailure::Disconnected) => fs_read_error(
+            StatusCode::BAD_GATEWAY,
+            "machine_disconnected",
+            "Machine disconnected".into(),
+        ),
+        Err(FsReadFailure::Timeout) => fs_read_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "timeout",
+            "The machine took too long to read the file".into(),
+        ),
+    }
 }
 
 async fn get_machine_stats(
@@ -1104,6 +1204,7 @@ pub fn router() -> Router<AppState> {
             get(check_foreground_process),
         )
         .route("/api/machines/{machine_id}/fs/list", get(list_directory))
+        .route("/api/machines/{machine_id}/fs/read", get(read_file))
         .route("/api/machines/{machine_id}/stats", get(get_machine_stats))
 }
 
@@ -1217,6 +1318,113 @@ mod tests {
             .handle_machine_message("machine-a", MachineToHub::ExistingTerminals { terminals })
             .await;
         state
+    }
+
+    async fn get_json(state: &AppState, uri: &str) -> (StatusCode, Value) {
+        let token = sign_jwt("user-a", &state.jwt_secret);
+        let response = super::router()
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn fs_read_maps_machine_errors_to_http_statuses() {
+        let state = state_with_terminals(Vec::new()).await;
+        // machine-a registered without capabilities: it predates fs-read-v1.
+        let (status, body) =
+            get_json(&state, "/api/machines/machine-a/fs/read?path=/etc/hosts").await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "machine_outdated");
+
+        let (status, body) = get_json(&state, "/api/machines/machine-a/fs/read").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "bad_request");
+
+        let (status, _) = get_json(&state, "/api/machines/other/fs/read?path=/x").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn fs_read_returns_file_json_and_typed_failures() {
+        use offdesk_protocol::FsReadErrorCode;
+        let state = test_state();
+        {
+            let conn = state.db.get().unwrap();
+            crate::db::machines::ensure_machine_for_user(
+                &conn,
+                "machine-a",
+                "user-a",
+                "Machine A",
+                Some("linux"),
+                Some("/tmp"),
+            )
+            .unwrap();
+        }
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_READ_CAPABILITY.to_string()],
+            )
+            .await;
+        let machine_side = {
+            let manager = state.manager.clone();
+            tokio::spawn(async move {
+                // First request: success. Second: too_large.
+                for round in 0..2 {
+                    let Some(HubToMachine::FsReadFile { request_id, .. }) = commands.recv().await
+                    else {
+                        panic!("expected FsReadFile");
+                    };
+                    let reply = if round == 0 {
+                        MachineToHub::FsReadResult {
+                            request_id,
+                            name: "a.txt".into(),
+                            path: "/w/a.txt".into(),
+                            mime: "text/plain".into(),
+                            size: 2,
+                            data_base64: "aGk=".into(),
+                        }
+                    } else {
+                        MachineToHub::FsReadError {
+                            request_id,
+                            code: FsReadErrorCode::TooLarge,
+                            message: "big".into(),
+                            size: Some(99),
+                            path: Some("/w/big".into()),
+                        }
+                    };
+                    manager.handle_machine_message("machine-a", reply).await;
+                }
+            })
+        };
+        let (status, body) =
+            get_json(&state, "/api/machines/machine-a/fs/read?path=a.txt&cwd=/w").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data_base64"], "aGk=");
+        assert_eq!(body["mime"], "text/plain");
+
+        let (status, body) = get_json(&state, "/api/machines/machine-a/fs/read?path=big").await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(body["error"], "too_large");
+        assert_eq!(body["size"], 99);
+        assert_eq!(body["path"], "/w/big");
+        machine_side.await.unwrap();
     }
 
     async fn put_workspace_layout(state: &AppState, body: Value) -> (StatusCode, Value) {

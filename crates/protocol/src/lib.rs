@@ -76,6 +76,30 @@ pub struct DirEntry {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// File size in bytes; absent for directories and from older machines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    /// Last modification time, ms since the Unix epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_ms: Option<u64>,
+}
+
+/// Capability a machine advertises when it can answer `HubToMachine::FsReadFile`.
+pub const FS_READ_CAPABILITY: &str = "fs-read-v1";
+/// Largest file a machine will return through `FsReadFile`. The base64 JSON
+/// (~26.7 MiB) must stay under the 32 MiB hub WebSocket frame cap and the
+/// paired-app transport's 32 MiB - 1 KiB response cap.
+pub const FS_READ_MAX_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Why `FsReadFile` failed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FsReadErrorCode {
+    NotFound,
+    IsDirectory,
+    TooLarge,
+    PermissionDenied,
+    Io,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -652,7 +676,21 @@ pub enum HubToMachine {
     #[serde(rename = "destroy_terminal")]
     DestroyTerminal { terminal_id: String },
     #[serde(rename = "fs_list")]
-    FsListDir { request_id: String, path: String },
+    FsListDir {
+        request_id: String,
+        path: String,
+        #[serde(default)]
+        show_hidden: bool,
+    },
+    /// Read one file (<= `FS_READ_MAX_BYTES`). Needs `FS_READ_CAPABILITY`.
+    #[serde(rename = "fs_read_file")]
+    FsReadFile {
+        request_id: String,
+        path: String,
+        /// Base for relative paths.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+    },
     #[serde(rename = "auth_result")]
     AuthResult { ok: bool, message: Option<String> },
     #[serde(rename = "check_foreground_process")]
@@ -821,6 +859,27 @@ pub enum MachineToHub {
     },
     #[serde(rename = "fs_list_error")]
     FsListError { request_id: String, error: String },
+    #[serde(rename = "fs_read_result")]
+    FsReadResult {
+        request_id: String,
+        name: String,
+        /// Resolved absolute path.
+        path: String,
+        mime: String,
+        size: u64,
+        data_base64: String,
+    },
+    #[serde(rename = "fs_read_error")]
+    FsReadError {
+        request_id: String,
+        code: FsReadErrorCode,
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<u64>,
+        /// Resolved absolute path, when resolution got that far.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+    },
     #[serde(rename = "existing_terminals")]
     ExistingTerminals { terminals: Vec<TerminalInfo> },
     #[serde(rename = "resource_stats")]
@@ -1588,6 +1647,78 @@ mod tests {
             with_compress,
             HubToMachine::OpenAttach { compress: true, .. }
         ));
+    }
+
+    #[test]
+    fn fs_read_messages_round_trip() {
+        use super::{FsReadErrorCode, MachineToHub};
+        let request = HubToMachine::FsReadFile {
+            request_id: "r".into(),
+            path: "a.txt".into(),
+            cwd: Some("/tmp".into()),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""type":"fs_read_file""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::FsReadFile { cwd: Some(c), .. } if c == "/tmp"
+        ));
+        let no_cwd: HubToMachine =
+            serde_json::from_str(r#"{"type":"fs_read_file","request_id":"r","path":"/x"}"#)
+                .unwrap();
+        assert!(matches!(no_cwd, HubToMachine::FsReadFile { cwd: None, .. }));
+
+        let ok = MachineToHub::FsReadResult {
+            request_id: "r".into(),
+            name: "a.txt".into(),
+            path: "/tmp/a.txt".into(),
+            mime: "text/plain".into(),
+            size: 2,
+            data_base64: "aGk=".into(),
+        };
+        let json = serde_json::to_string(&ok).unwrap();
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::FsReadResult { size: 2, .. }
+        ));
+
+        let err = MachineToHub::FsReadError {
+            request_id: "r".into(),
+            code: FsReadErrorCode::TooLarge,
+            message: "big".into(),
+            size: Some(99),
+            path: None,
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains(r#""code":"too_large""#));
+        assert!(!json.contains("\"path\""));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::FsReadError {
+                code: FsReadErrorCode::TooLarge,
+                size: Some(99),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fs_list_is_compatible_with_old_peers() {
+        use super::DirEntry;
+        let old: HubToMachine =
+            serde_json::from_str(r#"{"type":"fs_list","request_id":"r","path":"~"}"#).unwrap();
+        assert!(matches!(
+            old,
+            HubToMachine::FsListDir {
+                show_hidden: false,
+                ..
+            }
+        ));
+        let entry: DirEntry =
+            serde_json::from_str(r#"{"name":"a","path":"/a","is_dir":false}"#).unwrap();
+        assert_eq!(entry.size, None);
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(!json.contains("size") && !json.contains("modified_ms"));
     }
 
     #[test]

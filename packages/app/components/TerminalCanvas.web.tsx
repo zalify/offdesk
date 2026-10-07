@@ -89,6 +89,10 @@ import {
   pickBrowserToOpen,
 } from "@/lib/agentBrowserOverlay";
 import { AgentBrowserOverlay } from "./AgentBrowserOverlay.web";
+import { FileBrowserOverlay } from "./FileBrowserOverlay.web";
+import { FileBrowserMobileSurface } from "./FileBrowserMobileSurface.web";
+import { OpenDirectoryContext } from "./OpenDirectoryContext";
+import { resolveStartPath } from "@/lib/fileBrowser";
 import {
   MAX_PANES_PER_TAB,
   buildReorderPersistentGroupIds,
@@ -1179,6 +1183,7 @@ function TerminalCanvasInner() {
       );
       if (pick) handleSelectOverlayBrowser(pick);
     }
+    setFilesState(null);
     setBrowserOverlayOpen(true);
   }, [
     overlayMachineId,
@@ -1203,10 +1208,64 @@ function TerminalCanvasInner() {
       // Drop the terminal's soft keyboard; the browser view opens its own.
       if (active instanceof HTMLElement) active.blur();
       handleSelectOverlayBrowser(browserId);
+      setFilesState(null);
       setBrowserOverlayOpen(true);
     },
     [handleSelectOverlayBrowser],
   );
+  // The file browser: desktop overlay / phone surface for the active machine,
+  // opened from the top bar, the palette, or a directory link in a terminal.
+  const [filesState, setFilesState] = useState<{
+    machineId: string;
+    startPath: string;
+  } | null>(null);
+  const workspaceCwd = workspaceTerminal?.cwd;
+  const handleOpenFiles = useCallback(
+    (machineId: string, path?: string) => {
+      // Phone: drop the terminal's soft keyboard. Desktop keeps focus so it
+      // returns to the terminal when the overlay closes.
+      const active = document.activeElement;
+      if (isCompact && active instanceof HTMLElement) active.blur();
+      setBrowserOverlayOpen(false);
+      setFilesState({
+        machineId,
+        startPath: resolveStartPath({
+          machineId,
+          givenPath: path,
+          cwd: workspaceCwd,
+        }),
+      });
+    },
+    [workspaceCwd, isCompact],
+  );
+  const handleOpenDirectory = useCallback(
+    (machineId: string, path: string) => handleOpenFiles(machineId, path),
+    [handleOpenFiles],
+  );
+  const handleToggleFiles = useCallback(() => {
+    if (filesState) {
+      setFilesState(null);
+      return;
+    }
+    if (overlayMachineId) handleOpenFiles(overlayMachineId);
+  }, [filesState, overlayMachineId, handleOpenFiles]);
+  const handleCloseFiles = useCallback(() => setFilesState(null), []);
+  useEffect(() => {
+    setFilesState((current) =>
+      current && current.machineId !== overlayMachineId ? null : current,
+    );
+  }, [overlayMachineId]);
+  useEffect(() => {
+    setFilesState(null);
+  }, [isCompact]);
+  const filesMachine = filesState
+    ? machines.find((machine) => machine.id === filesState.machineId)
+    : undefined;
+  const filesButtonProps =
+    activeMachine && machineOnline[activeMachine.id]
+      ? { open: filesState !== null }
+      : undefined;
+
   // A browser that starts asking for help while the overlay is closed is easy
   // to miss: say so (the top-bar button also shows a dot).
   const previousScopedBrowsersRef = useRef<{
@@ -1773,6 +1832,16 @@ function TerminalCanvasInner() {
         }),
       ),
       {
+        id: "browse-files",
+        section: "actions",
+        label: "Browse files",
+        keywords: "文件 files download fetch",
+        disabled: !activeMachine || !machineOnline[activeMachine.id],
+        action: () => {
+          if (activeMachine) handleOpenFiles(activeMachine.id);
+        },
+      },
+      {
         id: "add-host",
         section: "actions",
         label: "Add a machine…",
@@ -1806,10 +1875,13 @@ function TerminalCanvasInner() {
     isActiveController,
     handleNewTerminalFromHeader,
     handleNewGroup,
+    handleOpenFiles,
+    machineOnline,
     logout,
   ]);
 
   return (
+    <OpenDirectoryContext.Provider value={handleOpenDirectory}>
     <div
       data-testid="terminal-canvas"
       style={{
@@ -1877,6 +1949,19 @@ function TerminalCanvasInner() {
               onOpenBrowser={handleOpenBrowserTab}
               onSelectBrowser={handleSelectOverlayBrowser}
               onCloseBrowserSurface={() => setBrowserOverlayOpen(false)}
+              filesButton={filesButtonProps}
+              onToggleFiles={handleToggleFiles}
+              filesSurface={
+                filesState && filesMachine ? (
+                  <FileBrowserMobileSurface
+                    machineId={filesMachine.id}
+                    machineName={filesMachine.name}
+                    homeDir={filesMachine.home_dir}
+                    startPath={filesState.startPath}
+                    onClose={handleCloseFiles}
+                  />
+                ) : null
+              }
               canCreateTerminal={isActiveController}
               canSendAttention={(machineId) => !eventsReconnecting && canTypeOnMachine(machineId)}
               onPickTerminal={handleZoomTerminal}
@@ -1985,6 +2070,8 @@ function TerminalCanvasInner() {
                     : undefined
                 }
                 onToggleBrowser={handleToggleBrowserOverlay}
+                filesButton={filesButtonProps}
+                onToggleFiles={handleToggleFiles}
                 onRemoveHost={handleRemoveHost}
                 onRequestControl={() => {
                   if (activeMachine) void handleRequestControl(activeMachine.id);
@@ -2122,6 +2209,16 @@ function TerminalCanvasInner() {
           />
         )}
 
+        {!isCompact && filesState && filesMachine && (
+          <FileBrowserOverlay
+            machineId={filesMachine.id}
+            machineName={filesMachine.name}
+            homeDir={filesMachine.home_dir}
+            startPath={filesState.startPath}
+            onClose={handleCloseFiles}
+          />
+        )}
+
         {!isCompact && paletteState.open && (
           <CommandPalette
             rows={paletteRows}
@@ -2247,6 +2344,7 @@ function TerminalCanvasInner() {
         )}
       </TerminalPreviewMuxProvider>
     </div>
+    </OpenDirectoryContext.Provider>
   );
 }
 

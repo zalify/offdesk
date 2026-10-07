@@ -99,6 +99,16 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Print clickable links that download files (or open folders) from this
+    /// machine in the Offdesk app
+    Fetch {
+        /// Files or directories on this machine
+        #[arg(required = true)]
+        paths: Vec<String>,
+        /// Print only the file:// URL, with no escape sequences
+        #[arg(long)]
+        plain: bool,
+    },
     /// List terminals
     Ls {
         /// Filter to one machine (id or unique prefix)
@@ -585,6 +595,10 @@ fn env_with_legacy(name: &str, legacy: &str) -> Option<String> {
 }
 
 async fn run(cli: Cli) -> Result<(), CliError> {
+    // Purely local: needs neither a config file nor a hub.
+    if let Commands::Fetch { paths, plain } = &cli.command {
+        return commands::fetch::run(paths, *plain);
+    }
     let file = config::load_config_file()?;
     let env_url = env_with_legacy("OFFDESK_URL", "WEBMUX_URL");
     // Needs no token: on the hub's machine the hub signs the link itself,
@@ -672,6 +686,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
         Commands::Todo { .. } => unreachable!("todo returns early"),
+        Commands::Fetch { .. } => unreachable!("fetch returns early"),
         Commands::Mcp => unreachable!("mcp returns early"),
         Commands::Browser { action } => match action {
             BrowserAction::Open {

@@ -135,7 +135,10 @@ pub fn grant_and_load<R: Runtime>(app: &AppHandle<R>, hub_url: &str) -> Result<(
             // Deliberately not `allow-set-mobile-hub-url`: a hub may offer to
             // let go of the app, but must not be able to point it somewhere
             // else without the user typing the address.
-            .permission("allow-clear-mobile-hub-url"),
+            .permission("allow-clear-mobile-hub-url")
+            // Saving a file the hub UI fetched onto the phone.
+            .permission("allow-save-download")
+            .permission("allow-open-download"),
     )
     .map_err(|e| format!("failed to grant {url} plugin access: {e}"))?;
 

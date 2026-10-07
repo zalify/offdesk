@@ -43,6 +43,14 @@ import { bulkKeypressText } from "@/lib/terminalBulkKey";
 import { attachAppleTerminalInput } from "@/lib/appleTerminalInput";
 import { readClipboardText } from "@/lib/readClipboardText";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
+import { fetchRemoteFile } from "@/lib/fetchRemoteFile";
+import {
+  findPathsInLine,
+  lineTextWithColumns,
+  pathLinkUri,
+  remotePathFromLink,
+  resolveRemotePath,
+} from "@/lib/remoteFileLinks";
 import { useDisplayMode } from "@/lib/hooks";
 import { usePrefixKey } from "@/lib/prefixKeyContext";
 import { filterBrowserGeneratedTerminalInput } from "@/lib/terminalInputFilter";
@@ -475,8 +483,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     onTitleChange,
     onReconnectingChange,
     inputTransformRef,
+    cwd,
+    onOpenDirectory,
     style,
   }, ref) {
+    // The xterm link callbacks are registered once at mount, so they read the
+    // live cwd / directory hook through refs.
+    const cwdRef = useRef(cwd);
+    cwdRef.current = cwd;
+    const onOpenDirectoryRef = useRef(onOpenDirectory);
+    onOpenDirectoryRef.current = onOpenDirectory;
     const [previewNotice, setPreviewNotice] = useState<{ message: string; url?: string } | null>(null);
     useEffect(() => {
       // Actionable retry links persist until dismissed so popup-blocked users
@@ -487,6 +503,23 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, [previewNotice]);
     const previewTap = useRef<{ url: string; at: number; pending: boolean } | null>(null);
     const openTerminalLink = useCallback((url: string) => {
+      // `file://` OSC 8 links (from `offdesk fetch` / `ls --hyperlink`) and
+      // bare-path matches name a file on the remote machine: fetch it here
+      // instead of handing the URI to the external opener (which rejects it).
+      const remotePath = remotePathFromLink(url);
+      if (remotePath) {
+        const currentCwd = cwdRef.current;
+        void fetchRemoteFile({
+          machineId,
+          path: resolveRemotePath(remotePath, currentCwd) ?? remotePath,
+          cwd: currentCwd,
+          onDirectory: (dir) => {
+            const hook = onOpenDirectoryRef.current;
+            if (hook) hook(machineId, dir);
+          },
+        });
+        return;
+      }
       const local = parseLocalPreview(url);
       if (!local) { openExternalUrl(url); return; }
       const previous = previewTap.current;
@@ -827,6 +860,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         // OSC 8 hyperlinks have no default click action in xterm.js;
         // WebLinksAddon only covers plain-text URLs.
         linkHandler: {
+          // `file://` links are routed to the remote file fetch in
+          // openTerminalLink; anything else non-http is dropped there.
+          allowNonHttpProtocols: true,
           activate: (_event, url) => openTerminalLink(url),
           hover: (_event, url) => {
             hoveredLink = url;
@@ -863,6 +899,41 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           },
         ),
       );
+      // Bare paths in output (`/a/b`, `~/x`, `./y`, `../z`, optionally with a
+      // `:line:col` suffix) become fetch links too. Hover/leave feed the same
+      // hoveredLink slot as the other link kinds so a tap activates them.
+      term.registerLinkProvider({
+        provideLinks(y, callback) {
+          const line = term.buffer.active.getLine(y - 1);
+          if (!line) return callback(undefined);
+          const { text, columns } = lineTextWithColumns({
+            length: line.length,
+            getCell: (x) => line.getCell(x),
+          });
+          const matches = findPathsInLine(text);
+          if (matches.length === 0) return callback(undefined);
+          callback(
+            matches.map((m) => {
+              const uri = pathLinkUri(m.path);
+              return {
+                range: {
+                  start: { x: columns[m.start] + 1, y },
+                  end: { x: columns[m.end - 1] + 1, y },
+                },
+                text: m.path,
+                decorations: { underline: true, pointerCursor: true },
+                activate: () => openTerminalLink(uri),
+                hover: () => {
+                  hoveredLink = uri;
+                },
+                leave: () => {
+                  hoveredLink = null;
+                },
+              };
+            }),
+          );
+        },
+      });
       term.open(container);
       // GPU rendering with guarded activation: context loss or any failure
       // falls back to the DOM renderer, and the texture atlas is cleared

@@ -105,6 +105,10 @@ export interface DirEntry {
   name: string
   path: string
   is_dir: boolean
+  /** Bytes; absent for directories and on older nodes. */
+  size?: number
+  /** Last modified, ms since epoch; absent on older nodes. */
+  modified_ms?: number
 }
 
 export interface DiskInfo {

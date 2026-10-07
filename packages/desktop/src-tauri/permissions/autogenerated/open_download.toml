@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-download"
+description = "Enables the open_download command without any pre-configured scope."
+commands.allow = ["open_download"]
+
+[[permission]]
+identifier = "deny-open-download"
+description = "Denies the open_download command without any pre-configured scope."
+commands.deny = ["open_download"]

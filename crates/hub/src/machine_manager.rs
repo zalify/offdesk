@@ -48,8 +48,36 @@ pub enum PendingResult {
         process_name: Option<String>,
     },
     RelayBrief(Result<offdesk_protocol::relay::RelayBrief, String>),
+    FsRead(Result<FsReadData, FsReadFailure>),
     /// Node's reply to an agent browser command: its `data`, or its error text.
     AgentBrowser(Result<serde_json::Value, String>),
+}
+
+/// A file the machine read for us.
+#[derive(Debug, Clone)]
+pub struct FsReadData {
+    pub name: String,
+    pub path: String,
+    pub mime: String,
+    pub size: u64,
+    pub data_base64: String,
+}
+
+/// Why reading a remote file failed.
+#[derive(Debug)]
+pub enum FsReadFailure {
+    /// The machine answered with a typed error.
+    Machine {
+        code: offdesk_protocol::FsReadErrorCode,
+        message: String,
+        size: Option<u64>,
+        path: Option<String>,
+    },
+    /// The machine predates `fs-read-v1`.
+    Outdated,
+    NoMachine,
+    Disconnected,
+    Timeout,
 }
 
 /// A change to who controls an agent browser.
@@ -1874,11 +1902,67 @@ impl MachineManager {
         }
     }
 
+    /// Read one file from a machine (capped by `FS_READ_MAX_BYTES`).
+    pub async fn read_file(
+        &self,
+        machine_id: &str,
+        path: &str,
+        cwd: Option<&str>,
+    ) -> Result<FsReadData, FsReadFailure> {
+        if !self
+            .machine_supports(machine_id, offdesk_protocol::FS_READ_CAPABILITY)
+            .await
+        {
+            let known = self.machines.lock().await.contains_key(machine_id);
+            return Err(if known {
+                FsReadFailure::Outdated
+            } else {
+                FsReadFailure::NoMachine
+            });
+        }
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err(FsReadFailure::NoMachine);
+            };
+            conn.cmd_tx.clone()
+        };
+        if cmd_tx
+            .send(HubToMachine::FsReadFile {
+                request_id: request_id.clone(),
+                path: path.to_string(),
+                cwd: cwd.map(str::to_string),
+            })
+            .await
+            .is_err()
+        {
+            self.remove_pending(&request_id).await;
+            return Err(FsReadFailure::Disconnected);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+            Ok(Ok(Ok(PendingResult::FsRead(result)))) => result,
+            Ok(Ok(_)) => Err(FsReadFailure::Disconnected),
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                Err(FsReadFailure::Disconnected)
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(FsReadFailure::Timeout)
+            }
+        }
+    }
+
     /// Request directory listing from a machine
     pub async fn list_directory(
         &self,
         machine_id: &str,
         path: &str,
+        show_hidden: bool,
     ) -> Result<Vec<DirEntry>, String> {
         let request_id = uuid::Uuid::new_v4().to_string();
 
@@ -1897,6 +1981,7 @@ impl MachineManager {
             .send(HubToMachine::FsListDir {
                 request_id: request_id.clone(),
                 path: path.to_string(),
+                show_hidden,
             })
             .await
         {
@@ -2169,6 +2254,40 @@ impl MachineManager {
             } => {
                 if let Some(tx) = self.pending.lock().await.remove(&request_id) {
                     let _ = tx.send(Ok(PendingResult::FsListResult { entries }));
+                }
+            }
+            MachineToHub::FsReadResult {
+                request_id,
+                name,
+                path,
+                mime,
+                size,
+                data_base64,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::FsRead(Ok(FsReadData {
+                        name,
+                        path,
+                        mime,
+                        size,
+                        data_base64,
+                    }))));
+                }
+            }
+            MachineToHub::FsReadError {
+                request_id,
+                code,
+                message,
+                size,
+                path,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::FsRead(Err(FsReadFailure::Machine {
+                        code,
+                        message,
+                        size,
+                        path,
+                    }))));
                 }
             }
             MachineToHub::FsListError { request_id, error } => {
@@ -3712,11 +3831,64 @@ mod tests {
         let manager = MachineManager::new(test_db());
 
         let error = manager
-            .list_directory("missing-machine", "/tmp")
+            .list_directory("missing-machine", "/tmp", false)
             .await
             .unwrap_err();
 
         assert!(error.contains("not found"));
+        assert_eq!(manager.pending_count_for_tests().await, 0);
+    }
+
+    #[tokio::test]
+    async fn read_file_distinguishes_missing_and_outdated_machines() {
+        let manager = MachineManager::new(test_db());
+        let missing = manager.read_file("missing-machine", "/tmp/a", None).await;
+        assert!(matches!(missing, Err(FsReadFailure::NoMachine)));
+
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let outdated = manager.read_file("machine-a", "/tmp/a", None).await;
+        assert!(matches!(outdated, Err(FsReadFailure::Outdated)));
+        assert_eq!(manager.pending_count_for_tests().await, 0);
+    }
+
+    #[tokio::test]
+    async fn read_file_round_trips_machine_reply() {
+        let manager = std::sync::Arc::new(MachineManager::new(test_db()));
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_READ_CAPABILITY.to_string()],
+            )
+            .await;
+        let reader = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.read_file("machine-a", "a.txt", Some("/w")).await })
+        };
+        let Some(HubToMachine::FsReadFile {
+            request_id, cwd, ..
+        }) = commands.recv().await
+        else {
+            panic!("expected FsReadFile");
+        };
+        assert_eq!(cwd.as_deref(), Some("/w"));
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::FsReadResult {
+                    request_id,
+                    name: "a.txt".into(),
+                    path: "/w/a.txt".into(),
+                    mime: "text/plain".into(),
+                    size: 2,
+                    data_base64: "aGk=".into(),
+                },
+            )
+            .await;
+        let data = reader.await.unwrap().ok().unwrap();
+        assert_eq!(data.path, "/w/a.txt");
         assert_eq!(manager.pending_count_for_tests().await, 0);
     }
 

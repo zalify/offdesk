@@ -387,6 +387,7 @@ offdesk browser goto|snapshot|click|fill|press|wait|screenshot|close <browser> .
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # ask a person for help
 offdesk browser wait-control <browser>          # block while a person controls it (exit 3 = refused)
 offdesk mcp                                     # the agent browser as MCP tools over stdio: claude mcp add offdesk -- offdesk mcp
+offdesk fetch <path>... [--plain]               # print click-to-download links (OSC 8) for files/folders on this machine; max 20 MiB per file; no hub token needed
 offdesk link [--no-open]                        # open the hub in a browser; on the hub's machine, the sign-in link + code
 ```
 

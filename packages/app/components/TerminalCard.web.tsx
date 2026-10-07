@@ -1,4 +1,5 @@
 import { createPortal } from "react-dom";
+import { useOpenDirectory } from "./OpenDirectoryContext";
 import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle, type ReactNode } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
 import { X } from "lucide-react";
@@ -55,6 +56,8 @@ interface TerminalCardProps {
   onDestroy: (terminal: TerminalInfo) => void;
   onRequestControl?: (machineId: string) => void;
   onReleaseControl?: (machineId: string) => void;
+  /** A path link in this terminal resolved to a directory (file browser hook). */
+  onOpenDirectory?: (machineId: string, path: string) => void;
   /** Floating controls over the terminal area (never resizes the PTY). */
   overlay?: (layout: { topInset: number }) => ReactNode;
 }
@@ -75,8 +78,11 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   onDestroy,
   onRequestControl,
   onReleaseControl,
+  onOpenDirectory: onOpenDirectoryProp,
   overlay,
 }, ref) {
+  const contextOpenDirectory = useOpenDirectory();
+  const onOpenDirectory = onOpenDirectoryProp ?? contextOpenDirectory;
   const termViewRef = useRef<TerminalViewRef>(null);
   const selectOverlayRef = useRef<HTMLPreElement>(null);
   const fitRefRetryTimer = useRef<number | null>(null);
@@ -580,6 +586,8 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                   canResizeTerminal={isTab && isController}
                   onReconnectingChange={setTerminalReconnecting}
                   inputTransformRef={inputTransformRef}
+                  cwd={terminal.cwd}
+                  onOpenDirectory={onOpenDirectory}
                 />
               </Suspense>
             ) : !isTab ? (

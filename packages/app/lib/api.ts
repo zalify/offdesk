@@ -237,11 +237,74 @@ export const checkForegroundProcess = (
   );
 
 // Directory
-export const listDirectory = (machineId: string, path: string) =>
+export const listDirectory = (
+  machineId: string,
+  path: string,
+  opts?: { showHidden?: boolean },
+) =>
   request<DirEntry[]>(
     "GET",
-    `/api/machines/${machineId}/fs/list?path=${encodeURIComponent(path)}`,
+    `/api/machines/${machineId}/fs/list?path=${encodeURIComponent(path)}${
+      opts?.showHidden ? "&show_hidden=true" : ""
+    }`,
   );
+
+// Remote file read (fetch a file from the machine to this device)
+export interface RemoteFile {
+  name: string;
+  path: string;
+  mime: string;
+  size: number;
+  data_base64: string;
+}
+
+/** Error from `fs/read`; `code` is the hub's error code (e.g. `too_large`). */
+export class RemoteFileError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+    public readonly size?: number,
+    public readonly path?: string,
+  ) {
+    super(message);
+    this.name = "RemoteFileError";
+  }
+}
+
+export async function readFile(
+  machineId: string,
+  path: string,
+  cwd?: string,
+): Promise<RemoteFile> {
+  const query =
+    `path=${encodeURIComponent(path)}` +
+    (cwd ? `&cwd=${encodeURIComponent(cwd)}` : "");
+  try {
+    return await request<RemoteFile>(
+      "GET",
+      `/api/machines/${machineId}/fs/read?${query}`,
+    );
+  } catch (err) {
+    if (!(err instanceof ApiError)) throw err;
+    // ApiError.message is "<status>: <body>"; the body is the hub's JSON.
+    let body: { error?: string; message?: string; size?: number; path?: string } = {};
+    try {
+      body = JSON.parse(err.message.slice(err.message.indexOf(":") + 1).trim());
+    } catch {
+      // Non-JSON body (proxy error page): fall through with a generic code.
+    }
+    const code =
+      body.error ?? (err.status === 504 ? "timeout" : `http_${err.status}`);
+    throw new RemoteFileError(
+      err.status,
+      code,
+      body.message ?? err.message,
+      body.size,
+      body.path,
+    );
+  }
+}
 
 // Bookmarks
 export const listBookmarks = (machineId: string) =>

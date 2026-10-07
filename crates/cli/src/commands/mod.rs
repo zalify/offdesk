@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod fetch;
 pub mod key;
 pub mod kill;
 pub mod layout;

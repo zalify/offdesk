@@ -52,6 +52,13 @@ export interface TerminalViewProps {
   canResizeTerminal?: boolean;
   onTitleChange?: (title: string) => void;
   onReconnectingChange?: (reconnecting: boolean) => void;
+  /** The terminal's current working directory; relative path links resolve against it. */
+  cwd?: string;
+  /**
+   * A tapped path link turned out to be a directory. `path` is absolute (or
+   * `~`-prefixed). Without a handler the user just sees a notice.
+   */
+  onOpenDirectory?: (machineId: string, path: string) => void;
   // Optional outgoing-input transform (mobile Ctrl latch). Stored behind a
   // ref because the xterm onData handler is registered once at mount; the
   // ref keeps it reading the latest transform. Returns the data to send.
