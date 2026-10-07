@@ -2974,6 +2974,7 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-notification",
+ "tauri-plugin-offdesk-android-downloads",
  "tauri-plugin-offdesk-android-updater",
  "tauri-plugin-offdesk-keystore",
  "tauri-plugin-opener",
@@ -2986,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-secure"
-version = "0.21.0"
+version = "0.21.4"
 dependencies = [
  "base64 0.22.1",
  "futures",
@@ -4943,6 +4944,15 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "url",
+]
+
+[[package]]
+name = "tauri-plugin-offdesk-android-downloads"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
 ]
 
 [[package]]

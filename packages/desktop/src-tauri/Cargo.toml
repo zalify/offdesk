@@ -61,3 +61,4 @@ keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust",
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-offdesk-keystore = { path = "../keystore" }
 tauri-plugin-offdesk-android-updater = { path = "../android-updater" }
+tauri-plugin-offdesk-android-downloads = { path = "../android-downloads" }

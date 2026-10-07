@@ -38,6 +38,8 @@
     "opener:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
-    "process:default"
+    "process:default",
+    "allow-save-download",
+    "allow-open-download"
   ]
 }

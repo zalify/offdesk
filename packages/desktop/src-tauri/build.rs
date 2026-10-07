@@ -30,6 +30,8 @@ fn main() {
         "mobile_hub_url",
         "set_mobile_hub_url",
         "clear_mobile_hub_url",
+        "save_download",
+        "open_download",
     ]);
     let attributes = tauri_build::Attributes::new().app_manifest(app_manifest);
 

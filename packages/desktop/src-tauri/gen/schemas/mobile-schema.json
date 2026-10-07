@@ -561,6 +561,12 @@
           "markdownDescription": "Enables the clear_mobile_hub_url command without any pre-configured scope."
         },
         {
+          "description": "Enables the cloud_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cloud-action",
+          "markdownDescription": "Enables the cloud_action command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_role command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-role",
@@ -603,16 +609,52 @@
           "markdownDescription": "Enables the mobile_hub_url command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-download",
+          "markdownDescription": "Enables the open_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-download",
+          "markdownDescription": "Enables the save_download command without any pre-configured scope."
+        },
+        {
           "description": "Enables the secure_forget command without any pre-configured scope.",
           "type": "string",
           "const": "allow-secure-forget",
           "markdownDescription": "Enables the secure_forget command without any pre-configured scope."
         },
         {
+          "description": "Enables the secure_hubs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-hubs",
+          "markdownDescription": "Enables the secure_hubs command without any pre-configured scope."
+        },
+        {
           "description": "Enables the secure_pair command without any pre-configured scope.",
           "type": "string",
           "const": "allow-secure-pair",
           "markdownDescription": "Enables the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_pairing_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-pairing-identity",
+          "markdownDescription": "Enables the secure_pairing_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_remove_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-remove-hub",
+          "markdownDescription": "Enables the secure_remove_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_rename_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-rename-hub",
+          "markdownDescription": "Enables the secure_rename_hub command without any pre-configured scope."
         },
         {
           "description": "Enables the secure_request command without any pre-configured scope.",
@@ -651,6 +693,12 @@
           "markdownDescription": "Enables the secure_status command without any pre-configured scope."
         },
         {
+          "description": "Enables the secure_switch_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-switch-hub",
+          "markdownDescription": "Enables the secure_switch_hub command without any pre-configured scope."
+        },
+        {
           "description": "Enables the secure_switch_route command without any pre-configured scope.",
           "type": "string",
           "const": "allow-secure-switch-route",
@@ -679,6 +727,12 @@
           "type": "string",
           "const": "deny-clear-mobile-hub-url",
           "markdownDescription": "Denies the clear_mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cloud_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cloud-action",
+          "markdownDescription": "Denies the cloud_action command without any pre-configured scope."
         },
         {
           "description": "Denies the desktop_role command without any pre-configured scope.",
@@ -723,16 +777,52 @@
           "markdownDescription": "Denies the mobile_hub_url command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-download",
+          "markdownDescription": "Denies the open_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-download",
+          "markdownDescription": "Denies the save_download command without any pre-configured scope."
+        },
+        {
           "description": "Denies the secure_forget command without any pre-configured scope.",
           "type": "string",
           "const": "deny-secure-forget",
           "markdownDescription": "Denies the secure_forget command without any pre-configured scope."
         },
         {
+          "description": "Denies the secure_hubs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-hubs",
+          "markdownDescription": "Denies the secure_hubs command without any pre-configured scope."
+        },
+        {
           "description": "Denies the secure_pair command without any pre-configured scope.",
           "type": "string",
           "const": "deny-secure-pair",
           "markdownDescription": "Denies the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_pairing_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-pairing-identity",
+          "markdownDescription": "Denies the secure_pairing_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_remove_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-remove-hub",
+          "markdownDescription": "Denies the secure_remove_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_rename_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-rename-hub",
+          "markdownDescription": "Denies the secure_rename_hub command without any pre-configured scope."
         },
         {
           "description": "Denies the secure_request command without any pre-configured scope.",
@@ -769,6 +859,12 @@
           "type": "string",
           "const": "deny-secure-status",
           "markdownDescription": "Denies the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_switch_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-switch-hub",
+          "markdownDescription": "Denies the secure_switch_hub command without any pre-configured scope."
         },
         {
           "description": "Denies the secure_switch_route command without any pre-configured scope.",
@@ -3115,6 +3211,30 @@
           "type": "string",
           "const": "notification:deny-show",
           "markdownDescription": "Denies the show command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:allow-check",
+          "markdownDescription": "Enables the check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:allow-install",
+          "markdownDescription": "Enables the install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:deny-check",
+          "markdownDescription": "Denies the check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:deny-install",
+          "markdownDescription": "Denies the install command without any pre-configured scope."
         },
         {
           "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",

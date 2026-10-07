@@ -140,6 +140,174 @@
                   "identifier": {
                     "anyOf": [
                       {
+                        "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",
+                        "type": "string",
+                        "const": "opener:default",
+                        "markdownDescription": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`"
+                      },
+                      {
+                        "description": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application.",
+                        "type": "string",
+                        "const": "opener:allow-default-urls",
+                        "markdownDescription": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application."
+                      },
+                      {
+                        "description": "Enables the open_path command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:allow-open-path",
+                        "markdownDescription": "Enables the open_path command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Enables the open_url command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:allow-open-url",
+                        "markdownDescription": "Enables the open_url command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Enables the reveal_item_in_dir command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:allow-reveal-item-in-dir",
+                        "markdownDescription": "Enables the reveal_item_in_dir command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Denies the open_path command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:deny-open-path",
+                        "markdownDescription": "Denies the open_path command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Denies the open_url command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:deny-open-url",
+                        "markdownDescription": "Denies the open_url command without any pre-configured scope."
+                      },
+                      {
+                        "description": "Denies the reveal_item_in_dir command without any pre-configured scope.",
+                        "type": "string",
+                        "const": "opener:deny-reveal-item-in-dir",
+                        "markdownDescription": "Denies the reveal_item_in_dir command without any pre-configured scope."
+                      }
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "allow": {
+                    "items": {
+                      "title": "OpenerScopeEntry",
+                      "description": "Opener scope entry.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "url"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this url with, for example: firefox.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "url": {
+                              "description": "A URL that can be opened by the webview when using the Opener APIs.\n\nWildcards can be used following the UNIX glob pattern.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "path"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this path with, for example: xdg-open.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "path": {
+                              "description": "A path that can be opened by the webview when using the Opener APIs.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  "deny": {
+                    "items": {
+                      "title": "OpenerScopeEntry",
+                      "description": "Opener scope entry.",
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "required": [
+                            "url"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this url with, for example: firefox.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "url": {
+                              "description": "A URL that can be opened by the webview when using the Opener APIs.\n\nWildcards can be used following the UNIX glob pattern.\n\nExamples:\n\n- \"https://*\" : allows all HTTPS origin\n\n- \"https://*.github.com/tauri-apps/tauri\": allows any subdomain of \"github.com\" with the \"tauri-apps/api\" path\n\n- \"https://myapi.service.com/users/*\": allows access to any URLs that begins with \"https://myapi.service.com/users/\"",
+                              "type": "string"
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "required": [
+                            "path"
+                          ],
+                          "properties": {
+                            "app": {
+                              "description": "An application to open this path with, for example: xdg-open.",
+                              "allOf": [
+                                {
+                                  "$ref": "#/definitions/Application"
+                                }
+                              ]
+                            },
+                            "path": {
+                              "description": "A path that can be opened by the webview when using the Opener APIs.\n\nThe pattern can start with a variable that resolves to a system base directory. The variables are: `$AUDIO`, `$CACHE`, `$CONFIG`, `$DATA`, `$LOCALDATA`, `$DESKTOP`, `$DOCUMENT`, `$DOWNLOAD`, `$EXE`, `$FONT`, `$HOME`, `$PICTURE`, `$PUBLIC`, `$RUNTIME`, `$TEMPLATE`, `$VIDEO`, `$RESOURCE`, `$APP`, `$LOG`, `$TEMP`, `$APPCONFIG`, `$APPDATA`, `$APPLOCALDATA`, `$APPCACHE`, `$APPLOG`.",
+                              "type": "string"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "properties": {
+                "identifier": {
+                  "description": "Identifier of the permission or permission set.",
+                  "allOf": [
+                    {
+                      "$ref": "#/definitions/Identifier"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "identifier": {
+                    "anyOf": [
+                      {
                         "description": "This permission set configures which\nshell functionality is exposed by default.\n\n#### Granted Permissions\n\nIt allows to use the `open` functionality with a reasonable\nscope pre-configured. It will allow opening `http(s)://`,\n`tel:` and `mailto:` links.\n\n#### This default permission set includes:\n\n- `allow-open`",
                         "type": "string",
                         "const": "shell:default",
@@ -386,6 +554,420 @@
     "Identifier": {
       "description": "Permission identifier",
       "oneOf": [
+        {
+          "description": "Enables the clear_mobile_hub_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-mobile-hub-url",
+          "markdownDescription": "Enables the clear_mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cloud_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cloud-action",
+          "markdownDescription": "Enables the cloud_action command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_role command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-role",
+          "markdownDescription": "Enables the desktop_role command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hub_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hub-install",
+          "markdownDescription": "Enables the hub_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hub_link command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hub-link",
+          "markdownDescription": "Enables the hub_link command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hub_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hub-pair",
+          "markdownDescription": "Enables the hub_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hub_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hub-status",
+          "markdownDescription": "Enables the hub_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hub_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hub-uninstall",
+          "markdownDescription": "Enables the hub_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the mobile_hub_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-mobile-hub-url",
+          "markdownDescription": "Enables the mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-download",
+          "markdownDescription": "Enables the open_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the save_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-download",
+          "markdownDescription": "Enables the save_download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_forget command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-forget",
+          "markdownDescription": "Enables the secure_forget command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_hubs command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-hubs",
+          "markdownDescription": "Enables the secure_hubs command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-pair",
+          "markdownDescription": "Enables the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_pairing_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-pairing-identity",
+          "markdownDescription": "Enables the secure_pairing_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_remove_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-remove-hub",
+          "markdownDescription": "Enables the secure_remove_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_rename_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-rename-hub",
+          "markdownDescription": "Enables the secure_rename_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-request",
+          "markdownDescription": "Enables the secure_request command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_routes command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-routes",
+          "markdownDescription": "Enables the secure_routes command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_socket_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-socket-close",
+          "markdownDescription": "Enables the secure_socket_close command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_socket_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-socket-open",
+          "markdownDescription": "Enables the secure_socket_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_socket_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-socket-send",
+          "markdownDescription": "Enables the secure_socket_send command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-status",
+          "markdownDescription": "Enables the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_switch_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-switch-hub",
+          "markdownDescription": "Enables the secure_switch_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the secure_switch_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-secure-switch-route",
+          "markdownDescription": "Enables the secure_switch_route command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_desktop_role command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-desktop-role",
+          "markdownDescription": "Enables the set_desktop_role command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_mobile_hub_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-mobile-hub-url",
+          "markdownDescription": "Enables the set_mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_oauth_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-oauth-listener",
+          "markdownDescription": "Enables the start_oauth_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_mobile_hub_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-mobile-hub-url",
+          "markdownDescription": "Denies the clear_mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cloud_action command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cloud-action",
+          "markdownDescription": "Denies the cloud_action command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_role command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-role",
+          "markdownDescription": "Denies the desktop_role command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hub_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hub-install",
+          "markdownDescription": "Denies the hub_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hub_link command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hub-link",
+          "markdownDescription": "Denies the hub_link command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hub_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hub-pair",
+          "markdownDescription": "Denies the hub_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hub_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hub-status",
+          "markdownDescription": "Denies the hub_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hub_uninstall command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hub-uninstall",
+          "markdownDescription": "Denies the hub_uninstall command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the mobile_hub_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-mobile-hub-url",
+          "markdownDescription": "Denies the mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-download",
+          "markdownDescription": "Denies the open_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the save_download command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-download",
+          "markdownDescription": "Denies the save_download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_forget command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-forget",
+          "markdownDescription": "Denies the secure_forget command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_hubs command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-hubs",
+          "markdownDescription": "Denies the secure_hubs command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_pair command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-pair",
+          "markdownDescription": "Denies the secure_pair command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_pairing_identity command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-pairing-identity",
+          "markdownDescription": "Denies the secure_pairing_identity command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_remove_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-remove-hub",
+          "markdownDescription": "Denies the secure_remove_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_rename_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-rename-hub",
+          "markdownDescription": "Denies the secure_rename_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_request command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-request",
+          "markdownDescription": "Denies the secure_request command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_routes command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-routes",
+          "markdownDescription": "Denies the secure_routes command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_socket_close command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-socket-close",
+          "markdownDescription": "Denies the secure_socket_close command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_socket_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-socket-open",
+          "markdownDescription": "Denies the secure_socket_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_socket_send command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-socket-send",
+          "markdownDescription": "Denies the secure_socket_send command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-status",
+          "markdownDescription": "Denies the secure_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_switch_hub command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-switch-hub",
+          "markdownDescription": "Denies the secure_switch_hub command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the secure_switch_route command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-secure-switch-route",
+          "markdownDescription": "Denies the secure_switch_route command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_desktop_role command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-desktop-role",
+          "markdownDescription": "Denies the set_desktop_role command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_mobile_hub_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-mobile-hub-url",
+          "markdownDescription": "Denies the set_mobile_hub_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_oauth_listener command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-oauth-listener",
+          "markdownDescription": "Denies the start_oauth_listener command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which\nbarcode scanning features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all barcode related features.\n\n\n#### This default permission set includes:\n\n- `allow-cancel`\n- `allow-check-permissions`\n- `allow-open-app-settings`\n- `allow-request-permissions`\n- `allow-scan`\n- `allow-vibrate`",
+          "type": "string",
+          "const": "barcode-scanner:default",
+          "markdownDescription": "This permission set configures which\nbarcode scanning features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all barcode related features.\n\n\n#### This default permission set includes:\n\n- `allow-cancel`\n- `allow-check-permissions`\n- `allow-open-app-settings`\n- `allow-request-permissions`\n- `allow-scan`\n- `allow-vibrate`"
+        },
+        {
+          "description": "Enables the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:allow-cancel",
+          "markdownDescription": "Enables the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:allow-check-permissions",
+          "markdownDescription": "Enables the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_app_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:allow-open-app-settings",
+          "markdownDescription": "Enables the open_app_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:allow-request-permissions",
+          "markdownDescription": "Enables the request_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:allow-scan",
+          "markdownDescription": "Enables the scan command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the vibrate command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:allow-vibrate",
+          "markdownDescription": "Enables the vibrate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:deny-cancel",
+          "markdownDescription": "Denies the cancel command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:deny-check-permissions",
+          "markdownDescription": "Denies the check_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_app_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:deny-open-app-settings",
+          "markdownDescription": "Denies the open_app_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_permissions command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:deny-request-permissions",
+          "markdownDescription": "Denies the request_permissions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the scan command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:deny-scan",
+          "markdownDescription": "Denies the scan command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the vibrate command without any pre-configured scope.",
+          "type": "string",
+          "const": "barcode-scanner:deny-vibrate",
+          "markdownDescription": "Denies the vibrate command without any pre-configured scope."
+        },
         {
           "description": "No features are enabled by default, as we believe\nthe clipboard can be inherently dangerous and it is \napplication specific if read and/or write access is needed.\n\nClipboard interaction needs to be explicitly enabled.\n",
           "type": "string",
@@ -2631,6 +3213,78 @@
           "markdownDescription": "Denies the show command without any pre-configured scope."
         },
         {
+          "description": "Enables the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:allow-check",
+          "markdownDescription": "Enables the check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:allow-install",
+          "markdownDescription": "Enables the install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:deny-check",
+          "markdownDescription": "Denies the check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "offdesk-android-updater:deny-install",
+          "markdownDescription": "Denies the install command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",
+          "type": "string",
+          "const": "opener:default",
+          "markdownDescription": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`"
+        },
+        {
+          "description": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application.",
+          "type": "string",
+          "const": "opener:allow-default-urls",
+          "markdownDescription": "This enables opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application."
+        },
+        {
+          "description": "Enables the open_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:allow-open-path",
+          "markdownDescription": "Enables the open_path command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:allow-open-url",
+          "markdownDescription": "Enables the open_url command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the reveal_item_in_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:allow-reveal-item-in-dir",
+          "markdownDescription": "Enables the reveal_item_in_dir command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_path command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:deny-open-path",
+          "markdownDescription": "Denies the open_path command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:deny-open-url",
+          "markdownDescription": "Denies the open_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the reveal_item_in_dir command without any pre-configured scope.",
+          "type": "string",
+          "const": "opener:deny-reveal-item-in-dir",
+          "markdownDescription": "Denies the reveal_item_in_dir command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures which\nprocess features are by default exposed.\n\n#### Granted Permissions\n\nThis enables to quit via `allow-exit` and restart via `allow-restart`\nthe application.\n\n#### This default permission set includes:\n\n- `allow-exit`\n- `allow-restart`",
           "type": "string",
           "const": "process:default",
@@ -2819,6 +3473,23 @@
           "enum": [
             "iOS"
           ]
+        }
+      ]
+    },
+    "Application": {
+      "description": "Opener scope application.",
+      "anyOf": [
+        {
+          "description": "Open in default application.",
+          "type": "null"
+        },
+        {
+          "description": "If true, allow open with any application.",
+          "type": "boolean"
+        },
+        {
+          "description": "Allow specific application to open with.",
+          "type": "string"
         }
       ]
     },

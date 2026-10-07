@@ -2,6 +2,7 @@
 // app has a hub address to parse.
 #[allow(dead_code)]
 mod hub_url;
+mod downloads;
 mod secure;
 #[cfg(any(mobile, test))]
 mod mobile_shell;
@@ -29,7 +30,8 @@ pub fn run() {
 
     #[cfg(target_os = "android")]
     let builder = builder.plugin(tauri_plugin_offdesk_keystore::init())
-        .plugin(tauri_plugin_offdesk_android_updater::init());
+        .plugin(tauri_plugin_offdesk_android_updater::init())
+        .plugin(tauri_plugin_offdesk_android_downloads::init());
 
     #[cfg(desktop)]
     let builder = configure_desktop(builder);
@@ -57,7 +59,9 @@ pub fn run() {
             secure::secure_request,
             secure::secure_socket_open,
             secure::secure_socket_send,
-            secure::secure_socket_close
+            secure::secure_socket_close,
+            downloads::save_download,
+            downloads::open_download
         ]);
 
     builder
@@ -109,7 +113,9 @@ fn configure_desktop<R: tauri::Runtime>(
             secure::secure_request,
             secure::secure_socket_open,
             secure::secure_socket_send,
-            secure::secure_socket_close
+            secure::secure_socket_close,
+            downloads::save_download,
+            downloads::open_download
         ])
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
