@@ -249,7 +249,8 @@ export function AgentBrowserMobileSurface({
             aria-label="Web address"
             // Keep the keyboard off the terminal's tab while nothing is open.
             autoFocus
-            type="url"
+            // Native URL validation rejects bare hosts before submit can add a scheme.
+            type="text"
             inputMode="url"
             enterKeyHint="go"
             value={address}
