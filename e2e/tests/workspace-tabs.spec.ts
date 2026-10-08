@@ -120,6 +120,53 @@ test("creating a workspace tab opens an empty group without moving the active te
   expect(created?.id).not.toBe(homeGroupId);
 });
 
+test("an overflowing tab strip scrolls without showing scrollbars", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  await openApp(page);
+  await resetMachineState(page);
+  await takeControlFromHeader(page);
+  await selectHomeWorkpath(page);
+
+  const homeTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  await expandTerminalById(page, homeTerminalId);
+  const stamp = Date.now();
+  for (let index = 0; index < 12; index += 1) {
+    await createWorkspaceGroupViaApi(page, `Overflow tab ${index}-${stamp}`);
+  }
+  await expect(workspaceGroup(page, `Overflow tab 11-${stamp}`)).toBeAttached();
+
+  const strip = page.getByTestId("group-tab-strip");
+  const metrics = () =>
+    strip.evaluate((element) => ({
+      overflowing: element.scrollWidth > element.clientWidth,
+      scrollbar: element.offsetHeight - element.clientHeight,
+      verticalOverflow: element.scrollHeight - element.clientHeight,
+      scrollLeft: element.scrollLeft,
+    }));
+  const before = await metrics();
+  expect(before.overflowing).toBe(true);
+  expect(before.scrollbar).toBe(0);
+  expect(before.verticalOverflow).toBe(0);
+
+  // The active tab still covers the bar's bottom border.
+  const groupId = (await listTerminals(page)).find(
+    (terminal) => terminal.id === homeTerminalId,
+  )?.workspace_group_id;
+  const activeTab = await page.getByTestId(`workspace-tab-${groupId}`).boundingBox();
+  const bar = await page.getByTestId("tab-bar").boundingBox();
+  expect(Math.round(activeTab!.y + activeTab!.height)).toBe(
+    Math.round(bar!.y + bar!.height),
+  );
+
+  // A vertical wheel moves the strip sideways.
+  const box = await strip.boundingBox();
+  await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+  await page.mouse.wheel(0, 400);
+  await expect.poll(async () => (await metrics()).scrollLeft).toBeGreaterThan(0);
+});
+
 test("workspace tabs can be reordered by dragging", async ({ page }) => {
   await openApp(page);
   await resetMachineState(page);
