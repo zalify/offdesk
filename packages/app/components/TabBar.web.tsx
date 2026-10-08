@@ -350,12 +350,25 @@ function TabBarComponent({
         <FolderTree size={15} />
       </button>
       <div
+        data-testid="group-tab-strip"
+        className="scrollbar-hidden"
+        // A vertical wheel scrolls the strip sideways; it has no scrollbar.
+        onWheel={(event) => {
+          if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) {
+            event.currentTarget.scrollLeft += event.deltaY;
+          }
+        }}
         style={{
           display: "flex",
           alignItems: "stretch",
           gap: 2,
           paddingLeft: 6,
           overflowX: "auto",
+          overflowY: "hidden",
+          // Reach over the bar's bottom border so the active tab's 1px
+          // overlap stays inside the strip instead of overflowing it.
+          paddingBottom: 1,
+          marginBottom: -1,
           minWidth: 0,
           flex: 1,
         }}
