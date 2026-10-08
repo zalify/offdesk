@@ -29,9 +29,22 @@ jobs:
             args: ""
 
     runs-on: ${{ matrix.platform }}
+    env:
+      # Baked in at compile time so the shell only loads Web UI bundles signed
+      # with this key. Tag releases follow the stable channel; manual builds rc.
+      OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
+      OFFDESK_UI_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'rc' }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Require the Web UI release public key
+        shell: bash
+        run: |
+          if [ -z "$OFFDESK_UI_PUBLIC_KEY" ]; then
+            echo "The OFFDESK_UI_PUBLIC_KEY repository variable is required; without it the app cannot accept Web UI updates." >&2
+            exit 1
+          fi
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4

@@ -24,6 +24,9 @@ jobs:
       # launch, so one APK works for everyone. A dispatch can preset a hub for
       # a private build.
       OFFDESK_MOBILE_HUB_URL: ${{ github.event.inputs.hub_url }}
+      # Baked in at compile time so the shell only loads Web UI bundles signed
+      # with this key. The channel is chosen after the release source is known.
+      OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -51,6 +54,16 @@ jobs:
           fi
           git rev-parse HEAD
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Choose the Web UI channel
+        run: |
+          if [ -z "$OFFDESK_UI_PUBLIC_KEY" ]; then
+            echo "The OFFDESK_UI_PUBLIC_KEY repository variable is required; without it the app cannot accept Web UI updates." >&2
+            exit 1
+          fi
+          # Release tags follow the stable channel; ad-hoc builds follow rc.
+          if [ -n "${{ steps.source.outputs.tag }}" ]; then channel=stable; else channel=rc; fi
+          echo "OFFDESK_UI_CHANNEL=$channel" >> "$GITHUB_ENV"
 
       - name: Decide which ABIs to build
         id: abi

@@ -1,3 +1,4 @@
+import { UiUpdateNotification } from "./UiUpdateNotification";
 import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
@@ -1342,6 +1343,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           </div>
           <UpdateNotification inline />
           <AndroidUpdateNotification inline />
+          <UiUpdateNotification inline />
         </section>
 
         {/* Reload notice */}

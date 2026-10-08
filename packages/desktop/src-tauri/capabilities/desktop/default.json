@@ -49,7 +49,11 @@
     "allow-hub-pair",
     "allow-cloud-action",
     "allow-save-download",
-    "allow-open-download"
+    "allow-open-download",
+    "allow-ui-status",
+    "allow-ui-check",
+    "allow-ui-ready",
+    "allow-ui-recover"
   ],
   "local": true
 }

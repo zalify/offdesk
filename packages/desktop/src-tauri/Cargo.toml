@@ -19,6 +19,8 @@ tauri-build = { version = "2", features = [] }
 [workspace]
 
 [dependencies]
+offdesk-ui-updates = { path = "../../../crates/ui-updates" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures = "0.3"
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
