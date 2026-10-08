@@ -29,7 +29,7 @@ const DRAIN_GRACE: Duration = Duration::from_secs(5);
 const INSTRUCTIONS: &str = "\
 Drive a headless browser on the user's machine. Workflow: browser_open (keep \
 the returned id), browser_snapshot to read the page as text with [ref=eN] \
-handles, act with browser_click / browser_fill / browser_press using those \
+handles, act with browser_click / browser_fill / browser_upload / browser_press using those \
 refs, then browser_wait (text, url_regex or idle_ms) for the result and \
 snapshot again; refs are only valid for the latest snapshot. If a tool says a \
 person has taken over the browser, stop driving it and call \
@@ -184,6 +184,18 @@ pub fn tool_definitions() -> Vec<Value> {
             ),
         ),
         tool(
+            "browser_upload",
+            "Put files from this machine into a page's file input. Omit ref when the page has a single file input; otherwise pass the ref of the upload button (\"Choose File\", \"Upload\", ...) or of the input from the latest browser_snapshot. Never click the button yourself first: this tool clicks it and answers the file chooser. Paths are local to the machine running this MCP server; 25 MB in total.",
+            schema(
+                json!({
+                    "browser_id": id(),
+                    "ref": {"type": "string", "description": "Ref of the upload button or the file input, e.g. e12; omit if the page has exactly one file input"},
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Local file paths to upload"},
+                }),
+                &["browser_id", "paths"],
+            ),
+        ),
+        tool(
             "browser_press",
             "Press a key in the page: Enter, Tab, Escape, ArrowDown, a, ...",
             schema(
@@ -325,6 +337,15 @@ struct FillArgs {
     browser_id: String,
     r#ref: String,
     text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UploadArgs {
+    browser_id: String,
+    #[serde(default)]
+    r#ref: Option<String>,
+    paths: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -593,6 +614,21 @@ impl Server {
                 self.run(Some(&id), |client, _| async move {
                     browser::fill_element(&client, &a.browser_id, a.r#ref.clone(), a.text).await?;
                     Ok(ToolResult::text(format!("filled {}", a.r#ref)))
+                })
+                .await
+            }
+            "browser_upload" => {
+                let a = args!(UploadArgs);
+                let id = a.browser_id.clone();
+                self.run(Some(&id), |client, _| async move {
+                    let paths: Vec<std::path::PathBuf> = a.paths.iter().map(Into::into).collect();
+                    let done =
+                        browser::upload_files(&client, &a.browser_id, a.r#ref, &paths).await?;
+                    Ok(ToolResult::text(format!(
+                        "uploaded {} to {}",
+                        done.files.join(", "),
+                        done.input
+                    )))
                 })
                 .await
             }
@@ -897,7 +933,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_has_all_fourteen_with_valid_schemas() {
+    async fn tools_list_has_all_sixteen_with_valid_schemas() {
         let reply = send(&server(), json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
             .await
             .unwrap();
@@ -913,6 +949,7 @@ mod tests {
                 "browser_snapshot",
                 "browser_click",
                 "browser_fill",
+                "browser_upload",
                 "browser_press",
                 "browser_wait",
                 "browser_screenshot",

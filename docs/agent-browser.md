@@ -114,6 +114,7 @@ offdesk browser snapshot <browser>                  # the page as text
 offdesk browser click <browser> <ref>
 offdesk browser click <browser> --text TEXT         # by visible text, for tabs/toggles without a ref
 offdesk browser fill <browser> <ref> <text>
+offdesk browser upload <browser> [<ref>] --file PATH [--file PATH ...]   # put local files into a file input
 offdesk browser press <browser> <key>               # Enter, Tab, Escape, ArrowDown, a, ...
 offdesk browser wait <browser> [--text T] [--url-regex REGEX] [--idle MS] [--timeout SEC]
 offdesk browser screenshot <browser> [-o FILE] [--full]
@@ -139,7 +140,7 @@ Exit codes for every `offdesk browser` command (also in `offdesk browser --help`
 | `0` | Success (`wait`: matched; `handoff --wait` / `wait-control`: the person is done) |
 | `1` | Timeout (`wait`, `handoff --wait`, `wait-control`) |
 | `2` | Error |
-| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `login`, `press` and `close` were refused. Also `take` when a person is using the page right now |
+| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `upload`, `login`, `press` and `close` were refused. Also `take` when a person is using the page right now |
 
 `screenshot` writes a PNG and prints its path; the default file is
 `./browser-<id8>-<timestamp>.png`, `--full` captures the whole page.
@@ -324,6 +325,7 @@ Tools (arguments in brackets are optional):
 | `browser_snapshot` | `browser_id` | `snapshot` |
 | `browser_click` | `browser_id`, `ref` or `text` (exactly one) | `click` / `click --text` |
 | `browser_fill` | `browser_id`, `ref`, `text` | `fill` |
+| `browser_upload` | `browser_id`, `[ref]`, `paths` | `upload` |
 | `browser_press` | `browser_id`, `key` | `press` |
 | `browser_wait` | `browser_id`, `[text]`, `[url_regex]`, `[idle_ms]`, `[timeout_ms]` (default 30000) | `wait` |
 | `browser_screenshot` | `browser_id`, `[full_page]` | `screenshot` (returned as an MCP image, no file) |
@@ -404,6 +406,28 @@ get no ref. `click <browser> --text "账密登录"` (MCP: `browser_click` with
 equals the given text (else the smallest one that contains it, an exact match
 always wins) and clicks its centre. It prints what it clicked (tag and text,
 for example `clicked div "账密登录"`). Give exactly one of a ref and `--text`.
+
+## Uploading files
+
+A headless browser has no file dialog, so `<input type=file>` cannot be driven
+by clicking. `upload <browser> [<ref>] --file PATH [--file PATH ...]` (MCP:
+`browser_upload` with `paths`) sends the local files to the node and sets them
+on the page's file input. Which input it uses depends on the ref:
+
+- **No ref**: the page must have exactly one file input, in any frame or shadow
+  root, even a hidden one. With none or several, the command fails (and says
+  how many it found).
+- **The ref of an `<input type=file>`**: that input.
+- **Any other ref** (normally the "Choose File" button, since the real input is
+  often hidden and has no ref): the node clicks it, answers the file chooser it
+  opens (waiting up to 5 seconds) and sets the files there. Do not click the
+  button yourself first.
+
+Several files need an input with `multiple`. The files may total 25 MB; the
+file name sent is the local base name. It prints `uploaded <names> to <input>`.
+The node keeps the files in a private temporary directory, because Chromium
+reads them when the form is submitted. Like `fill`, it is refused while a
+person controls the browser.
 
 ## Logging in with 1Password
 

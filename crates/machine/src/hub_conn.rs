@@ -1175,16 +1175,16 @@ fn attachment_path_text(path: &std::path::Path) -> String {
     }
 }
 
-fn handle_image_paste(base64_data: &str, _mime: &str, filename: &str) -> Result<String, String> {
-    use base64::Engine;
+/// Largest upload (pasted attachment or browser upload) the node will save.
+pub(crate) const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+/// Save `files` (name, bytes) into one fresh private directory and return
+/// their paths in order. Each call has a unique 0o700 directory: never trust
+/// a client path, overwrite an existing file, or follow a pre-created
+/// temporary symlink. A name used twice gets its index as a prefix. The
+/// files stay on disk; the caller decides when they are no longer needed.
+pub(crate) fn save_upload_files(files: &[(&str, &[u8])]) -> Result<Vec<std::path::PathBuf>, String> {
     use std::io::Write;
-    const MAX_BYTES: usize = 25 * 1024 * 1024;
-    if base64_data.len() > MAX_BYTES * 4 / 3 + 16 { return Err("File exceeds 25 MB".into()); }
-    let data = base64::engine::general_purpose::STANDARD.decode(base64_data)
-        .map_err(|e| format!("Base64 decode failed: {e}"))?;
-    if data.len() > MAX_BYTES { return Err("File exceeds 25 MB".into()); }
-    // Each upload has a private, unique directory. Never trust a client path,
-    // overwrite an existing file, or follow a pre-created temporary symlink.
     let dir = std::env::temp_dir().join(format!("offdesk-upload-{}", uuid::Uuid::new_v4()));
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -1193,15 +1193,34 @@ fn handle_image_paste(base64_data: &str, _mime: &str, filename: &str) -> Result<
         builder.mode(0o700);
     }
     builder.create(&dir).map_err(|e| format!("Could not save attachment: {e}"))?;
-    let path = dir.join(safe_attachment_name(filename));
-    let result = (|| -> Result<String, String> {
-        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
-            .map_err(|e| format!("Could not create attachment: {e}"))?;
-        file.write_all(&data).map_err(|e| format!("Could not write attachment: {e}"))?;
-        Ok(format!("\x1b[200~{}\x1b[201~", attachment_path_text(&path)))
+    let result = (|| -> Result<Vec<std::path::PathBuf>, String> {
+        let mut used = std::collections::HashSet::new();
+        let mut paths = Vec::new();
+        for (index, (name, data)) in files.iter().enumerate() {
+            let mut name = safe_attachment_name(name);
+            if !used.insert(name.clone()) {
+                name = format!("{index}-{name}");
+            }
+            let path = dir.join(name);
+            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
+                .map_err(|e| format!("Could not create attachment: {e}"))?;
+            file.write_all(data).map_err(|e| format!("Could not write attachment: {e}"))?;
+            paths.push(path);
+        }
+        Ok(paths)
     })();
     if result.is_err() { let _ = std::fs::remove_dir_all(&dir); }
     result
+}
+
+fn handle_image_paste(base64_data: &str, _mime: &str, filename: &str) -> Result<String, String> {
+    use base64::Engine;
+    if base64_data.len() > MAX_UPLOAD_BYTES * 4 / 3 + 16 { return Err("File exceeds 25 MB".into()); }
+    let data = base64::engine::general_purpose::STANDARD.decode(base64_data)
+        .map_err(|e| format!("Base64 decode failed: {e}"))?;
+    if data.len() > MAX_UPLOAD_BYTES { return Err("File exceeds 25 MB".into()); }
+    let paths = save_upload_files(&[(filename, &data)])?;
+    Ok(format!("\x1b[200~{}\x1b[201~", attachment_path_text(&paths[0])))
 }
 
 fn read_directory(path: &str, show_hidden: bool) -> Result<Vec<DirEntry>, String> {

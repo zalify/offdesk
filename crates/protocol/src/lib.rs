@@ -552,11 +552,42 @@ impl Drop for Secret {
     }
 }
 
+/// Base64 text too big to print: its `Debug` shows only the length, so a
+/// 20 MB upload never lands in a log.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Base64Data(String);
+
+impl Base64Data {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Base64Data {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<{} bytes base64>", self.0.len())
+    }
+}
+
+/// One local file sent with `AgentBrowserCommand::Upload`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UploadFile {
+    /// The file's base name; the node sanitizes it again.
+    pub name: String,
+    pub data: Base64Data,
+}
+
 /// Commands an agent can run against an agent browser. Replies:
 /// Open/Goto -> `AgentBrowserInfo`; List -> `Vec<AgentBrowserInfo>`;
 /// Snapshot -> `{"snapshot": string}`; Screenshot -> `{"png_base64": string}`;
 /// Wait -> `{"matched": bool, "message"?: string}` (a timeout is not an
-/// error); the rest -> `{}`.
+/// error); Upload -> `{"files": ["name", ...], "input": "<the input used>"}`;
+/// the rest -> `{}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentBrowserCommand {
@@ -605,6 +636,16 @@ pub enum AgentBrowserCommand {
         browser_id: String,
         r#ref: String,
         text: String,
+    },
+    /// Put local files into a page's `<input type=file>`. With a `ref` that
+    /// is the input, it is used; with any other `ref` (an upload button) the
+    /// ref is clicked and the file chooser it opens is answered; without a
+    /// `ref` the page must have exactly one file input.
+    Upload {
+        browser_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        r#ref: Option<String>,
+        files: Vec<UploadFile>,
     },
     Press {
         browser_id: String,
@@ -1785,6 +1826,32 @@ mod login_command_tests {
             assert!(rendered.contains("aliyun.com"), "{rendered}");
             assert!(rendered.contains("redacted"), "{rendered}");
         }
+    }
+
+    #[test]
+    fn upload_wire_format_and_terse_debug() {
+        let command = AgentBrowserCommand::Upload {
+            browser_id: "b1".into(),
+            r#ref: None,
+            files: vec![UploadFile {
+                name: "id.png".into(),
+                data: Base64Data::new("aGVsbG8gd29ybGQ="),
+            }],
+        };
+        let wire = serde_json::to_value(&command).unwrap();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "type": "upload",
+                "browser_id": "b1",
+                "files": [{"name": "id.png", "data": "aGVsbG8gd29ybGQ="}],
+            })
+        );
+        assert_eq!(serde_json::from_value::<AgentBrowserCommand>(wire).unwrap(), command);
+        let rendered = format!("{command:?}");
+        assert!(rendered.contains("id.png"), "{rendered}");
+        assert!(rendered.contains("<16 bytes base64>"), "{rendered}");
+        assert!(!rendered.contains("aGVsbG8"), "{rendered}");
     }
 
     #[test]

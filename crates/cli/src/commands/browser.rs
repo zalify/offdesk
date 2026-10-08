@@ -4,7 +4,9 @@
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
-use offdesk_protocol::{AgentBrowserCommand, AgentBrowserInfo, MachineInfo};
+use offdesk_protocol::{
+    AgentBrowserCommand, AgentBrowserInfo, Base64Data, MachineInfo, UploadFile,
+};
 use serde_json::Value;
 
 use crate::client::HubClient;
@@ -129,6 +131,7 @@ async fn call(
         AgentBrowserCommand::Goto { browser_id, .. }
         | AgentBrowserCommand::Click { browser_id, .. }
         | AgentBrowserCommand::Fill { browser_id, .. }
+        | AgentBrowserCommand::Upload { browser_id, .. }
         | AgentBrowserCommand::Login { browser_id, .. }
         | AgentBrowserCommand::Press { browser_id, .. }
         | AgentBrowserCommand::Close { browser_id } => short_id(browser_id).to_string(),
@@ -425,6 +428,85 @@ pub async fn fill_element(
     Ok(())
 }
 
+/// What the node reports after setting the files.
+pub struct UploadOutcome {
+    pub files: Vec<String>,
+    pub input: String,
+}
+
+/// Most bytes of files one `upload` sends (the node enforces it too).
+const MAX_UPLOAD_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Read `paths`, check they fit, and encode them for an `Upload`.
+fn read_upload_files(paths: &[PathBuf]) -> Result<Vec<UploadFile>, CliError> {
+    if paths.is_empty() {
+        return Err(CliError::Usage("upload needs at least one file".to_string()));
+    }
+    let mut total = 0;
+    for path in paths {
+        let meta = std::fs::metadata(path).map_err(|error| {
+            CliError::Usage(format!("could not read {}: {error}", path.display()))
+        })?;
+        if !meta.is_file() {
+            return Err(CliError::Usage(format!("{} is not a file", path.display())));
+        }
+        total += meta.len();
+    }
+    if total > MAX_UPLOAD_BYTES {
+        return Err(CliError::Usage(
+            "files exceed 25 MB in total; upload fewer or smaller files".to_string(),
+        ));
+    }
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = std::fs::read(path).map_err(|error| {
+                CliError::Usage(format!("could not read {}: {error}", path.display()))
+            })?;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "file".to_string());
+            Ok(UploadFile {
+                name,
+                data: Base64Data::new(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            })
+        })
+        .collect()
+}
+
+pub async fn upload_files(
+    client: &HubClient,
+    browser: &str,
+    element: Option<String>,
+    paths: &[PathBuf],
+) -> Result<UploadOutcome, CliError> {
+    let files = read_upload_files(paths)?;
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    let value = call(
+        client,
+        &machine_id,
+        AgentBrowserCommand::Upload {
+            browser_id,
+            r#ref: element,
+            files,
+        },
+    )
+    .await?;
+    let names = |value: &Value| {
+        value["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.as_str().map(str::to_string))
+            .collect()
+    };
+    Ok(UploadOutcome {
+        files: names(&value),
+        input: value["input"].as_str().unwrap_or("file input").to_string(),
+    })
+}
+
 pub async fn press_key(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     call(
@@ -665,6 +747,17 @@ pub async fn fill(
     text: String,
 ) -> Result<(), CliError> {
     fill_element(client, browser, element, text).await
+}
+
+pub async fn upload(
+    client: &HubClient,
+    browser: &str,
+    element: Option<String>,
+    paths: &[PathBuf],
+) -> Result<(), CliError> {
+    let done = upload_files(client, browser, element, paths).await?;
+    super::out_line(&format!("uploaded {} to {}", done.files.join(", "), done.input));
+    Ok(())
 }
 
 pub async fn press(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
