@@ -236,7 +236,7 @@ Exit codes:
   1  timeout (wait, handoff --wait, wait-control)
   2  error
   3  take: a person is using the page right now (retry later or pass --force).
-     Also: a person is controlling the browser, so goto/click/fill/press/login/close were
+     Also: a person is controlling the browser, so goto/click/fill/upload/press/login/close were
      refused. Run `offdesk browser wait-control <browser>` to wait for them,
      or `offdesk browser handoff <browser> --reason \"...\" --wait` to ask for
      help and wait until they hand control back. snapshot, screenshot, wait
@@ -252,7 +252,7 @@ Register it with an agent that speaks MCP, from inside an offdesk terminal:
   codex mcp add offdesk -- offdesk mcp
 
 Tools: browser_open, browser_list, browser_close, browser_goto,
-browser_snapshot, browser_click, browser_fill, browser_press, browser_wait,
+browser_snapshot, browser_click, browser_fill, browser_upload, browser_press, browser_wait,
 browser_screenshot, browser_handoff, browser_wait_control, browser_take_control,
 browser_logins, browser_login. They make the same
 hub calls as `offdesk browser ...`; the hub URL and token come from the same
@@ -391,6 +391,18 @@ enum BrowserAction {
         /// Element ref, e.g. e12
         element: String,
         text: String,
+    },
+    /// Put local files into a page's file input. Give the ref of the upload
+    /// button (it is clicked and the file chooser answered) or of the input
+    /// itself; without a ref the page must have exactly one file input
+    Upload {
+        /// Browser id or unique prefix
+        browser: String,
+        /// Element ref of the upload button or the file input, e.g. e12
+        element: Option<String>,
+        /// Local file to upload; repeat for several (25 MB in total)
+        #[arg(long = "file", required = true)]
+        files: Vec<std::path::PathBuf>,
     },
     /// Press a key: Enter, Tab, Escape, ArrowDown, a, ...
     Press {
@@ -731,6 +743,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 element,
                 text,
             } => commands::browser::fill(&hub_client, &browser, element, text).await,
+            BrowserAction::Upload {
+                browser,
+                element,
+                files,
+            } => commands::browser::upload(&hub_client, &browser, element, &files).await,
             BrowserAction::Press { browser, key } => {
                 commands::browser::press(&hub_client, &browser, key).await
             }

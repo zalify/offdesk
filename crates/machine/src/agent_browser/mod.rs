@@ -16,7 +16,7 @@ mod snapshot;
 use base64::Engine;
 use bytes::Bytes;
 use cdp::CdpClient;
-use offdesk_protocol::{AgentBrowserCommand, AgentBrowserInfo};
+use offdesk_protocol::{AgentBrowserCommand, AgentBrowserInfo, UploadFile};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -311,6 +311,16 @@ impl AgentBrowserManager {
                 self.tab(&browser_id).await?.fill(&r#ref, &text).await?;
                 Ok(json!({}))
             }
+            C::Upload {
+                browser_id,
+                r#ref,
+                files,
+            } => {
+                let tab = self.tab(&browser_id).await?;
+                let (names, paths) = save_uploads(files).await?;
+                let input = tab.upload(r#ref.as_deref(), &paths).await?;
+                Ok(json!({"files": names, "input": input}))
+            }
             C::Press { browser_id, key } => {
                 self.tab(&browser_id).await?.press(&key).await?;
                 Ok(json!({}))
@@ -559,6 +569,41 @@ async fn fit_window_to_viewport(client: &CdpClient, target_id: &str, session_id:
             }),
         )
         .await;
+}
+
+/// Decode the files of an `Upload` into one private directory; returns their
+/// names and absolute paths. The files stay: Chromium reads them when the
+/// form is submitted, long after the input was set.
+async fn save_uploads(files: Vec<UploadFile>) -> Result<(Vec<String>, Vec<String>), String> {
+    if files.is_empty() {
+        return Err("upload needs at least one file".to_string());
+    }
+    tokio::task::spawn_blocking(move || {
+        let mut decoded = Vec::new();
+        let mut total = 0;
+        for file in &files {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(file.data.as_str())
+                .map_err(|e| format!("Base64 decode failed for {}: {e}", file.name))?;
+            total += bytes.len();
+            if total > crate::hub_conn::MAX_UPLOAD_BYTES {
+                return Err("Files exceed 25 MB".to_string());
+            }
+            decoded.push(bytes);
+        }
+        let named: Vec<(&str, &[u8])> = files
+            .iter()
+            .zip(&decoded)
+            .map(|(f, bytes)| (f.name.as_str(), bytes.as_slice()))
+            .collect();
+        let paths = crate::hub_conn::save_upload_files(&named)?;
+        Ok((
+            files.iter().map(|f| f.name.clone()).collect(),
+            paths.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+        ))
+    })
+    .await
+    .map_err(|e| format!("saving the files failed: {e}"))?
 }
 
 fn unknown_browser(id: &str) -> String {
@@ -1609,6 +1654,143 @@ mod tests {
         assert!(destroyed.contains(&id), "{destroyed:?}");
         assert!(mgr.chromium_pid().await.is_none());
         assert!(!pid_alive(pid), "chromium should exit after the last close");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// `upload` finds the file input itself, or answers the chooser a button
+    /// opens.
+    #[tokio::test]
+    #[ignore]
+    async fn uploads_files_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let file = |name: &str, text: &str| UploadFile {
+            name: name.to_string(),
+            data: offdesk_protocol::Base64Data::new(
+                base64::engine::general_purpose::STANDARD.encode(text),
+            ),
+        };
+        let open = |page: &'static str| {
+            let mgr = &mgr;
+            async move {
+                let info = mgr
+                    .execute(AgentBrowserCommand::Open {
+                        url: Some(page.to_string()),
+                        opener_terminal_id: None,
+                    })
+                    .await
+                    .unwrap();
+                info["id"].as_str().unwrap().to_string()
+            }
+        };
+        let upload = |id: &str, r#ref: Option<String>, files: Vec<UploadFile>| {
+            mgr.execute(AgentBrowserCommand::Upload {
+                browser_id: id.to_string(),
+                r#ref,
+                files,
+            })
+        };
+
+        // One hidden input and no ref: it is found and `change` fires.
+        let id = open(
+            "data:text/html,<title>One</title>\
+            <input id=f type=file style='display:none' onchange='window.changed=1'>",
+        )
+        .await;
+        let done = upload(&id, None, vec![file("note.txt", "hello upload")])
+            .await
+            .unwrap();
+        assert_eq!(done["files"][0], "note.txt");
+        assert!(done["input"].as_str().unwrap().contains("id=\"f\""), "{done}");
+        let tab = mgr.tabs.get(&id).unwrap();
+        let read = |expr: &'static str| {
+            let tab = tab.clone();
+            async move { tab.evaluate(expr).await.unwrap() }
+        };
+        assert_eq!(read("window.changed").await, 1);
+        assert_eq!(read("document.getElementById('f').files[0].name").await, "note.txt");
+        assert_eq!(read("document.getElementById('f').files[0].size").await, 12);
+        // Not multiple: two files are refused before anything is set.
+        let err = upload(&id, None, vec![file("a.txt", "a"), file("b.txt", "b")])
+            .await
+            .unwrap_err();
+        assert!(err.contains("takes one file"), "{err}");
+
+        // A button opens the chooser of a hidden input: use the button's ref.
+        let id = open(
+            "data:text/html,<title>Button</title>\
+            <button onclick=\"document.getElementById('f').click()\">Choose File</button>\
+            <input id=f type=file multiple style='display:none' onchange='window.changed=1'>\
+            <input id=g type=file style='display:none'>",
+        )
+        .await;
+        let snap = mgr
+            .execute(AgentBrowserCommand::Snapshot {
+                browser_id: id.clone(),
+            })
+            .await
+            .unwrap();
+        let snap = snap["snapshot"].as_str().unwrap();
+        let line = snap.lines().find(|l| l.contains("button")).expect(snap);
+        let start = line.find("[ref=").unwrap() + 5;
+        let button = line[start..line[start..].find(']').unwrap() + start].to_string();
+        // Two inputs and no ref: the error says how many.
+        let err = upload(&id, None, vec![file("a.txt", "a")]).await.unwrap_err();
+        assert!(err.starts_with("2 file inputs"), "{err}");
+        let done = upload(
+            &id,
+            Some(button.clone()),
+            vec![file("a.txt", "a"), file("b.txt", "bb")],
+        )
+        .await
+        .unwrap();
+        assert_eq!(done["files"], json!(["a.txt", "b.txt"]));
+        let tab = mgr.tabs.get(&id).unwrap();
+        assert_eq!(
+            tab.evaluate("window.changed + ':' + Array.from(document.getElementById('f').files, f => f.name).join()")
+                .await
+                .unwrap(),
+            "1:a.txt,b.txt"
+        );
+        // A ref that opens no chooser times out with a clear error.
+        let err = upload(&id, Some("e999".into()), vec![file("a.txt", "a")])
+            .await
+            .unwrap_err();
+        assert!(err.contains("e999"), "{err}");
+        // A button that opens no chooser: a clear error after the wait.
+        let id = open("data:text/html,<title>Plain</title><button>Nothing</button>").await;
+        let snap = mgr
+            .execute(AgentBrowserCommand::Snapshot {
+                browser_id: id.clone(),
+            })
+            .await
+            .unwrap();
+        let snap = snap["snapshot"].as_str().unwrap();
+        let line = snap.lines().find(|l| l.contains("button")).expect(snap);
+        let start = line.find("[ref=").unwrap() + 5;
+        let plain = line[start..line[start..].find(']').unwrap() + start].to_string();
+        let err = upload(&id, Some(plain.clone()), vec![file("a.txt", "a")])
+            .await
+            .unwrap_err();
+        assert_eq!(err, format!("clicking {plain} did not open a file chooser"));
+        // A file input inside a shadow root is found too.
+        let id = open(
+            "data:text/html,<title>Shadow</title><div id=h></div>\
+            <script>document.getElementById('h').attachShadow({mode:'open'}).innerHTML=\"<input type=file>\"</script>",
+        )
+        .await;
+        let done = upload(&id, None, vec![file("s.txt", "s")]).await.unwrap();
+        assert_eq!(done["files"][0], "s.txt");
+        // No file input at all.
+        let id = open("data:text/html,<title>None</title><p>nothing</p>").await;
+        let err = upload(&id, None, vec![file("a.txt", "a")]).await.unwrap_err();
+        assert_eq!(err, "no file input on the page");
+        mgr.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }
 

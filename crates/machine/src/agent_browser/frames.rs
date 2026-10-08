@@ -853,6 +853,225 @@ impl Tab {
     }
 }
 
+/// How long a click may take to open the file chooser.
+const FILE_CHOOSER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// An `<input type=file>` and the session it lives in.
+struct FileInput {
+    session: String,
+    backend: i64,
+    multiple: bool,
+    /// For messages, e.g. `input[type=file] id="f" accept=".png"`.
+    what: String,
+}
+
+/// The value of attribute `name` in a CDP `attributes` array (name, value,
+/// name, value, ...).
+fn attribute<'a>(attributes: &'a [Value], name: &str) -> Option<&'a str> {
+    attributes
+        .chunks(2)
+        .find(|pair| pair[0].as_str() == Some(name))
+        .map(|pair| pair.get(1).and_then(Value::as_str).unwrap_or(""))
+}
+
+/// `Some` when `node` (a CDP DOM node) is an `<input type=file>`:
+/// (multiple, description).
+fn file_input_of(node: &Value) -> Option<(bool, String)> {
+    if !node["nodeName"].as_str()?.eq_ignore_ascii_case("input") {
+        return None;
+    }
+    let attributes = node["attributes"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    if !attribute(attributes, "type")?.eq_ignore_ascii_case("file") {
+        return None;
+    }
+    let mut what = "input[type=file]".to_string();
+    for name in ["id", "name", "accept"] {
+        if let Some(value) = attribute(attributes, name).filter(|v| !v.is_empty()) {
+            what.push_str(&format!(" {name}=\"{}\"", short(value)));
+        }
+    }
+    Some((attribute(attributes, "multiple").is_some(), what))
+}
+
+/// Every file input under `node`, shadow roots and same-process iframes
+/// included (a `DOM.getDocument` with `pierce`).
+fn collect_file_inputs(node: &Value, session: &str, out: &mut Vec<FileInput>) {
+    if let (Some((multiple, what)), Some(backend)) =
+        (file_input_of(node), node["backendNodeId"].as_i64())
+    {
+        out.push(FileInput {
+            session: session.to_string(),
+            backend,
+            multiple,
+            what,
+        });
+    }
+    for key in ["children", "shadowRoots"] {
+        for child in node[key].as_array().into_iter().flatten() {
+            collect_file_inputs(child, session, out);
+        }
+    }
+    if node["contentDocument"].is_object() {
+        collect_file_inputs(&node["contentDocument"], session, out);
+    }
+}
+
+impl Tab {
+    // -- file upload --------------------------------------------------------
+
+    /// Every file input of the page, in all frames.
+    async fn find_file_inputs(&self) -> Result<Vec<FileInput>, String> {
+        let mut inputs = Vec::new();
+        // One document per session: it already holds the page's
+        // same-process iframes.
+        for frame in self.enumerate_frames().await?.iter().filter(|f| f.session_root) {
+            let doc = self
+                .client
+                .call(
+                    Some(&frame.session),
+                    "DOM.getDocument",
+                    json!({"depth": -1, "pierce": true}),
+                )
+                .await?;
+            collect_file_inputs(&doc["root"], &frame.session, &mut inputs);
+        }
+        Ok(inputs)
+    }
+
+    /// Click `r` and return the file chooser it opens: (session, backend
+    /// node, mode). Interception is switched off again whatever happens.
+    async fn open_file_chooser(&self, r: &str) -> Result<(String, i64, String), String> {
+        let (frame, _) = self.ref_target(r)?;
+        let mut sessions = vec![frame.session.clone()];
+        if frame.session != self.session_id {
+            sessions.push(self.session_id.clone());
+        }
+        for session in &sessions {
+            let s = Some(session.as_str());
+            let _ = self.client.call(s, "Page.enable", json!({})).await;
+            self.client
+                .call(s, "Page.setInterceptFileChooserDialog", json!({"enabled": true}))
+                .await?;
+        }
+        let opened = self.click_for_chooser(r, &sessions).await;
+        for session in &sessions {
+            let _ = self
+                .client
+                .call(
+                    Some(session),
+                    "Page.setInterceptFileChooserDialog",
+                    json!({"enabled": false}),
+                )
+                .await;
+        }
+        opened
+    }
+
+    async fn click_for_chooser(
+        &self,
+        r: &str,
+        sessions: &[String],
+    ) -> Result<(String, i64, String), String> {
+        // Subscribe first: the event can arrive before the click returns.
+        let mut events = self.client.subscribe();
+        self.click(r).await?;
+        let not_opened = || format!("clicking {r} did not open a file chooser");
+        let deadline = tokio::time::Instant::now() + FILE_CHOOSER_TIMEOUT;
+        loop {
+            match tokio::time::timeout_at(deadline, events.recv()).await {
+                Err(_) => return Err(not_opened()),
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    return Err("browser connection closed".to_string())
+                }
+                Ok(Ok(ev)) if ev.method == "Page.fileChooserOpened" => {
+                    let Some(session) = ev
+                        .session_id
+                        .as_deref()
+                        .filter(|s| sessions.iter().any(|own| own == s))
+                    else {
+                        continue;
+                    };
+                    let backend = ev.params["backendNodeId"]
+                        .as_i64()
+                        .ok_or("the file chooser did not say which input it belongs to")?;
+                    let mode = ev.params["mode"].as_str().unwrap_or("selectMultiple");
+                    return Ok((session.to_string(), backend, mode.to_string()));
+                }
+                Ok(_) => {}
+            }
+        }
+    }
+
+    /// Put the files at `paths` into a file input and return a description
+    /// of it. `r` names the input or the button that opens the chooser; with
+    /// no `r` the page must have exactly one file input.
+    pub(super) async fn upload(&self, r: Option<&str>, paths: &[String]) -> Result<String, String> {
+        let many = paths.len() > 1;
+        let too_many = |what: &str| format!("{what} takes one file, but {} were given", paths.len());
+        let (session, backend, what) = match r {
+            None => {
+                let mut inputs = self.find_file_inputs().await?;
+                match inputs.len() {
+                    0 => return Err("no file input on the page".to_string()),
+                    1 => {
+                        let input = inputs.remove(0);
+                        if many && !input.multiple {
+                            return Err(too_many(&input.what));
+                        }
+                        (input.session, input.backend, input.what)
+                    }
+                    n => {
+                        let list: Vec<_> = inputs.iter().map(|i| i.what.as_str()).collect();
+                        return Err(format!(
+                            "{n} file inputs on the page ({}); pass the ref of the one to fill, or of its upload button",
+                            list.join("; ")
+                        ));
+                    }
+                }
+            }
+            Some(r) => {
+                let (frame, backend) = self.ref_target(r)?;
+                let described = self
+                    .client
+                    .call(
+                        Some(&frame.session),
+                        "DOM.describeNode",
+                        json!({"backendNodeId": backend}),
+                    )
+                    .await
+                    .map_err(|e| Self::map_node_err(r, e))?;
+                match file_input_of(&described["node"]) {
+                    Some((multiple, what)) => {
+                        if many && !multiple {
+                            return Err(too_many(&what));
+                        }
+                        (frame.session, backend, what)
+                    }
+                    None => {
+                        let (session, backend, mode) = self.open_file_chooser(r).await?;
+                        if many && mode == "selectSingle" {
+                            return Err(too_many(&format!("the file chooser opened by {r}")));
+                        }
+                        (session, backend, format!("file chooser opened by {r}"))
+                    }
+                }
+            }
+        };
+        self.client
+            .call(
+                Some(&session),
+                "DOM.setFileInputFiles",
+                json!({"files": paths, "backendNodeId": backend}),
+            )
+            .await
+            .map_err(|e| match r {
+                Some(r) => Self::map_node_err(r, e),
+                None => e,
+            })?;
+        Ok(what)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

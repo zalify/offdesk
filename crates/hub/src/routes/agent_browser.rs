@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -24,6 +24,9 @@ const OPEN_TIMEOUT: Duration = Duration::from_secs(300);
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const WAIT_GRACE: Duration = Duration::from_secs(15);
 
+/// Largest command body: the CLI's 25 MB of files, base64-encoded, plus slack.
+const MAX_COMMAND_BODY: usize = 32 * 1024 * 1024;
+
 /// One control long-poll stays at the hub at most this long; the CLI loops.
 const MAX_CONTROL_WAIT: Duration = Duration::from_secs(60);
 const MAX_HANDOFF_REASON_CHARS: usize = 500;
@@ -33,7 +36,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/api/machines/{machine_id}/agent-browser",
-            post(run_command),
+            // `upload` carries files (base64); axum's 2 MB default would
+            // refuse them. The node's WS frame limit is the same 32 MB.
+            post(run_command).layer(DefaultBodyLimit::max(MAX_COMMAND_BODY)),
         )
         .route(
             "/api/machines/{machine_id}/agent-browser/{browser_id}/control",
@@ -55,6 +60,7 @@ fn mutated_browser(command: &AgentBrowserCommand) -> Option<&str> {
         AgentBrowserCommand::Goto { browser_id, .. }
         | AgentBrowserCommand::Click { browser_id, .. }
         | AgentBrowserCommand::Fill { browser_id, .. }
+        | AgentBrowserCommand::Upload { browser_id, .. }
         | AgentBrowserCommand::Login { browser_id, .. }
         | AgentBrowserCommand::Press { browser_id, .. }
         | AgentBrowserCommand::Close { browser_id } => Some(browser_id),
@@ -773,6 +779,7 @@ mod tests {
             json!({"type": "goto", "browser_id": "b1", "url": "https://x.test"}),
             json!({"type": "click", "browser_id": "b1", "ref": "e1"}),
             json!({"type": "fill", "browser_id": "b1", "ref": "e1", "text": "t"}),
+            json!({"type": "upload", "browser_id": "b1", "ref": "e1", "files": [{"name": "a.png", "data": "aGk="}]}),
             json!({"type": "press", "browser_id": "b1", "key": "Enter"}),
             json!({"type": "click", "browser_id": "b1", "text": "Sign in"}),
             json!({"type": "login", "browser_id": "b1", "password": "pw", "allowed_domains": ["x.test"]}),
