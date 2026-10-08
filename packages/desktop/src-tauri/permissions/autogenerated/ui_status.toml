@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ui-status"
+description = "Enables the ui_status command without any pre-configured scope."
+commands.allow = ["ui_status"]
+
+[[permission]]
+identifier = "deny-ui-status"
+description = "Denies the ui_status command without any pre-configured scope."
+commands.deny = ["ui_status"]

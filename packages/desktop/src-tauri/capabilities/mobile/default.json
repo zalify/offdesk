@@ -40,6 +40,10 @@
     "clipboard-manager:allow-write-text",
     "process:default",
     "allow-save-download",
-    "allow-open-download"
+    "allow-open-download",
+    "allow-ui-status",
+    "allow-ui-check",
+    "allow-ui-ready",
+    "allow-ui-recover"
   ]
 }

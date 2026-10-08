@@ -1,0 +1,72 @@
+name: Publish Web UI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/ui-release.yml'
+      - 'scripts/ui-updates/package*'
+      - 'scripts/ui-updates/rollback.mjs'
+  workflow_dispatch:
+    inputs:
+      channel:
+        type: choice
+        options: [rc, stable]
+        default: rc
+        description: UI channel (existing compatible shells only)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ui-release-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      UI_CHANNEL: ${{ inputs.channel }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: cargo test -p offdesk-ui-updates --locked
+      - run: node --test scripts/ui-updates/package.test.mjs
+      - name: Container browser regression
+        env:
+          E2E_TEST_GREP: 'UI updates'
+        run: pnpm e2e:ci
+      - name: Build Web UI
+        run: pnpm build
+      - name: Sign immutable UI release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          OFFDESK_UI_SIGNING_KEY: ${{ secrets.OFFDESK_UI_SIGNING_KEY }}
+          EXPECTED_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
+        run: |
+          version="${UI_CHANNEL}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sequence="$((GITHUB_RUN_ID * 100 + GITHUB_RUN_ATTEMPT))"
+          node scripts/stamp-build.mjs packages/app/dist "ui-$version"
+          node scripts/ui-updates/package.mjs packages/app/dist ui-release "$version" "$sequence" "$UI_CHANNEL" > ui-release-meta.json
+          node --input-type=module -e 'import fs from "node:fs"; const m=JSON.parse(fs.readFileSync("ui-release-meta.json")); if (!process.env.EXPECTED_KEY || m.publicKey !== process.env.EXPECTED_KEY) throw new Error("UI signing key does not match the shell key");'
+          echo "UI_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Publish immutable release then channel pointer
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          gh release create "ui-$UI_VERSION" ui-release/bundle.json ui-release/latest.json \
+            --target "$GITHUB_SHA" --prerelease --latest=false --title "Web UI $UI_VERSION" \
+            --notes "Signed Web UI for compatible shells. This release does not replace APKs, desktop apps, Hub or Node binaries."
+          if ! gh release view "ui-$UI_CHANNEL" >/dev/null 2>&1; then
+            gh release create "ui-$UI_CHANNEL" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Web UI $UI_CHANNEL channel" --notes "Signed channel manifest. Immutable UI releases are retained separately."
+          fi
+          gh release upload "ui-$UI_CHANNEL" ui-release/latest.json --clobber
