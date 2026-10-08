@@ -179,7 +179,6 @@ impl HubConnection {
                 DEFLATE_RAW_V1.to_string(),
                 offdesk_protocol::composer::COMPOSER_V1.to_string(),
                 offdesk_protocol::preview::CAPABILITY.to_string(),
-                offdesk_protocol::agents::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
             ],
         };
@@ -287,7 +286,6 @@ impl HubConnection {
                 cols: s.cols,
                 rows: s.rows,
                 attention: None,
-                agent: None,
                 reachable: true,
             })
             .collect();
@@ -403,18 +401,13 @@ impl HubConnection {
                 (String, TerminalTitleSource),
             > = std::collections::HashMap::new();
             let mut last_sent_attention = std::collections::HashMap::new();
-            let mut last_sent_agent: std::collections::HashMap<
-                String,
-                Option<offdesk_protocol::agents::TerminalAgent>,
-            > = std::collections::HashMap::new();
             loop {
                 interval.tick().await;
                 let poll_pty = pty_for_titles.clone();
-                let (pane_infos, attentions, agents) = match tokio::task::spawn_blocking(move || {
+                let (pane_infos, attentions) = match tokio::task::spawn_blocking(move || {
                     let panes = poll_pty.pane_infos();
-                    let attentions = poll_pty.terminal_attentions(&panes);
-                    let agents = crate::agents::resolve_agents(&panes);
-                    (panes, attentions, agents)
+                    let attention = poll_pty.terminal_attentions(&panes);
+                    (panes, attention)
                 })
                 .await
                 {
@@ -430,22 +423,7 @@ impl HubConnection {
                 last_sent_cwd.retain(|id, _| terminal_ids.contains(id));
                 last_sent_title.retain(|id, _| terminal_ids.contains(id));
                 last_sent_attention.retain(|id, _| terminal_ids.contains(id));
-                last_sent_agent.retain(|id, _| terminal_ids.contains(id));
                 for terminal_id in terminal_ids {
-                    let agent = agents.get(&terminal_id).map(|agent| agent.report());
-                    if last_sent_agent.get(&terminal_id) != Some(&agent) {
-                        if send_tx_for_titles
-                            .send(OutboundHubMessage::Json(MachineToHub::TerminalAgent {
-                                terminal_id: terminal_id.clone(),
-                                agent: agent.clone(),
-                            }))
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                        last_sent_agent.insert(terminal_id.clone(), agent);
-                    }
                     let attention = attentions.get(&terminal_id).copied().flatten();
                     if last_sent_attention.get(&terminal_id) != Some(&attention) {
                         if send_tx_for_titles
@@ -674,26 +652,9 @@ async fn handle_hub_message(
             cols,
             rows,
             startup_command,
-            startup_prompt,
+            ..
         } => {
             let terminal_id = uuid::Uuid::new_v4().to_string();
-            // A startup prompt is saved before the terminal exists, so a
-            // prompt that cannot be delivered never leaves a bare shell.
-            let startup_command = match startup_prompt {
-                Some(prompt) => match crate::agents::startup_command(&terminal_id, &prompt) {
-                    Ok(command) => Some(command),
-                    Err(error) => {
-                        let _ = send_tx
-                            .send(OutboundHubMessage::Json(MachineToHub::TerminalCreateError {
-                                request_id,
-                                error,
-                            }))
-                            .await;
-                        return;
-                    }
-                },
-                None => startup_command,
-            };
             match pty.create_terminal(&terminal_id, &cwd, cols, rows) {
                 Ok(info) => {
                     let _ = send_tx

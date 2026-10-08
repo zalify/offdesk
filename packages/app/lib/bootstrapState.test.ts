@@ -461,54 +461,6 @@ describe("applyBrowserEventEnvelope", () => {
   });
 });
 
-describe("to-dos", () => {
-  const todo = (id: string, updated_at: number, title = id) => ({
-    id,
-    title,
-    notes: "",
-    status: "open" as const,
-    position: 0,
-    created_at: 1,
-    updated_at,
-  });
-
-  it("come from the snapshot and follow live upserts and deletes", () => {
-    const state = applyBootstrapSnapshot({
-      snapshot_seq: 5,
-      machines: [],
-      terminals: [],
-      machine_stats: [],
-      control_leases: [],
-      todos: [todo("a", 1)],
-    });
-    expect(state.todos.map((t) => t.id)).toEqual(["a"]);
-
-    const added = applyBrowserEventEnvelope(state, envelope(6, { type: "todo_upserted", todo: todo("b", 2) }));
-    expect(added.todos.map((t) => t.id)).toEqual(["a", "b"]);
-
-    const edited = applyBrowserEventEnvelope(added, envelope(7, { type: "todo_upserted", todo: todo("a", 3, "edited") }));
-    expect(edited.todos.find((t) => t.id === "a")?.title).toBe("edited");
-
-    // A stale copy (an older write echoed late) never replaces a newer one.
-    const stale = applyBrowserEventEnvelope(edited, envelope(8, { type: "todo_upserted", todo: todo("a", 2, "stale") }));
-    expect(stale.todos.find((t) => t.id === "a")?.title).toBe("edited");
-
-    const removed = applyBrowserEventEnvelope(stale, envelope(9, { type: "todo_deleted", id: "b" }));
-    expect(removed.todos.map((t) => t.id)).toEqual(["a"]);
-  });
-
-  it("default to an empty list from older Hubs", () => {
-    const state = applyBootstrapSnapshot({
-      snapshot_seq: 1,
-      machines: [],
-      terminals: [],
-      machine_stats: [],
-      control_leases: [],
-    });
-    expect(state.todos).toEqual([]);
-  });
-});
-
 describe("agent browsers", () => {
   const browser = (id: string, url = "https://a.test/", machine = "m1") => ({
     id,

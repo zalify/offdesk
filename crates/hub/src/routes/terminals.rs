@@ -281,7 +281,7 @@ async fn create_terminal(
 
     let terminal = state
         .manager
-        .create_terminal(&machine_id, &req.cwd, req.cols, req.rows, startup_command, None)
+        .create_terminal(&machine_id, &req.cwd, req.cols, req.rows, startup_command)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -1289,7 +1289,6 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
-            agent: None,
             reachable: true,
         }
     }

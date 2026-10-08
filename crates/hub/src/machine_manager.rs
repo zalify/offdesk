@@ -242,7 +242,6 @@ impl MachineManager {
                         cols: u16::try_from(row.cols).unwrap_or(80),
                         rows: u16::try_from(row.rows).unwrap_or(24),
                         attention: None,
-                        agent: None,
                         reachable: false,
                     });
             }
@@ -802,37 +801,6 @@ impl MachineManager {
         }
     }
 
-    fn record_todo_progress(
-        &self,
-        user_id: &str,
-        terminal_id: &str,
-        tasks: &offdesk_protocol::agents::AgentTasks,
-    ) {
-        let changed = match self.db.get() {
-            Ok(conn) => crate::db::todos::record_terminal_tasks(&conn, user_id, terminal_id, tasks),
-            Err(error) => {
-                tracing::warn!("to-do progress not saved: {error}");
-                return;
-            }
-        };
-        match changed {
-            Ok(todos) => {
-                for todo in todos {
-                    self.publish_todo_upserted(user_id, todo);
-                }
-            }
-            Err(error) => tracing::warn!("to-do progress not saved: {error}"),
-        }
-    }
-
-    pub fn publish_todo_upserted(&self, user_id: &str, todo: offdesk_protocol::todos::TodoInfo) {
-        self.send_event(Some(user_id.to_string()), BrowserEvent::TodoUpserted { todo });
-    }
-
-    pub fn publish_todo_deleted(&self, user_id: &str, id: String) {
-        self.send_event(Some(user_id.to_string()), BrowserEvent::TodoDeleted { id });
-    }
-
     pub fn publish_workspace_group_created(&self, user_id: &str, group: WorkspaceGroupInfo) {
         self.send_event(
             Some(user_id.to_string()),
@@ -966,7 +934,6 @@ impl MachineManager {
         cols: u16,
         rows: u16,
         startup_command: Option<String>,
-        startup_prompt: Option<offdesk_protocol::agents::StartupPrompt>,
     ) -> Result<TerminalInfo, String> {
         let request_id = uuid::Uuid::new_v4().to_string();
 
@@ -990,7 +957,6 @@ impl MachineManager {
                 cols,
                 rows,
                 startup_command,
-                startup_prompt,
             })
             .await
         {
@@ -1029,7 +995,6 @@ impl MachineManager {
                     cols,
                     rows,
                     attention: None,
-                    agent: None,
                     reachable: true,
                 };
                 Ok(terminal)
@@ -1058,21 +1023,6 @@ impl MachineManager {
             .await
             .map_err(|_| "Machine disconnected".to_string())?;
         Ok(())
-    }
-
-    /// A live terminal this user can see, with its current agent state.
-    pub async fn terminal_for_user(
-        &self,
-        user_id: &str,
-        machine_id: &str,
-        terminal_id: &str,
-    ) -> Option<TerminalInfo> {
-        let machines = self.machines.lock().await;
-        let conn = machines.get(machine_id)?;
-        if !connection_visible_to(conn, user_id) {
-            return None;
-        }
-        conn.terminals.get(terminal_id).cloned()
     }
 
     /// Check if a terminal has a foreground process running
@@ -1966,7 +1916,6 @@ impl MachineManager {
                             cols,
                             rows,
                             attention: None,
-                            agent: None,
                             reachable: true,
                         };
                         conn.terminals.insert(terminal_id.clone(), terminal.clone());
@@ -2096,28 +2045,6 @@ impl MachineManager {
                             let terminal = terminal.clone();
                             drop(machines);
                             self.send_event(user_id, BrowserEvent::TerminalUpdated { terminal });
-                        }
-                    }
-                }
-            }
-            MachineToHub::TerminalAgent { terminal_id, agent } => {
-                let mut machines = self.machines.lock().await;
-                if let Some(conn) = machines.get_mut(machine_id) {
-                    let user_id = conn.user_id.clone();
-                    if let Some(terminal) = conn.terminals.get_mut(&terminal_id) {
-                        if terminal.agent != agent {
-                            terminal.agent = agent;
-                            let terminal = terminal.clone();
-                            drop(machines);
-                            let tasks = terminal.agent.as_ref().and_then(|a| a.tasks.clone());
-                            self.send_event(
-                                user_id.clone(),
-                                BrowserEvent::TerminalUpdated { terminal },
-                            );
-                            // To-dos handed to this agent follow its task list.
-                            if let (Some(owner), Some(tasks)) = (user_id, tasks) {
-                                self.record_todo_progress(&owner, &terminal_id, &tasks);
-                            }
                         }
                     }
                 }
@@ -2951,12 +2878,6 @@ impl MachineManager {
                 (sessions, seen)
             })
             .unwrap_or_default();
-        let todos = self
-            .db
-            .get()
-            .ok()
-            .and_then(|conn| crate::db::todos::list(&conn, user_id).ok())
-            .unwrap_or_default();
         let mut agent_browsers: Vec<AgentBrowserInfo> = visible
             .iter()
             .flat_map(|conn| conn.agent_browsers.values().cloned())
@@ -2978,7 +2899,6 @@ impl MachineManager {
                 .collect(),
             agent_sessions,
             agent_session_seen,
-            todos,
             agent_browsers,
         }
     }
@@ -3255,7 +3175,6 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
-            agent: None,
             reachable: true,
         }
     }
@@ -3716,7 +3635,7 @@ mod tests {
         let manager = MachineManager::new(test_db());
 
         let error = manager
-            .create_terminal("missing-machine", "/tmp", 80, 24, None, None)
+            .create_terminal("missing-machine", "/tmp", 80, 24, None)
             .await
             .unwrap_err();
 
@@ -3734,7 +3653,7 @@ mod tests {
         drop(cmd_rx);
 
         let error = manager
-            .create_terminal("machine-a", "/tmp", 80, 24, None, None)
+            .create_terminal("machine-a", "/tmp", 80, 24, None)
             .await
             .unwrap_err();
 

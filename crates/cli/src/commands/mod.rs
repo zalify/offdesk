@@ -10,7 +10,6 @@ pub mod open;
 pub mod read;
 pub mod read_all;
 pub mod send;
-pub mod todo;
 pub mod wait;
 
 use std::collections::{HashMap, HashSet};
@@ -109,7 +108,6 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
-            agent: None,
             reachable: true,
         }
     }

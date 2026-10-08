@@ -9,7 +9,6 @@ mod terminal_attention;
 mod codex_title;
 mod pty;
 mod preview;
-mod agents;
 mod revive;
 mod service;
 mod session_watcher;

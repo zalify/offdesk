@@ -1369,38 +1369,6 @@ mod tests {
         assert_eq!(panes["a"].current_command.as_deref(), Some("codex"));
     }
 
-    /// Manual probe against this machine's live Offdesk panes. Prints only
-    /// counts, never session text: `cargo test -p offdesk-machine
-    /// live_agent_probe -- --ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn live_agent_probe() {
-        let output = tmux_cmd()
-            .args([
-                "-L",
-                tmux_socket(),
-                "list-panes",
-                "-a",
-                "-F",
-                "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
-            ])
-            .output()
-            .unwrap();
-        let panes = parse_pane_info(&String::from_utf8_lossy(&output.stdout), &current_hostname());
-        let agents = crate::agents::resolve_agents(&panes);
-        println!("panes={} agents={}", panes.len(), agents.len());
-        for (id, agent) in &agents {
-            println!(
-                "{} kind={:?} session={} activity={:?} tasks={:?}",
-                &id[..8],
-                agent.kind,
-                agent.session_id.is_some(),
-                agent.activity,
-                agent.tasks.as_ref().map(|t| (t.done, t.total)),
-            );
-        }
-    }
-
     #[test]
     fn parse_pane_info_maps_sessions_back_to_terminal_ids() {
         let panes = parse_pane_info(

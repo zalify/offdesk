@@ -4,13 +4,11 @@ pub use composer::{ComposerAttachment, ComposerMessage, ComposerReceipt, Compose
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub mod agents;
 pub mod compression;
 pub mod domain;
 pub mod keep_awake;
 pub mod local_host;
 pub mod preview;
-pub mod todos;
 pub mod service;
 
 // ── Shared data types ──
@@ -44,9 +42,6 @@ pub struct TerminalInfo {
     /// Best-effort detection of an interactive confirmation on the live screen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention: Option<TerminalAttention>,
-    /// The Claude/Codex agent detected in this terminal. Live only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<agents::TerminalAgent>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -307,9 +302,6 @@ pub struct BrowserStateSnapshot {
     /// session_id → last_seen_seq for the requesting user (cross-device read sync).
     #[serde(default)]
     pub agent_session_seen: HashMap<String, u64>,
-    /// The user's to-dos; absent from older Hubs.
-    #[serde(default)]
-    pub todos: Vec<todos::TodoInfo>,
     /// Live agent browsers on the user's online machines.
     #[serde(default)]
     pub agent_browsers: Vec<AgentBrowserInfo>,
@@ -660,10 +652,6 @@ pub enum HubToMachine {
         rows: u16,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         startup_command: Option<String>,
-        /// Only sent to Nodes with `agents::CAPABILITY`; replaces
-        /// `startup_command`.
-        #[serde(skip_serializing_if = "Option::is_none", default)]
-        startup_prompt: Option<agents::StartupPrompt>,
     },
     #[serde(rename = "destroy_terminal")]
     DestroyTerminal { terminal_id: String },
@@ -924,11 +912,6 @@ pub enum MachineToHub {
         terminal_id: String,
         attention: Option<TerminalAttention>,
     },
-    #[serde(rename = "terminal_agent")]
-    TerminalAgent {
-        terminal_id: String,
-        agent: Option<agents::TerminalAgent>,
-    },
     #[serde(rename = "pong")]
     Pong,
     /// Agent session state changes. Fields left `None` are unchanged.
@@ -1041,10 +1024,6 @@ pub enum BrowserEvent {
         machine_id: String,
         browser_id: String,
     },
-    #[serde(rename = "todo_upserted")]
-    TodoUpserted { todo: todos::TodoInfo },
-    #[serde(rename = "todo_deleted")]
-    TodoDeleted { id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
