@@ -229,14 +229,6 @@ body {
   unicode-range: U+23F4-23FA;
 }
 
-.agent-relay-dialog::backdrop {
-  background: rgb(43 35 64 / 0.45);
-}
-.agent-relay-dialog :is(button, input, textarea):focus-visible {
-  outline: 2px solid rgb(var(--color-accent));
-  outline-offset: 2px;
-}
-
 .todos-dialog {
   padding: 0;
   border: 1px solid rgb(var(--color-border));

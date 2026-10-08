@@ -22,18 +22,14 @@ export interface TerminalInfo {
   attention?: "confirmation" | null
   /** The Claude/Codex agent detected in this terminal; absent on older nodes. */
   agent?: TerminalAgent | null
-  /** Set when this terminal continues another agent's task. */
-  relay_source?: RelaySource | null
 }
 
-export type RelayAgent = "claude" | "codex"
+export type TerminalAgentKind = "claude" | "codex"
 
 export interface TerminalAgent {
-  kind: RelayAgent
+  kind: TerminalAgentKind
   /** Claude session id or Codex thread id when matched exactly. */
   session_id?: string
-  /** The agent's own usage-limit line while it is on screen. */
-  usage_limit?: string
   /** Claude's own busy / idle / waiting status, when known. */
   activity?: AgentActivity
   /** Claude's task list while it has one. */
@@ -46,33 +42,14 @@ export interface AgentTasks {
   done: number
   total: number
   /** Open work first (in progress, then pending), then finished; capped. */
-  items: RelayTask[]
+  items: AgentTask[]
 }
 
-export interface RelaySource {
-  relay_id: string
-  terminal_id: string
-  agent: RelayAgent
-}
+export type AgentTaskStatus = "pending" | "in_progress" | "completed"
 
-export type RelayTaskStatus = "pending" | "in_progress" | "completed"
-
-export interface RelayTask {
+export interface AgentTask {
   subject: string
-  status: RelayTaskStatus
-}
-
-export interface RelayBrief {
-  agent: RelayAgent
-  cwd: string
-  session_id?: string
-  title?: string
-  goal?: string
-  latest?: string
-  tasks: RelayTask[]
-  git?: { branch?: string; changed: string[]; more: number }
-  usage_limit?: string
-  warnings: string[]
+  status: AgentTaskStatus
 }
 
 export interface WorkspaceGroupInfo {
@@ -237,7 +214,7 @@ export interface TodoInfo {
   updated_at: number
   completed_at?: number
   /** The agent this to-do was handed to, and the terminal it runs in. */
-  agent?: RelayAgent
+  agent?: TerminalAgentKind
   terminal_id?: string
   /** The agent's task list as last seen; kept after Claude clears it. */
   progress?: TodoProgress

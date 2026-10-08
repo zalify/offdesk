@@ -80,13 +80,6 @@ pub struct TmuxAttach {
     pub master: Box<dyn MasterPty + Send>,
 }
 
-/// What the visible screen of an agent pane says right now.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ScreenState {
-    pub attention: Option<offdesk_protocol::TerminalAttention>,
-    pub usage_limit: Option<String>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneInfo {
     /// Root process of this pane, used to bind agent metadata to this pane.
@@ -370,40 +363,41 @@ impl PtyManager {
         }
     }
 
-    /// The visible screen of one terminal (no scrollback), or None when tmux
-    /// cannot capture it.
-    pub fn capture_screen(&self, id: &str) -> Option<String> {
-        let target = format!("{}:0.0", tmux_session_name(id));
-        tmux_cmd()
-            .args(["-L", tmux_socket(), "capture-pane", "-p", "-J", "-t", &target])
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
-    }
-
     /// Inspect only the visible pane on this machine; never stream inactive
-    /// terminals to the phone just to discover a confirmation prompt or a
-    /// usage-limit notice. One capture per agent pane serves both.
-    pub fn terminal_screen_states(
+    /// terminals to the phone just to discover a confirmation prompt.
+    pub fn terminal_attentions(
         &self,
         panes: &HashMap<String, PaneInfo>,
-    ) -> HashMap<String, ScreenState> {
+    ) -> HashMap<String, Option<offdesk_protocol::TerminalAttention>> {
         self.list_terminal_ids()
             .into_iter()
             .map(|id| {
                 let command = panes.get(&id).and_then(|p| p.current_command.as_deref());
-                let state = if crate::terminal_attention::supports_command(command) {
-                    self.capture_screen(&id)
-                        .map(|screen| ScreenState {
-                            attention: crate::terminal_attention::detect(command, &screen),
-                            usage_limit: crate::relay::usage_limit_line(&screen),
+                let attention = if crate::terminal_attention::supports_command(command) {
+                    let target = format!("{}:0.0", tmux_session_name(&id));
+                    tmux_cmd()
+                        .args([
+                            "-L",
+                            tmux_socket(),
+                            "capture-pane",
+                            "-p",
+                            "-J",
+                            "-t",
+                            &target,
+                        ])
+                        .output()
+                        .ok()
+                        .filter(|o| o.status.success())
+                        .and_then(|o| {
+                            crate::terminal_attention::detect(
+                                command,
+                                &String::from_utf8_lossy(&o.stdout),
+                            )
                         })
-                        .unwrap_or_default()
                 } else {
-                    ScreenState::default()
+                    None
                 };
-                (id, state)
+                (id, attention)
             })
             .collect()
     }
@@ -1377,10 +1371,10 @@ mod tests {
 
     /// Manual probe against this machine's live Offdesk panes. Prints only
     /// counts, never session text: `cargo test -p offdesk-machine
-    /// live_relay_probe -- --ignored --nocapture`.
+    /// live_agent_probe -- --ignored --nocapture`.
     #[test]
     #[ignore]
-    fn live_relay_probe() {
+    fn live_agent_probe() {
         let output = tmux_cmd()
             .args([
                 "-L",
@@ -1393,23 +1387,16 @@ mod tests {
             .output()
             .unwrap();
         let panes = parse_pane_info(&String::from_utf8_lossy(&output.stdout), &current_hostname());
-        let agents = crate::relay::resolve_agents(&panes);
+        let agents = crate::agents::resolve_agents(&panes);
         println!("panes={} agents={}", panes.len(), agents.len());
         for (id, agent) in &agents {
-            let brief = crate::relay::build_brief(&panes[id], agent, None);
             println!(
-                "{} kind={:?} session={} activity={:?} live_tasks={:?} title={} goal={} latest={} tasks={} git={:?} warnings={}",
+                "{} kind={:?} session={} activity={:?} tasks={:?}",
                 &id[..8],
                 agent.kind,
                 agent.session_id.is_some(),
                 agent.activity,
                 agent.tasks.as_ref().map(|t| (t.done, t.total)),
-                brief.title.is_some(),
-                brief.goal.as_ref().map_or(0, |g| g.chars().count()),
-                brief.latest.as_ref().map_or(0, |l| l.chars().count()),
-                brief.tasks.len(),
-                brief.git.as_ref().map(|g| (g.branch.is_some(), g.changed.len(), g.more)),
-                brief.warnings.len(),
             );
         }
     }

@@ -10,8 +10,7 @@ import type {
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
   ResourceStats,
-  RelayAgent,
-  RelayBrief,
+  TerminalAgentKind,
   TodoInfo,
   TodoStatus,
   AgentBrowserInfo,
@@ -153,34 +152,6 @@ export const createTerminal = (
     ...(rows !== undefined ? { rows } : {}),
     ...(workspaceGroupId ? { workspace_group_id: workspaceGroupId } : {}),
   });
-export const getRelayBrief = (machineId: string, terminalId: string, signal?: AbortSignal) =>
-  request<RelayBrief>(
-    "GET",
-    `/api/machines/${encodeURIComponent(machineId)}/terminals/${encodeURIComponent(terminalId)}/relay-brief`,
-    undefined,
-    signal,
-  );
-export const createRelay = (
-  machineId: string,
-  relay: {
-    id: string;
-    deviceId: string;
-    sourceTerminalId: string;
-    targetAgent: RelayAgent;
-    prompt: string;
-    cols?: number;
-    rows?: number;
-  },
-) =>
-  request<TerminalInfo>("POST", `/api/machines/${encodeURIComponent(machineId)}/relays`, {
-    id: relay.id,
-    device_id: relay.deviceId,
-    source_terminal_id: relay.sourceTerminalId,
-    target_agent: relay.targetAgent,
-    prompt: relay.prompt,
-    ...(relay.cols !== undefined ? { cols: relay.cols } : {}),
-    ...(relay.rows !== undefined ? { rows: relay.rows } : {}),
-  });
 export const listTodos = (signal?: AbortSignal) =>
   request<TodoInfo[]>("GET", "/api/todos", undefined, signal);
 export const createTodo = (todo: {
@@ -195,7 +166,7 @@ export const createTodo = (todo: {
 /** Start Claude or Codex on a to-do in its folder; retries return the agent already running. */
 export const dispatchTodo = (
   id: string,
-  dispatch: { agent: RelayAgent; deviceId: string; prompt: string; cols?: number; rows?: number },
+  dispatch: { agent: TerminalAgentKind; deviceId: string; prompt: string; cols?: number; rows?: number },
 ) =>
   request<{ todo: TodoInfo; terminal: TerminalInfo }>("POST", `/api/todos/${encodeURIComponent(id)}/dispatch`, {
     agent: dispatch.agent,

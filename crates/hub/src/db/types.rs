@@ -109,5 +109,4 @@ pub struct TerminalSessionRow {
     pub rows: i64,
     pub created_at: i64,
     pub destroyed_at: Option<i64>,
-    pub relay_source: Option<offdesk_protocol::relay::RelaySource>,
 }

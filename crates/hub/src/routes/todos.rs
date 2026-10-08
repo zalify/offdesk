@@ -9,15 +9,14 @@ use axum::{
     routing::{get, patch, post},
     Router,
 };
-use offdesk_protocol::relay::{RelayAgent, StartupPrompt};
+use offdesk_protocol::agents::{StartupPrompt, TerminalAgentKind, CAPABILITY};
 use offdesk_protocol::todos::{
     normalize_notes, normalize_title, TodoInfo, TodoStatus, MAX_TODOS_PER_USER,
 };
 use offdesk_protocol::TerminalInfo;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::relays::{require_relay_node, start_agent_terminal};
-use super::terminals::{control_action_allowed, ensure_machine_row};
+use super::terminals::{auto_create_workspace_group, control_action_allowed, ensure_machine_row};
 use crate::auth::AuthUser;
 use crate::db::todos::{NewTodo, TodoPatch};
 use crate::AppState;
@@ -25,6 +24,7 @@ use crate::AppState;
 type ApiError = (StatusCode, String);
 
 const MAX_CWD_CHARS: usize = 4096;
+const UPDATE_NODE: &str = "Update Offdesk on this machine to hand to-dos to an agent";
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -120,7 +120,7 @@ struct CreateTodoRequest {
 
 #[derive(Deserialize)]
 struct DispatchRequest {
-    agent: RelayAgent,
+    agent: TerminalAgentKind,
     #[serde(default)]
     device_id: Option<String>,
     prompt: String,
@@ -341,17 +341,25 @@ async fn dispatch_todo(
     }
     let prompt = StartupPrompt::normalized(req.agent, &req.prompt)
         .map_err(|message| bad_request(message))?;
-    require_relay_node(&state, &machine_id).await?;
-    let terminal = start_agent_terminal(
-        &state,
-        user_id,
-        &machine_id,
-        &cwd,
-        (req.cols, req.rows),
-        prompt,
-        None,
-    )
-    .await?;
+    // An older Node would ignore the prompt and leave a bare shell.
+    if !state
+        .manager
+        .machine_supports(&machine_id, CAPABILITY)
+        .await
+    {
+        return Err((StatusCode::CONFLICT, UPDATE_NODE.to_string()));
+    }
+    let terminal = state
+        .manager
+        .create_terminal(&machine_id, &cwd, req.cols, req.rows, None, Some(prompt))
+        .await
+        .map_err(|message| (StatusCode::SERVICE_UNAVAILABLE, message))?;
+    let group_id = auto_create_workspace_group(&state, user_id, &machine_id, &terminal.cwd).await?;
+    let terminal = state
+        .manager
+        .set_terminal_workspace_group(user_id, &machine_id, &terminal.id, Some(group_id))
+        .await
+        .map_err(|message| (StatusCode::INTERNAL_SERVER_ERROR, message))?;
     let todo = {
         let conn = state.db.get().map_err(db_error)?;
         crate::db::todos::link_agent(&conn, user_id, &id, req.agent, &terminal.id, None)
@@ -723,20 +731,20 @@ mod tests {
 
     mod agents {
         use super::*;
-        use offdesk_protocol::relay::{
-            AgentTasks, RelayAgent, RelayTask, RelayTaskStatus, TerminalAgent,
+        use offdesk_protocol::agents::{
+            AgentTask, AgentTaskStatus, AgentTasks, TerminalAgent, TerminalAgentKind,
         };
         use offdesk_protocol::{HubToMachine, MachineInfo, MachineToHub, TerminalInfo};
         use tokio::sync::mpsc::Receiver;
 
         fn tasks(done: usize, total: usize) -> AgentTasks {
             let list: Vec<_> = (0..total)
-                .map(|i| RelayTask {
+                .map(|i| AgentTask {
                     subject: format!("Task {i}"),
                     status: if i < done {
-                        RelayTaskStatus::Completed
+                        AgentTaskStatus::Completed
                     } else {
-                        RelayTaskStatus::Pending
+                        AgentTaskStatus::Pending
                     },
                 })
                 .collect();
@@ -747,9 +755,8 @@ mod tests {
             MachineToHub::TerminalAgent {
                 terminal_id: "claude-term".into(),
                 agent: Some(TerminalAgent {
-                    kind: RelayAgent::Claude,
+                    kind: TerminalAgentKind::Claude,
                     session_id: None,
-                    usage_limit: None,
                     activity: None,
                     tasks: Some(tasks(done, total)),
                 }),
@@ -782,7 +789,7 @@ mod tests {
                 .register_machine_with_capabilities(
                     info,
                     Some("user-a".into()),
-                    vec![offdesk_protocol::relay::CAPABILITY.into()],
+                    vec![offdesk_protocol::agents::CAPABILITY.into()],
                 )
                 .await;
             let terminal = TerminalInfo {
@@ -796,7 +803,6 @@ mod tests {
                 rows: 24,
                 attention: None,
                 agent: None,
-                relay_source: None,
                 reachable: true,
             };
             state
@@ -920,7 +926,7 @@ mod tests {
                     let prompt = startup_prompt.unwrap();
                     assert_eq!(
                         (prompt.agent, prompt.text.as_str()),
-                        (RelayAgent::Codex, "Write release notes")
+                        (TerminalAgentKind::Codex, "Write release notes")
                     );
                     state
                         .manager

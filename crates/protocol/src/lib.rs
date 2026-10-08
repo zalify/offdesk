@@ -4,12 +4,12 @@ pub use composer::{ComposerAttachment, ComposerMessage, ComposerReceipt, Compose
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod agents;
 pub mod compression;
 pub mod domain;
 pub mod keep_awake;
 pub mod local_host;
 pub mod preview;
-pub mod relay;
 pub mod todos;
 pub mod service;
 
@@ -46,10 +46,7 @@ pub struct TerminalInfo {
     pub attention: Option<TerminalAttention>,
     /// The Claude/Codex agent detected in this terminal. Live only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent: Option<relay::TerminalAgent>,
-    /// Set when this terminal was started to continue another agent's task.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub relay_source: Option<relay::RelaySource>,
+    pub agent: Option<agents::TerminalAgent>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -663,15 +660,10 @@ pub enum HubToMachine {
         rows: u16,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         startup_command: Option<String>,
-        /// Only sent to Nodes with `relay::CAPABILITY`; replaces
+        /// Only sent to Nodes with `agents::CAPABILITY`; replaces
         /// `startup_command`.
         #[serde(skip_serializing_if = "Option::is_none", default)]
-        startup_prompt: Option<relay::StartupPrompt>,
-    },
-    #[serde(rename = "relay_brief")]
-    RelayBrief {
-        request_id: String,
-        terminal_id: String,
+        startup_prompt: Option<agents::StartupPrompt>,
     },
     #[serde(rename = "destroy_terminal")]
     DestroyTerminal { terminal_id: String },
@@ -935,15 +927,7 @@ pub enum MachineToHub {
     #[serde(rename = "terminal_agent")]
     TerminalAgent {
         terminal_id: String,
-        agent: Option<relay::TerminalAgent>,
-    },
-    #[serde(rename = "relay_brief_result")]
-    RelayBriefResult {
-        request_id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        brief: Option<relay::RelayBrief>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
+        agent: Option<agents::TerminalAgent>,
     },
     #[serde(rename = "pong")]
     Pong,

@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useOpenDirectory } from "./OpenDirectoryContext";
-import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle, type ReactNode } from "react";
+import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
 import { X } from "lucide-react";
 import type { TerminalViewRef, SelectionSnapshot } from "./TerminalView.types";
@@ -58,8 +58,6 @@ interface TerminalCardProps {
   onReleaseControl?: (machineId: string) => void;
   /** A path link in this terminal resolved to a directory (file browser hook). */
   onOpenDirectory?: (machineId: string, path: string) => void;
-  /** Floating controls over the terminal area (never resizes the PTY). */
-  overlay?: (layout: { topInset: number }) => ReactNode;
 }
 
 const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(function TerminalCardComponent({
@@ -79,7 +77,6 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   onRequestControl,
   onReleaseControl,
   onOpenDirectory: onOpenDirectoryProp,
-  overlay,
 }, ref) {
   const contextOpenDirectory = useOpenDirectory();
   const onOpenDirectory = onOpenDirectoryProp ?? contextOpenDirectory;
@@ -567,7 +564,6 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                 </button>
               </div>
             )}
-            {isTab && overlay?.({ topInset: sizedElsewhere ? 48 : 0 })}
             {terminal.reachable && isTab ? (
               <Suspense
                 fallback={<LazyLoadingFallback />}

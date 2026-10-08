@@ -175,63 +175,12 @@ pub fn count_active_in_workspace_group(
     )
 }
 
-fn relay_source_from_columns(
-    relay_id: Option<String>,
-    terminal_id: Option<String>,
-    agent: Option<String>,
-) -> Option<offdesk_protocol::relay::RelaySource> {
-    let agent = serde_json::from_value(serde_json::Value::String(agent?)).ok()?;
-    Some(offdesk_protocol::relay::RelaySource {
-        relay_id: relay_id?,
-        terminal_id: terminal_id?,
-        agent,
-    })
-}
-
-/// Record where a relayed terminal's task came from.
-pub fn set_relay_source(
-    conn: &Connection,
-    id: &str,
-    source: &offdesk_protocol::relay::RelaySource,
-) -> rusqlite::Result<()> {
-    let agent = serde_json::to_value(source.agent)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default();
-    conn.execute(
-        "UPDATE terminal_sessions
-         SET relay_id = ?2, relay_source_terminal_id = ?3, relay_source_agent = ?4
-         WHERE id = ?1",
-        params![id, source.relay_id, source.terminal_id, agent],
-    )?;
-    Ok(())
-}
-
-/// The terminal a relay already created, so a retried request returns it
-/// instead of starting a second agent. Destroyed terminals count too.
-pub fn find_by_relay_id(
-    conn: &Connection,
-    machine_id: &str,
-    relay_id: &str,
-) -> rusqlite::Result<Option<(String, bool)>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, destroyed_at IS NOT NULL FROM terminal_sessions
-         WHERE machine_id = ?1 AND relay_id = ?2 LIMIT 1",
-    )?;
-    let mut rows = stmt.query(params![machine_id, relay_id])?;
-    match rows.next()? {
-        Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
-        None => Ok(None),
-    }
-}
-
 pub fn find_active_by_machine(
     conn: &Connection,
     machine_id: &str,
 ) -> rusqlite::Result<Vec<TerminalSessionRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, machine_id, title, title_source, cwd, workspace_group_id, cols, rows, created_at, destroyed_at,
-                relay_id, relay_source_terminal_id, relay_source_agent
+        "SELECT id, machine_id, title, title_source, cwd, workspace_group_id, cols, rows, created_at, destroyed_at
          FROM terminal_sessions WHERE machine_id = ?1 AND destroyed_at IS NULL
          ORDER BY created_at ASC, id ASC",
     )?;
@@ -247,7 +196,6 @@ pub fn find_active_by_machine(
             rows: row.get(7)?,
             created_at: row.get(8)?,
             destroyed_at: row.get(9)?,
-            relay_source: relay_source_from_columns(row.get(10)?, row.get(11)?, row.get(12)?),
         })
     })?;
     rows.collect()
@@ -255,8 +203,7 @@ pub fn find_active_by_machine(
 
 pub fn find_all_active(conn: &Connection) -> rusqlite::Result<Vec<TerminalSessionRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, machine_id, title, title_source, cwd, workspace_group_id, cols, rows, created_at, destroyed_at,
-                relay_id, relay_source_terminal_id, relay_source_agent
+        "SELECT id, machine_id, title, title_source, cwd, workspace_group_id, cols, rows, created_at, destroyed_at
          FROM terminal_sessions WHERE destroyed_at IS NULL
          ORDER BY machine_id ASC, created_at ASC, id ASC",
     )?;
@@ -272,7 +219,6 @@ pub fn find_all_active(conn: &Connection) -> rusqlite::Result<Vec<TerminalSessio
             rows: row.get(7)?,
             created_at: row.get(8)?,
             destroyed_at: row.get(9)?,
-            relay_source: relay_source_from_columns(row.get(10)?, row.get(11)?, row.get(12)?),
         })
     })?;
     rows.collect()

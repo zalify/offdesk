@@ -1,6 +1,6 @@
 //! Personal to-dos, one list per user. Ids come from the client and the
 //! first write wins, so a retried create never adds a second row.
-use offdesk_protocol::relay::{AgentTasks, RelayAgent};
+use offdesk_protocol::agents::{AgentTasks, TerminalAgentKind};
 use offdesk_protocol::todos::{TodoInfo, TodoProgress, TodoStatus};
 use rusqlite::{params, Connection, OptionalExtension, Row};
 
@@ -40,10 +40,10 @@ pub fn init(conn: &Connection) -> rusqlite::Result<()> {
 
 const COLUMNS: &str = "id, title, notes, status, position, machine_id, cwd, created_at, updated_at, completed_at, agent, terminal_id, progress_json";
 
-fn agent_name(agent: RelayAgent) -> &'static str {
+fn agent_name(agent: TerminalAgentKind) -> &'static str {
     match agent {
-        RelayAgent::Claude => "claude",
-        RelayAgent::Codex => "codex",
+        TerminalAgentKind::Claude => "claude",
+        TerminalAgentKind::Codex => "codex",
     }
 }
 
@@ -67,8 +67,8 @@ fn row_to_todo(row: &Row<'_>) -> rusqlite::Result<TodoInfo> {
         agent: row
             .get::<_, Option<String>>(10)?
             .and_then(|agent| match agent.as_str() {
-                "claude" => Some(RelayAgent::Claude),
-                "codex" => Some(RelayAgent::Codex),
+                "claude" => Some(TerminalAgentKind::Claude),
+                "codex" => Some(TerminalAgentKind::Codex),
                 _ => None,
             }),
         terminal_id: row.get(11)?,
@@ -204,7 +204,7 @@ pub fn link_agent(
     conn: &Connection,
     user_id: &str,
     id: &str,
-    agent: RelayAgent,
+    agent: TerminalAgentKind,
     terminal_id: &str,
     tasks: Option<&AgentTasks>,
 ) -> rusqlite::Result<Option<TodoInfo>> {
@@ -405,30 +405,30 @@ mod tests {
 
     #[test]
     fn linked_to_dos_follow_their_agents_task_list_and_keep_the_last_one() {
-        use offdesk_protocol::relay::{RelayTask, RelayTaskStatus};
+        use offdesk_protocol::agents::{AgentTask, AgentTaskStatus};
         let conn = db();
         create(&conn, "user-a", new("1", "Backfill orders")).unwrap();
         create(&conn, "user-a", new("2", "Unrelated")).unwrap();
-        let task = |subject: &str, status| RelayTask {
+        let task = |subject: &str, status| AgentTask {
             subject: subject.into(),
             status,
         };
         let half = AgentTasks::summarize(&[
-            task("Find the cause", RelayTaskStatus::Completed),
-            task("Backfill", RelayTaskStatus::InProgress),
+            task("Find the cause", AgentTaskStatus::Completed),
+            task("Backfill", AgentTaskStatus::InProgress),
         ])
         .unwrap();
         let linked = link_agent(
             &conn,
             "user-a",
             "1",
-            RelayAgent::Claude,
+            TerminalAgentKind::Claude,
             "term-1",
             Some(&half),
         )
         .unwrap()
         .unwrap();
-        assert_eq!(linked.agent, Some(RelayAgent::Claude));
+        assert_eq!(linked.agent, Some(TerminalAgentKind::Claude));
         assert_eq!(linked.terminal_id.as_deref(), Some("term-1"));
         assert_eq!(
             linked.progress.as_ref().map(|p| (p.done, p.total)),
@@ -441,8 +441,8 @@ mod tests {
             .unwrap()
             .is_empty());
         let all = AgentTasks::summarize(&[
-            task("Find the cause", RelayTaskStatus::Completed),
-            task("Backfill", RelayTaskStatus::Completed),
+            task("Find the cause", AgentTaskStatus::Completed),
+            task("Backfill", AgentTaskStatus::Completed),
         ])
         .unwrap();
         assert!(record_terminal_tasks(&conn, "user-b", "term-1", &all)

@@ -407,7 +407,7 @@ pub async fn rm(auth: &TodoAuth, query: &str) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use offdesk_protocol::relay::RelayAgent;
+    use offdesk_protocol::agents::TerminalAgentKind;
     use offdesk_protocol::todos::TodoProgress;
 
     fn todo(id: &str, title: &str) -> TodoInfo {
@@ -554,7 +554,7 @@ mod tests {
         let mut item = todo("5f3a2c1e-0000-4000-8000-000000000001", "Backfill orders");
         assert_eq!(format_line(&item), "5f3a2c1e  [ ] Backfill orders");
         item.cwd = Some("/srv/repo".into());
-        item.agent = Some(RelayAgent::Claude);
+        item.agent = Some(TerminalAgentKind::Claude);
         item.progress = Some(TodoProgress {
             done: 2,
             total: 4,

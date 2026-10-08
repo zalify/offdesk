@@ -7,7 +7,6 @@ mod bootstrap;
 mod focus;
 mod mode;
 mod registration;
-mod relays;
 mod settings;
 mod terminals;
 mod todos;
@@ -23,7 +22,6 @@ pub fn router() -> Router<AppState> {
         .merge(terminals::router())
         .merge(todos::router())
         .merge(agent_browser::router())
-        .merge(relays::router())
         .merge(agent_sessions::router())
         .merge(bootstrap::router())
         .merge(focus::router())

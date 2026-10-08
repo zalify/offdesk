@@ -1,4 +1,6 @@
-import type { AgentTasks, TerminalInfo, TodoInfo } from "@offdesk/shared";
+import type { TerminalAgentKind, AgentTasks, TerminalInfo, TodoInfo } from "@offdesk/shared";
+
+export const agentLabel = (agent: TerminalAgentKind) => (agent === "claude" ? "Claude" : "Codex");
 
 /** Open to-dos in their manual order, newest first among equals. */
 export function openTodos(todos: TodoInfo[]): TodoInfo[] {

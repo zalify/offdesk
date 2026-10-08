@@ -11,7 +11,7 @@ import {
 } from "react";
 import type {
   AgentBrowserInfo,
-  RelayAgent,
+  TerminalAgentKind,
   TerminalInfo,
   TodoInfo,
   Bookmark,
@@ -32,7 +32,6 @@ import { HandoffBanner } from "./HandoffBanner";
 import { MachineOnboardingDialog, MobileAppDialog } from "./OnboardingView.web";
 import { Terminal as TerminalIcon } from "lucide-react";
 import {
-  createRelay,
   createTerminal,
   dispatchTodo,
   createWorkspaceGroup,
@@ -878,55 +877,11 @@ function TerminalCanvasInner() {
     }
   }, [expandedTerminal]);
 
-  // Agent relay: start the other agent on a terminal's task in a new tab.
-  // The Hub creates the terminal and its tab; this mirrors what a normal
-  // create does on the client, then opens the new terminal.
-  const handleRelay = useCallback(
-    async (source: TerminalInfo, target: RelayAgent, prompt: string, relayId: string) => {
-      if (!deviceId || !isMachineController(source.machine_id)) {
-        throw new Error("Take control of this machine first.");
-      }
-      const viewportHeightPx = viewportHeight ?? window.innerHeight;
-      const { cols, rows } = isCompact
-        ? estimateMobileInitialTerminalDimensions(window.innerWidth, viewportHeightPx)
-        : estimateInitialTerminalDimensions(window.innerWidth, viewportHeightPx);
-      const created = await createRelay(source.machine_id, {
-        id: relayId,
-        deviceId,
-        sourceTerminalId: source.id,
-        targetAgent: target,
-        prompt,
-        cols,
-        rows,
-      });
-      setBrowserState((prev) => ({
-        ...prev,
-        terminals: upsertTerminalInfo(prev.terminals, created),
-      }));
-      try {
-        const groups = await listWorkspaceGroups(source.machine_id);
-        setBrowserState((prev) => ({
-          ...prev,
-          workspaceGroups: replaceMachineWorkspaceGroups(
-            prev.workspaceGroups,
-            source.machine_id,
-            groups,
-          ),
-        }));
-      } catch {
-        /* the workspace_group_created event still fills the tab in */
-      }
-      dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: created.id });
-      window.history.pushState(null, "", `#/t/${created.id}`);
-      return created;
-    },
-    [deviceId, isCompact, isMachineController, viewportHeight],
-  );
-
   // To-do hand-off: the Hub starts the agent in a new tab in the to-do's
-  // folder and links the two; show the new terminal like a relay does.
+  // folder and links the two; this mirrors what a normal create does on the
+  // client, then opens the new terminal.
   const handleDispatchTodo = useCallback(
-    async (todo: TodoInfo, agent: RelayAgent, prompt: string) => {
+    async (todo: TodoInfo, agent: TerminalAgentKind, prompt: string) => {
       const machineId = todo.machine_id;
       if (!deviceId || !machineId || !isMachineController(machineId)) {
         throw new Error("Take control of this machine first.");
@@ -2001,7 +1956,6 @@ function TerminalCanvasInner() {
                   isCompact
                   isTouch={isTouch}
                   onPick={handleZoomTerminal}
-                  onRelay={handleRelay}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
                   onCreatePane={handleCreateWorkspacePane}
@@ -2157,7 +2111,6 @@ function TerminalCanvasInner() {
                   isCompact={isCompact}
                   isTouch={isTouch}
                   onPick={handleZoomTerminal}
-                  onRelay={handleRelay}
                   onDestroy={handleDestroyTerminal}
                   onSplit={handleSplitWorkspacePane}
                   onCreatePane={handleCreateWorkspacePane}

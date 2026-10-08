@@ -58,14 +58,14 @@ test.describe("to-dos on a phone", () => {
     // Edit the other in its detail view.
     await panel.locator('[data-testid^="todo-open-"]').filter({ hasText: "Write release notes" }).click();
     const detail = panel.getByTestId("todo-detail");
-    await detail.getByTestId("todo-notes-input").fill("Cover the agent relay");
+    await detail.getByTestId("todo-notes-input").fill("Cover the hand-off");
     await detail.getByTestId("todo-machine-select").selectOption({ index: 1 });
     await detail.getByTestId("todo-folder-input").fill("/root/projects/offdesk");
     await detail.getByTestId("todo-save").click();
     await expect(detail).toHaveCount(0);
     const edited = panel.locator('[data-testid^="todo-row-"]').filter({ hasText: "Write release notes" });
     await expect(edited).toContainText("offdesk");
-    await expect(edited).toContainText("Cover the agent relay");
+    await expect(edited).toContainText("Cover the hand-off");
 
     // Delete takes a second tap.
     await edited.locator('[data-testid^="todo-open-"]').click();

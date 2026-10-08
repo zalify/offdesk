@@ -1290,7 +1290,6 @@ mod tests {
             rows: 24,
             attention: None,
             agent: None,
-            relay_source: None,
             reachable: true,
         }
     }

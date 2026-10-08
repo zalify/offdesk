@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { AgentTasks, MachineInfo, RelayAgent, RelayTask, TerminalInfo, TodoInfo } from "@offdesk/shared";
+import type { TerminalAgentKind, AgentTask, AgentTasks, MachineInfo, TerminalInfo, TodoInfo } from "@offdesk/shared";
 import { ChevronDown, ChevronLeft, ChevronRight, Folder, Plus, X } from "lucide-react";
 import { createTodo, deleteTodo, updateTodo } from "@/lib/api";
-import { agentLabel } from "@/lib/agentRelay";
 import { colors, colorAlpha } from "@/lib/colors";
 import {
+  agentLabel,
   agentLooksFinished,
   cleanTitle,
   composeTodoPrompt,
@@ -28,7 +28,7 @@ interface TodosPanelProps {
   /** Starting an agent creates a terminal, which needs machine control. */
   canDispatch: (machineId: string) => boolean;
   /** Start the agent; the canvas then shows its terminal. */
-  onDispatch: (todo: TodoInfo, agent: RelayAgent, prompt: string) => Promise<void>;
+  onDispatch: (todo: TodoInfo, agent: TerminalAgentKind, prompt: string) => Promise<void>;
   onOpenTerminal: (terminalId: string) => void;
   /** Apply a change locally right away; the Hub's event confirms it. */
   onLocalUpsert: (todo: TodoInfo) => void;
@@ -367,7 +367,7 @@ function progressLabel(tasks?: AgentTasks) {
   return tasks && tasks.total > 0 ? ` · ${tasks.done}/${tasks.total}` : "";
 }
 
-function AgentBadge({ agent, state }: { agent: RelayAgent; state: TodoAgentState }) {
+function AgentBadge({ agent, state }: { agent: TerminalAgentKind; state: TodoAgentState }) {
   const status =
     state.kind === "working"
       ? "working"
@@ -388,7 +388,7 @@ function AgentBadge({ agent, state }: { agent: RelayAgent; state: TodoAgentState
   );
 }
 
-function TaskList({ items }: { items: RelayTask[] }) {
+function TaskList({ items }: { items: AgentTask[] }) {
   return (
     <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
       {items.map((task, index) => (
@@ -472,13 +472,13 @@ function TodoDetail({
   agentState: TodoAgentState;
   defaultLocation?: { machineId: string; cwd: string };
   canDispatch: (machineId: string) => boolean;
-  onDispatch: (todo: TodoInfo, agent: RelayAgent, prompt: string) => Promise<void>;
+  onDispatch: (todo: TodoInfo, agent: TerminalAgentKind, prompt: string) => Promise<void>;
   onOpenTerminal: (terminalId: string) => void;
   onBack: () => void;
   onLocalUpsert: (todo: TodoInfo) => void;
   onDeleted: (id: string) => void;
 }) {
-  const [dispatchAgent, setDispatchAgent] = useState<RelayAgent | null>(null);
+  const [dispatchAgent, setDispatchAgent] = useState<TerminalAgentKind | null>(null);
   const [prompt, setPrompt] = useState("");
   const [title, setTitle] = useState(todo.title);
   const [notes, setNotes] = useState(todo.notes);
