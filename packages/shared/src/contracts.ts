@@ -20,59 +20,6 @@ export interface TerminalInfo {
   reachable: boolean
   /** Best-effort live-screen detection; absent on older nodes. */
   attention?: "confirmation" | null
-  /** The Claude/Codex agent detected in this terminal; absent on older nodes. */
-  agent?: TerminalAgent | null
-  /** Set when this terminal continues another agent's task. */
-  relay_source?: RelaySource | null
-}
-
-export type RelayAgent = "claude" | "codex"
-
-export interface TerminalAgent {
-  kind: RelayAgent
-  /** Claude session id or Codex thread id when matched exactly. */
-  session_id?: string
-  /** The agent's own usage-limit line while it is on screen. */
-  usage_limit?: string
-  /** Claude's own busy / idle / waiting status, when known. */
-  activity?: AgentActivity
-  /** Claude's task list while it has one. */
-  tasks?: AgentTasks
-}
-
-export type AgentActivity = "busy" | "idle" | "waiting"
-
-export interface AgentTasks {
-  done: number
-  total: number
-  /** Open work first (in progress, then pending), then finished; capped. */
-  items: RelayTask[]
-}
-
-export interface RelaySource {
-  relay_id: string
-  terminal_id: string
-  agent: RelayAgent
-}
-
-export type RelayTaskStatus = "pending" | "in_progress" | "completed"
-
-export interface RelayTask {
-  subject: string
-  status: RelayTaskStatus
-}
-
-export interface RelayBrief {
-  agent: RelayAgent
-  cwd: string
-  session_id?: string
-  title?: string
-  goal?: string
-  latest?: string
-  tasks: RelayTask[]
-  git?: { branch?: string; changed: string[]; more: number }
-  usage_limit?: string
-  warnings: string[]
 }
 
 export interface WorkspaceGroupInfo {
@@ -213,38 +160,8 @@ export interface BrowserStateSnapshot {
   agent_sessions?: AgentSessionInfo[]
   /** session_id → last_seen_seq for the requesting user (cross-device read sync). */
   agent_session_seen?: Record<string, number>
-  /** The user's to-dos; absent from older Hubs. */
-  todos?: TodoInfo[]
   /** Live agent browsers on online machines; absent from older Hubs. */
   agent_browsers?: AgentBrowserInfo[]
-}
-
-// ── To-dos — mirrors crates/protocol/src/todos.rs ──
-
-export type TodoStatus = "open" | "done"
-
-export interface TodoInfo {
-  /** Client-generated UUID; a retried create returns the stored to-do. */
-  id: string
-  title: string
-  notes: string
-  status: TodoStatus
-  /** Manual order among open to-dos; lower comes first. */
-  position: number
-  machine_id?: string
-  cwd?: string
-  created_at: number
-  updated_at: number
-  completed_at?: number
-  /** The agent this to-do was handed to, and the terminal it runs in. */
-  agent?: RelayAgent
-  terminal_id?: string
-  /** The agent's task list as last seen; kept after Claude clears it. */
-  progress?: TodoProgress
-}
-
-export interface TodoProgress extends AgentTasks {
-  updated_at: number
 }
 
 // ── Agent sessions (ACP) — mirrors crates/protocol/src/lib.rs ──
@@ -481,8 +398,6 @@ export type BrowserEvent =
   | BrowserEvent.AgentSessionDestroyed
   | BrowserEvent.AgentSessionEvent
   | BrowserEvent.AgentSessionSeen
-  | BrowserEvent.TodoUpserted
-  | BrowserEvent.TodoDeleted
   | BrowserEvent.AgentBrowserCreated
   | BrowserEvent.AgentBrowserUpdated
   | BrowserEvent.AgentBrowserDestroyed
@@ -590,16 +505,6 @@ export namespace BrowserEvent {
     type: 'agent_session_seen'
     session_id: string
     last_seen_seq: number
-  }
-
-  export interface TodoUpserted {
-    type: 'todo_upserted'
-    todo: TodoInfo
-  }
-
-  export interface TodoDeleted {
-    type: 'todo_deleted'
-    id: string
   }
 
   export interface AgentBrowserCreated {

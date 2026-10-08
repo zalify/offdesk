@@ -12,7 +12,6 @@ pub mod hub_state;
 pub mod machines;
 pub mod settings;
 pub mod terminal_sessions;
-pub mod todos;
 pub mod tokens;
 pub mod types;
 pub mod user_focus;
@@ -220,17 +219,6 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
 
-    // A terminal started to continue another agent's task remembers where
-    // the task came from, so its "back" link survives a Hub restart.
-    for column in ["relay_id", "relay_source_terminal_id", "relay_source_agent"] {
-        if !column_exists(conn, "terminal_sessions", column)? {
-            conn.execute(
-                &format!("ALTER TABLE terminal_sessions ADD COLUMN {column} TEXT"),
-                [],
-            )?;
-        }
-    }
-
     if !column_exists(conn, "workspace_groups", "auto_created")? {
         conn.execute(
             "ALTER TABLE workspace_groups ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0",
@@ -272,9 +260,6 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
     // Startup recovery: mark all machines offline
     conn.execute("UPDATE machines SET status = 'offline'", [])?;
-
-    // After users and machines exist: to-dos reference both.
-    todos::init(conn)?;
 
     Ok(())
 }
