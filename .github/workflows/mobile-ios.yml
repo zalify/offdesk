@@ -62,8 +62,13 @@ jobs:
         with:
           workspaces: packages/desktop/src-tauri
 
+      # Without --locked, building tauri-cli 2.10.1 from source picks up a
+      # newer tauri-bundler it does not compile against (ios-v0.7.9 failed so).
       - name: Tauri CLI
-        run: cargo install cargo-binstall --locked && cargo binstall -y tauri-cli --version "=2.10.1"
+        run: |
+          cargo install cargo-binstall --locked
+          cargo binstall -y --locked tauri-cli --version "=2.10.1" \
+            || cargo install tauri-cli --version "=2.10.1" --locked
 
       - name: Build shared package
         run: pnpm --filter @offdesk/shared build
