@@ -4944,6 +4944,33 @@ mod tests {
         assert_eq!(info.controller, AgentBrowserController::Human);
         assert_eq!(info.controller_device_id.as_deref(), Some("dev-a"));
         assert_eq!(info.handoff.unwrap().reason, "captcha");
+
+        // What the node owns (history, dialog, opener) is taken as reported.
+        let mut page = browser("b1", "https://example.com/again");
+        page.nav = Some(offdesk_protocol::AgentBrowserNav {
+            can_go_back: true,
+            can_go_forward: false,
+            loading: true,
+        });
+        page.dialog = Some(offdesk_protocol::AgentBrowserDialog {
+            kind: offdesk_protocol::AgentBrowserDialogKind::Alert,
+            message: "hi".to_string(),
+            default_prompt: String::new(),
+        });
+        page.opener_browser_id = Some("b0".to_string());
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserUpdated {
+                    browser: page.clone(),
+                },
+            )
+            .await;
+        let info = manager.agent_browser_info("machine-a", "b1").await.unwrap();
+        assert_eq!(info.nav, page.nav);
+        assert_eq!(info.dialog, page.dialog);
+        assert_eq!(info.opener_browser_id.as_deref(), Some("b0"));
+        assert_eq!(info.controller_device_id.as_deref(), Some("dev-a"));
     }
 
     fn click_event() -> AgentBrowserInputEvent {

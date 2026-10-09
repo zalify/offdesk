@@ -90,7 +90,8 @@ fn editing_command(modifiers: u32, key: &str) -> Option<&'static str> {
     }
 }
 
-/// The CDP calls (method, params) one event turns into.
+/// The CDP calls (method, params) one event turns into. Toolbar actions and
+/// dialog answers are not queued here (see `AgentBrowserManager::input`).
 pub fn cdp_calls(event: &Event) -> Vec<(&'static str, Value)> {
     match event {
         Event::Mouse {
@@ -192,6 +193,7 @@ pub fn cdp_calls(event: &Event) -> Vec<(&'static str, Value)> {
             vec![("Input.dispatchKeyEvent", params)]
         }
         Event::Text { text } => vec![("Input.insertText", json!({"text": text}))],
+        Event::Navigate { .. } | Event::Dialog { .. } => Vec::new(),
     }
 }
 

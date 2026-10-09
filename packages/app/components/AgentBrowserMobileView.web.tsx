@@ -7,7 +7,16 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
-import { Bot, Globe, Hand, Keyboard as KeyboardIcon, X } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Bot,
+  Globe,
+  Hand,
+  Keyboard as KeyboardIcon,
+  RotateCw,
+  X,
+} from "lucide-react";
 import {
   IDENTITY_VIEW_ZOOM,
   classifyTouchGesture,
@@ -41,8 +50,13 @@ import {
   useAgentBrowserReclaimNotice,
 } from "@/lib/useAgentBrowserReclaimNotice";
 import { colors, colorAlpha } from "@/lib/colors";
+import {
+  AgentBrowserDialogOverlay,
+  AgentBrowserLoadingBar,
+} from "./AgentBrowserPageOverlays.web";
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
+type NavAction = Extract<AgentBrowserInputEvent, { kind: "navigate" }>["action"];
 
 const SOFT_KEYS: { name: SoftKeyName; label: string; text: string }[] = [
   { name: "Escape", label: "Escape", text: "Esc" },
@@ -497,6 +511,24 @@ export function AgentBrowserMobileView({
   };
 
   const label = browserLabel(browser);
+  // Back, forward and reload sit in the bar under the page while this device
+  // is in control (older nodes report no `nav` and get none).
+  const nav = browser.nav;
+  const navigate = (action: NavAction) => sendInput({ kind: "navigate", action });
+  const keyBarButton = {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 0,
+    borderRadius: 10,
+    border: `1px solid ${colors.line}`,
+    background: colors.bg0,
+    color: colors.fg0,
+    cursor: "pointer",
+  } as const;
   const stateText = mine
     ? "In control"
     : otherDevice
@@ -693,119 +725,146 @@ export function AgentBrowserMobileView({
         </div>
       )}
       <div
-        ref={bodyRef}
-        data-testid="mobile-agent-browser-body"
-        data-edge-swipe="off"
-        onContextMenu={(event) => event.preventDefault()}
         style={{
           position: "relative",
           flex: 1,
           minHeight: 0,
           minWidth: 0,
-          overflow: "hidden",
-          background: "#000",
-          // The app's global rule is `touch-action: manipulation` on
-          // everything; only this surface takes every touch itself.
-          touchAction: "none",
-          userSelect: "none",
-          WebkitUserSelect: "none",
-          WebkitTouchCallout: "none",
-          boxShadow: mine ? `inset 0 0 0 2px ${colorAlpha.accentLine}` : "none",
+          display: "flex",
         }}
       >
-        <textarea
-          ref={textareaRef}
-          data-testid="mobile-agent-browser-input"
-          aria-label="Type into the agent browser"
-          autoCapitalize="off"
-          autoCorrect="off"
-          autoComplete="off"
-          spellCheck={false}
-          enterKeyHint="enter"
-          onFocus={() => setKeyboardOn(true)}
-          onBlur={() => setKeyboardOn(false)}
-          onKeyDown={handleKeyDown}
-          onKeyUp={handleKeyUp}
-          onCompositionStart={() => {
-            composingRef.current = true;
-          }}
-          onCompositionEnd={(event) => handleCompositionEnd(event.data)}
-          onInput={(event) =>
-            handleInput((event.nativeEvent as InputEvent).inputType ?? "")
-          }
-          onPaste={handlePaste}
+        <div
+          ref={bodyRef}
+          data-testid="mobile-agent-browser-body"
+          data-edge-swipe="off"
+          onContextMenu={(event) => event.preventDefault()}
           style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            width: 1,
-            height: 1,
-            padding: 0,
-            border: 0,
-            opacity: 0,
-            fontSize: 16,
-            resize: "none",
+            position: "relative",
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
             overflow: "hidden",
-            pointerEvents: "none",
-          }}
-        />
-        <canvas
-          ref={canvasRef}
-          data-testid="mobile-agent-browser-canvas"
-          data-frames="0"
-          data-zoom={zoom.scale.toFixed(2)}
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "contain",
-            transformOrigin: "0 0",
-            transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
-            visibility: hasFrame ? "visible" : "hidden",
+            background: "#000",
+            // The app's global rule is `touch-action: manipulation` on
+            // everything; only this surface takes every touch itself.
             touchAction: "none",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            WebkitTouchCallout: "none",
+            boxShadow: mine ? `inset 0 0 0 2px ${colorAlpha.accentLine}` : "none",
           }}
-        />
-        {!hasFrame && (
-          <div
+        >
+          <textarea
+            ref={textareaRef}
+            data-testid="mobile-agent-browser-input"
+            aria-label="Type into the agent browser"
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoComplete="off"
+            spellCheck={false}
+            enterKeyHint="enter"
+            onFocus={() => setKeyboardOn(true)}
+            onBlur={() => setKeyboardOn(false)}
+            onKeyDown={handleKeyDown}
+            onKeyUp={handleKeyUp}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={(event) => handleCompositionEnd(event.data)}
+            onInput={(event) =>
+              handleInput((event.nativeEvent as InputEvent).inputType ?? "")
+            }
+            onPaste={handlePaste}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              padding: 0,
+              border: 0,
+              opacity: 0,
+              fontSize: 16,
+              resize: "none",
+              overflow: "hidden",
+              pointerEvents: "none",
+            }}
+          />
+          <canvas
+            ref={canvasRef}
+            data-testid="mobile-agent-browser-canvas"
+            data-frames="0"
+            data-zoom={zoom.scale.toFixed(2)}
             style={{
               position: "absolute",
               inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: colors.foregroundMuted,
-              fontSize: 13,
-              pointerEvents: "none",
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              transformOrigin: "0 0",
+              transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+              visibility: hasFrame ? "visible" : "hidden",
+              touchAction: "none",
             }}
-          >
-            Waiting for the browser…
-          </div>
-        )}
-        {zoom.scale > 1 && (
-          <button
-            type="button"
-            data-testid="mobile-agent-browser-zoom-reset"
-            aria-label="Reset zoom"
-            onTouchStart={(event) => event.stopPropagation()}
-            onTouchEnd={(event) => event.stopPropagation()}
-            onClick={() => setZoom(IDENTITY_VIEW_ZOOM)}
-            style={{
-              position: "absolute",
-              top: 8,
-              right: 8,
-              minHeight: 32,
-              padding: "0 12px",
-              borderRadius: 999,
-              border: `1px solid ${colors.line}`,
-              background: colorAlpha.accentSoft,
-              color: colors.fg0,
-              fontSize: 12,
-              cursor: "pointer",
-            }}
-          >
-            {zoom.scale.toFixed(1)}× · Reset
-          </button>
+          />
+          {!hasFrame && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: colors.foregroundMuted,
+                fontSize: 13,
+                pointerEvents: "none",
+              }}
+            >
+              Waiting for the browser…
+            </div>
+          )}
+          {zoom.scale > 1 && (
+            <button
+              type="button"
+              data-testid="mobile-agent-browser-zoom-reset"
+              aria-label="Reset zoom"
+              onTouchStart={(event) => event.stopPropagation()}
+              onTouchEnd={(event) => event.stopPropagation()}
+              onClick={() => setZoom(IDENTITY_VIEW_ZOOM)}
+              style={{
+                position: "absolute",
+                top: 8,
+                right: 8,
+                minHeight: 32,
+                padding: "0 12px",
+                borderRadius: 999,
+                border: `1px solid ${colors.line}`,
+                background: colorAlpha.accentSoft,
+                color: colors.fg0,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              {zoom.scale.toFixed(1)}× · Reset
+            </button>
+          )}
+        </div>
+        {nav?.loading && <AgentBrowserLoadingBar testId="mobile-agent-browser-loading" />}
+        {browser.dialog && (
+          <AgentBrowserDialogOverlay
+            key={`${browser.dialog.kind}:${browser.dialog.message}`}
+            dialog={browser.dialog}
+            canAnswer={mine}
+            onAnswer={(accept, promptText) =>
+              sendInput(
+                promptText === undefined
+                  ? { kind: "dialog", accept }
+                  : { kind: "dialog", accept, prompt_text: promptText },
+              )
+            }
+            testId="mobile-agent-browser-dialog"
+            compact
+          />
         )}
       </div>
       {mine && (
@@ -822,6 +881,51 @@ export function AgentBrowserMobileView({
             flexShrink: 0,
           }}
         >
+          {nav && (
+            <>
+              <button
+                type="button"
+                data-testid="mobile-agent-browser-back"
+                aria-label="Back"
+                disabled={!nav.can_go_back}
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => navigate("back")}
+                style={{ ...keyBarButton, opacity: nav.can_go_back ? 1 : 0.35 }}
+              >
+                <ArrowLeft size={18} aria-hidden />
+              </button>
+              <button
+                type="button"
+                data-testid="mobile-agent-browser-forward"
+                aria-label="Forward"
+                disabled={!nav.can_go_forward}
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => navigate("forward")}
+                style={{ ...keyBarButton, opacity: nav.can_go_forward ? 1 : 0.35 }}
+              >
+                <ArrowRight size={18} aria-hidden />
+              </button>
+              <button
+                type="button"
+                data-testid={
+                  nav.loading ? "mobile-agent-browser-stop" : "mobile-agent-browser-reload"
+                }
+                aria-label={nav.loading ? "Stop" : "Reload"}
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => navigate(nav.loading ? "stop" : "reload")}
+                style={keyBarButton}
+              >
+                {nav.loading ? <X size={18} aria-hidden /> : <RotateCw size={16} aria-hidden />}
+              </button>
+              <span
+                aria-hidden
+                style={{ width: 1, alignSelf: "stretch", background: colors.lineSoft, flexShrink: 0 }}
+              />
+            </>
+          )}
           <button
             type="button"
             data-testid="mobile-agent-browser-keyboard"

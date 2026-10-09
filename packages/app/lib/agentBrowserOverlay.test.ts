@@ -4,8 +4,10 @@ import {
   browserControlledBy,
   browserLabel,
   browserNeedsPerson,
+  dialogText,
   findNewHandoffs,
   findNewReclaims,
+  followPopups,
   normalizeBrowserUrl,
   pickBrowserToOpen,
   pickSelectedBrowserId,
@@ -124,5 +126,50 @@ describe("browserLabel", () => {
       "about:blank",
     );
     expect(browserLabel(browser("a", { title: "", url: "" }))).toBe("browser");
+  });
+});
+
+describe("followPopups", () => {
+  const opener = browser("a");
+  const popup = browser("p", { opener_browser_id: "a" });
+
+  it("brings a window the shown page opened to the front", () => {
+    expect(followPopups([opener], [opener, popup], "a")).toBe("p");
+  });
+
+  it("ignores windows opened by a tab that is not shown, and old ones", () => {
+    expect(followPopups([opener, browser("b")], [opener, browser("b"), popup], "b")).toBeNull();
+    expect(followPopups([opener, popup], [opener, popup], "a")).toBeNull();
+    expect(followPopups([opener], [opener, popup], null)).toBeNull();
+  });
+
+  it("goes back to the opener when the shown popup closes", () => {
+    expect(followPopups([opener, popup], [opener], "p")).toBe("a");
+    // Its opener is gone too: the usual fallback picks a tab.
+    expect(followPopups([opener, popup], [browser("c")], "p")).toBeNull();
+    // A tab without an opener closing: nothing to follow.
+    expect(followPopups([opener, browser("b")], [browser("b")], "a")).toBeNull();
+  });
+});
+
+describe("dialogText", () => {
+  it("words alerts, confirms and prompts like Chrome", () => {
+    expect(dialogText({ kind: "alert", message: "Saved" })).toEqual({
+      title: "This page says",
+      message: "Saved",
+      accept: "OK",
+      dismiss: null,
+    });
+    expect(dialogText({ kind: "confirm", message: "Sure?" }).dismiss).toBe("Cancel");
+    expect(dialogText({ kind: "prompt", message: "Name?" }).dismiss).toBe("Cancel");
+  });
+
+  it("asks before leaving a page", () => {
+    expect(dialogText({ kind: "beforeunload", message: "" })).toEqual({
+      title: "Leave site?",
+      message: "Changes you made may not be saved.",
+      accept: "Leave",
+      dismiss: "Stay",
+    });
   });
 });

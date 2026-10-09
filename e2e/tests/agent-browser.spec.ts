@@ -8,6 +8,7 @@ import {
   getAgentBrowserViaApi,
   getDeviceId,
   gotoAgentBrowserViaApi,
+  listAgentBrowsersViaApi,
   openAgentBrowserViaApi,
   openApp,
   reclaimAgentBrowserViaApi,
@@ -44,6 +45,41 @@ function formPage(): string {
     "<div id=c style='position:absolute;left:100px;top:450px'>idle</div>" +
     "<div id=k style='position:absolute;left:100px;top:500px'>key:none</div>" +
     "<script>addEventListener('keydown',e=>{k.textContent='key:'+e.key})</script>";
+  return `data:text/html,${encodeURIComponent(html)}`;
+}
+
+// Each load writes a new stamp, so a reload shows in the snapshot.
+function stampedPage(title: string): string {
+  const html =
+    `<title>${title}</title><body style='margin:0;font:16px sans-serif'>` +
+    `<h1>${title}</h1><p id=s></p>` +
+    "<script>s.textContent='stamp:'+Math.random().toString(36).slice(2)</script>";
+  return `data:text/html,${encodeURIComponent(html)}`;
+}
+
+// Buttons at known spots (160x40): confirm (100,200), prompt (100,300).
+function dialogPage(): string {
+  const button = (top: number, label: string, onclick: string) =>
+    `<button style='position:absolute;left:100px;top:${top}px;width:160px;height:40px' ` +
+    `onclick="${onclick}">${label}</button>`;
+  const html =
+    "<title>Dialog page</title><body style='margin:0;font:16px sans-serif'>" +
+    button(200, "Confirm", "o.textContent='confirm:'+confirm('Sure?')") +
+    button(300, "Prompt", "o.textContent='prompt:'+prompt('Name?','x')") +
+    "<div id=o style='position:absolute;left:100px;top:500px'>none</div>";
+  return `data:text/html,${encodeURIComponent(html)}`;
+}
+
+// A button (100,200 160x40) that opens a window with a "Close me" button at
+// the same spot, which closes it again.
+function popupPage(): string {
+  const popup =
+    "<title>Popup page</title><button style=\"position:absolute;left:100px;top:200px;" +
+    "width:160px;height:40px\" onclick=\"window.close()\">Close me</button>";
+  const html =
+    "<title>Opener page</title><body style='margin:0;font:16px sans-serif'>" +
+    "<button id=b style='position:absolute;left:100px;top:200px;width:160px;height:40px'>Open</button>" +
+    `<script>b.onclick=()=>{const w=window.open('');w.document.write(${JSON.stringify(popup)});w.document.close()}</script>`;
   return `data:text/html,${encodeURIComponent(html)}`;
 }
 
@@ -327,6 +363,173 @@ test.describe("agent browser", () => {
     // Handed back: Esc closes the overlay again.
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+  });
+
+  test("the toolbar goes back and forward, reloads, loads a typed address and has shortcuts", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: stampedPage("One") });
+    await gotoAgentBrowserViaApi(page, opened.id, stampedPage("Two"));
+    const title = async () => (await getAgentBrowserViaApi(page, opened.id))?.title;
+    await openOverlay(page);
+    const pane = page.getByTestId(`agent-browser-pane-${opened.id}`);
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(0);
+    const back = pane.getByTestId("agent-browser-back");
+    const forward = pane.getByTestId("agent-browser-forward");
+    const address = pane.getByTestId("agent-browser-address");
+
+    // While the agent drives, the toolbar stays off.
+    await expect(back).toBeDisabled();
+    await expect(back).toHaveAttribute("title", "Take over to navigate");
+    await expect(address).toHaveAttribute("readonly", "");
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(back).toBeEnabled();
+    await expect(forward).toBeDisabled();
+
+    await back.click();
+    await expect.poll(title).toBe("One");
+    // The blank page a tab starts on is not somewhere to go back to.
+    await expect(back).toBeDisabled();
+    await expect(forward).toBeEnabled();
+    await forward.click();
+    await expect.poll(title).toBe("Two");
+
+    // Reload runs the page again: a new stamp.
+    const stamp = async () =>
+      /stamp:\w+/.exec(await agentBrowserSnapshotViaApi(page, opened.id))?.[0];
+    const before = await stamp();
+    expect(before).toBeTruthy();
+    await pane.getByTestId("agent-browser-reload").click();
+    await expect.poll(stamp).not.toBe(before);
+
+    // The address bar: the whole URL to edit, Enter loads it and gives the
+    // keyboard back to the page.
+    await address.click();
+    await expect(address).toHaveValue(/^data:text\/html,/);
+    await address.fill(stampedPage("Three"));
+    await address.press("Enter");
+    await expect.poll(title).toBe("Three");
+    await expect(pane.getByTestId("agent-browser-input")).toBeFocused();
+
+    // Browser shortcuts go to the toolbar (Chrome's Linux ones here).
+    await page.keyboard.press("Alt+ArrowLeft");
+    await expect.poll(title).toBe("Two");
+    await page.keyboard.press("Alt+ArrowRight");
+    await expect.poll(title).toBe("Three");
+    await page.keyboard.press("Control+l");
+    await expect(address).toBeFocused();
+    // Esc leaves the field and keeps the overlay open.
+    await page.keyboard.press("Escape");
+    await expect(address).not.toBeFocused();
+    await expect(page.getByTestId("agent-browser-overlay")).toBeVisible();
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-toolbar.png" });
+  });
+
+  test("a page's dialogs show over it; the person in control answers them, the agent can too", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: dialogPage() });
+    await openOverlay(page);
+    const pane = page.getByTestId(`agent-browser-pane-${opened.id}`);
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(0);
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(pane.getByTestId("agent-browser-release")).toBeVisible();
+    const output = () => agentBrowserSnapshotViaApi(page, opened.id);
+
+    const confirmButton = await viewportToClient(page, opened.id, 180, 220);
+    await page.mouse.click(confirmButton.x, confirmButton.y);
+    const dialog = pane.getByTestId("agent-browser-dialog");
+    await expect(dialog).toHaveAttribute("data-kind", "confirm");
+    await expect(pane.getByTestId("agent-browser-dialog-message")).toHaveText("Sure?");
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-dialog.png" });
+    // The agent cannot read the page meanwhile, and is told why.
+    const refused = await tryAgentBrowserCommand(page, {
+      type: "snapshot",
+      browser_id: opened.id,
+    });
+    expect(refused.status).toBe(422);
+    expect(String(refused.body.error)).toContain('a confirm dialog ("Sure?")');
+    await pane.getByTestId("agent-browser-dialog-dismiss").click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(output).toContain("confirm:false");
+
+    // A prompt comes prefilled and takes the keyboard; Enter answers it.
+    const promptButton = await viewportToClient(page, opened.id, 180, 320);
+    await page.mouse.click(promptButton.x, promptButton.y);
+    const input = pane.getByTestId("agent-browser-dialog-input");
+    await expect(input).toHaveValue("x");
+    await expect(input).toBeFocused();
+    await input.fill("Ada");
+    await input.press("Enter");
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(output).toContain("prompt:Ada");
+
+    // The agent's click that opens a dialog returns with it; the person sees
+    // it but the agent, in control, answers.
+    await pane.getByTestId("agent-browser-release").click();
+    await expect(pane.getByTestId("agent-browser-take")).toBeVisible();
+    const clicked = await tryAgentBrowserCommand(page, {
+      type: "click",
+      browser_id: opened.id,
+      text: "Confirm",
+    });
+    expect(clicked.status).toBe(200);
+    expect((clicked.body.dialog as { message?: string } | undefined)?.message).toBe("Sure?");
+    await expect(pane.getByTestId("agent-browser-dialog-hint")).toHaveText(
+      "Take over to answer",
+    );
+    await expect(pane.getByTestId("agent-browser-dialog-accept")).toBeDisabled();
+    const answered = await tryAgentBrowserCommand(page, {
+      type: "dialog",
+      browser_id: opened.id,
+      accept: true,
+    });
+    expect(answered.status).toBe(200);
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(output).toContain("confirm:true");
+  });
+
+  test("a window the page opens comes up as a tab in your control; closing it returns you", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: popupPage() });
+    await openOverlay(page);
+    const pane = page.getByTestId(`agent-browser-pane-${opened.id}`);
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(0);
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(pane.getByTestId("agent-browser-release")).toBeVisible();
+
+    const open = await viewportToClient(page, opened.id, 180, 220);
+    await page.mouse.click(open.x, open.y);
+    let popupId = "";
+    await expect
+      .poll(async () => {
+        const popup = (await listAgentBrowsersViaApi(page)).find(
+          (browser) => browser.opener_browser_id === opened.id,
+        );
+        popupId = popup?.id ?? "";
+        return popupId;
+      })
+      .not.toBe("");
+    const popupTab = page.getByTestId(`agent-browser-tab-${popupId}`);
+    await expect(popupTab).toHaveAttribute("data-selected", "true");
+    await expect(popupTab).toContainText("Popup page");
+    await expect(page.getByTestId(`agent-browser-tab-you-${popupId}`)).toBeVisible();
+    const deviceId = await getDeviceId(page);
+    await expect
+      .poll(async () => (await getAgentBrowserViaApi(page, popupId))?.controller_device_id)
+      .toBe(deviceId);
+    await expect.poll(() => frames(page, popupId)).toBeGreaterThan(0);
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-popup.png" });
+
+    const close = await viewportToClient(page, popupId, 180, 220);
+    await page.mouse.click(close.x, close.y);
+    await expect(popupTab).toHaveCount(0);
+    await expect(page.getByTestId(`agent-browser-tab-${opened.id}`)).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+    expect(await getAgentBrowserViaApi(page, popupId)).toBeUndefined();
   });
 
   test("a handoff toasts, marks the button, and the button opens that tab", async ({

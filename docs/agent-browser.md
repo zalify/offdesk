@@ -39,10 +39,34 @@ backdrop. The terminals underneath stay mounted and keep their connections.
   machine (`POST /api/machines/{machine}/agent-browser` with `{"type":"open","url":...}`)
   and selects the new tab. A bare host such as `aliyun.com` gets `https://`;
   `localhost` and IPv4 addresses get `http://`. Errors show under the field.
-- **Body.** The selected browser, live, with the page title, URL, who is in
-  control, **Take over** / **Hand back**, the connection state, the handoff
-  banner and the notice that the agent took control back. Only the selected tab streams: other tabs hold no connection, and the
-  node stops the screencast when the last viewer leaves.
+- **Body.** The selected browser, live, under a toolbar: back, forward, reload
+  (stop while the page loads), the address, who is in control, **Take over** /
+  **Hand back** and the connection state; then the handoff banner and the notice
+  that the agent took control back. A thin bar runs along the top of the page
+  while it loads. Only the selected tab streams: other tabs hold no connection,
+  and the node stops the screencast when the last viewer leaves.
+- **Toolbar.** Back, forward and reload work while *this device is in control*
+  (otherwise they are dimmed, "Take over to navigate"). Back and forward are
+  dimmed when there is nowhere to go; the blank page a tab starts on does not
+  count. The address shows `host/path`; click it for the whole URL (to copy, in
+  any state). In control you can edit it: Enter loads what you typed, read like
+  the **+** field (a bare host gets `https://`, `localhost` and IPv4 get
+  `http://`), and Esc puts the page's address back without closing the overlay.
+- **Browser shortcuts in control.** On a Mac ⌘[ and ⌘] go back and forward, ⌘R
+  reloads and ⌘L selects the address; elsewhere Alt+← / Alt+→, Ctrl+R and
+  Ctrl+L. F5 reloads everywhere. These go to the toolbar, not the page; every
+  other key still goes to the page (Option+arrows and Ctrl+L on a Mac included).
+- **Dialogs.** Headless Chromium paints no `alert`, `confirm`, `prompt` or "Leave
+  site?" dialog, so the web UI shows them over the page, with the page's message
+  and OK / Cancel (Leave / Stay). The device in control answers, with the
+  buttons or Enter and Esc; a prompt comes prefilled and takes the keyboard.
+  Everyone else sees "Take over to answer". See [Dialogs](#dialogs).
+- **Windows the page opens.** A popup or a `target=_blank` link becomes a tab of
+  its own (see [Windows a page opens](#windows-a-page-opens)). When the page you
+  are looking at opens one, its tab comes to the front, and if this device
+  controls the page, it takes over the new tab too (so a "Sign in with Google"
+  popup is yours to use at once). When the tab you are looking at closes itself,
+  as such popups do once you have signed in, the page that opened it comes back.
 - **Empty state.** With no browser tabs it says "No browser tabs on this machine"
   and shows the address field.
 - **Closing the overlay.** The **x** in the corner, a click on the backdrop, or
@@ -100,6 +124,14 @@ mounted and connected underneath; tap the button again to close it):
   keyboard. Typed text and committed IME text are sent as text (a composition is
   sent once, when you commit it), and the bar has Esc, Tab, arrows, Backspace
   and Enter keys.
+- **Back, forward, reload.** While you are in control, the bar under the page
+  starts with back, forward and reload (stop while the page loads), dimmed when
+  there is nowhere to go. A thin bar runs along the top of the page while it
+  loads. The phone has no address field; open a page with **+**.
+- **Dialogs and new windows** work as on the desktop: a page's dialog is shown
+  over it (answered by the device in control), and a window the page opens
+  becomes a tab, comes to the front, and hands you back to its opener when it
+  closes itself.
 - The stream is sized to the view (times the device pixel ratio, at most
   1280x800) at JPEG quality 50.
 
@@ -116,6 +148,7 @@ offdesk browser click <browser> --text TEXT         # by visible text, for tabs/
 offdesk browser fill <browser> <ref> <text>
 offdesk browser upload <browser> [<ref>] --file PATH [--file PATH ...]   # put local files into a file input
 offdesk browser press <browser> <key>               # Enter, Tab, Escape, ArrowDown, a, ...
+offdesk browser dialog <browser> accept|dismiss [--text T]   # answer the page's alert/confirm/prompt
 offdesk browser wait <browser> [--text T] [--url-regex REGEX] [--idle MS] [--timeout SEC]
 offdesk browser screenshot <browser> [-o FILE] [--full]
 offdesk browser handoff <browser> --reason TEXT [--wait] [--timeout SEC]   # ask a person for help
@@ -140,7 +173,7 @@ Exit codes for every `offdesk browser` command (also in `offdesk browser --help`
 | `0` | Success (`wait`: matched; `handoff --wait` / `wait-control`: the person is done) |
 | `1` | Timeout (`wait`, `handoff --wait`, `wait-control`) |
 | `2` | Error |
-| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `upload`, `login`, `press` and `close` were refused. Also `take` when a person is using the page right now |
+| `3` | A person is controlling the browser; `goto`, `click`, `fill`, `upload`, `login`, `press`, `dialog` and `close` were refused. Also `take` when a person is using the page right now |
 
 `screenshot` writes a PNG and prints its path; the default file is
 `./browser-<id8>-<timestamp>.png`, `--full` captures the whole page.
@@ -179,7 +212,7 @@ a captcha, entering a 2FA code.
   (`"agent"` or `"human"`), and while a person controls it,
   `controller_device_id` and `controller_since` (ms).
 - **While a person controls it,** commands that change the page (`goto`,
-  `click`, `fill`, `press`, `close`) are refused: the hub answers HTTP 409
+  `click`, `fill`, `upload`, `login`, `press`, `dialog`, `close`) are refused: the hub answers HTTP 409
   `{"error": "a person is controlling this browser", "code": "user_in_control"}`
   (plus `"reason"` when a handoff is pending) and the CLI prints "A person is
   controlling this browser. Wait for them with `offdesk browser wait-control
@@ -284,6 +317,9 @@ control) is dropped silently. Upstream JSON:
 {"type":"input","event":{"kind":"wheel","x":..,"y":..,"delta_x":0,"delta_y":120,"modifiers":0}}
 {"type":"input","event":{"kind":"key","action":"down"|"up","key":"a","code":"KeyA","text":"a","modifiers":0,"key_code":65}}
 {"type":"input","event":{"kind":"text","text":"pasted or IME text"}}
+{"type":"input","event":{"kind":"navigate","action":"back"|"forward"|"reload"|"stop"}}
+{"type":"input","event":{"kind":"navigate","action":"goto","url":"https://example.com/"}}
+{"type":"input","event":{"kind":"dialog","accept":true,"prompt_text":"only for a prompt"}}
 ```
 
 Coordinates are CSS pixels in the fixed 1280x800 viewport and are clamped to it;
@@ -291,7 +327,16 @@ Coordinates are CSS pixels in the fixed 1280x800 viewport and are clamped to it;
 are at most 10000 characters. The node applies each browser's input in order
 on its own task, so it is never held up by screencast frames; a backlog of
 mouse moves collapses to the latest one. Ctrl or Cmd with A, C, X, V, Z, Y runs
-the matching editing command.
+the matching editing command. `navigate` and `dialog` events skip that queue:
+Chromium holds the input event that opened a dialog until the dialog is
+answered, so an answer must not wait behind it. A `goto` URL is at most 8192
+bytes and is loaded as given (the web UI adds the scheme).
+
+The node reports, with every browser record, what the toolbar and the dialog
+need: `nav` (`can_go_back`, `can_go_forward`, `loading` for the main frame) and
+`dialog` (`kind`: `alert`, `confirm`, `prompt` or `beforeunload`, `message`, and
+`default_prompt` for a prompt). Nodes from before these existed send no `nav`,
+and the web UI then shows no toolbar buttons.
 
 If the controlling person closes the overlay without releasing, the hub releases
 control after 2 minutes without a viewer from that device (see Auto-release
@@ -327,6 +372,7 @@ Tools (arguments in brackets are optional):
 | `browser_fill` | `browser_id`, `ref`, `text` | `fill` |
 | `browser_upload` | `browser_id`, `[ref]`, `paths` | `upload` |
 | `browser_press` | `browser_id`, `key` | `press` |
+| `browser_dialog` | `browser_id`, `accept`, `[prompt_text]` | `dialog` |
 | `browser_wait` | `browser_id`, `[text]`, `[url_regex]`, `[idle_ms]`, `[timeout_ms]` (default 30000) | `wait` |
 | `browser_screenshot` | `browser_id`, `[full_page]` | `screenshot` (returned as an MCP image, no file) |
 | `browser_handoff` | `browser_id`, `reason`, `[wait]`, `[timeout_ms]` (default 600000) | `handoff` |
@@ -397,6 +443,50 @@ iframe element, and the iframes on the way are scrolled into view. Iframes
 that are hidden or 0 pixels large are skipped. Shadow DOM is only searched by
 `click --text` and `login`, not shown specially in snapshots beyond what the
 accessibility tree already exposes.
+
+## Dialogs
+
+A page's `alert`, `confirm`, `prompt` or "Leave site?" (`beforeunload`) dialog
+stops the page until it is answered: Chromium answers no script, snapshot or
+screenshot of it meanwhile, and holds the click or key that opened it.
+
+- **For the agent.** While a dialog is open, `goto`, `snapshot`, `click`, `fill`,
+  `upload`, `login`, `press`, `wait` and `screenshot` fail at once with an error
+  that names the dialog and how to answer it, for example ``the page is showing a
+  confirm dialog ("Delete it?"); answer it first with `offdesk browser dialog
+  1a2b3c4d accept` or `dismiss` (MCP: browser_dialog)``. An action that *opens*
+  one (a click on "Delete") succeeds right away and says so: the CLI prints a
+  `note:` line on stderr, MCP adds it to the tool result, and the reply carries
+  `"dialog": {...}`. `offdesk browser dialog <browser> accept` is OK (or Leave),
+  `dismiss` is Cancel (or Stay); `--text` answers a prompt. It prints what it
+  answered (`accepted confirm "Delete it?"`), and fails with `the page is not
+  showing a dialog` when there is none. Like `click`, it is refused while a
+  person controls the browser.
+- **For a person,** the web UI shows the dialog over the page (see above); the
+  device in control answers it.
+- Dialogs of iframes count as the page's. Messages are cut at 2000 characters.
+
+## Windows a page opens
+
+A page that opens a window (`window.open`, a `target=_blank` link, a "Sign in
+with ..." popup) gets an agent browser of its own, with `opener_browser_id` set
+to the browser whose page opened it; `ls --json` and `browser_list` show it, and
+it is driven like any other. It has the same 1280x800 viewport. When its page
+closes itself, the browser is destroyed. Chromium blocks popups that no click
+or key opened, as usual.
+
+## User agent
+
+Headless Chromium calls itself `HeadlessChrome` in its user agent, and sites
+behind Cloudflare and the like treat that as a bot ("Verify you are human"
+before every page). The node therefore starts Chromium with the user agent the
+same browser has with a window (`Chrome/<major>.0.0.0`), as a launch flag so
+that cross-site iframes (where such checks run) and workers see it too; the
+client hints (`Sec-CH-UA`) are Chromium's own. The first launch learns the
+user agent from Chromium, remembers it in `<config dir>/agent-browser/user-agent`
+and relaunches once; later launches use it directly, and relaunch only when
+Chromium has been updated since. Some sites still ask a person to tick their
+box, as they do for a normal browser on a new device: use `handoff`.
 
 ## Click by text
 

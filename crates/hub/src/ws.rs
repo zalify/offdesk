@@ -1378,6 +1378,23 @@ mod tests {
                 event: offdesk_protocol::AgentBrowserInputEvent::Text { .. }
             })
         ));
+        // The toolbar and dialog answers travel as input too.
+        assert!(matches!(
+            serde_json::from_str::<AgentBrowserViewerMessage>(
+                r#"{"type":"input","event":{"kind":"navigate","action":"back"}}"#
+            ),
+            Ok(AgentBrowserViewerMessage::Input {
+                event: offdesk_protocol::AgentBrowserInputEvent::Navigate { .. }
+            })
+        ));
+        assert!(matches!(
+            serde_json::from_str::<AgentBrowserViewerMessage>(
+                r#"{"type":"input","event":{"kind":"dialog","accept":false}}"#
+            ),
+            Ok(AgentBrowserViewerMessage::Input {
+                event: offdesk_protocol::AgentBrowserInputEvent::Dialog { .. }
+            })
+        ));
         // Unknown event kinds are ignored, not fatal.
         assert!(serde_json::from_str::<AgentBrowserViewerMessage>(
             r#"{"type":"input","event":{"kind":"gamepad"}}"#

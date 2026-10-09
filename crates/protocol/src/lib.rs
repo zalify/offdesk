@@ -339,7 +339,50 @@ pub struct AgentBrowserInfo {
     /// handoff). Owned by the hub; cleared when a person takes control.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reclaimed: Option<AgentBrowserReclaim>,
+    /// The browser whose page opened this one (a popup or a `target=_blank`
+    /// link). Set by the node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opener_browser_id: Option<String>,
+    /// Back / forward / loading state for the toolbar. Set by the node;
+    /// absent from older nodes, which cannot navigate for a person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav: Option<AgentBrowserNav>,
+    /// A JavaScript dialog the page is waiting on. Set by the node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialog: Option<AgentBrowserDialog>,
 }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentBrowserNav {
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    /// The main frame is loading.
+    pub loading: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentBrowserDialogKind {
+    Alert,
+    Confirm,
+    Prompt,
+    /// "Leave site?": accepting leaves, dismissing stays.
+    Beforeunload,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentBrowserDialog {
+    pub kind: AgentBrowserDialogKind,
+    pub message: String,
+    /// What a `prompt` is prefilled with.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub default_prompt: String,
+}
+
+/// Longest dialog message the node reports.
+pub const AGENT_BROWSER_MAX_DIALOG_MESSAGE: usize = 2_000;
+/// Longest URL a person can navigate to.
+pub const AGENT_BROWSER_MAX_URL: usize = 8_192;
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -397,6 +440,17 @@ pub enum KeyAction {
     Up,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NavAction {
+    Back,
+    Forward,
+    Reload,
+    Stop,
+    /// Load `url`.
+    Goto,
+}
+
 fn one() -> u32 {
     1
 }
@@ -445,6 +499,19 @@ pub enum AgentBrowserInputEvent {
     },
     /// Insert text as is (IME commit, paste).
     Text { text: String },
+    /// The toolbar: back, forward, reload, stop, or load `url` (`goto`).
+    Navigate {
+        action: NavAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+    },
+    /// Answer the JavaScript dialog the page is showing.
+    Dialog {
+        accept: bool,
+        /// The answer to a `prompt`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_text: Option<String>,
+    },
 }
 
 impl AgentBrowserInputEvent {
@@ -515,6 +582,27 @@ impl AgentBrowserInputEvent {
             Self::Text { text } => (!text.is_empty()
                 && text.chars().count() <= AGENT_BROWSER_MAX_INPUT_TEXT)
                 .then_some(Self::Text { text }),
+            Self::Navigate {
+                action: NavAction::Goto,
+                url,
+            } => {
+                let url = url?.trim().to_string();
+                (!url.is_empty() && url.len() <= AGENT_BROWSER_MAX_URL).then_some(Self::Navigate {
+                    action: NavAction::Goto,
+                    url: Some(url),
+                })
+            }
+            Self::Navigate { action, .. } => Some(Self::Navigate { action, url: None }),
+            Self::Dialog {
+                accept,
+                prompt_text,
+            } => (prompt_text
+                .as_ref()
+                .is_none_or(|t| t.chars().count() <= AGENT_BROWSER_MAX_INPUT_TEXT))
+            .then_some(Self::Dialog {
+                accept,
+                prompt_text,
+            }),
         }
     }
 }
@@ -587,7 +675,8 @@ pub struct UploadFile {
 /// Snapshot -> `{"snapshot": string}`; Screenshot -> `{"png_base64": string}`;
 /// Wait -> `{"matched": bool, "message"?: string}` (a timeout is not an
 /// error); Upload -> `{"files": ["name", ...], "input": "<the input used>"}`;
-/// the rest -> `{}`.
+/// Dialog -> `{"dialog": AgentBrowserDialog}` (the one answered); the rest ->
+/// `{}`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentBrowserCommand {
@@ -665,6 +754,15 @@ pub enum AgentBrowserCommand {
         browser_id: String,
         #[serde(default)]
         full_page: bool,
+    },
+    /// Answer the JavaScript dialog (alert, confirm, prompt, leave page) the
+    /// page is showing. While one is open, commands that read or act on the
+    /// page fail and say so.
+    Dialog {
+        browser_id: String,
+        accept: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt_text: Option<String>,
     },
 }
 
@@ -1240,8 +1338,10 @@ mod tests {
         decode_agent_browser_frame, decode_attach_output_frame,
         decode_terminal_preview_output_frame, encode_agent_browser_frame,
         encode_attach_output_frame, encode_terminal_preview_output_frame, AgentBrowserController,
-        AgentBrowserInfo, AgentBrowserInputEvent, BrowserEventsClientMessage, BrowserEventsPong,
-        HubToMachine, MachineToHub, MouseButton, TerminalInfo, TerminalTitleSource,
+        AgentBrowserDialogKind, AgentBrowserInfo, AgentBrowserInputEvent, AgentBrowserNav,
+        BrowserEventsClientMessage, BrowserEventsPong, HubToMachine, MachineToHub, MouseButton,
+        NavAction, TerminalInfo, TerminalTitleSource, AGENT_BROWSER_MAX_INPUT_TEXT,
+        AGENT_BROWSER_MAX_URL,
     };
     use bytes::Bytes;
 
@@ -1321,6 +1421,95 @@ mod tests {
         assert_eq!(json["type"], "agent_browser_input");
         assert_eq!(json["event"]["kind"], "text");
         assert!(serde_json::from_value::<HubToMachine>(json).is_ok());
+    }
+
+    #[test]
+    fn agent_browser_navigate_and_dialog_events() {
+        let parse = |json: &str| serde_json::from_str::<AgentBrowserInputEvent>(json).unwrap();
+        // Only goto carries a url, trimmed; the others drop one.
+        assert_eq!(
+            parse(r#"{"kind":"navigate","action":"goto","url":"  https://x.test/a  "}"#)
+                .sanitized(),
+            Some(AgentBrowserInputEvent::Navigate {
+                action: NavAction::Goto,
+                url: Some("https://x.test/a".into()),
+            })
+        );
+        assert_eq!(
+            parse(r#"{"kind":"navigate","action":"back","url":"ignored"}"#).sanitized(),
+            Some(AgentBrowserInputEvent::Navigate {
+                action: NavAction::Back,
+                url: None,
+            })
+        );
+        for bad in [
+            r#"{"kind":"navigate","action":"goto"}"#,
+            r#"{"kind":"navigate","action":"goto","url":"   "}"#,
+        ] {
+            assert_eq!(parse(bad).sanitized(), None, "{bad}");
+        }
+        let long = format!("https://x.test/{}", "a".repeat(AGENT_BROWSER_MAX_URL));
+        assert_eq!(
+            AgentBrowserInputEvent::Navigate {
+                action: NavAction::Goto,
+                url: Some(long),
+            }
+            .sanitized(),
+            None
+        );
+        assert!(serde_json::from_str::<AgentBrowserInputEvent>(
+            r#"{"kind":"navigate","action":"sideways"}"#
+        )
+        .is_err());
+
+        let answer = parse(r#"{"kind":"dialog","accept":true,"prompt_text":"42"}"#);
+        assert_eq!(answer.clone().sanitized(), Some(answer));
+        assert!(parse(r#"{"kind":"dialog","accept":false}"#)
+            .sanitized()
+            .is_some());
+        assert_eq!(
+            AgentBrowserInputEvent::Dialog {
+                accept: true,
+                prompt_text: Some("x".repeat(AGENT_BROWSER_MAX_INPUT_TEXT + 1)),
+            }
+            .sanitized(),
+            None
+        );
+    }
+
+    #[test]
+    fn agent_browser_info_nav_dialog_and_opener() {
+        let old: AgentBrowserInfo =
+            serde_json::from_str(r#"{"id":"b","url":"u","title":"t"}"#).unwrap();
+        assert!(old.nav.is_none() && old.dialog.is_none() && old.opener_browser_id.is_none());
+        let json = serde_json::to_value(&old).unwrap();
+        for absent in ["nav", "dialog", "opener_browser_id"] {
+            assert!(json.get(absent).is_none(), "{absent}");
+        }
+        let new: AgentBrowserInfo = serde_json::from_str(
+            r#"{"id":"b","url":"u","title":"t","opener_browser_id":"a",
+                "nav":{"can_go_back":true,"can_go_forward":false,"loading":true},
+                "dialog":{"kind":"beforeunload","message":""}}"#,
+        )
+        .unwrap();
+        assert_eq!(new.opener_browser_id.as_deref(), Some("a"));
+        assert_eq!(
+            new.nav,
+            Some(AgentBrowserNav {
+                can_go_back: true,
+                can_go_forward: false,
+                loading: true,
+            })
+        );
+        let dialog = new.dialog.clone().unwrap();
+        assert_eq!(dialog.kind, AgentBrowserDialogKind::Beforeunload);
+        assert!(dialog.default_prompt.is_empty());
+        let json = serde_json::to_value(&new).unwrap();
+        assert!(json["dialog"].get("default_prompt").is_none());
+        assert_eq!(
+            serde_json::from_value::<AgentBrowserInfo>(json).unwrap(),
+            new
+        );
     }
 
     #[test]

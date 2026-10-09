@@ -230,11 +230,14 @@ Exit codes:
   1  timeout (wait, handoff --wait, wait-control)
   2  error
   3  take: a person is using the page right now (retry later or pass --force).
-     Also: a person is controlling the browser, so goto/click/fill/upload/press/login/close were
-     refused. Run `offdesk browser wait-control <browser>` to wait for them,
+     Also: a person is controlling the browser, so goto/click/fill/upload/press/login/dialog/close
+     were refused. Run `offdesk browser wait-control <browser>` to wait for them,
      or `offdesk browser handoff <browser> --reason \"...\" --wait` to ask for
      help and wait until they hand control back. snapshot, screenshot, wait
-     and ls still work while a person is in control.")]
+     and ls still work while a person is in control.
+
+A page that opens a window (a popup, a target=_blank link) gets an agent
+browser of its own: `ls --json` shows it with `opener_browser_id`.")]
     Browser {
         #[command(subcommand)]
         action: BrowserAction,
@@ -246,8 +249,8 @@ Register it with an agent that speaks MCP, from inside an offdesk terminal:
   codex mcp add offdesk -- offdesk mcp
 
 Tools: browser_open, browser_list, browser_close, browser_goto,
-browser_snapshot, browser_click, browser_fill, browser_upload, browser_press, browser_wait,
-browser_screenshot, browser_handoff, browser_wait_control, browser_take_control,
+browser_snapshot, browser_click, browser_fill, browser_upload, browser_press, browser_dialog,
+browser_wait, browser_screenshot, browser_handoff, browser_wait_control, browser_take_control,
 browser_logins, browser_login. They make the same
 hub calls as `offdesk browser ...`; the hub URL and token come from the same
 flags, OFFDESK_URL / OFFDESK_TOKEN, or config.toml. Only JSON-RPC goes to
@@ -368,6 +371,17 @@ enum BrowserAction {
         browser: String,
         key: String,
     },
+    /// Answer the JavaScript dialog (alert, confirm, prompt, leave page) the
+    /// page is showing; other page commands fail while one is open
+    Dialog {
+        /// Browser id or unique prefix
+        browser: String,
+        /// accept (OK, Leave) or dismiss (Cancel, Stay)
+        answer: DialogAnswer,
+        /// The text to answer a prompt with
+        #[arg(long)]
+        text: Option<String>,
+    },
     /// Wait for text, a URL, or network idle: exit 0 matched, 1 timeout, 2 error
     Wait {
         /// Browser id or unique prefix
@@ -432,6 +446,12 @@ enum BrowserAction {
         #[arg(long)]
         full: bool,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum DialogAnswer {
+    Accept,
+    Dismiss,
 }
 
 #[derive(Subcommand)]
@@ -663,6 +683,14 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             } => commands::browser::upload(&hub_client, &browser, element, &files).await,
             BrowserAction::Press { browser, key } => {
                 commands::browser::press(&hub_client, &browser, key).await
+            }
+            BrowserAction::Dialog {
+                browser,
+                answer,
+                text,
+            } => {
+                let accept = matches!(answer, DialogAnswer::Accept);
+                commands::browser::dialog(&hub_client, &browser, accept, text).await
             }
             BrowserAction::Wait {
                 browser,

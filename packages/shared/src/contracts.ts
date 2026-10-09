@@ -92,9 +92,30 @@ export interface AgentBrowserInfo {
   handoff?: AgentBrowserHandoff
   /** The agent took control back; cleared when a person takes control. */
   reclaimed?: AgentBrowserReclaim
+  /** The browser whose page opened this one (a popup or a `target=_blank` link). */
+  opener_browser_id?: string
+  /** Back / forward / loading state; absent from older nodes, which cannot navigate for a person. */
+  nav?: AgentBrowserNav
+  /** A JavaScript dialog the page is waiting on. */
+  dialog?: AgentBrowserDialog
 }
 
 export type AgentBrowserController = 'agent' | 'human'
+
+export interface AgentBrowserNav {
+  can_go_back: boolean
+  can_go_forward: boolean
+  /** The main frame is loading. */
+  loading: boolean
+}
+
+export interface AgentBrowserDialog {
+  /** `beforeunload` is "Leave site?": accepting leaves, dismissing stays. */
+  kind: 'alert' | 'confirm' | 'prompt' | 'beforeunload'
+  message: string
+  /** What a prompt is prefilled with. */
+  default_prompt?: string
+}
 
 export interface AgentBrowserHandoff {
   reason: string
@@ -147,6 +168,10 @@ export type AgentBrowserInputEvent =
       key_code?: number
     }
   | { kind: 'text'; text: string }
+  /** The toolbar: `goto` loads `url`. */
+  | { kind: 'navigate'; action: 'back' | 'forward' | 'reload' | 'stop' | 'goto'; url?: string }
+  /** Answer the page's JavaScript dialog. */
+  | { kind: 'dialog'; accept: boolean; prompt_text?: string }
 
 export interface BrowserStateSnapshot {
   snapshot_seq: number
