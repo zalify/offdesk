@@ -33,3 +33,4 @@ packages/desktop/src-tauri/binaries/
 # Native plugin outputs generated during Android builds.
 packages/desktop/*/android/build/
 packages/desktop/*/android/.tauri/
+packages/app/public/pdfjs/

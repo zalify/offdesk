@@ -12,7 +12,8 @@ test.use({ ...devices["iPhone 14"], browserName: "chromium" });
 
 const SETUP =
   "rm -rf /tmp/e2e-fbm; mkdir -p /tmp/e2e-fbm/sub; " +
-  "printf 'file browser body\\n' > /tmp/e2e-fbm/report.txt; ";
+  "printf 'file browser body\\n' > /tmp/e2e-fbm/report.txt; " +
+  "printf '# Title\\n\\n**bold**\\n' > /tmp/e2e-fbm/note.md; ";
 
 const row = (page: Page, name: string) =>
   page.locator(`[data-testid="file-browser-row"][data-name="${name}"]`);
@@ -38,11 +39,26 @@ test.describe("file browser on the phone", () => {
     const box = await row(page, "report.txt").boundingBox();
     expect(box!.height).toBeGreaterThanOrEqual(44);
 
-    const download = page.waitForEvent("download", { timeout: 15_000 });
     await row(page, "report.txt").tap();
+    await expect(page.getByTestId("file-browser-preview-text")).toContainText("file browser body");
+    for (const id of ["back", "download"]) {
+      const target = await page.getByTestId(`file-browser-preview-${id}`).boundingBox();
+      expect(target!.height).toBeGreaterThanOrEqual(44);
+    }
+    const download = page.waitForEvent("download", { timeout: 15_000 });
+    await page.getByTestId("file-browser-preview-download").tap();
     const file = await download;
     expect(file.suggestedFilename()).toBe("report.txt");
     expect(await readDownload(file)).toBe("file browser body\n");
+
+    await page.getByTestId("file-browser-preview-back").tap();
+    await expect(page.getByTestId("file-browser-preview")).toHaveCount(0);
+    await row(page, "note.md").tap();
+    await expect(page.getByTestId("file-browser-preview-rich")).toHaveAttribute("sandbox", "");
+    await expect(
+      page.frameLocator('[data-testid="file-browser-preview-rich"]').locator("h1"),
+    ).toHaveText("Title");
+    await page.getByTestId("file-browser-preview-back").tap();
 
     await page.getByTestId("mobile-file-browser-surface-back").tap();
     await expect(page.getByTestId("mobile-file-browser-surface")).toHaveCount(0);

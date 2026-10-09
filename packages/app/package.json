@@ -5,8 +5,8 @@
   "license": "MIT",
   "main": "expo-router/entry",
   "scripts": {
-    "dev:web": "expo start --web",
-    "build": "expo export --platform web"
+    "dev:web": "node scripts/copy-pdfjs-assets.mjs && expo start --web",
+    "build": "node scripts/copy-pdfjs-assets.mjs && expo export --platform web"
   },
   "dependencies": {
     "@offdesk/shared": "workspace:*",
@@ -23,7 +23,10 @@
     "expo-system-ui": "~55.0.16",
     "fflate": "0.8.3",
     "lucide-react": "^1.8.0",
+    "mammoth": "1.13.0",
+    "marked": "18.1.0",
     "nativewind": "^4.2.3",
+    "pdfjs-dist": "5.4.149",
     "qrcode": "^1.5.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

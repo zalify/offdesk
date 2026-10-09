@@ -73,6 +73,48 @@ export function describeFetchError(err: unknown, path: string): string {
 }
 
 /**
+ * Saves an already-loaded remote file on this device and announces it
+ * ("已保存 … → …" with an 打开 action when the platform supports it). Errors
+ * become toasts; this never throws.
+ */
+export async function saveFetchedFile(
+  file: Pick<RemoteFile, "name" | "mime" | "data_base64">,
+  deps: Pick<FetchRemoteFileDeps, "save" | "notify"> = defaultDeps,
+): Promise<void> {
+  try {
+    const saved = await deps.save({
+      filename: file.name,
+      mime: file.mime,
+      dataBase64: file.data_base64,
+    });
+    const open = saved.open;
+    deps.notify(
+      `已保存 ${file.name} → ${saved.location}`,
+      open
+        ? {
+            action: {
+              label: "打开",
+              run: () => {
+                void open().catch((err) =>
+                  deps.notify(
+                    `打开失败：${err instanceof Error ? err.message : String(err)}`,
+                    { tone: "error" },
+                  ),
+                );
+              },
+            },
+          }
+        : undefined,
+    );
+  } catch (err) {
+    deps.notify(
+      `保存 ${file.name} 失败：${err instanceof Error ? err.message : String(err)}`,
+      { tone: "error", timeoutMs: 8000 },
+    );
+  }
+}
+
+/**
  * Fetches a file from a remote machine and saves it on this device, with
  * visible progress / success / error notices. Concurrent calls for the same
  * file are ignored.
@@ -107,37 +149,7 @@ export async function fetchRemoteFile(
       deps.notify(describeFetchError(err, path), { tone: "error", timeoutMs: 8000 });
       return;
     }
-    try {
-      const saved = await deps.save({
-        filename: file.name,
-        mime: file.mime,
-        dataBase64: file.data_base64,
-      });
-      const open = saved.open;
-      deps.notify(
-        `已保存 ${file.name} → ${saved.location}`,
-        open
-          ? {
-              action: {
-                label: "打开",
-                run: () => {
-                  void open().catch((err) =>
-                    deps.notify(
-                      `打开失败：${err instanceof Error ? err.message : String(err)}`,
-                      { tone: "error" },
-                    ),
-                  );
-                },
-              },
-            }
-          : undefined,
-      );
-    } catch (err) {
-      deps.notify(
-        `保存 ${file.name} 失败：${err instanceof Error ? err.message : String(err)}`,
-        { tone: "error", timeoutMs: 8000 },
-      );
-    }
+    await saveFetchedFile(file, deps);
   } finally {
     inFlight.delete(key);
   }
