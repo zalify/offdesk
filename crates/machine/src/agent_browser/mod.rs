@@ -16,15 +16,19 @@ mod snapshot;
 use base64::Engine;
 use bytes::Bytes;
 use cdp::CdpClient;
-use offdesk_protocol::{AgentBrowserCommand, AgentBrowserInfo, UploadFile};
+use offdesk_protocol::{
+    AgentBrowserCommand, AgentBrowserDialog, AgentBrowserDialogKind, AgentBrowserInfo,
+    AgentBrowserInputEvent, AgentBrowserNav, NavAction, UploadFile,
+};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::future::Future;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::process::Child;
-use tokio::sync::{broadcast, Mutex as AsyncMutex};
+use tokio::sync::{broadcast, watch, Mutex as AsyncMutex};
 
 const NAV_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
@@ -119,6 +123,21 @@ struct RefTarget {
     backend: i64,
 }
 
+/// How a page command ended: done, or held up by a dialog the page opened.
+enum Acted<T> {
+    Done(T),
+    Dialog(AgentBrowserDialog),
+}
+
+/// What the node reports about a tab's page; every change is an `Updated`.
+#[derive(Default, Clone, PartialEq)]
+struct PageState {
+    url: String,
+    title: String,
+    nav: AgentBrowserNav,
+    dialog: Option<AgentBrowserDialog>,
+}
+
 struct Tab {
     id: String,
     target_id: String,
@@ -131,13 +150,18 @@ struct Tab {
     /// Out-of-process iframes of this tab by frame id.
     children: Mutex<HashMap<String, frames::ChildSession>>,
     opener_terminal_id: Option<String>,
+    /// The tab whose page opened this one (popups).
+    opener_browser_id: Option<String>,
     events: Events,
     /// The hub has been told this browser exists (Created sent).
     announced: AtomicBool,
     /// Destroyed has been decided; never announce twice.
     gone: AtomicBool,
-    /// url/title last reported to the hub.
-    reported: Mutex<(String, String)>,
+    /// The page as last reported (or, before Created, as known so far).
+    page: Mutex<PageState>,
+    /// Dialogs opened so far: tells an answered dialog from a newer one,
+    /// and wakes commands waiting on input a dialog holds up.
+    dialogs_opened: watch::Sender<u64>,
     screen: Mutex<Screen>,
     /// Serializes screencast start/stop; holds the newest epoch applied.
     cast_gate: tokio::sync::Mutex<u64>,
@@ -235,11 +259,34 @@ impl AgentBrowserManager {
 
     /// Queue a person's input for a tab. Never blocks: the tab's dispatcher
     /// applies it in order. Unknown tabs and unacceptable events are dropped.
-    pub fn input(&self, browser_id: &str, event: offdesk_protocol::AgentBrowserInputEvent) {
+    /// Toolbar actions and dialog answers run on their own: a dialog answer
+    /// must not wait behind anything the open dialog holds up.
+    pub fn input(&self, browser_id: &str, event: AgentBrowserInputEvent) {
         let (Some(tab), Some(event)) = (self.tabs.get(browser_id), event.sanitized()) else {
             return;
         };
-        let _ = tab.input.send(event);
+        match event {
+            AgentBrowserInputEvent::Navigate { action, url } => {
+                tokio::spawn(async move {
+                    if let Err(error) = tab.navigate(action, url).await {
+                        tracing::debug!(browser = %tab.id, "agent browser {action:?}: {error}");
+                    }
+                });
+            }
+            AgentBrowserInputEvent::Dialog {
+                accept,
+                prompt_text,
+            } => {
+                tokio::spawn(async move {
+                    if let Err(error) = tab.answer_dialog(accept, prompt_text).await {
+                        tracing::debug!(browser = %tab.id, "agent browser dialog: {error}");
+                    }
+                });
+            }
+            event => {
+                let _ = tab.input.send(event);
+            }
+        }
     }
 
     /// The hub connection is gone, so nobody is watching.
@@ -264,26 +311,42 @@ impl AgentBrowserManager {
                 self.close(&browser_id).await?;
                 Ok(json!({}))
             }
-            C::Goto { browser_id, url } => {
+            C::Dialog {
+                browser_id,
+                accept,
+                prompt_text,
+            } => {
                 let tab = self.tab(&browser_id).await?;
-                Ok(json!(tab.goto(&url).await?))
+                Ok(json!({"dialog": tab.answer_dialog(accept, prompt_text).await?}))
+            }
+            C::Goto { browser_id, url } => {
+                let tab = self.page_tab(&browser_id).await?;
+                // The record carries a dialog the new page opened.
+                let info = match tab.until_dialog(tab.goto(&url)).await? {
+                    Acted::Done(info) => info,
+                    Acted::Dialog(_) => tab.info().await?,
+                };
+                Ok(json!(info))
             }
             C::Snapshot { browser_id } => {
-                let tab = self.tab(&browser_id).await?;
-                Ok(json!({"snapshot": tab.snapshot().await?}))
+                let tab = self.page_tab(&browser_id).await?;
+                Ok(json!({"snapshot": tab.read(tab.snapshot()).await?}))
             }
             C::Click {
                 browser_id,
                 r#ref,
                 text,
             } => {
-                let tab = self.tab(&browser_id).await?;
+                let tab = self.page_tab(&browser_id).await?;
                 match (r#ref, text) {
                     (Some(r), None) => {
-                        tab.click(&r).await?;
-                        Ok(json!({}))
+                        tab.act(async { tab.click(&r).await.map(|_| json!({})) })
+                            .await
                     }
-                    (None, Some(text)) => Ok(json!({"clicked": tab.click_text(&text).await?})),
+                    (None, Some(text)) => {
+                        tab.act(async { Ok(json!({"clicked": tab.click_text(&text).await?})) })
+                            .await
+                    }
                     _ => Err("click needs exactly one of ref or text".to_string()),
                 }
             }
@@ -294,13 +357,13 @@ impl AgentBrowserManager {
                 allowed_domains,
                 submit,
             } => {
-                let tab = self.tab(&browser_id).await?;
-                tab.login(
+                let tab = self.page_tab(&browser_id).await?;
+                tab.act(tab.login(
                     username.as_ref().map(|s| s.expose()),
                     password.as_ref().map(|s| s.expose()),
                     &allowed_domains,
                     submit,
-                )
+                ))
                 .await
             }
             C::Fill {
@@ -308,22 +371,31 @@ impl AgentBrowserManager {
                 r#ref,
                 text,
             } => {
-                self.tab(&browser_id).await?.fill(&r#ref, &text).await?;
-                Ok(json!({}))
+                let tab = self.page_tab(&browser_id).await?;
+                tab.act(async { tab.fill(&r#ref, &text).await.map(|_| json!({})) })
+                    .await
             }
             C::Upload {
                 browser_id,
                 r#ref,
                 files,
             } => {
-                let tab = self.tab(&browser_id).await?;
+                let tab = self.page_tab(&browser_id).await?;
                 let (names, paths) = save_uploads(files).await?;
-                let input = tab.upload(r#ref.as_deref(), &paths).await?;
-                Ok(json!({"files": names, "input": input}))
+                match tab
+                    .until_dialog(tab.upload(r#ref.as_deref(), &paths))
+                    .await?
+                {
+                    Acted::Done(input) => Ok(json!({"files": names, "input": input})),
+                    Acted::Dialog(dialog) => {
+                        Ok(json!({"files": names, "input": "the file input", "dialog": dialog}))
+                    }
+                }
             }
             C::Press { browser_id, key } => {
-                self.tab(&browser_id).await?.press(&key).await?;
-                Ok(json!({}))
+                let tab = self.page_tab(&browser_id).await?;
+                tab.act(async { tab.press(&key).await.map(|_| json!({})) })
+                    .await
             }
             C::Wait {
                 browser_id,
@@ -332,9 +404,12 @@ impl AgentBrowserManager {
                 idle_ms,
                 timeout_ms,
             } => {
-                let tab = self.tab(&browser_id).await?;
+                let tab = self.page_tab(&browser_id).await?;
                 Ok(
-                    match tab.wait(text, url_regex, idle_ms, timeout_ms).await? {
+                    match tab
+                        .read(tab.wait(text, url_regex, idle_ms, timeout_ms))
+                        .await?
+                    {
                         None => json!({"matched": true}),
                         Some(message) => json!({"matched": false, "message": message}),
                     },
@@ -344,7 +419,8 @@ impl AgentBrowserManager {
                 browser_id,
                 full_page,
             } => {
-                let png = self.tab(&browser_id).await?.screenshot(full_page).await?;
+                let tab = self.page_tab(&browser_id).await?;
+                let png = tab.read(tab.screenshot(full_page)).await?;
                 Ok(json!({"png_base64": png}))
             }
         }
@@ -371,20 +447,51 @@ impl AgentBrowserManager {
         for tab in self.tabs.drain() {
             tab.announce_destroyed();
         }
-        if let Some(mut running) = state.chromium.take() {
-            let _ = tokio::time::timeout(
-                Duration::from_secs(2),
-                running.client.call(None, "Browser.close", json!({})),
-            )
-            .await;
-            if tokio::time::timeout(Duration::from_secs(5), running.child.wait())
-                .await
-                .is_err()
-            {
-                let _ = running.child.kill().await;
-            }
+        if let Some(running) = state.chromium.take() {
+            self.stop_chromium(running).await;
+        }
+    }
+
+    async fn stop_chromium(&self, mut running: Running) {
+        let _ = tokio::time::timeout(
+            Duration::from_secs(2),
+            running.client.call(None, "Browser.close", json!({})),
+        )
+        .await;
+        if tokio::time::timeout(Duration::from_secs(5), running.child.wait())
+            .await
+            .is_err()
+        {
+            let _ = running.child.kill().await;
         }
         let _ = std::fs::remove_file(self.dir.join("chromium.pid"));
+    }
+
+    /// Launch Chromium and connect to it.
+    async fn start_chromium(
+        &self,
+        binary: &Path,
+        user_agent: Option<&str>,
+    ) -> Result<Running, String> {
+        let launched = chromium::launch(
+            binary,
+            &self.dir.join("profile"),
+            &self.dir.join("chromium.pid"),
+            user_agent,
+        )
+        .await?;
+        match CdpClient::connect(&launched.ws_url).await {
+            Ok(client) => Ok(Running {
+                child: launched.child,
+                client,
+            }),
+            Err(e) => {
+                let mut child = launched.child;
+                let _ = child.kill().await;
+                let _ = std::fs::remove_file(self.dir.join("chromium.pid"));
+                Err(e)
+            }
+        }
     }
 
     /// Make sure a live Chromium + CDP connection exists.
@@ -401,33 +508,49 @@ impl AgentBrowserManager {
             return Ok(r.client.clone());
         }
         let binary = self.find_or_download_chromium().await?;
-        let launched = chromium::launch(
-            &binary,
-            &self.dir.join("profile"),
-            &self.dir.join("chromium.pid"),
-        )
-        .await?;
-        let client = match CdpClient::connect(&launched.ws_url).await {
-            Ok(c) => c,
-            Err(e) => {
-                let mut child = launched.child;
-                let _ = child.kill().await;
-                let _ = std::fs::remove_file(self.dir.join("chromium.pid"));
-                return Err(e);
+        // Headless Chromium calls itself HeadlessChrome in its user agent,
+        // which sites behind Cloudflare and the like treat as a bot. Launch
+        // with the user agent the same browser has with a window (remembered
+        // from the last launch); only a launch flag also reaches cross-site
+        // iframes and workers. A first launch, or one after Chromium updated,
+        // learns it and launches again.
+        let ua_file = self.dir.join("user-agent");
+        let saved = std::fs::read_to_string(&ua_file)
+            .ok()
+            .map(|ua| ua.trim().to_string())
+            .filter(|ua| !ua.is_empty());
+        let mut running = self.start_chromium(&binary, saved.as_deref()).await?;
+        if let Ok(version) = running
+            .client
+            .call(None, "Browser.getVersion", json!({}))
+            .await
+        {
+            let reported = version["userAgent"].as_str().unwrap_or("");
+            let product = version["product"].as_str().unwrap_or("");
+            if let Some(wanted) =
+                chromium::windowed_user_agent(reported, product).filter(|wanted| wanted != reported)
+            {
+                let _ = std::fs::write(&ua_file, &wanted);
+                self.stop_chromium(running).await;
+                running = self.start_chromium(&binary, Some(&wanted)).await?;
             }
-        };
-        // Report url/title changes of tabs we own.
+        }
+        let client = running.client.clone();
+        // Report url/title changes of tabs we own, and notice the pages they
+        // open.
         if let Err(e) = client
             .call(None, "Target.setDiscoverTargets", json!({"discover": true}))
             .await
         {
             tracing::warn!("agent-browser: Target.setDiscoverTargets failed: {e}");
         }
-        tokio::spawn(supervise(client.subscribe(), self.tabs.clone()));
-        state.chromium = Some(Running {
-            child: launched.child,
-            client: client.clone(),
-        });
+        tokio::spawn(supervise(
+            client.subscribe(),
+            self.tabs.clone(),
+            client.clone(),
+            self.events.clone(),
+        ));
+        state.chromium = Some(running);
         Ok(client)
     }
 
@@ -521,6 +644,14 @@ impl AgentBrowserManager {
         }
         Ok(tab)
     }
+
+    /// A tab for a command that reads or acts on its page. Refused while the
+    /// page waits on a dialog: Chromium would not answer until it is gone.
+    async fn page_tab(&self, browser_id: &str) -> Result<Arc<Tab>, String> {
+        let tab = self.tab(browser_id).await?;
+        tab.check_no_dialog()?;
+        Ok(tab)
+    }
 }
 
 /// Best effort: make the window's content area exactly the viewport size.
@@ -611,13 +742,20 @@ fn unknown_browser(id: &str) -> String {
 }
 
 /// Maps browser-level CDP events back to tabs until Chromium goes away:
-/// url/title changes become `Updated`, screencast frames feed the tab's
-/// latest-frame slot, and a dead connection destroys every tab.
+/// url/title, history, loading and dialog changes become `Updated`, pages a
+/// tab opens become tabs of their own, a page that closed itself is
+/// destroyed, screencast frames feed the tab's latest-frame slot, and a dead
+/// connection destroys every tab.
 ///
 /// `Target.targetInfoChanged` reports url changes, but Chromium sends the
 /// page's real title late (observed: only when the target closes), so tabs
 /// are also re-read after each load and on a slow timer.
-async fn supervise(mut events: broadcast::Receiver<cdp::CdpEvent>, tabs: Tabs) {
+async fn supervise(
+    mut events: broadcast::Receiver<cdp::CdpEvent>,
+    tabs: Tabs,
+    client: Arc<CdpClient>,
+    browser_events: Events,
+) {
     let mut refresh = tokio::time::interval(TITLE_POLL);
     refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
@@ -634,10 +772,79 @@ async fn supervise(mut events: broadcast::Receiver<cdp::CdpEvent>, tabs: Tabs) {
                 continue;
             }
         };
+        let page_tab = || ev.session_id.as_deref().and_then(|s| tabs.by_session(s));
         match ev.method.as_str() {
-            "Page.loadEventFired" | "Page.navigatedWithinDocument" => {
-                if let Some(tab) = ev.session_id.as_deref().and_then(|s| tabs.by_session(s)) {
+            "Page.loadEventFired" => {
+                if let Some(tab) = page_tab() {
                     tokio::spawn(async move { tab.refresh_info().await });
+                }
+            }
+            "Page.navigatedWithinDocument" => {
+                if let Some(tab) = page_tab()
+                    .filter(|t| ev.params["frameId"].as_str() == Some(t.target_id.as_str()))
+                {
+                    tokio::spawn(async move {
+                        tab.refresh_info().await;
+                        tab.refresh_nav().await;
+                    });
+                }
+            }
+            "Page.frameNavigated" => {
+                let main = ev.params["frame"].get("parentId").is_none();
+                if let Some(tab) = page_tab().filter(|_| main) {
+                    tokio::spawn(async move { tab.refresh_nav().await });
+                }
+            }
+            // The main frame's id is the target id.
+            "Page.frameStartedLoading" | "Page.frameStoppedLoading" => {
+                let Some(tab) = page_tab()
+                    .filter(|t| ev.params["frameId"].as_str() == Some(t.target_id.as_str()))
+                else {
+                    continue;
+                };
+                let loading = ev.method == "Page.frameStartedLoading";
+                tab.update(|page| page.nav.loading = loading);
+                if !loading {
+                    tokio::spawn(async move {
+                        tab.refresh_info().await;
+                        tab.refresh_nav().await;
+                    });
+                }
+            }
+            // Dialogs of iframes are reported (and answered) on the page's
+            // own session too.
+            "Page.javascriptDialogOpening" => {
+                if let Some(tab) = page_tab() {
+                    tab.dialog_opened(&ev.params);
+                }
+            }
+            "Page.javascriptDialogClosed" => {
+                if let Some(tab) = page_tab() {
+                    tab.update(|page| page.dialog = None);
+                }
+            }
+            "Target.targetCreated" => {
+                let info = &ev.params["targetInfo"];
+                let opener = info["openerId"].as_str().and_then(|o| tabs.by_target(o));
+                if let (true, Some(target), Some(opener)) =
+                    (info["type"] == "page", info["targetId"].as_str(), opener)
+                {
+                    tokio::spawn(adopt_popup(
+                        client.clone(),
+                        browser_events.clone(),
+                        tabs.clone(),
+                        target.to_string(),
+                        opener,
+                    ));
+                }
+            }
+            "Target.targetDestroyed" => {
+                if let Some(tab) = ev.params["targetId"]
+                    .as_str()
+                    .and_then(|t| tabs.by_target(t))
+                {
+                    tabs.remove(&tab.id);
+                    tab.announce_destroyed();
                 }
             }
             cdp::CLOSED_EVENT => {
@@ -686,6 +893,37 @@ async fn supervise(mut events: broadcast::Receiver<cdp::CdpEvent>, tabs: Tabs) {
     }
 }
 
+/// Make a page that one of our tabs opened (a popup, a `target=_blank` link)
+/// a tab of its own, announced like any other.
+async fn adopt_popup(
+    client: Arc<CdpClient>,
+    events: Events,
+    tabs: Tabs,
+    target_id: String,
+    opener: Arc<Tab>,
+) {
+    let attached = Tab::attach(
+        client,
+        target_id,
+        opener.opener_terminal_id.clone(),
+        Some(opener.id.clone()),
+        events,
+    )
+    .await;
+    let tab = match attached {
+        Ok(tab) => Arc::new(tab),
+        Err(error) => {
+            tracing::debug!("agent-browser: could not adopt a popup: {error}");
+            return;
+        }
+    };
+    tabs.insert(tab.clone());
+    match tab.info().await {
+        Ok(info) => tab.announce_created(&info),
+        Err(error) => tracing::debug!("agent-browser: popup info: {error}"),
+    }
+}
+
 impl Tab {
     async fn create(
         client: Arc<CdpClient>,
@@ -699,6 +937,17 @@ impl Tab {
             .as_str()
             .ok_or("Target.createTarget returned no targetId")?
             .to_string();
+        Self::attach(client, target_id, opener_terminal_id, None, events).await
+    }
+
+    /// Attach to a page target and set it up as an agent browser.
+    async fn attach(
+        client: Arc<CdpClient>,
+        target_id: String,
+        opener_terminal_id: Option<String>,
+        opener_browser_id: Option<String>,
+        events: Events,
+    ) -> Result<Tab, String> {
         let attached = client
             .call(
                 None,
@@ -738,7 +987,7 @@ impl Tab {
             )
             .await?;
         let input = input::spawn(client.clone(), session_id.clone());
-        Ok(Tab {
+        let tab = Tab {
             id: uuid::Uuid::new_v4().to_string(),
             target_id,
             session_id,
@@ -747,20 +996,44 @@ impl Tab {
             frames: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
             opener_terminal_id,
+            opener_browser_id,
             events,
             announced: AtomicBool::new(false),
             gone: AtomicBool::new(false),
-            reported: Mutex::new((String::new(), String::new())),
+            page: Mutex::new(PageState::default()),
+            dialogs_opened: watch::channel(0).0,
             screen: Mutex::new(Screen::default()),
             cast_gate: tokio::sync::Mutex::new(0),
             input,
-        })
+        };
+        // A popup may already have history, a load running or a dialog up.
+        tab.refresh_nav().await;
+        Ok(tab)
+    }
+
+    /// The record the hub gets for this tab in `page`'s state.
+    fn record(&self, page: &PageState) -> AgentBrowserInfo {
+        AgentBrowserInfo {
+            id: self.id.clone(),
+            machine_id: None,
+            url: page.url.clone(),
+            title: page.title.clone(),
+            opener_terminal_id: self.opener_terminal_id.clone(),
+            opener_browser_id: self.opener_browser_id.clone(),
+            nav: Some(page.nav),
+            dialog: page.dialog.clone(),
+            ..Default::default()
+        }
     }
 
     fn announce_created(&self, info: &AgentBrowserInfo) {
-        *self.reported.lock().unwrap() = (info.url.clone(), info.title.clone());
+        let mut page = self.page.lock().unwrap();
+        page.url = info.url.clone();
+        page.title = info.title.clone();
         if !self.gone.load(Ordering::SeqCst) && !self.announced.swap(true, Ordering::SeqCst) {
-            let _ = self.events.send(AgentBrowserEvent::Created(info.clone()));
+            let _ = self
+                .events
+                .send(AgentBrowserEvent::Created(self.record(&page)));
         }
     }
 
@@ -772,6 +1045,23 @@ impl Tab {
         }
     }
 
+    /// Change what is known about the page and, once the hub knows the tab,
+    /// report the change. Sent under the lock so reports keep their order.
+    fn update(&self, change: impl FnOnce(&mut PageState)) {
+        let mut page = self.page.lock().unwrap();
+        let before = page.clone();
+        change(&mut page);
+        if *page == before
+            || !self.announced.load(Ordering::SeqCst)
+            || self.gone.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let _ = self
+            .events
+            .send(AgentBrowserEvent::Updated(self.record(&page)));
+    }
+
     /// Re-read url/title and report them if they changed.
     async fn refresh_info(&self) {
         if let Ok(info) = self.info().await {
@@ -780,26 +1070,148 @@ impl Tab {
     }
 
     fn target_info_changed(&self, url: &str, title: &str) {
-        if !self.announced.load(Ordering::SeqCst) || self.gone.load(Ordering::SeqCst) {
-            return;
+        self.update(|page| {
+            page.url = url.to_string();
+            page.title = title.to_string();
+        });
+    }
+
+    /// Re-read whether there is somewhere to go back or forward to.
+    async fn refresh_nav(&self) {
+        if let Ok(history) = self.call("Page.getNavigationHistory", json!({})).await {
+            let (back, forward) = history_nav(&history);
+            self.update(|page| {
+                page.nav.can_go_back = back;
+                page.nav.can_go_forward = forward;
+            });
         }
-        {
-            let mut reported = self.reported.lock().unwrap();
-            if reported.0 == url && reported.1 == title {
-                return;
+    }
+
+    /// A person's toolbar action. Returns once Chromium took it, not when the
+    /// page has loaded.
+    async fn navigate(&self, action: NavAction, url: Option<String>) -> Result<(), String> {
+        match action {
+            NavAction::Back | NavAction::Forward => {
+                let history = self.call("Page.getNavigationHistory", json!({})).await?;
+                if let Some(entry) = history_step(&history, action == NavAction::Back) {
+                    self.call("Page.navigateToHistoryEntry", json!({"entryId": entry}))
+                        .await?;
+                }
             }
-            *reported = (url.to_string(), title.to_string());
+            NavAction::Reload => {
+                self.call("Page.reload", json!({})).await?;
+            }
+            NavAction::Stop => {
+                self.call("Page.stopLoading", json!({})).await?;
+            }
+            NavAction::Goto => {
+                if let Some(url) = url {
+                    let nav = self
+                        .call("Page.navigate", json!({"url": normalize_url(&url)}))
+                        .await?;
+                    if let Some(error) = nav["errorText"].as_str() {
+                        return Err(format!("navigation to {url} failed: {error}"));
+                    }
+                }
+            }
         }
-        let _ = self
-            .events
-            .send(AgentBrowserEvent::Updated(AgentBrowserInfo {
-                id: self.id.clone(),
-                machine_id: None,
-                url: url.to_string(),
-                title: title.to_string(),
-                opener_terminal_id: self.opener_terminal_id.clone(),
-                ..Default::default()
-            }));
+        Ok(())
+    }
+
+    fn dialog_opened(&self, params: &Value) {
+        let kind = match params["type"].as_str() {
+            Some("confirm") => AgentBrowserDialogKind::Confirm,
+            Some("prompt") => AgentBrowserDialogKind::Prompt,
+            Some("beforeunload") => AgentBrowserDialogKind::Beforeunload,
+            _ => AgentBrowserDialogKind::Alert,
+        };
+        let clip = |text: &str| -> String {
+            text.chars()
+                .take(offdesk_protocol::AGENT_BROWSER_MAX_DIALOG_MESSAGE)
+                .collect()
+        };
+        let dialog = AgentBrowserDialog {
+            kind,
+            message: clip(params["message"].as_str().unwrap_or("")),
+            default_prompt: clip(params["defaultPrompt"].as_str().unwrap_or("")),
+        };
+        self.update(|page| {
+            self.dialogs_opened.send_modify(|n| *n += 1);
+            page.dialog = Some(dialog);
+        });
+    }
+
+    /// Answer the open dialog; returns the dialog that was answered.
+    async fn answer_dialog(
+        &self,
+        accept: bool,
+        prompt_text: Option<String>,
+    ) -> Result<AgentBrowserDialog, String> {
+        let (dialog, opened) = {
+            let page = self.page.lock().unwrap();
+            (page.dialog.clone(), *self.dialogs_opened.borrow())
+        };
+        let dialog = dialog.ok_or("the page is not showing a dialog")?;
+        let mut params = json!({"accept": accept});
+        if let Some(text) = prompt_text {
+            params["promptText"] = json!(text);
+        }
+        self.call("Page.handleJavaScriptDialog", params).await?;
+        // Its closed event clears it too, but maybe after the caller's next
+        // command; never clear a dialog opened since.
+        self.update(|page| {
+            if *self.dialogs_opened.borrow() == opened {
+                page.dialog = None;
+            }
+        });
+        Ok(dialog)
+    }
+
+    /// Run a command on the page. Chromium holds the input event that makes a
+    /// page open a dialog (and every script call) until the dialog is
+    /// answered, so stop waiting once one opens and return it instead.
+    async fn until_dialog<T>(
+        &self,
+        command: impl Future<Output = Result<T, String>>,
+    ) -> Result<Acted<T>, String> {
+        let mut opened = self.dialogs_opened.subscribe();
+        opened.borrow_and_update();
+        tokio::select! {
+            result = command => result.map(Acted::Done),
+            Ok(()) = opened.changed() => {
+                let dialog = self.page.lock().unwrap().dialog.clone();
+                dialog.map(Acted::Dialog).ok_or_else(|| "the page closed a dialog".to_string())
+            }
+        }
+    }
+
+    /// An action (click, fill, ...) whose reply is `done`, or `{"dialog": ..}`
+    /// when it made the page open one: the action happened, and the dialog
+    /// has to be answered next.
+    async fn act(
+        &self,
+        action: impl Future<Output = Result<Value, String>>,
+    ) -> Result<Value, String> {
+        Ok(match self.until_dialog(action).await? {
+            Acted::Done(done) => done,
+            Acted::Dialog(dialog) => json!({"dialog": dialog}),
+        })
+    }
+
+    /// A command that reads the page: a dialog that opens meanwhile is an
+    /// error saying how to answer it.
+    async fn read<T>(&self, command: impl Future<Output = Result<T, String>>) -> Result<T, String> {
+        match self.until_dialog(command).await? {
+            Acted::Done(done) => Ok(done),
+            Acted::Dialog(dialog) => Err(dialog_open_error(&self.id, &dialog)),
+        }
+    }
+
+    fn check_no_dialog(&self) -> Result<(), String> {
+        match &self.page.lock().unwrap().dialog {
+            None => Ok(()),
+            Some(dialog) => Err(dialog_open_error(&self.id, dialog)),
+        }
     }
 
     async fn screencast_start(
@@ -1016,14 +1428,10 @@ impl Tab {
             )
             .await?;
         let info = &r["targetInfo"];
-        Ok(AgentBrowserInfo {
-            id: self.id.clone(),
-            machine_id: None,
-            url: info["url"].as_str().unwrap_or("").to_string(),
-            title: info["title"].as_str().unwrap_or("").to_string(),
-            opener_terminal_id: self.opener_terminal_id.clone(),
-            ..Default::default()
-        })
+        let mut page = self.page.lock().unwrap().clone();
+        page.url = info["url"].as_str().unwrap_or("").to_string();
+        page.title = info["title"].as_str().unwrap_or("").to_string();
+        Ok(self.record(&page))
     }
 
     async fn goto(&self, url: &str) -> Result<AgentBrowserInfo, String> {
@@ -1191,6 +1599,8 @@ impl Tab {
                     Err(_) => break,
                 }
             }
+            // A dialog would hold every check below up until it is answered.
+            self.check_no_dialog()?;
             let mut ok = true;
             if let Some(t) = &text {
                 let expr = format!(
@@ -1260,6 +1670,61 @@ fn normalize_url(url: &str) -> String {
     }
 }
 
+/// `(current index, entry ids)` of a `Page.getNavigationHistory` reply, with
+/// the blank pages a tab starts on dropped: they are no place to go back to.
+fn history_entries(history: &Value) -> Option<(usize, Vec<i64>)> {
+    let current = usize::try_from(history["currentIndex"].as_u64()?).ok()?;
+    let entries = history["entries"].as_array()?;
+    let first = entries
+        .iter()
+        .position(|entry| entry["url"] != "about:blank")
+        .unwrap_or(entries.len());
+    let ids: Vec<i64> = entries
+        .iter()
+        .map(|entry| entry["id"].as_i64())
+        .collect::<Option<_>>()?;
+    (current < ids.len() && current >= first).then(|| (current - first, ids[first..].to_vec()))
+}
+
+/// Whether there is somewhere to go (back, forward).
+fn history_nav(history: &Value) -> (bool, bool) {
+    match history_entries(history) {
+        Some((current, ids)) => (current > 0, current + 1 < ids.len()),
+        None => (false, false),
+    }
+}
+
+/// The history entry one step back or forward, if there is one.
+fn history_step(history: &Value, back: bool) -> Option<i64> {
+    let (current, ids) = history_entries(history)?;
+    let index = if back {
+        current.checked_sub(1)?
+    } else {
+        current + 1
+    };
+    ids.get(index).copied()
+}
+
+/// What an agent is told when its command meets an open dialog.
+fn dialog_open_error(browser_id: &str, dialog: &AgentBrowserDialog) -> String {
+    let kind = match dialog.kind {
+        AgentBrowserDialogKind::Alert => "an alert",
+        AgentBrowserDialogKind::Confirm => "a confirm dialog",
+        AgentBrowserDialogKind::Prompt => "a prompt",
+        AgentBrowserDialogKind::Beforeunload => "a \"leave this page?\" dialog",
+    };
+    let message = if dialog.message.is_empty() {
+        String::new()
+    } else {
+        format!(" ({:?})", dialog.message)
+    };
+    let short: String = browser_id.chars().take(8).collect();
+    format!(
+        "the page is showing {kind}{message}; answer it first with \
+         `offdesk browser dialog {short} accept` or `dismiss` (MCP: browser_dialog)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1270,6 +1735,73 @@ mod tests {
         assert_eq!(normalize_url("http://x.test/a"), "http://x.test/a");
         assert_eq!(normalize_url("data:text/html,hi"), "data:text/html,hi");
         assert_eq!(normalize_url("about:blank"), "about:blank");
+    }
+
+    fn history(current: u64, urls: &[&str]) -> Value {
+        let entries: Vec<Value> = urls
+            .iter()
+            .enumerate()
+            .map(|(i, url)| json!({"id": 10 + i, "url": url}))
+            .collect();
+        json!({"currentIndex": current, "entries": entries})
+    }
+
+    #[test]
+    fn history_skips_the_blank_page_a_tab_starts_on() {
+        // Opened on a URL: the blank start page is not "back".
+        let opened = history(1, &["about:blank", "https://a.test/"]);
+        assert_eq!(history_nav(&opened), (false, false));
+        assert_eq!(history_step(&opened, true), None);
+        let middle = history(
+            2,
+            &[
+                "about:blank",
+                "https://a.test/",
+                "https://b.test/",
+                "https://c.test/",
+            ],
+        );
+        assert_eq!(history_nav(&middle), (true, true));
+        assert_eq!(history_step(&middle, true), Some(11));
+        assert_eq!(history_step(&middle, false), Some(13));
+        let last = history(
+            3,
+            &[
+                "about:blank",
+                "https://a.test/",
+                "https://b.test/",
+                "https://c.test/",
+            ],
+        );
+        assert_eq!(history_nav(&last), (true, false));
+        assert_eq!(history_step(&last, false), None);
+        // Still on the start page, or a blank page later on: nothing special.
+        assert_eq!(history_nav(&history(0, &["about:blank"])), (false, false));
+        let later_blank = history(2, &["https://a.test/", "https://b.test/", "about:blank"]);
+        assert_eq!(history_nav(&later_blank), (true, false));
+        assert_eq!(history_step(&later_blank, true), Some(11));
+        assert_eq!(history_nav(&json!({})), (false, false));
+    }
+
+    #[test]
+    fn dialog_error_says_what_is_open_and_how_to_answer() {
+        let dialog = AgentBrowserDialog {
+            kind: AgentBrowserDialogKind::Confirm,
+            message: "Delete it?".into(),
+            default_prompt: String::new(),
+        };
+        assert_eq!(
+            dialog_open_error("0123456789abcdef", &dialog),
+            "the page is showing a confirm dialog (\"Delete it?\"); answer it first with \
+             `offdesk browser dialog 01234567 accept` or `dismiss` (MCP: browser_dialog)"
+        );
+        let leave = AgentBrowserDialog {
+            kind: AgentBrowserDialogKind::Beforeunload,
+            message: String::new(),
+            default_prompt: String::new(),
+        };
+        assert!(dialog_open_error("b", &leave)
+            .starts_with("the page is showing a \"leave this page?\" dialog; answer"));
     }
 
     fn pid_alive(pid: u32) -> bool {
@@ -1790,6 +2322,270 @@ mod tests {
         let id = open("data:text/html,<title>None</title><p>nothing</p>").await;
         let err = upload(&id, None, vec![file("a.txt", "a")]).await.unwrap_err();
         assert_eq!(err, "no file input on the page");
+        mgr.shutdown().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The newest record the node reported for `id` that satisfies `want`.
+    async fn reported(
+        events: &mut broadcast::Receiver<AgentBrowserEvent>,
+        what: &str,
+        want: impl Fn(&AgentBrowserInfo) -> bool,
+    ) -> AgentBrowserInfo {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events.recv().await {
+                    Ok(AgentBrowserEvent::Created(info) | AgentBrowserEvent::Updated(info))
+                        if want(&info) =>
+                    {
+                        return info
+                    }
+                    Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(e) => panic!("{what}: {e}"),
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| panic!("never reported: {what}"))
+    }
+
+    /// Toolbar navigation, loading state, dialogs, popups and the user
+    /// agent, against a real Chromium.
+    #[tokio::test]
+    #[ignore]
+    async fn toolbar_dialogs_and_popups_in_a_real_browser() {
+        use offdesk_protocol::{AgentBrowserInputEvent as Ev, MouseAction, MouseButton};
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let mut events = mgr.subscribe();
+        let page = |title: &str| format!("data:text/html,<title>{title}</title><p>{title}</p>");
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some(page("One")),
+                opener_terminal_id: None,
+            })
+            .await
+            .unwrap();
+        let id = info["id"].as_str().unwrap().to_string();
+        // A fresh tab has nowhere to go back to (its blank start page aside).
+        assert_eq!(info["nav"]["can_go_back"], false, "{info}");
+        let tab = mgr.tabs.get(&id).unwrap();
+
+        // Not HeadlessChrome, anywhere; remembered for the next launch.
+        let ua = tab.evaluate("navigator.userAgent").await.unwrap();
+        let ua = ua.as_str().unwrap();
+        assert!(!ua.contains("Headless") && ua.contains("Chrome/"), "{ua}");
+        assert_eq!(std::fs::read_to_string(dir.join("user-agent")).unwrap(), ua);
+
+        mgr.execute(AgentBrowserCommand::Goto {
+            browser_id: id.clone(),
+            url: page("Two"),
+        })
+        .await
+        .unwrap();
+        reported(&mut events, "back after goto", |i| {
+            i.id == id && i.nav.is_some_and(|n| n.can_go_back && !n.can_go_forward)
+        })
+        .await;
+
+        // A person goes back and forward.
+        mgr.input(
+            &id,
+            Ev::Navigate {
+                action: NavAction::Back,
+                url: None,
+            },
+        );
+        let back = reported(&mut events, "back to One", |i| {
+            i.id == id && i.title == "One" && i.nav.is_some_and(|n| n.can_go_forward)
+        })
+        .await;
+        assert!(!back.nav.unwrap().can_go_back);
+        mgr.input(
+            &id,
+            Ev::Navigate {
+                action: NavAction::Forward,
+                url: None,
+            },
+        );
+        reported(&mut events, "forward to Two", |i| {
+            i.id == id && i.title == "Two"
+        })
+        .await;
+        // goto from the address bar, then reload: the page is loaded afresh.
+        mgr.input(
+            &id,
+            Ev::Navigate {
+                action: NavAction::Goto,
+                url: Some(page("Three")),
+            },
+        );
+        reported(&mut events, "address bar goto", |i| {
+            i.id == id && i.title == "Three"
+        })
+        .await;
+        tab.evaluate("window.marker = 1").await.unwrap();
+        mgr.input(
+            &id,
+            Ev::Navigate {
+                action: NavAction::Reload,
+                url: None,
+            },
+        );
+        reported(&mut events, "loading", |i| {
+            i.id == id && i.nav.is_some_and(|n| n.loading)
+        })
+        .await;
+        reported(&mut events, "loaded", |i| {
+            i.id == id && i.nav.is_some_and(|n| !n.loading)
+        })
+        .await;
+        assert_eq!(
+            tab.evaluate("window.marker === undefined").await.unwrap(),
+            true
+        );
+
+        // A dialog: reported, page commands refused, answered by the agent.
+        tab.evaluate("setTimeout(() => { window.answer = confirm('Sure?') }, 0); 1")
+            .await
+            .unwrap();
+        let open = reported(&mut events, "confirm", |i| i.id == id && i.dialog.is_some()).await;
+        let dialog = open.dialog.unwrap();
+        assert_eq!(dialog.kind, AgentBrowserDialogKind::Confirm);
+        assert_eq!(dialog.message, "Sure?");
+        let err = mgr
+            .execute(AgentBrowserCommand::Snapshot {
+                browser_id: id.clone(),
+            })
+            .await
+            .unwrap_err();
+        assert!(err.contains("a confirm dialog (\"Sure?\")"), "{err}");
+        let answered = mgr
+            .execute(AgentBrowserCommand::Dialog {
+                browser_id: id.clone(),
+                accept: true,
+                prompt_text: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(answered["dialog"]["kind"], "confirm");
+        assert_eq!(tab.evaluate("window.answer").await.unwrap(), true);
+        let err = mgr
+            .execute(AgentBrowserCommand::Dialog {
+                browser_id: id.clone(),
+                accept: true,
+                prompt_text: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err, "the page is not showing a dialog");
+        // A person answers a prompt.
+        tab.evaluate("setTimeout(() => { window.answer = prompt('Name?', 'x') }, 0); 1")
+            .await
+            .unwrap();
+        let open = reported(&mut events, "prompt", |i| i.id == id && i.dialog.is_some()).await;
+        assert_eq!(open.dialog.unwrap().default_prompt, "x");
+        mgr.input(
+            &id,
+            Ev::Dialog {
+                accept: true,
+                prompt_text: Some("Ada".into()),
+            },
+        );
+        reported(&mut events, "prompt answered", |i| {
+            i.id == id && i.dialog.is_none()
+        })
+        .await;
+        assert_eq!(tab.evaluate("window.answer").await.unwrap(), "Ada");
+        // Chromium holds the click that opens a dialog until it is answered;
+        // the agent's click returns at once with the dialog instead.
+        tab.evaluate(
+            "document.body.innerHTML = \"<button onclick=\\\"window.answer = confirm('Delete?')\\\">Delete</button>\"; 1",
+        )
+        .await
+        .unwrap();
+        let started = Instant::now();
+        let clicked = mgr
+            .execute(AgentBrowserCommand::Click {
+                browser_id: id.clone(),
+                r#ref: None,
+                text: Some("Delete".into()),
+            })
+            .await
+            .unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(clicked["dialog"]["message"], "Delete?", "{clicked}");
+        mgr.execute(AgentBrowserCommand::Dialog {
+            browser_id: id.clone(),
+            accept: false,
+            prompt_text: None,
+        })
+        .await
+        .unwrap();
+        assert_eq!(tab.evaluate("window.answer").await.unwrap(), false);
+
+        // A popup opened by a person's click becomes a tab of its own; it
+        // goes away when it closes itself.
+        tab.evaluate(
+            "document.body.innerHTML = \"<button style='position:absolute;left:0;top:0;width:200px;height:100px' \
+             onclick=\\\"window.pop = window.open(''); pop.document.title = 'Popup'\\\">open</button>\"; 1",
+        )
+        .await
+        .unwrap();
+        for action in [MouseAction::Down, MouseAction::Up] {
+            mgr.input(
+                &id,
+                Ev::Mouse {
+                    action,
+                    x: 50.0,
+                    y: 50.0,
+                    button: MouseButton::Left,
+                    buttons: u32::from(action == MouseAction::Down),
+                    click_count: 1,
+                    modifiers: 0,
+                },
+            );
+        }
+        let popup = reported(&mut events, "popup", |i| {
+            i.opener_browser_id.as_deref() == Some(id.as_str())
+        })
+        .await;
+        assert_ne!(popup.id, id);
+        assert!(popup.nav.is_some());
+        let listed = mgr.execute(AgentBrowserCommand::List).await.unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 2, "{listed}");
+        // Same viewport as any tab.
+        let popup_tab = mgr.tabs.get(&popup.id).unwrap();
+        assert_eq!(
+            popup_tab
+                .evaluate("[innerWidth, innerHeight].join('x')")
+                .await
+                .unwrap(),
+            "1280x800"
+        );
+        tab.evaluate("window.pop.close(); 1").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let Ok(AgentBrowserEvent::Destroyed(gone)) = events.recv().await {
+                    if gone == popup.id {
+                        return;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("the popup closed but was not destroyed");
+        assert!(mgr.tabs.get(&popup.id).is_none());
+
         mgr.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }

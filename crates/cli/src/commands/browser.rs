@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use offdesk_protocol::{
-    AgentBrowserCommand, AgentBrowserInfo, Base64Data, MachineInfo, UploadFile,
+    AgentBrowserCommand, AgentBrowserDialog, AgentBrowserDialogKind, AgentBrowserInfo, Base64Data,
+    MachineInfo, UploadFile,
 };
 use serde_json::Value;
 
@@ -36,6 +37,58 @@ pub enum HandoffOutcome {
     HandedBack,
     /// Nobody handed control back before the timeout.
     TimedOut,
+}
+
+/// A page action's result, and the dialog it made the page open, if any:
+/// the action happened, and the dialog has to be answered next.
+pub struct Acted<T> {
+    pub result: T,
+    pub dialog: Option<AgentBrowserDialog>,
+}
+
+fn acted<T>(result: T, reply: &Value) -> Acted<T> {
+    Acted {
+        result,
+        dialog: reply
+            .get("dialog")
+            .and_then(|dialog| serde_json::from_value(dialog.clone()).ok()),
+    }
+}
+
+/// `a confirm dialog ("Delete it?")`.
+fn dialog_phrase(dialog: &AgentBrowserDialog) -> String {
+    let kind = match dialog.kind {
+        AgentBrowserDialogKind::Alert => "an alert",
+        AgentBrowserDialogKind::Confirm => "a confirm dialog",
+        AgentBrowserDialogKind::Prompt => "a prompt",
+        AgentBrowserDialogKind::Beforeunload => "a \"leave this page?\" dialog",
+    };
+    if dialog.message.is_empty() {
+        kind.to_string()
+    } else {
+        format!("{kind} ({:?})", dialog.message)
+    }
+}
+
+/// What to tell whoever ran an action that opened a dialog; `answer` says
+/// how to answer it.
+pub fn dialog_note(dialog: &AgentBrowserDialog, answer: &str) -> String {
+    format!(
+        "the page opened {}; answer it with {answer}",
+        dialog_phrase(dialog)
+    )
+}
+
+/// The CLI's way to answer a dialog of `browser`.
+fn cli_answer(browser: &str) -> String {
+    format!("`offdesk browser dialog {browser} accept` or `dismiss`")
+}
+
+/// The note on stderr after a CLI action that opened a dialog.
+fn print_dialog_note(browser: &str, dialog: Option<&AgentBrowserDialog>) {
+    if let Some(dialog) = dialog {
+        eprintln!("note: {}", dialog_note(dialog, &cli_answer(browser)));
+    }
 }
 
 /// A screenshot as the node delivered it.
@@ -134,6 +187,7 @@ async fn call(
         | AgentBrowserCommand::Upload { browser_id, .. }
         | AgentBrowserCommand::Login { browser_id, .. }
         | AgentBrowserCommand::Press { browser_id, .. }
+        | AgentBrowserCommand::Dialog { browser_id, .. }
         | AgentBrowserCommand::Close { browser_id } => short_id(browser_id).to_string(),
         _ => String::new(),
     };
@@ -308,7 +362,7 @@ pub async fn click_element(
     client: &HubClient,
     browser: &str,
     target: ClickTarget,
-) -> Result<Option<String>, CliError> {
+) -> Result<Acted<Option<String>>, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     let (r#ref, text) = match target {
         ClickTarget::Ref(element) => (Some(element), None),
@@ -324,10 +378,11 @@ pub async fn click_element(
         },
     )
     .await?;
-    Ok(value
+    let clicked = value
         .get("clicked")
         .and_then(Value::as_str)
-        .map(str::to_string))
+        .map(str::to_string);
+    Ok(acted(clicked, &value))
 }
 
 /// The registrable domain of the page a browser is on.
@@ -413,9 +468,9 @@ pub async fn fill_element(
     browser: &str,
     element: String,
     text: String,
-) -> Result<(), CliError> {
+) -> Result<Acted<()>, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
-    call(
+    let value = call(
         client,
         &machine_id,
         AgentBrowserCommand::Fill {
@@ -425,7 +480,7 @@ pub async fn fill_element(
         },
     )
     .await?;
-    Ok(())
+    Ok(acted((), &value))
 }
 
 /// What the node reports after setting the files.
@@ -480,7 +535,7 @@ pub async fn upload_files(
     browser: &str,
     element: Option<String>,
     paths: &[PathBuf],
-) -> Result<UploadOutcome, CliError> {
+) -> Result<Acted<UploadOutcome>, CliError> {
     let files = read_upload_files(paths)?;
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
     let value = call(
@@ -501,21 +556,63 @@ pub async fn upload_files(
             .filter_map(|n| n.as_str().map(str::to_string))
             .collect()
     };
-    Ok(UploadOutcome {
+    let outcome = UploadOutcome {
         files: names(&value),
         input: value["input"].as_str().unwrap_or("file input").to_string(),
-    })
+    };
+    Ok(acted(outcome, &value))
 }
 
-pub async fn press_key(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
+pub async fn press_key(
+    client: &HubClient,
+    browser: &str,
+    key: String,
+) -> Result<Acted<()>, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
-    call(
+    let value = call(
         client,
         &machine_id,
         AgentBrowserCommand::Press { browser_id, key },
     )
     .await?;
-    Ok(())
+    Ok(acted((), &value))
+}
+
+/// Answer the JavaScript dialog the page is showing; returns that dialog.
+pub async fn answer_dialog(
+    client: &HubClient,
+    browser: &str,
+    accept: bool,
+    prompt_text: Option<String>,
+) -> Result<AgentBrowserDialog, CliError> {
+    let (machine_id, browser_id) = resolve_browser(client, browser).await?;
+    let value = call(
+        client,
+        &machine_id,
+        AgentBrowserCommand::Dialog {
+            browser_id,
+            accept,
+            prompt_text,
+        },
+    )
+    .await?;
+    parse(value["dialog"].clone())
+}
+
+/// `accepted confirm "Delete it?"`: what `dialog` did.
+pub fn describe_answer(dialog: &AgentBrowserDialog, accept: bool) -> String {
+    let kind = match dialog.kind {
+        AgentBrowserDialogKind::Alert => "alert",
+        AgentBrowserDialogKind::Confirm => "confirm",
+        AgentBrowserDialogKind::Prompt => "prompt",
+        AgentBrowserDialogKind::Beforeunload => "leave-page dialog",
+    };
+    let verb = if accept { "accepted" } else { "dismissed" };
+    if dialog.message.is_empty() {
+        format!("{verb} {kind}")
+    } else {
+        format!("{verb} {kind} {:?}", dialog.message)
+    }
 }
 
 pub async fn wait_for_page(
@@ -692,7 +789,9 @@ pub async fn goto(
     json: bool,
 ) -> Result<(), CliError> {
     let info = goto_browser(client, browser, url).await?;
-    print_info(&info, json, false)
+    print_info(&info, json, false)?;
+    print_dialog_note(browser, info.dialog.as_ref());
+    Ok(())
 }
 
 pub async fn snapshot(client: &HubClient, browser: &str) -> Result<(), CliError> {
@@ -707,9 +806,11 @@ pub async fn click(
     text: Option<String>,
 ) -> Result<(), CliError> {
     let target = ClickTarget::from_args(element, text)?;
-    if let Some(clicked) = click_element(client, browser, target).await? {
-        super::out_line(&format!("clicked {clicked}"));
+    let clicked = click_element(client, browser, target).await?;
+    if let Some(what) = &clicked.result {
+        super::out_line(&format!("clicked {what}"));
     }
+    print_dialog_note(browser, clicked.dialog.as_ref());
     Ok(())
 }
 
@@ -737,6 +838,7 @@ pub async fn login(
 ) -> Result<(), CliError> {
     let outcome = login_with_item(client, browser, item, submit).await?;
     super::out_line(&outcome.reply.to_string());
+    print_dialog_note(browser, acted((), &outcome.reply).dialog.as_ref());
     Ok(())
 }
 
@@ -746,7 +848,9 @@ pub async fn fill(
     element: String,
     text: String,
 ) -> Result<(), CliError> {
-    fill_element(client, browser, element, text).await
+    let filled = fill_element(client, browser, element, text).await?;
+    print_dialog_note(browser, filled.dialog.as_ref());
+    Ok(())
 }
 
 pub async fn upload(
@@ -756,12 +860,31 @@ pub async fn upload(
     paths: &[PathBuf],
 ) -> Result<(), CliError> {
     let done = upload_files(client, browser, element, paths).await?;
-    super::out_line(&format!("uploaded {} to {}", done.files.join(", "), done.input));
+    let outcome = &done.result;
+    super::out_line(&format!(
+        "uploaded {} to {}",
+        outcome.files.join(", "),
+        outcome.input
+    ));
+    print_dialog_note(browser, done.dialog.as_ref());
     Ok(())
 }
 
 pub async fn press(client: &HubClient, browser: &str, key: String) -> Result<(), CliError> {
-    press_key(client, browser, key).await
+    let pressed = press_key(client, browser, key).await?;
+    print_dialog_note(browser, pressed.dialog.as_ref());
+    Ok(())
+}
+
+pub async fn dialog(
+    client: &HubClient,
+    browser: &str,
+    accept: bool,
+    prompt_text: Option<String>,
+) -> Result<(), CliError> {
+    let answered = answer_dialog(client, browser, accept, prompt_text).await?;
+    super::out_line(&describe_answer(&answered, accept));
+    Ok(())
 }
 
 /// Exit 0 when the condition matched, 1 on timeout (message on stderr), 2 on
@@ -1000,6 +1123,36 @@ mod tests {
         ));
         assert!(ClickTarget::from_args(None, None).is_err());
         assert!(ClickTarget::from_args(Some("e1".into()), Some("x".into())).is_err());
+    }
+
+    #[test]
+    fn an_action_that_opened_a_dialog_says_how_to_answer_it() {
+        let reply = serde_json::json!({"dialog": {"kind": "confirm", "message": "Delete it?"}});
+        let done = acted((), &reply);
+        let dialog = done.dialog.expect("dialog");
+        assert_eq!(
+            dialog_note(&dialog, &cli_answer("abcd1234")),
+            "the page opened a confirm dialog (\"Delete it?\"); answer it with \
+             `offdesk browser dialog abcd1234 accept` or `dismiss`"
+        );
+        assert!(acted((), &serde_json::json!({})).dialog.is_none());
+    }
+
+    #[test]
+    fn dialog_answers_are_described() {
+        let dialog = |kind, message: &str| AgentBrowserDialog {
+            kind,
+            message: message.to_string(),
+            default_prompt: String::new(),
+        };
+        assert_eq!(
+            describe_answer(&dialog(AgentBrowserDialogKind::Confirm, "Delete it?"), true),
+            "accepted confirm \"Delete it?\""
+        );
+        assert_eq!(
+            describe_answer(&dialog(AgentBrowserDialogKind::Beforeunload, ""), false),
+            "dismissed leave-page dialog"
+        );
     }
 
     #[test]

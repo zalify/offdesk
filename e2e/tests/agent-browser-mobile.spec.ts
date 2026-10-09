@@ -12,6 +12,7 @@ import {
   createTerminalViaApi,
   getAgentBrowserViaApi,
   getImmersiveTerminal,
+  gotoAgentBrowserViaApi,
   openAgentBrowserViaApi,
   openApp,
   reclaimAgentBrowserViaApi,
@@ -49,6 +50,16 @@ function phonePage(title = "Phone page"): string {
     "oncontextmenu=\"this.textContent='rightclick';return false\">menu</div>" +
     "<div id=y style='position:fixed;left:700px;top:20px;font-size:32px'>scrollY:0</div>" +
     "<script>addEventListener('scroll',()=>{y.textContent='scrollY:'+Math.round(scrollY)})</script>";
+  return `data:text/html,${encodeURIComponent(html)}`;
+}
+
+// A button (100,200) 160x60 that asks for confirmation; the answer at (100,420).
+function phoneDialogPage(): string {
+  const html =
+    "<title>Dialog phone page</title><body style='margin:0;font:16px sans-serif'>" +
+    "<button style='position:absolute;left:100px;top:200px;width:160px;height:60px' " +
+    "onclick=\"o.textContent='confirm:'+confirm('Sure?')\">Ask</button>" +
+    "<div id=o style='position:absolute;left:100px;top:420px'>none</div>";
   return `data:text/html,${encodeURIComponent(html)}`;
 }
 
@@ -437,6 +448,39 @@ test.describe("agent browser on the phone", () => {
     await expect(surface(page)).toBeVisible();
     await expect(page.getByTestId("mobile-browser-surface-empty")).toBeVisible();
     await expect.poll(async () => getAgentBrowserViaApi(page, opened.id)).toBeUndefined();
+  });
+
+  test("in control, the bar under the page goes back and forward, and dialogs show over the page", async ({
+    page,
+  }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: phonePage("Phone one") });
+    await gotoAgentBrowserViaApi(page, opened.id, phoneDialogPage());
+    await openBrowserView(page, opened.id);
+    const title = async () => (await getAgentBrowserViaApi(page, opened.id))?.title;
+
+    await page.getByTestId("mobile-agent-browser-take").click();
+    await expect(page.getByTestId("mobile-agent-browser-keybar")).toBeVisible();
+    const back = page.getByTestId("mobile-agent-browser-back");
+    const forward = page.getByTestId("mobile-agent-browser-forward");
+    await expect(page.getByTestId("mobile-agent-browser-reload")).toBeVisible();
+    await expect(forward).toBeDisabled();
+    await back.tap();
+    await expect.poll(title).toBe("Phone one");
+    await expect(back).toBeDisabled();
+    await forward.tap();
+    await expect.poll(title).toBe("Dialog phone page");
+
+    const ask = await viewportToClient(page, 180, 230);
+    await page.touchscreen.tap(ask.x, ask.y);
+    const dialog = page.getByTestId("mobile-agent-browser-dialog");
+    await expect(dialog).toHaveAttribute("data-kind", "confirm");
+    await expect(page.getByTestId("mobile-agent-browser-dialog-message")).toHaveText("Sure?");
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-mobile-dialog.png" });
+    await page.getByTestId("mobile-agent-browser-dialog-accept").tap();
+    await expect(dialog).toHaveCount(0);
+    await expect
+      .poll(() => agentBrowserSnapshotViaApi(page, opened.id))
+      .toContain("confirm:true");
   });
 
   test("the agent taking control back is announced and the keyboard is released", async ({

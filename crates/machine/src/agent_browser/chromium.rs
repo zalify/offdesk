@@ -136,7 +136,14 @@ fn running_as_root() -> bool {
 }
 
 /// Start Chromium on `profile` and return once its DevTools endpoint is up.
-pub async fn launch(binary: &Path, profile: &Path, pidfile: &Path) -> Result<Launched, String> {
+/// `user_agent` replaces the one it would report (everywhere: pages,
+/// iframes, workers).
+pub async fn launch(
+    binary: &Path,
+    profile: &Path,
+    pidfile: &Path,
+    user_agent: Option<&str>,
+) -> Result<Launched, String> {
     std::fs::create_dir_all(profile).map_err(|e| format!("create profile dir: {e}"))?;
     let port_file = profile.join("DevToolsActivePort");
     let _ = std::fs::remove_file(&port_file);
@@ -150,6 +157,9 @@ pub async fn launch(binary: &Path, profile: &Path, pidfile: &Path) -> Result<Lau
         .arg("--no-default-browser-check")
         .arg("--disable-background-networking")
         .arg("--window-size=1280,800");
+    if let Some(user_agent) = user_agent {
+        cmd.arg(format!("--user-agent={user_agent}"));
+    }
     if running_as_root() {
         cmd.arg("--no-sandbox");
     }
@@ -203,6 +213,27 @@ pub async fn launch(binary: &Path, profile: &Path, pidfile: &Path) -> Result<Lau
     }
 }
 
+/// The user agent this Chromium reports with a window: headless says
+/// `HeadlessChrome/`, and the version follows `product` (`Chrome/154.0.…`)
+/// so a remembered user agent catches up with an updated browser. `None`
+/// for a browser that does not say `Chrome/` at all.
+pub fn windowed_user_agent(reported: &str, product: &str) -> Option<String> {
+    let ua = reported.replace("HeadlessChrome/", "Chrome/");
+    let start = ua.find("Chrome/")? + "Chrome/".len();
+    let digits = ua[start..].bytes().take_while(u8::is_ascii_digit).count();
+    let major = product
+        .rsplit('/')
+        .next()
+        .and_then(|version| version.split('.').next())
+        .filter(|major| !major.is_empty() && major.bytes().all(|b| b.is_ascii_digit()));
+    Some(match major {
+        Some(major) if digits > 0 => {
+            format!("{}{major}{}", &ua[..start], &ua[start + digits..])
+        }
+        _ => ua,
+    })
+}
+
 /// Kill a Chromium left over from a previous node run, if the pidfile's pid
 /// is still alive and its command line mentions our profile directory.
 pub fn kill_stale(pidfile: &Path, profile: &Path) {
@@ -244,6 +275,34 @@ mod tests {
             std::env::temp_dir().join(format!("offdesk-chromium-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn windowed_user_agent_drops_headless_and_follows_the_version() {
+        let headless = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+            (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36";
+        let windowed = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+            (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36";
+        assert_eq!(
+            windowed_user_agent(headless, "Chrome/154.0.8037.98").as_deref(),
+            Some(windowed)
+        );
+        // Launched with the flag already: nothing to change.
+        assert_eq!(
+            windowed_user_agent(windowed, "Chrome/154.0.8037.98").as_deref(),
+            Some(windowed)
+        );
+        // The browser updated since the user agent was remembered.
+        assert_eq!(
+            windowed_user_agent(windowed, "HeadlessChrome/155.0.1.2").unwrap(),
+            windowed.replace("Chrome/154.", "Chrome/155.")
+        );
+        // An unparseable product keeps the version as reported.
+        assert_eq!(windowed_user_agent(headless, "").as_deref(), Some(windowed));
+        assert_eq!(
+            windowed_user_agent("Mozilla/5.0 Firefox/130.0", "Firefox/130"),
+            None
+        );
     }
 
     #[test]

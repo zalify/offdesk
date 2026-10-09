@@ -7,10 +7,12 @@ import {
   type CompositionEvent as ReactCompositionEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent,
+  type RefObject,
 } from "react";
 import type { AgentBrowserInfo, AgentBrowserInputEvent } from "@offdesk/shared";
-import { Bot, Globe, Hand, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Bot, Hand, RotateCw, X } from "lucide-react";
 import {
+  browserShortcut,
   containedImageRect,
   isComposingKey,
   keyEvent,
@@ -24,12 +26,19 @@ import {
   STREAM_STATE_LABEL,
   useAgentBrowserStream,
 } from "@/lib/useAgentBrowserStream";
-import { browserLabel } from "@/lib/agentBrowserOverlay";
+import { normalizeBrowserUrl } from "@/lib/agentBrowserOverlay";
+import { detectOS } from "@/lib/platform";
 import {
   reclaimNoticeText,
   useAgentBrowserReclaimNotice,
 } from "@/lib/useAgentBrowserReclaimNotice";
 import { colors, colorAlpha } from "@/lib/colors";
+import {
+  AgentBrowserDialogOverlay,
+  AgentBrowserLoadingBar,
+} from "./AgentBrowserPageOverlays.web";
+
+const IS_MAC = typeof navigator !== "undefined" && detectOS() === "macos";
 
 const bannerButton = {
   fontSize: 10,
@@ -56,6 +65,105 @@ function shortUrl(url: string): string {
 }
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
+type NavAction = Extract<AgentBrowserInputEvent, { kind: "navigate" }>["action"];
+
+const toolbarButton = {
+  width: 24,
+  height: 24,
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  borderRadius: 4,
+  border: "none",
+  background: "transparent",
+  color: colors.fg2,
+} as const;
+
+/**
+ * The page's address: `host/path` at rest, the whole URL to edit (or copy)
+ * when focused. Enter loads what was typed, the way the "+" field reads it;
+ * Esc puts the page's address back.
+ */
+function AddressBar({
+  url,
+  editable,
+  inputRef,
+  onGo,
+  onDone,
+}: {
+  url: string;
+  editable: boolean;
+  inputRef: RefObject<HTMLInputElement | null>;
+  onGo: (url: string) => void;
+  /** The field let go of the keyboard (after Enter or Esc). */
+  onDone: () => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
+  return (
+    <input
+      ref={inputRef}
+      data-testid="agent-browser-address"
+      aria-label="Address"
+      aria-invalid={invalid}
+      title={url}
+      readOnly={!editable}
+      value={draft ?? shortUrl(url)}
+      autoCapitalize="none"
+      autoCorrect="off"
+      spellCheck={false}
+      onFocus={(event) => {
+        setDraft(url);
+        const field = event.currentTarget;
+        window.requestAnimationFrame(() => field.select());
+      }}
+      onBlur={() => {
+        setDraft(null);
+        setInvalid(false);
+      }}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        setInvalid(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          if (!editable) return;
+          const next = normalizeBrowserUrl(draft ?? "");
+          if (!next) {
+            setInvalid(true);
+            return;
+          }
+          onGo(next);
+          event.currentTarget.blur();
+          onDone();
+        } else if (event.key === "Escape") {
+          // Esc leaves the field; it does not close the overlay.
+          event.preventDefault();
+          event.stopPropagation();
+          event.currentTarget.blur();
+          onDone();
+        }
+      }}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        height: 24,
+        boxSizing: "border-box",
+        padding: "0 8px",
+        fontSize: 11,
+        color: draft === null ? colors.foregroundMuted : colors.foreground,
+        background: colors.bg0,
+        border: `1px solid ${invalid ? colors.danger : colors.border}`,
+        borderRadius: 999,
+        outline: "none",
+        textOverflow: "ellipsis",
+      }}
+    />
+  );
+}
 
 // Live screencast of one agent browser, the body of the browser overlay. View
 // only until the person takes control, then pointer, wheel, keyboard, IME and
@@ -76,6 +184,7 @@ export function AgentBrowserPane({
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const addressRef = useRef<HTMLInputElement | null>(null);
   const [inputFocused, setInputFocused] = useState(false);
 
   const {
@@ -98,6 +207,19 @@ export function AgentBrowserPane({
   });
 
   const reclaimNotice = useAgentBrowserReclaimNotice(browser, deviceId, mine);
+
+  // The toolbar works while this device is in control and the node can
+  // navigate for a person (older nodes report no `nav`).
+  const nav = browser.nav;
+  const canNavigate = mine && nav !== undefined;
+  const navigate = useCallback(
+    (action: NavAction, url?: string) =>
+      sendInput(url === undefined ? { kind: "navigate", action } : { kind: "navigate", action, url }),
+    [sendInput],
+  );
+  const focusPage = useCallback(() => {
+    if (mine) textareaRef.current?.focus({ preventScroll: true });
+  }, [mine]);
 
   /** Viewport point of a client position; `clamp` pins it to the image edge (drags). */
   const viewportPoint = useCallback(
@@ -219,13 +341,21 @@ export function AgentBrowserPane({
   const isPasteShortcut = (event: { key: string; ctrlKey: boolean; metaKey: boolean }) =>
     (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v";
 
+  // Browser shortcuts (back, forward, reload, address bar) go to the toolbar,
+  // not the page.
+  const shortcutOf = (event: ReactKeyboardEvent<HTMLTextAreaElement>) =>
+    nav === undefined ? null : browserShortcut(event.nativeEvent, IS_MAC);
+
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (!mine) return;
     if (isComposingKey(event.nativeEvent) || composingRef.current) return;
     if (isPasteShortcut(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    sendInput(keyEvent("down", event.nativeEvent));
+    const shortcut = shortcutOf(event);
+    if (shortcut === "address") addressRef.current?.focus();
+    else if (shortcut !== null) navigate(shortcut);
+    else sendInput(keyEvent("down", event.nativeEvent));
   };
   const handleKeyUp = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (!mine) return;
@@ -233,7 +363,7 @@ export function AgentBrowserPane({
     if (isPasteShortcut(event)) return;
     event.preventDefault();
     event.stopPropagation();
-    sendInput(keyEvent("up", event.nativeEvent));
+    if (shortcutOf(event) === null) sendInput(keyEvent("up", event.nativeEvent));
   };
   const clearTextarea = () => {
     if (textareaRef.current) textareaRef.current.value = "";
@@ -265,7 +395,10 @@ export function AgentBrowserPane({
     if (text) sendInput(text);
   };
 
-  const label = browserLabel(browser);
+  // Toolbar buttons keep the keyboard on the page.
+  const keepFocus = (event: { preventDefault: () => void }) => event.preventDefault();
+  const navTitle = (label: string, keys?: string) =>
+    !mine ? "Take over to navigate" : keys ? `${label} (${keys})` : label;
 
   return (
     <div
@@ -301,41 +434,76 @@ export function AgentBrowserPane({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 6,
+            gap: 2,
             overflow: "hidden",
             minWidth: 0,
             flex: 1,
           }}
         >
-          <Globe size={12} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
-          <span
-            data-testid="agent-browser-title"
-            style={{
-              fontSize: 11,
-              color: colors.foreground,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              flexShrink: 0,
-              maxWidth: "45%",
-            }}
-          >
-            {label}
-          </span>
-          <span
-            data-testid="agent-browser-url"
-            title={browser.url}
-            style={{
-              fontSize: 11,
-              color: colors.foregroundMuted,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              minWidth: 0,
-            }}
-          >
-            {shortUrl(browser.url)}
-          </span>
+          {nav && (
+            <>
+              <button
+                type="button"
+                data-testid="agent-browser-back"
+                aria-label="Back"
+                title={navTitle("Back", IS_MAC ? "⌘[" : "Alt+←")}
+                disabled={!canNavigate || !nav.can_go_back}
+                onMouseDown={keepFocus}
+                onClick={() => navigate("back")}
+                style={{
+                  ...toolbarButton,
+                  cursor: canNavigate && nav.can_go_back ? "pointer" : "default",
+                  opacity: canNavigate && nav.can_go_back ? 1 : 0.35,
+                }}
+              >
+                <ArrowLeft size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                data-testid="agent-browser-forward"
+                aria-label="Forward"
+                title={navTitle("Forward", IS_MAC ? "⌘]" : "Alt+→")}
+                disabled={!canNavigate || !nav.can_go_forward}
+                onMouseDown={keepFocus}
+                onClick={() => navigate("forward")}
+                style={{
+                  ...toolbarButton,
+                  cursor: canNavigate && nav.can_go_forward ? "pointer" : "default",
+                  opacity: canNavigate && nav.can_go_forward ? 1 : 0.35,
+                }}
+              >
+                <ArrowRight size={14} aria-hidden />
+              </button>
+              <button
+                type="button"
+                data-testid={nav.loading ? "agent-browser-stop" : "agent-browser-reload"}
+                aria-label={nav.loading ? "Stop" : "Reload"}
+                title={
+                  nav.loading
+                    ? navTitle("Stop")
+                    : navTitle("Reload", IS_MAC ? "⌘R" : "Ctrl+R")
+                }
+                disabled={!canNavigate}
+                onMouseDown={keepFocus}
+                onClick={() => navigate(nav.loading ? "stop" : "reload")}
+                style={{
+                  ...toolbarButton,
+                  marginRight: 4,
+                  cursor: canNavigate ? "pointer" : "default",
+                  opacity: canNavigate ? 1 : 0.35,
+                }}
+              >
+                {nav.loading ? <X size={14} aria-hidden /> : <RotateCw size={13} aria-hidden />}
+              </button>
+            </>
+          )}
+          <AddressBar
+            url={browser.url}
+            editable={canNavigate}
+            inputRef={addressRef}
+            onGo={(url) => navigate("goto", url)}
+            onDone={focusPage}
+          />
         </div>
         <span
           data-testid="agent-browser-control-state"
@@ -498,95 +666,122 @@ export function AgentBrowserPane({
         </div>
       )}
       <div
-        ref={bodyRef}
-        data-testid="agent-browser-body"
-        data-controlling={mine ? "true" : "false"}
-        tabIndex={mine ? 0 : -1}
-        onFocus={() => {
-          setInputFocused(true);
-          if (mine) textareaRef.current?.focus({ preventScroll: true });
-        }}
-        onBlur={() => setInputFocused(false)}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
-        onContextMenu={(e) => {
-          if (mine) e.preventDefault();
-        }}
         style={{
           position: "relative",
           flex: 1,
           minHeight: 0,
           minWidth: 0,
-          background: "#000",
-          cursor: mine ? "crosshair" : "default",
-          outline: "none",
-          boxShadow:
-            mine && inputFocused
-              ? `inset 0 0 0 2px ${colorAlpha.accentLine}`
-              : "none",
-          touchAction: mine ? "none" : "auto",
-          userSelect: "none",
+          display: "flex",
         }}
       >
-        <textarea
-          ref={textareaRef}
-          data-testid="agent-browser-input"
-          aria-label="Type into the agent browser"
-          tabIndex={-1}
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          onKeyDown={handleKeyDown}
-          onKeyUp={handleKeyUp}
-          onCompositionStart={() => {
-            composingRef.current = true;
+        <div
+          ref={bodyRef}
+          data-testid="agent-browser-body"
+          data-controlling={mine ? "true" : "false"}
+          tabIndex={mine ? 0 : -1}
+          onFocus={() => {
+            setInputFocused(true);
+            if (mine) textareaRef.current?.focus({ preventScroll: true });
           }}
-          onCompositionEnd={handleCompositionEnd}
-          onInput={handleInput}
-          onPaste={handlePaste}
+          onBlur={() => setInputFocused(false)}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          onContextMenu={(e) => {
+            if (mine) e.preventDefault();
+          }}
           style={{
-            position: "absolute",
-            left: 0,
-            top: 0,
-            width: 1,
-            height: 1,
-            padding: 0,
-            border: 0,
-            opacity: 0,
-            resize: "none",
-            overflow: "hidden",
-            pointerEvents: "none",
+            position: "relative",
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            background: "#000",
+            cursor: mine ? "crosshair" : "default",
+            outline: "none",
+            boxShadow:
+              mine && inputFocused
+                ? `inset 0 0 0 2px ${colorAlpha.accentLine}`
+                : "none",
+            touchAction: mine ? "none" : "auto",
+            userSelect: "none",
           }}
-        />
-        <canvas
-          ref={canvasRef}
-          data-testid="agent-browser-canvas"
-          data-frames="0"
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "contain",
-            visibility: hasFrame ? "visible" : "hidden",
-          }}
-        />
-        {!hasFrame && (
-          <div
+        >
+          <textarea
+            ref={textareaRef}
+            data-testid="agent-browser-input"
+            aria-label="Type into the agent browser"
+            tabIndex={-1}
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onKeyDown={handleKeyDown}
+            onKeyUp={handleKeyUp}
+            onCompositionStart={() => {
+              composingRef.current = true;
+            }}
+            onCompositionEnd={handleCompositionEnd}
+            onInput={handleInput}
+            onPaste={handlePaste}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: 1,
+              height: 1,
+              padding: 0,
+              border: 0,
+              opacity: 0,
+              resize: "none",
+              overflow: "hidden",
+              pointerEvents: "none",
+            }}
+          />
+          <canvas
+            ref={canvasRef}
+            data-testid="agent-browser-canvas"
+            data-frames="0"
             style={{
               position: "absolute",
               inset: 0,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              color: colors.foregroundMuted,
-              fontSize: 12,
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              visibility: hasFrame ? "visible" : "hidden",
             }}
-          >
-            Waiting for the browser…
-          </div>
+          />
+          {!hasFrame && (
+            <div
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: colors.foregroundMuted,
+                fontSize: 12,
+              }}
+            >
+              Waiting for the browser…
+            </div>
+          )}
+        </div>
+        {nav?.loading && <AgentBrowserLoadingBar testId="agent-browser-loading" />}
+        {browser.dialog && (
+          <AgentBrowserDialogOverlay
+            key={`${browser.dialog.kind}:${browser.dialog.message}`}
+            dialog={browser.dialog}
+            canAnswer={mine}
+            onAnswer={(accept, promptText) => {
+              sendInput(
+                promptText === undefined
+                  ? { kind: "dialog", accept }
+                  : { kind: "dialog", accept, prompt_text: promptText },
+              );
+              focusPage();
+            }}
+            testId="agent-browser-dialog"
+          />
         )}
       </div>
     </div>

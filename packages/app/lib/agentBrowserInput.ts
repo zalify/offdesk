@@ -223,6 +223,42 @@ export function textEvent(text: string): AgentBrowserInputEvent | null {
   return text === "" ? null : { kind: "text", text };
 }
 
+export type BrowserShortcut = "back" | "forward" | "reload" | "address";
+
+/**
+ * A browser shortcut the toolbar handles instead of the page, as in Chrome:
+ * on a Mac Cmd+[ / Cmd+] / Cmd+R / Cmd+L, elsewhere Alt+Left / Alt+Right /
+ * Ctrl+R / Ctrl+L; F5 everywhere. Option+arrows and Ctrl+L on a Mac stay with
+ * the page (word jumps, a web terminal's clear screen).
+ */
+export function browserShortcut(
+  event: KeyEventLike,
+  mac: boolean,
+): BrowserShortcut | null {
+  const { altKey: alt, ctrlKey: ctrl, metaKey: meta, shiftKey: shift } = event;
+  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  if (event.key === "F5" && !alt && !meta) return "reload";
+  if (shift) return null;
+  if (mac && meta && !ctrl && !alt) {
+    if (key === "[" || event.code === "BracketLeft") return "back";
+    if (key === "]" || event.code === "BracketRight") return "forward";
+    if (key === "r") return "reload";
+    if (key === "l") return "address";
+    return null;
+  }
+  if (mac) return null;
+  if (ctrl && !meta && !alt) {
+    if (key === "r") return "reload";
+    if (key === "l") return "address";
+    return null;
+  }
+  if (alt && !ctrl && !meta) {
+    if (key === "ArrowLeft") return "back";
+    if (key === "ArrowRight") return "forward";
+  }
+  return null;
+}
+
 // ---- Local view zoom (phone) ----
 //
 // A view aid only: it scales the canvas inside its box and is never sent to

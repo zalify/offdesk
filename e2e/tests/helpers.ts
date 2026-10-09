@@ -124,6 +124,9 @@ export interface AgentBrowserRecord {
   controller_device_id?: string;
   handoff?: { reason: string; requested_at: number };
   reclaimed?: { reason: string; at: number; device_id?: string };
+  opener_browser_id?: string;
+  nav?: { can_go_back: boolean; can_go_forward: boolean; loading: boolean };
+  dialog?: { kind: string; message: string; default_prompt?: string };
 }
 
 async function agentBrowserCommand(

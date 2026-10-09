@@ -63,6 +63,7 @@ fn mutated_browser(command: &AgentBrowserCommand) -> Option<&str> {
         | AgentBrowserCommand::Upload { browser_id, .. }
         | AgentBrowserCommand::Login { browser_id, .. }
         | AgentBrowserCommand::Press { browser_id, .. }
+        | AgentBrowserCommand::Dialog { browser_id, .. }
         | AgentBrowserCommand::Close { browser_id } => Some(browser_id),
         _ => None,
     }
@@ -783,6 +784,7 @@ mod tests {
             json!({"type": "press", "browser_id": "b1", "key": "Enter"}),
             json!({"type": "click", "browser_id": "b1", "text": "Sign in"}),
             json!({"type": "login", "browser_id": "b1", "password": "pw", "allowed_domains": ["x.test"]}),
+            json!({"type": "dialog", "browser_id": "b1", "accept": true}),
             json!({"type": "close", "browser_id": "b1"}),
         ] {
             let (status, body) = post_command(&state, "machine-a", command.clone()).await;

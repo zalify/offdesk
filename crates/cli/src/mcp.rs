@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine;
+use offdesk_protocol::AgentBrowserDialog;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -43,7 +44,11 @@ usernames only, never secrets); pick one (ask the user if several fit), then \
 browser_login with its item id; it fills username and password, even inside \
 iframes, without the secret ever reaching you, then check the result with \
 browser_wait / browser_snapshot. Never ask the user to paste a password in \
-chat; if there is no saved login, use browser_handoff.";
+chat; if there is no saved login, use browser_handoff. If a tool says the page \
+is showing a dialog (alert, confirm, prompt, leave page), answer it with \
+browser_dialog first. A page that opens a window (a popup, a target=_blank \
+link) gets a browser of its own: browser_list shows it with \
+opener_browser_id.";
 
 // ---------------------------------------------------------------------------
 // Tool results
@@ -204,6 +209,18 @@ pub fn tool_definitions() -> Vec<Value> {
             ),
         ),
         tool(
+            "browser_dialog",
+            "Answer the JavaScript dialog the page is showing (alert, confirm, prompt, or a leave-this-page dialog); other tools that read or act on the page fail while one is open. accept is OK / Leave, dismiss (accept=false) is Cancel / Stay. Replies with the dialog that was answered.",
+            schema(
+                json!({
+                    "browser_id": id(),
+                    "accept": {"type": "boolean", "description": "true: OK / Leave; false: Cancel / Stay"},
+                    "prompt_text": {"type": "string", "description": "The answer to a prompt"},
+                }),
+                &["browser_id", "accept"],
+            ),
+        ),
+        tool(
             "browser_wait",
             "Wait until the page shows some text, its URL matches a regex, or the network has been idle; give at least one of text, url_regex, idle_ms. Returns whether the condition was met before the timeout (default 30000 ms); a timeout is not an error.",
             schema(
@@ -357,6 +374,14 @@ struct PressArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct DialogArgs {
+    browser_id: String,
+    accept: bool,
+    prompt_text: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WaitArgs {
     browser_id: String,
     text: Option<String>,
@@ -397,6 +422,17 @@ struct TakeControlArgs {
 struct WaitControlArgs {
     browser_id: String,
     timeout_ms: Option<u64>,
+}
+
+/// An action's text, plus what to do about a dialog it made the page open.
+fn with_dialog_note(text: String, dialog: Option<&AgentBrowserDialog>) -> String {
+    match dialog {
+        Some(dialog) => format!(
+            "{text}\n{}",
+            browser::dialog_note(dialog, "browser_dialog before anything else")
+        ),
+        None => text,
+    }
 }
 
 fn parse_args<T: serde::de::DeserializeOwned>(tool: &str, args: Value) -> Result<T, ToolResult> {
@@ -573,7 +609,11 @@ impl Server {
                 let id = a.browser_id.clone();
                 self.run(Some(&id), |client, _| async move {
                     let info = browser::goto_browser(&client, &a.browser_id, a.url).await?;
-                    Ok(ToolResult::text(format!("{}\t{}", info.url, info.title)))
+                    let text = format!("{}\t{}", info.url, info.title);
+                    Ok(ToolResult::text(with_dialog_note(
+                        text,
+                        info.dialog.as_ref(),
+                    )))
                 })
                 .await
             }
@@ -600,11 +640,15 @@ impl Server {
                 };
                 self.run(Some(&id), |client, _| async move {
                     let clicked = browser::click_element(&client, &a.browser_id, target).await?;
-                    Ok(ToolResult::text(match (a.r#ref, clicked) {
+                    let text = match (a.r#ref, clicked.result) {
                         (Some(r), _) => format!("clicked {r}"),
                         (None, Some(what)) => format!("clicked {what}"),
                         (None, None) => "clicked".to_string(),
-                    }))
+                    };
+                    Ok(ToolResult::text(with_dialog_note(
+                        text,
+                        clicked.dialog.as_ref(),
+                    )))
                 })
                 .await
             }
@@ -612,8 +656,14 @@ impl Server {
                 let a = args!(FillArgs);
                 let id = a.browser_id.clone();
                 self.run(Some(&id), |client, _| async move {
-                    browser::fill_element(&client, &a.browser_id, a.r#ref.clone(), a.text).await?;
-                    Ok(ToolResult::text(format!("filled {}", a.r#ref)))
+                    let filled =
+                        browser::fill_element(&client, &a.browser_id, a.r#ref.clone(), a.text)
+                            .await?;
+                    let text = format!("filled {}", a.r#ref);
+                    Ok(ToolResult::text(with_dialog_note(
+                        text,
+                        filled.dialog.as_ref(),
+                    )))
                 })
                 .await
             }
@@ -624,10 +674,14 @@ impl Server {
                     let paths: Vec<std::path::PathBuf> = a.paths.iter().map(Into::into).collect();
                     let done =
                         browser::upload_files(&client, &a.browser_id, a.r#ref, &paths).await?;
-                    Ok(ToolResult::text(format!(
+                    let text = format!(
                         "uploaded {} to {}",
-                        done.files.join(", "),
-                        done.input
+                        done.result.files.join(", "),
+                        done.result.input
+                    );
+                    Ok(ToolResult::text(with_dialog_note(
+                        text,
+                        done.dialog.as_ref(),
                     )))
                 })
                 .await
@@ -636,8 +690,25 @@ impl Server {
                 let a = args!(PressArgs);
                 let id = a.browser_id.clone();
                 self.run(Some(&id), |client, _| async move {
-                    browser::press_key(&client, &a.browser_id, a.key.clone()).await?;
-                    Ok(ToolResult::text(format!("pressed {}", a.key)))
+                    let pressed = browser::press_key(&client, &a.browser_id, a.key.clone()).await?;
+                    let text = format!("pressed {}", a.key);
+                    Ok(ToolResult::text(with_dialog_note(
+                        text,
+                        pressed.dialog.as_ref(),
+                    )))
+                })
+                .await
+            }
+            "browser_dialog" => {
+                let a = args!(DialogArgs);
+                let id = a.browser_id.clone();
+                self.run(Some(&id), |client, _| async move {
+                    let answered =
+                        browser::answer_dialog(&client, &a.browser_id, a.accept, a.prompt_text)
+                            .await?;
+                    Ok(ToolResult::text(browser::describe_answer(
+                        &answered, a.accept,
+                    )))
                 })
                 .await
             }
@@ -933,7 +1004,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_has_all_sixteen_with_valid_schemas() {
+    async fn tools_list_has_all_seventeen_with_valid_schemas() {
         let reply = send(&server(), json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
             .await
             .unwrap();
@@ -951,6 +1022,7 @@ mod tests {
                 "browser_fill",
                 "browser_upload",
                 "browser_press",
+                "browser_dialog",
                 "browser_wait",
                 "browser_screenshot",
                 "browser_handoff",

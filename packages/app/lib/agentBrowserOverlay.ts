@@ -2,7 +2,7 @@
 // button): which tab is selected, what a typed address means, and which
 // handoffs and reclaims are new.
 
-import type { AgentBrowserInfo } from "@offdesk/shared";
+import type { AgentBrowserDialog, AgentBrowserInfo } from "@offdesk/shared";
 
 /** What a tab or row calls a browser: its title, else the host of its URL. */
 export function browserLabel(browser: AgentBrowserInfo): string {
@@ -88,6 +88,51 @@ export function findNewReclaims(
     const old = before.get(browser.id);
     return !old || old.reclaimed === undefined || old.reclaimed.at !== browser.reclaimed.at;
   });
+}
+
+/**
+ * The tab to switch to after the browsers changed from `prev` to `next`
+ * while `selectedId` was shown, or null to stay: a window the shown page
+ * just opened comes to the front, and when the shown tab goes away (a popup
+ * that closed itself) the page that opened it comes back.
+ */
+export function followPopups(
+  prev: AgentBrowserInfo[],
+  next: AgentBrowserInfo[],
+  selectedId: string | null,
+): string | null {
+  if (selectedId === null) return null;
+  const before = new Set(prev.map((browser) => browser.id));
+  const opened = next.find(
+    (browser) => !before.has(browser.id) && browser.opener_browser_id === selectedId,
+  );
+  if (opened) return opened.id;
+  if (next.some((browser) => browser.id === selectedId)) return null;
+  const opener = prev.find((browser) => browser.id === selectedId)?.opener_browser_id;
+  return opener && next.some((browser) => browser.id === opener) ? opener : null;
+}
+
+/** Title, body and button labels of a page's JavaScript dialog, as Chrome words them. */
+export function dialogText(dialog: AgentBrowserDialog): {
+  title: string;
+  message: string;
+  accept: string;
+  dismiss: string | null;
+} {
+  if (dialog.kind === "beforeunload") {
+    return {
+      title: "Leave site?",
+      message: dialog.message || "Changes you made may not be saved.",
+      accept: "Leave",
+      dismiss: "Stay",
+    };
+  }
+  return {
+    title: "This page says",
+    message: dialog.message,
+    accept: "OK",
+    dismiss: dialog.kind === "alert" ? null : "Cancel",
+  };
 }
 
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;

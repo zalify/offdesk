@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   IDENTITY_VIEW_ZOOM,
+  browserShortcut,
   classifyTouchGesture,
   clampViewZoom,
   compositionEndAction,
@@ -186,6 +187,44 @@ describe("keyEvent", () => {
   it("textEvent skips empty text", () => {
     expect(textEvent("")).toBeNull();
     expect(textEvent("你好")).toEqual({ kind: "text", text: "你好" });
+  });
+});
+
+describe("browserShortcut", () => {
+  const key = (key: string, mods: Partial<typeof noMods> = {}, code = "") => ({
+    ...noMods,
+    ...mods,
+    key,
+    code,
+  });
+
+  it("maps Chrome's Mac shortcuts on a Mac", () => {
+    expect(browserShortcut(key("[", { metaKey: true }, "BracketLeft"), true)).toBe("back");
+    expect(browserShortcut(key("]", { metaKey: true }, "BracketRight"), true)).toBe("forward");
+    expect(browserShortcut(key("r", { metaKey: true }), true)).toBe("reload");
+    expect(browserShortcut(key("L", { metaKey: true }), true)).toBe("address");
+    expect(browserShortcut(key("F5"), true)).toBe("reload");
+    // A non-US layout still has the bracket keys by position.
+    expect(browserShortcut(key("ü", { metaKey: true }, "BracketLeft"), true)).toBe("back");
+  });
+
+  it("leaves Option+arrows, Ctrl+L and other chords to the page on a Mac", () => {
+    expect(browserShortcut(key("ArrowLeft", { altKey: true }), true)).toBeNull();
+    expect(browserShortcut(key("l", { ctrlKey: true }), true)).toBeNull();
+    expect(browserShortcut(key("r", { ctrlKey: true }), true)).toBeNull();
+    expect(browserShortcut(key("a", { metaKey: true }), true)).toBeNull();
+    expect(browserShortcut(key("r", { metaKey: true, shiftKey: true }), true)).toBeNull();
+  });
+
+  it("maps Chrome's shortcuts elsewhere", () => {
+    expect(browserShortcut(key("ArrowLeft", { altKey: true }), false)).toBe("back");
+    expect(browserShortcut(key("ArrowRight", { altKey: true }), false)).toBe("forward");
+    expect(browserShortcut(key("r", { ctrlKey: true }), false)).toBe("reload");
+    expect(browserShortcut(key("l", { ctrlKey: true }), false)).toBe("address");
+    expect(browserShortcut(key("F5", { ctrlKey: true }), false)).toBe("reload");
+    expect(browserShortcut(key("[", { ctrlKey: true }), false)).toBeNull();
+    expect(browserShortcut(key("[", { metaKey: true }), false)).toBeNull();
+    expect(browserShortcut(key("a"), false)).toBeNull();
   });
 });
 
