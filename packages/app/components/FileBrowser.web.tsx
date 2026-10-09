@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { DirEntry } from "@offdesk/shared";
 import {
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { listDirectory } from "@/lib/api";
 import { colors, colorAlpha } from "@/lib/colors";
-import { fetchRemoteFile } from "@/lib/fetchRemoteFile";
+import { FilePreview } from "./FilePreview.web";
 import {
   describeListError,
   filterEntries,
@@ -35,7 +35,8 @@ const SPIN = { animation: "offdeskSpin 800ms linear infinite" } as const;
 /**
  * The remote file browser core, shared by the desktop overlay and the phone's
  * full-screen surface: breadcrumb, toolbar, filter and a directory listing.
- * Tapping a directory enters it; tapping a file fetches it to this device.
+ * Tapping a directory enters it; tapping a file previews it in place, with a
+ * download button there.
  */
 export function FileBrowser({
   machineId,
@@ -54,7 +55,9 @@ export function FileBrowser({
   const [filter, setFilter] = useState("");
   const [listing, setListing] = useState<Listing>({ status: "loading" });
   const [selected, setSelected] = useState(0);
-  const [fetching, setFetching] = useState<ReadonlySet<string>>(new Set());
+  // The file being previewed in place of the listing; null shows the listing.
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const listScroll = useRef(0);
   const [reloadTick, setReloadTick] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const filterRef = useRef<HTMLInputElement | null>(null);
@@ -65,6 +68,7 @@ export function FileBrowser({
   useEffect(() => {
     setPath(startPath);
     setFilter("");
+    setPreviewPath(null);
   }, [startPath]);
 
   // Load the listing. A newer navigation or toggle supersedes an older
@@ -111,8 +115,19 @@ export function FileBrowser({
 
   const go = useCallback((next: string) => {
     setFilter("");
+    setPreviewPath(null);
     setPath(next);
   }, []);
+
+  const openPreview = useCallback((entry: DirEntry) => {
+    if (listRef.current) listScroll.current = listRef.current.scrollTop;
+    setPreviewPath(entry.path);
+  }, []);
+
+  const closePreview = useCallback(() => {
+    setPreviewPath(null);
+    if (!touch) rootRef.current?.focus({ preventScroll: true });
+  }, [touch]);
 
   const activate = useCallback(
     (entry: DirEntry) => {
@@ -121,25 +136,68 @@ export function FileBrowser({
         return;
       }
       if (isTooLarge(entry)) return;
-      setFetching((prev) => new Set(prev).add(entry.path));
-      void fetchRemoteFile({
-        machineId,
-        path: entry.path,
-        onDirectory: go,
-      }).finally(() => {
-        setFetching((prev) => {
-          const next = new Set(prev);
-          next.delete(entry.path);
-          return next;
-        });
-      });
+      openPreview(entry);
     },
-    [go, machineId],
+    [go, openPreview],
   );
+
+  // Files that prev/next can step through: the visible, previewable ones.
+  const previewable = useMemo(
+    () => visible.filter((e) => !e.is_dir && !isTooLarge(e)),
+    [visible],
+  );
+  const previewIndex = previewable.findIndex((e) => e.path === previewPath);
+  const previewEntry =
+    previewIndex >= 0
+      ? previewable[previewIndex]
+      : (listing.status === "ready"
+          ? listing.entries.find((e) => e.path === previewPath)
+          : undefined);
+
+  const stepPreview = useCallback(
+    (delta: number) => {
+      const target = previewable[previewIndex + delta];
+      if (!target) return;
+      setPreviewPath(target.path);
+      setSelected(visible.findIndex((e) => e.path === target.path));
+    },
+    [previewable, previewIndex, visible],
+  );
+  const onPrev = previewIndex > 0 ? () => stepPreview(-1) : undefined;
+  const onNext =
+    previewIndex >= 0 && previewIndex < previewable.length - 1
+      ? () => stepPreview(1)
+      : undefined;
+
+  // The row that had focus unmounts with the listing; keep keys flowing to the
+  // browser root, and put the scroll position back when returning.
+  useEffect(() => {
+    if (previewPath !== null && !touch) rootRef.current?.focus({ preventScroll: true });
+  }, [previewPath === null, touch]);
+  useLayoutEffect(() => {
+    if (previewPath === null && listRef.current) {
+      listRef.current.scrollTop = listScroll.current;
+    }
+  }, [previewPath === null]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (touch || event.defaultPrevented) return;
     const target = event.target as HTMLElement;
+    if (previewPath !== null) {
+      // Handled (and prevented) here so the overlay's window-level Escape
+      // listener sees defaultPrevented and leaves the overlay open.
+      if (event.key === "Escape" || event.key === "Backspace") {
+        event.preventDefault();
+        closePreview();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        onPrev?.();
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        onNext?.();
+      }
+      return;
+    }
     const inFilter = target === filterRef.current;
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -302,186 +360,200 @@ export function FileBrowser({
         </nav>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: touch ? "6px 10px" : "6px 10px",
-          borderBottom: `1px solid ${colors.lineSoft}`,
-          flexShrink: 0,
-        }}
-      >
-        <input
-          ref={filterRef}
-          data-testid="file-browser-filter"
-          aria-label="按名称过滤"
-          value={filter}
-          onChange={(event) => setFilter(event.target.value)}
-          placeholder="按名称过滤"
-          autoCapitalize="none"
-          autoCorrect="off"
-          spellCheck={false}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            minHeight: touch ? 38 : 28,
-            padding: "0 10px",
-            fontSize: touch ? 16 : 13,
-            color: colors.foreground,
-            background: colors.bg1,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 6,
-            outline: "none",
-          }}
+      {previewPath !== null && (
+        <FilePreview
+          key={previewPath}
+          machineId={machineId}
+          path={previewPath}
+          name={previewEntry?.name ?? previewPath.split("/").pop() ?? previewPath}
+          size={previewEntry?.size}
+          touch={touch}
+          onBack={closePreview}
+          onPrev={onPrev}
+          onNext={onNext}
         />
-        <label
+      )}
+
+      {previewPath === null && (
+        <div
           style={{
-            display: "inline-flex",
+            display: "flex",
             alignItems: "center",
-            gap: 6,
-            fontSize: 12,
-            color: colors.fg2,
-            cursor: "pointer",
+            gap: 10,
+            padding: touch ? "6px 10px" : "6px 10px",
+            borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
-            minHeight: touch ? 38 : undefined,
           }}
         >
           <input
-            type="checkbox"
-            data-testid="file-browser-hidden"
-            checked={showHidden}
-            onChange={(event) => setShowHidden(event.target.checked)}
+            ref={filterRef}
+            data-testid="file-browser-filter"
+            aria-label="按名称过滤"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="按名称过滤"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              minHeight: touch ? 38 : 28,
+              padding: "0 10px",
+              fontSize: touch ? 16 : 13,
+              color: colors.foreground,
+              background: colors.bg1,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 6,
+              outline: "none",
+            }}
           />
-          显示隐藏文件
-        </label>
-      </div>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12,
+              color: colors.fg2,
+              cursor: "pointer",
+              flexShrink: 0,
+              minHeight: touch ? 38 : undefined,
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="file-browser-hidden"
+              checked={showHidden}
+              onChange={(event) => setShowHidden(event.target.checked)}
+            />
+            显示隐藏文件
+          </label>
+        </div>
+      )}
 
-      <div
-        ref={listRef}
-        data-testid="file-browser-list"
-        style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}
-      >
-        {listing.status === "loading" && (
-          <Centered testId="file-browser-loading">
-            <Loader2 size={16} aria-hidden style={SPIN} /> 正在读取…
-          </Centered>
-        )}
-        {listing.status === "error" && (
-          <Centered testId="file-browser-error" color={colors.danger}>
-            <div role="alert" style={{ marginBottom: 10 }}>
-              {listing.message}
-            </div>
-            <button
-              type="button"
-              data-testid="file-browser-retry"
-              onClick={() => setReloadTick((n) => n + 1)}
-              style={{
-                minHeight: touch ? 44 : 30,
-                padding: "0 16px",
-                borderRadius: 6,
-                border: "none",
-                background: colors.accent,
-                color: colors.onAccent,
-                cursor: "pointer",
-                fontSize: 13,
-              }}
-            >
-              重试
-            </button>
-          </Centered>
-        )}
-        {listing.status === "ready" && visible.length === 0 && (
-          <Centered testId="file-browser-empty">
-            {filter ? "没有匹配的文件" : "这个目录是空的"}
-          </Centered>
-        )}
-        {listing.status === "ready" &&
-          visible.map((entry, index) => {
-            const busy = fetching.has(entry.path);
-            const tooLarge = isTooLarge(entry);
-            const isSelected = index === selected && !touch;
-            const size = formatEntrySize(entry);
-            return (
+      {previewPath === null && (
+        <div
+          ref={listRef}
+          data-testid="file-browser-list"
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}
+        >
+          {listing.status === "loading" && (
+            <Centered testId="file-browser-loading">
+              <Loader2 size={16} aria-hidden style={SPIN} /> 正在读取…
+            </Centered>
+          )}
+          {listing.status === "error" && (
+            <Centered testId="file-browser-error" color={colors.danger}>
+              <div role="alert" style={{ marginBottom: 10 }}>
+                {listing.message}
+              </div>
               <button
-                key={entry.path}
                 type="button"
-                data-row=""
-                data-testid="file-browser-row"
-                data-name={entry.name}
-                data-kind={entry.is_dir ? "dir" : "file"}
-                data-selected={isSelected ? "true" : "false"}
-                disabled={tooLarge}
-                aria-busy={busy}
-                title={tooLarge ? "超过 20 MB" : entry.path}
-                onClick={() => {
-                  setSelected(index);
-                  activate(entry);
-                }}
+                data-testid="file-browser-retry"
+                onClick={() => setReloadTick((n) => n + 1)}
                 style={{
-                  width: "100%",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  minHeight: touch ? 48 : 30,
-                  padding: touch ? "0 14px" : "0 12px",
+                  minHeight: touch ? 44 : 30,
+                  padding: "0 16px",
+                  borderRadius: 6,
                   border: "none",
-                  borderBottom: touch ? `1px solid ${colors.lineSoft}` : "none",
-                  background: isSelected ? colorAlpha.accentSoft : "transparent",
-                  color: tooLarge ? colors.fg3 : colors.fg0,
-                  cursor: tooLarge ? "not-allowed" : "pointer",
-                  textAlign: "left",
-                  fontSize: touch ? 15 : 13,
+                  background: colors.accent,
+                  color: colors.onAccent,
+                  cursor: "pointer",
+                  fontSize: 13,
                 }}
               >
-                {busy ? (
-                  <Loader2 size={16} aria-hidden style={{ ...SPIN, flexShrink: 0, color: colors.accent }} />
-                ) : entry.is_dir ? (
-                  <Folder size={16} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
-                ) : (
-                  <FileIcon size={16} aria-hidden style={{ flexShrink: 0, color: colors.fg3 }} />
-                )}
-                <span
+                重试
+              </button>
+            </Centered>
+          )}
+          {listing.status === "ready" && visible.length === 0 && (
+            <Centered testId="file-browser-empty">
+              {filter ? "没有匹配的文件" : "这个目录是空的"}
+            </Centered>
+          )}
+          {listing.status === "ready" &&
+            visible.map((entry, index) => {
+              const tooLarge = isTooLarge(entry);
+              const isSelected = index === selected && !touch;
+              const size = formatEntrySize(entry);
+              return (
+                <button
+                  key={entry.path}
+                  type="button"
+                  data-row=""
+                  data-testid="file-browser-row"
+                  data-name={entry.name}
+                  data-kind={entry.is_dir ? "dir" : "file"}
+                  data-selected={isSelected ? "true" : "false"}
+                  disabled={tooLarge}
+                  title={tooLarge ? "超过 20 MB" : entry.path}
+                  onClick={() => {
+                    setSelected(index);
+                    activate(entry);
+                  }}
                   style={{
-                    flex: 1,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    minHeight: touch ? 48 : 30,
+                    padding: touch ? "0 14px" : "0 12px",
+                    border: "none",
+                    borderBottom: touch ? `1px solid ${colors.lineSoft}` : "none",
+                    background: isSelected ? colorAlpha.accentSoft : "transparent",
+                    color: tooLarge ? colors.fg3 : colors.fg0,
+                    cursor: tooLarge ? "not-allowed" : "pointer",
+                    textAlign: "left",
+                    fontSize: touch ? 15 : 13,
                   }}
                 >
-                  {entry.name}
-                </span>
-                {tooLarge && (
-                  <span style={{ fontSize: 11, color: colors.warn, flexShrink: 0 }}>
-                    {size} · 超过 20 MB
-                  </span>
-                )}
-                {!tooLarge && size && (
-                  <span
-                    data-testid="file-browser-size"
-                    style={{ fontSize: 11, color: colors.fg3, flexShrink: 0 }}
-                  >
-                    {size}
-                  </span>
-                )}
-                {!touch && (
+                  {entry.is_dir ? (
+                    <Folder size={16} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
+                  ) : (
+                    <FileIcon size={16} aria-hidden style={{ flexShrink: 0, color: colors.fg3 }} />
+                  )}
                   <span
                     style={{
-                      width: 84,
-                      textAlign: "right",
-                      fontSize: 11,
-                      color: colors.fg3,
-                      flexShrink: 0,
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
                     }}
                   >
-                    {formatRelativeTime(entry.modified_ms)}
+                    {entry.name}
                   </span>
-                )}
-              </button>
-            );
-          })}
-      </div>
+                  {tooLarge && (
+                    <span style={{ fontSize: 11, color: colors.warn, flexShrink: 0 }}>
+                      {size} · 超过 20 MB
+                    </span>
+                  )}
+                  {!tooLarge && size && (
+                    <span
+                      data-testid="file-browser-size"
+                      style={{ fontSize: 11, color: colors.fg3, flexShrink: 0 }}
+                    >
+                      {size}
+                    </span>
+                  )}
+                  {!touch && (
+                    <span
+                      style={{
+                        width: 84,
+                        textAlign: "right",
+                        fontSize: 11,
+                        color: colors.fg3,
+                        flexShrink: 0,
+                      }}
+                    >
+                      {formatRelativeTime(entry.modified_ms)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+        </div>
+      )}
     </div>
   );
 }

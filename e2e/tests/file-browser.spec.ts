@@ -11,10 +11,11 @@ import {
 import { locate, readDownload } from "./fetch-files.helpers";
 
 // A small tree under /tmp/e2e-fb, rebuilt on every run:
-//   report.txt  .hidden-file  sub/deep.txt  big.bin (21 MiB)
+//   report.txt  note.md  .hidden-file  sub/deep.txt  big.bin (21 MiB)
 const SETUP =
   "rm -rf /tmp/e2e-fb; mkdir -p /tmp/e2e-fb/sub; " +
   "printf 'file browser body\\n' > /tmp/e2e-fb/report.txt; " +
+  "printf '# Title\\n\\n**bold**\\n' > /tmp/e2e-fb/note.md; " +
   "printf 'secret\\n' > /tmp/e2e-fb/.hidden-file; " +
   "printf 'deep body\\n' > /tmp/e2e-fb/sub/deep.txt; " +
   "head -c 22020096 /dev/zero > /tmp/e2e-fb/big.bin; ";
@@ -72,12 +73,33 @@ test.describe("file browser on desktop", () => {
     await expect(row(page, "report.txt")).toBeVisible();
     await page.getByTestId("file-browser-filter").fill("");
 
-    // Download.
-    const download = page.waitForEvent("download", { timeout: 15_000 });
+    // Clicking a file previews it; download comes from the preview.
     await row(page, "report.txt").click();
+    await expect(page.getByTestId("file-browser-preview")).toHaveAttribute("data-kind", "text");
+    await expect(page.getByTestId("file-browser-preview-text")).toContainText("file browser body");
+    const download = page.waitForEvent("download", { timeout: 15_000 });
+    await page.getByTestId("file-browser-preview-download").click();
     const file = await download;
     expect(file.suggestedFilename()).toBe("report.txt");
     expect(await readDownload(file)).toBe("file browser body\n");
+
+    // Back returns to the listing in the same directory.
+    await page.getByTestId("file-browser-preview-back").click();
+    await expect(page.getByTestId("file-browser-preview")).toHaveCount(0);
+    await expect(browser(page)).toHaveAttribute("data-path", "/tmp/e2e-fb");
+
+    // Markdown renders inside an iframe with an empty sandbox.
+    await row(page, "note.md").click();
+    const rich = page.getByTestId("file-browser-preview-rich");
+    await expect(rich).toHaveAttribute("sandbox", "");
+    await expect(page.getByTestId("file-browser-preview")).toHaveAttribute("data-kind", "markdown");
+    const frame = page.frameLocator('[data-testid="file-browser-preview-rich"]');
+    await expect(frame.locator("h1")).toHaveText("Title");
+    await expect(frame.locator("strong")).toHaveText("bold");
+    // Escape closes the preview only, not the whole overlay.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("file-browser-preview")).toHaveCount(0);
+    await expect(page.getByTestId("file-browser-overlay")).toBeVisible();
 
     // Down into sub, then back out through the breadcrumb.
     await row(page, "sub").click();

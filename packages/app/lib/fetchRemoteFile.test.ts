@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { RemoteFileError } from "./api";
-import { fetchRemoteFile } from "./fetchRemoteFile";
+import { fetchRemoteFile, saveFetchedFile } from "./fetchRemoteFile";
 
 const file = { name: "report.pdf", path: "/tmp/report.pdf", mime: "application/pdf", size: 3, data_base64: "YWJj" };
 
@@ -66,5 +66,22 @@ describe("fetchRemoteFile", () => {
     await first;
     await fetchRemoteFile({ machineId: "m", path: "/tmp/report.pdf" }, d as never);
     expect(d.read).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("saveFetchedFile", () => {
+  it("saves loaded bytes and notifies with an open action", async () => {
+    const d = deps();
+    await saveFetchedFile(file, d as never);
+    expect(d.save).toHaveBeenCalledWith({ filename: "report.pdf", mime: "application/pdf", dataBase64: "YWJj" });
+    expect(d.read).not.toHaveBeenCalled();
+    expect(d.notify.mock.calls[0][0]).toBe("已保存 report.pdf → 下载");
+    expect(d.notify.mock.calls[0][1].action.label).toBe("打开");
+  });
+
+  it("reports save failures without throwing", async () => {
+    const d = deps({ save: vi.fn().mockRejectedValue(new Error("disk full")) });
+    await saveFetchedFile(file, d as never);
+    expect(d.notify).toHaveBeenCalledWith("保存 report.pdf 失败：disk full", { tone: "error", timeoutMs: 8000 });
   });
 });
