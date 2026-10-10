@@ -40,3 +40,63 @@ for (const [name, command, needle, filename, body] of [
     expect(await readDownload(download)).toBe(body);
   });
 }
+
+// Claude Code breaks a long path at the right edge itself and goes on after
+// the item's indent on the next row; nothing in the buffer ties the halves
+// together. Redrawn on every resize so the break sits at the final width;
+// the subshell keeps the loop in the foreground job that gets SIGWINCH.
+const HEAD = "/tmp/e2e-wrap/hard-w"; // 20 columns
+const TAIL = "rapped-path-file.txt";
+const DRAW = `printf '%*s%s\\n  %s\\n' $(( $(stty size | cut -d' ' -f2) - 20 )) 'see ' '${HEAD}' '${TAIL}'`;
+
+test("tapping either half of a path broken over two rows downloads it without the keyboard", async ({ page }) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await mobileTakeControl(page);
+  await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    startupCommand: `mkdir -p /tmp/e2e-wrap; printf 'joined\\n' > /tmp/e2e-wrap/hard-wrapped-path-file.txt; (draw() { clear; ${DRAW}; }; trap draw WINCH; draw; while :; do sleep 1; done)`,
+  });
+  await expect
+    .poll(
+      () =>
+        page.evaluate((head) => {
+          const term = (
+            window as unknown as {
+              __offdeskTerminals?: Map<
+                string,
+                {
+                  cols: number;
+                  rows: number;
+                  buffer: {
+                    active: {
+                      viewportY: number;
+                      getLine(y: number): { translateToString(trim: boolean): string } | undefined;
+                    };
+                  };
+                }
+              >;
+            }
+          ).__offdeskTerminals?.values().next().value;
+          if (!term) return false;
+          const buf = term.buffer.active;
+          for (let row = 0; row < term.rows; row++) {
+            const line = buf.getLine(buf.viewportY + row)?.translateToString(true) ?? "";
+            if (line.endsWith(head)) return line.length === term.cols;
+          }
+          return false;
+        }, HEAD),
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+
+  const keyboardFocused = () =>
+    page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false);
+  for (const needle of [TAIL, HEAD]) {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const download = await tap(page, needle);
+    expect(download.suggestedFilename()).toBe("hard-wrapped-path-file.txt");
+    expect(await readDownload(download)).toBe("joined\n");
+    expect(await keyboardFocused()).toBe(false);
+  }
+});

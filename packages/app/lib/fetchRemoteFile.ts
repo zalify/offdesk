@@ -11,6 +11,11 @@ export const MAX_FETCH_BYTES = 20 * 1024 * 1024;
 export interface FetchRemoteFileOptions {
   machineId: string;
   path: string;
+  /**
+   * Tried when `path` does not exist. A path joined across terminal rows
+   * may have taken in the next row's first word; this is the part without it.
+   */
+  fallbackPath?: string;
   cwd?: string;
   /** Called with the resolved path when the target turns out to be a directory. */
   onDirectory?: (resolvedPath: string) => void;
@@ -114,6 +119,29 @@ export async function saveFetchedFile(
   }
 }
 
+const isNotFound = (err: unknown) =>
+  err instanceof RemoteFileError && err.code === "not_found";
+
+async function readWithFallback(
+  deps: FetchRemoteFileDeps,
+  machineId: string,
+  path: string,
+  fallbackPath: string | undefined,
+  cwd: string | undefined,
+): Promise<RemoteFile> {
+  try {
+    return await deps.read(machineId, path, cwd);
+  } catch (err) {
+    if (!fallbackPath || !isNotFound(err)) throw err;
+    try {
+      return await deps.read(machineId, fallbackPath, cwd);
+    } catch (fallbackErr) {
+      // Neither exists: report the path as shown.
+      throw isNotFound(fallbackErr) ? err : fallbackErr;
+    }
+  }
+}
+
 /**
  * Fetches a file from a remote machine and saves it on this device, with
  * visible progress / success / error notices. Concurrent calls for the same
@@ -123,7 +151,7 @@ export async function fetchRemoteFile(
   options: FetchRemoteFileOptions,
   deps: FetchRemoteFileDeps = defaultDeps,
 ): Promise<void> {
-  const { machineId, path, cwd, onDirectory } = options;
+  const { machineId, path, fallbackPath, cwd, onDirectory } = options;
   const key = `${machineId}\0${cwd ?? ""}\0${path}`;
   if (inFlight.has(key)) return;
   inFlight.add(key);
@@ -132,7 +160,7 @@ export async function fetchRemoteFile(
     deps.notify(`正在取 ${name}…`, { timeoutMs: 0 });
     let file: RemoteFile;
     try {
-      file = await deps.read(machineId, path, cwd);
+      file = await readWithFallback(deps, machineId, path, fallbackPath, cwd);
     } catch (err) {
       if (err instanceof RemoteFileError && err.code === "is_directory") {
         const resolved = err.path ?? path;
