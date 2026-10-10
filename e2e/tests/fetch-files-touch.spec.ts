@@ -40,3 +40,74 @@ for (const [name, command, needle, filename, body] of [
     expect(await readDownload(download)).toBe(body);
   });
 }
+
+// Claude Code breaks a long path at the right edge itself and goes on after
+// the item's indent on the next row; nothing in the buffer ties the halves
+// together. Redrawn on every resize so the break sits at the final width;
+// the subshell keeps the loop in the foreground job that gets SIGWINCH.
+const HEAD = "/tmp/e2e-wrap/hard-w"; // 20 columns
+const TAIL = "rapped-path-file.txt";
+const DRAW = `printf '%*s%s\\n  %s\\n' $(( $(stty size | cut -d' ' -f2) - 20 )) 'see ' '${HEAD}' '${TAIL}'`;
+
+for (const [half, needle] of [
+  ["second-row", TAIL],
+  ["first-row", HEAD],
+] as const) {
+  test(`tapping the ${half} half of a path broken over two rows downloads it without the keyboard`, async ({ page }) => {
+    await openApp(page);
+    await resetMachineState(page);
+    await mobileTakeControl(page);
+    await createTerminalViaApi(page, {
+      cwd: "/tmp",
+      startupCommand: `mkdir -p /tmp/e2e-wrap; printf 'joined\\n' > /tmp/e2e-wrap/hard-wrapped-path-file.txt; (draw() { clear; ${DRAW}; }; trap draw WINCH; draw; while :; do sleep 1; done)`,
+    });
+    await expect
+      .poll(
+        async () => {
+          const { cols, rows } = await screenRows(page);
+          return rows.some((line) => line.endsWith(HEAD) && line.length === cols);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    const download = await tap(page, needle);
+    expect(download.suggestedFilename()).toBe("hard-wrapped-path-file.txt");
+    expect(await readDownload(download)).toBe("joined\n");
+    // The link took the tap: the terminal did not take focus (and the keyboard).
+    expect(
+      await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false),
+    ).toBe(false);
+  });
+}
+
+async function screenRows(page: Page) {
+  return page.evaluate(() => {
+    const term = (
+      window as unknown as {
+        __offdeskTerminals?: Map<
+          string,
+          {
+            cols: number;
+            rows: number;
+            buffer: {
+              active: {
+                viewportY: number;
+                getLine(y: number): { translateToString(trim: boolean, start: number, end: number): string } | undefined;
+              };
+            };
+          }
+        >;
+      }
+    ).__offdeskTerminals?.values().next().value;
+    if (!term) return { cols: 0, rows: [] as string[] };
+    const buf = term.buffer.active;
+    const rows: string[] = [];
+    for (let row = 0; row < term.rows; row++) {
+      // Rows can run past the edge after a resize; read what is on screen.
+      rows.push(buf.getLine(buf.viewportY + row)?.translateToString(true, 0, term.cols) ?? "");
+    }
+    return { cols: term.cols, rows };
+  });
+}

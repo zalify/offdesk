@@ -56,6 +56,30 @@ describe("fetchRemoteFile", () => {
     expect(d.notify.mock.calls[1][0]).toContain("是目录");
   });
 
+  it("tries the fallback when the path does not exist", async () => {
+    const read = vi.fn()
+      .mockRejectedValueOnce(new RemoteFileError(404, "not_found", "x"))
+      .mockResolvedValueOnce(file);
+    const d = deps({ read });
+    await fetchRemoteFile({ machineId: "m", path: "/tmp/report.pdfand", fallbackPath: "/tmp/report.pdf" }, d as never);
+    expect(read.mock.calls.map((call) => call[1])).toEqual(["/tmp/report.pdfand", "/tmp/report.pdf"]);
+    expect(d.notify.mock.calls[1][0]).toBe("已保存 report.pdf → 下载");
+  });
+
+  it("names the path as shown when the fallback is missing too", async () => {
+    const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(404, "not_found", "x")) });
+    await fetchRemoteFile({ machineId: "m", path: "/tmp/a/joined.txt", fallbackPath: "/tmp/a/join" }, d as never);
+    expect(d.read).toHaveBeenCalledTimes(2);
+    expect(d.notify.mock.calls[1][0]).toBe("找不到 joined.txt");
+  });
+
+  it("only falls back when the path does not exist", async () => {
+    const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(403, "permission_denied", "x")) });
+    await fetchRemoteFile({ machineId: "m", path: "/tmp/a/b.txt", fallbackPath: "/tmp/a/b" }, d as never);
+    expect(d.read).toHaveBeenCalledTimes(1);
+    expect(d.notify.mock.calls[1][0]).toBe("没有权限读取 b.txt");
+  });
+
   it("ignores a concurrent fetch of the same path", async () => {
     let release!: () => void;
     const d = deps({ read: vi.fn().mockReturnValue(new Promise((r) => { release = () => r(file); })) });

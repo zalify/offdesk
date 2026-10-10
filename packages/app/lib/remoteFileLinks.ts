@@ -23,22 +23,34 @@ export function parseFileUri(uri: string): string | null {
   return path;
 }
 
-export function pathLinkUri(path: string): string {
-  return PATH_LINK_PREFIX + encodeURIComponent(path);
+/** A path a terminal link names, and what to try if it does not exist. */
+export interface RemotePathLink {
+  path: string;
+  fallback?: string;
 }
 
-export function parsePathLinkUri(uri: string): string | null {
+/** The fallback rides after a space, which encodeURIComponent never emits. */
+export function pathLinkUri(path: string, fallback?: string): string {
+  const uri = PATH_LINK_PREFIX + encodeURIComponent(path);
+  return fallback ? `${uri} ${encodeURIComponent(fallback)}` : uri;
+}
+
+export function parsePathLinkUri(uri: string): RemotePathLink | null {
   if (!uri.startsWith(PATH_LINK_PREFIX)) return null;
+  const [path, fallback] = uri.slice(PATH_LINK_PREFIX.length).split(" ");
   try {
-    return decodeURIComponent(uri.slice(PATH_LINK_PREFIX.length));
+    return fallback
+      ? { path: decodeURIComponent(path), fallback: decodeURIComponent(fallback) }
+      : { path: decodeURIComponent(path) };
   } catch {
     return null;
   }
 }
 
 /** A remote path reference carried by a terminal link, if the URI is one. */
-export function remotePathFromLink(uri: string): string | null {
-  return parseFileUri(uri) ?? parsePathLinkUri(uri);
+export function remotePathFromLink(uri: string): RemotePathLink | null {
+  const file = parseFileUri(uri);
+  return file !== null ? { path: file } : parsePathLinkUri(uri);
 }
 
 export interface PathMatch {
@@ -75,6 +87,126 @@ export function findPathsInLine(line: string): PathMatch[] {
   return out;
 }
 
+/** One terminal row, as read by {@link readTerminalRow}. */
+export interface TerminalRow {
+  text: string;
+  columns: number[];
+  /** The last cell is written: the text runs into the right edge. */
+  full: boolean;
+  /** The terminal itself wrapped the row above onto this one. */
+  wrapped: boolean;
+}
+
+export interface CellPosition {
+  row: number;
+  column: number;
+}
+
+export interface RowPathMatch {
+  path: string;
+  /** Cell of the first character. */
+  start: CellPosition;
+  /** Cell of the last character. */
+  end: CellPosition;
+  /** For a path joined across rows: the part on its first row alone. */
+  fallback?: string;
+}
+
+// The text ends inside a path that may go on: a path start at a word
+// boundary followed only by path characters.
+const OPEN_PATH_TAIL = new RegExp(
+  `${BEFORE}(?:~|\\.{1,2})?\\/[\\p{L}\\p{N}_.@%+~=/-]*$`,
+  "u",
+);
+const CONTINUES_PATH = /^\s*[\p{L}\p{N}_.@%+~=/-]/u;
+const MAX_JOINED_ROWS = 8;
+
+/**
+ * Paths that touch `row`, including ones split over several rows. The
+ * terminal marks its own soft wraps, but full-screen apps such as Claude
+ * Code break long words themselves: the row is filled to the right edge and
+ * the rest goes on the next row after the item's indent, with nothing in
+ * the buffer saying the two belong together. So a path that runs into the
+ * edge continues on the next row when that row (past its indent) starts
+ * with path characters.
+ *
+ * A path that merely ends at the edge is then joined to the next row's
+ * first word, so a joined match carries its first-row part as `fallback`.
+ */
+export function findPathsAcrossRows(
+  readRow: (row: number) => TerminalRow | undefined,
+  row: number,
+): RowPathMatch[] {
+  const cache = new Map<number, TerminalRow | undefined>();
+  const getRow = (r: number) => {
+    if (!cache.has(r)) cache.set(r, readRow(r));
+    return cache.get(r);
+  };
+  if (!getRow(row)) return [];
+
+  // How far up the logical line containing `row` could begin.
+  let first = row;
+  while (row - first < MAX_JOINED_ROWS) {
+    const above = getRow(first - 1);
+    const here = getRow(first)!;
+    if (!above || !(here.wrapped || (above.full && CONTINUES_PATH.test(here.text)))) break;
+    first--;
+  }
+
+  // Join forward from there. A piece maps text[base…] to its row's
+  // text[from…]; rows that do not continue start a new logical line.
+  let pieces: { row: number; from: number; base: number }[] = [];
+  let text = "";
+  for (let r = first; r <= row + MAX_JOINED_ROWS; r++) {
+    const current = getRow(r);
+    if (!current) break;
+    const above = getRow(r - 1);
+    const joins =
+      r > first &&
+      above !== undefined &&
+      (current.wrapped ||
+        (above.full && OPEN_PATH_TAIL.test(text) && CONTINUES_PATH.test(current.text)));
+    if (joins) {
+      const from = current.wrapped ? 0 : current.text.length - current.text.trimStart().length;
+      pieces.push({ row: r, from, base: text.length });
+      text += current.text.slice(from);
+    } else if (r <= row) {
+      pieces = [{ row: r, from: 0, base: 0 }];
+      text = current.text;
+    } else {
+      break;
+    }
+  }
+
+  const pieceAt = (index: number) => {
+    let found = 0;
+    while (found + 1 < pieces.length && pieces[found + 1].base <= index) found++;
+    return found;
+  };
+  const cellAt = (index: number): CellPosition => {
+    const piece = pieces[pieceAt(index)];
+    return {
+      row: piece.row,
+      column: getRow(piece.row)!.columns[piece.from + index - piece.base],
+    };
+  };
+
+  const out: RowPathMatch[] = [];
+  for (const m of findPathsInLine(text)) {
+    const start = cellAt(m.start);
+    const end = cellAt(m.end - 1);
+    if (start.row > row || end.row < row) continue;
+    const match: RowPathMatch = { path: m.path, start, end };
+    if (start.row !== end.row) {
+      const head = text.slice(m.start, pieces[pieceAt(m.start) + 1].base);
+      const [alone] = findPathsInLine(head);
+      if (alone && alone.start === 0 && alone.path !== m.path) match.fallback = alone.path;
+    }
+    out.push(match);
+  }
+  return out;
+}
+
 /**
  * Resolves a path against the terminal's cwd into an absolute POSIX path.
  * `~` paths are returned untouched (only the machine knows its home).
@@ -106,11 +238,13 @@ export interface CellLineLike {
 
 /**
  * Line text plus the terminal column (0-based) of each UTF-16 index, so
- * matches stay correctly placed after wide (CJK) or combining characters.
+ * matches stay correctly placed after wide (CJK) or combining characters,
+ * and whether the text runs into the last column.
  */
 export function lineTextWithColumns(line: CellLineLike): {
   text: string;
   columns: number[];
+  full: boolean;
 } {
   let text = "";
   const columns: number[] = [];
@@ -123,7 +257,28 @@ export function lineTextWithColumns(line: CellLineLike): {
     for (let i = 0; i < chars.length; i++) columns.push(x);
     text += chars;
   }
-  return { text, columns };
+  const last = line.getCell(line.length - 1);
+  // A zero-width last cell is the trailing half of a wide character.
+  const full = !!last && (last.getWidth() === 0 || /\S/.test(last.getChars()));
+  return { text, columns, full };
+}
+
+/**
+ * A buffer row as wide as the screen. xterm only reflows the normal buffer;
+ * when the terminal narrows, rows of the alternate screen (where tmux draws)
+ * keep their old length, with blanks or stale text past the right edge.
+ */
+export function readTerminalRow(
+  line: CellLineLike & { isWrapped: boolean },
+  cols: number,
+): TerminalRow {
+  return {
+    ...lineTextWithColumns({
+      length: Math.min(line.length, cols),
+      getCell: (x) => line.getCell(x),
+    }),
+    wrapped: line.isWrapped,
+  };
 }
 
 /** Last path segment, for messages. */

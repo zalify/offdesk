@@ -45,9 +45,9 @@ import { readClipboardText } from "@/lib/readClipboardText";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { fetchRemoteFile } from "@/lib/fetchRemoteFile";
 import {
-  findPathsInLine,
-  lineTextWithColumns,
+  findPathsAcrossRows,
   pathLinkUri,
+  readTerminalRow,
   remotePathFromLink,
   resolveRemotePath,
 } from "@/lib/remoteFileLinks";
@@ -506,12 +506,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // `file://` OSC 8 links (from `offdesk fetch` / `ls --hyperlink`) and
       // bare-path matches name a file on the remote machine: fetch it here
       // instead of handing the URI to the external opener (which rejects it).
-      const remotePath = remotePathFromLink(url);
-      if (remotePath) {
+      const remote = remotePathFromLink(url);
+      if (remote) {
         const currentCwd = cwdRef.current;
+        const resolve = (path: string) => resolveRemotePath(path, currentCwd) ?? path;
         void fetchRemoteFile({
           machineId,
-          path: resolveRemotePath(remotePath, currentCwd) ?? remotePath,
+          path: resolve(remote.path),
+          fallbackPath: remote.fallback && resolve(remote.fallback),
           cwd: currentCwd,
           onDirectory: (dir) => {
             const hook = onOpenDirectoryRef.current;
@@ -900,25 +902,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ),
       );
       // Bare paths in output (`/a/b`, `~/x`, `./y`, `../z`, optionally with a
-      // `:line:col` suffix) become fetch links too. Hover/leave feed the same
-      // hoveredLink slot as the other link kinds so a tap activates them.
+      // `:line:col` suffix) become fetch links too, including ones split over
+      // rows. Hover/leave feed the same hoveredLink slot as the other link
+      // kinds so a tap activates them.
       term.registerLinkProvider({
         provideLinks(y, callback) {
-          const line = term.buffer.active.getLine(y - 1);
-          if (!line) return callback(undefined);
-          const { text, columns } = lineTextWithColumns({
-            length: line.length,
-            getCell: (x) => line.getCell(x),
-          });
-          const matches = findPathsInLine(text);
+          const buffer = term.buffer.active;
+          const matches = findPathsAcrossRows((row) => {
+            const line = buffer.getLine(row);
+            return line && readTerminalRow(line, term.cols);
+          }, y - 1);
           if (matches.length === 0) return callback(undefined);
           callback(
             matches.map((m) => {
-              const uri = pathLinkUri(m.path);
+              const uri = pathLinkUri(m.path, m.fallback);
               return {
                 range: {
-                  start: { x: columns[m.start] + 1, y },
-                  end: { x: columns[m.end - 1] + 1, y },
+                  start: { x: m.start.column + 1, y: m.start.row + 1 },
+                  end: { x: m.end.column + 1, y: m.end.row + 1 },
                 },
                 text: m.path,
                 decorations: { underline: true, pointerCursor: true },
@@ -1348,6 +1349,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           hoveredLink &&
           !tapInterruptedMomentum
         ) {
+          // The tap belongs to the link alone. Left to its default action it
+          // would bring up the keyboard: xterm focuses on every mousedown,
+          // which a tap's compatibility mouse events include, and a WebView
+          // reopens a dismissed keyboard on a tap while the terminal keeps
+          // focus. ExtendedKeyBar consumes its taps the same way.
+          e.preventDefault();
           stopMomentum();
           openTerminalLink(hoveredLink);
         }
@@ -1367,7 +1374,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
       container.addEventListener("touchstart", onTouchStart, { passive: true });
       container.addEventListener("touchmove", onTouchMove, { passive: false });
-      container.addEventListener("touchend", onTouchEnd, { passive: true });
+      container.addEventListener("touchend", onTouchEnd, { passive: false });
 
       const viewport = viewportRef.current;
       const viewportFit = createMobileViewportFitScheduler({
