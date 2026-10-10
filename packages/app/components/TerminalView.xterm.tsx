@@ -730,12 +730,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           rawRows.push({ text: "", isWrapped: false });
           continue;
         }
+        const row = readTerminalRow(line, term.cols);
+        const text = row.text.trimEnd();
         rawRows.push({
-          text: line.translateToString(true),
-          isWrapped: line.isWrapped,
+          text,
+          isWrapped: row.wrapped,
+          columns: row.columns,
+          // Where the text ends: at the first trailing blank, or the edge.
+          width: text.length < row.text.length ? row.columns[text.length] : term.cols,
         });
       }
-      const lines = trimTrailingBlankLines(mergeWrappedRows(rawRows));
+      const lines = trimTrailingBlankLines(mergeWrappedRows(rawRows, term.cols));
       return {
         lines,
         fontFamily: term.options.fontFamily ?? "monospace",
