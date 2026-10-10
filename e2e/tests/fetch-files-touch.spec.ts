@@ -49,54 +49,68 @@ const HEAD = "/tmp/e2e-wrap/hard-w"; // 20 columns
 const TAIL = "rapped-path-file.txt";
 const DRAW = `printf '%*s%s\\n  %s\\n' $(( $(stty size | cut -d' ' -f2) - 20 )) 'see ' '${HEAD}' '${TAIL}'`;
 
-test("tapping either half of a path broken over two rows downloads it without the keyboard", async ({ page }) => {
-  await openApp(page);
-  await resetMachineState(page);
-  await mobileTakeControl(page);
-  await createTerminalViaApi(page, {
-    cwd: "/tmp",
-    startupCommand: `mkdir -p /tmp/e2e-wrap; printf 'joined\\n' > /tmp/e2e-wrap/hard-wrapped-path-file.txt; (draw() { clear; ${DRAW}; }; trap draw WINCH; draw; while :; do sleep 1; done)`,
-  });
-  await expect
-    .poll(
-      () =>
-        page.evaluate((head) => {
-          const term = (
-            window as unknown as {
-              __offdeskTerminals?: Map<
-                string,
-                {
-                  cols: number;
-                  rows: number;
-                  buffer: {
-                    active: {
-                      viewportY: number;
-                      getLine(y: number): { translateToString(trim: boolean): string } | undefined;
-                    };
-                  };
-                }
-              >;
-            }
-          ).__offdeskTerminals?.values().next().value;
-          if (!term) return false;
-          const buf = term.buffer.active;
-          for (let row = 0; row < term.rows; row++) {
-            const line = buf.getLine(buf.viewportY + row)?.translateToString(true) ?? "";
-            if (line.endsWith(head)) return line.length === term.cols;
-          }
-          return false;
-        }, HEAD),
-      { timeout: 15_000 },
-    )
-    .toBe(true);
+for (const [half, needle] of [
+  ["second-row", TAIL],
+  ["first-row", HEAD],
+] as const) {
+  test(`tapping the ${half} half of a path broken over two rows downloads it without the keyboard`, async ({ page }) => {
+    await openApp(page);
+    await resetMachineState(page);
+    await mobileTakeControl(page);
+    await createTerminalViaApi(page, {
+      cwd: "/tmp",
+      startupCommand: `mkdir -p /tmp/e2e-wrap; printf 'joined\\n' > /tmp/e2e-wrap/hard-wrapped-path-file.txt; (draw() { clear; ${DRAW}; }; trap draw WINCH; draw; while :; do sleep 1; done)`,
+    });
+    await expect.poll(() => screenRows(page).then((s) => s.rows.some((line) => line.endsWith(HEAD) && line.length === s.cols)), { timeout: 15_000 }).toBe(true);
 
-  const keyboardFocused = () =>
-    page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false);
-  for (const needle of [TAIL, HEAD]) {
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    const download = await tap(page, needle);
+    const point = await locate(page, needle);
+    let download;
+    try {
+      download = await tap(page, needle);
+    } catch (err) {
+      // TEMP diagnostics for CI
+      const info = await page.evaluate(({ x, y }) => {
+        const el = document.elementFromPoint(x, y) as HTMLElement | null;
+        const notices = document.body.innerText.split("\n").filter((l) => /取|找不到|已保存|目录|失败/.test(l));
+        return { under: el ? `${el.tagName}.${el.className} testid=${el.closest("[data-testid]")?.getAttribute("data-testid")}` : null, notices, active: document.activeElement?.className };
+      }, point);
+      const rows = await screenRows(page);
+      throw new Error(`${String(err)}\nDIAG ${JSON.stringify({ point, info, cols: rows.cols, rows: rows.rows.slice(0, 4) })}`);
+    }
     expect(download.suggestedFilename()).toBe("hard-wrapped-path-file.txt");
     expect(await readDownload(download)).toBe("joined\n");
-    expect(await keyboardFocused()).toBe(false);
-  }
-});
+    expect(
+      await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false),
+    ).toBe(false);
+  });
+}
+
+async function screenRows(page: Page) {
+  return page.evaluate(() => {
+    const term = (
+      window as unknown as {
+        __offdeskTerminals?: Map<
+          string,
+          {
+            cols: number;
+            rows: number;
+            buffer: {
+              active: {
+                viewportY: number;
+                getLine(y: number): { translateToString(trim: boolean): string } | undefined;
+              };
+            };
+          }
+        >;
+      }
+    ).__offdeskTerminals?.values().next().value;
+    if (!term) return { cols: 0, rows: [] as string[] };
+    const buf = term.buffer.active;
+    const rows: string[] = [];
+    for (let row = 0; row < term.rows; row++) {
+      rows.push(buf.getLine(buf.viewportY + row)?.translateToString(true) ?? "");
+    }
+    return { cols: term.cols, rows };
+  });
+}
