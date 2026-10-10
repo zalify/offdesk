@@ -46,8 +46,8 @@ import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { fetchRemoteFile } from "@/lib/fetchRemoteFile";
 import {
   findPathsAcrossRows,
-  lineTextWithColumns,
   pathLinkUri,
+  readTerminalRow,
   remotePathFromLink,
   resolveRemotePath,
 } from "@/lib/remoteFileLinks";
@@ -910,14 +910,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           const buffer = term.buffer.active;
           const matches = findPathsAcrossRows((row) => {
             const line = buffer.getLine(row);
-            if (!line) return undefined;
-            return {
-              ...lineTextWithColumns({
-                length: line.length,
-                getCell: (x) => line.getCell(x),
-              }),
-              wrapped: line.isWrapped,
-            };
+            return line && readTerminalRow(line, term.cols);
           }, y - 1);
           if (matches.length === 0) return callback(undefined);
           callback(

@@ -87,7 +87,7 @@ export function findPathsInLine(line: string): PathMatch[] {
   return out;
 }
 
-/** One terminal row, as read by {@link lineTextWithColumns}. */
+/** One terminal row, as read by {@link readTerminalRow}. */
 export interface TerminalRow {
   text: string;
   columns: number[];
@@ -261,6 +261,24 @@ export function lineTextWithColumns(line: CellLineLike): {
   // A zero-width last cell is the trailing half of a wide character.
   const full = !!last && (last.getWidth() === 0 || /\S/.test(last.getChars()));
   return { text, columns, full };
+}
+
+/**
+ * A buffer row as wide as the screen. xterm only reflows the normal buffer;
+ * when the terminal narrows, rows of the alternate screen (where tmux draws)
+ * keep their old length, with blanks or stale text past the right edge.
+ */
+export function readTerminalRow(
+  line: CellLineLike & { isWrapped: boolean },
+  cols: number,
+): TerminalRow {
+  return {
+    ...lineTextWithColumns({
+      length: Math.min(line.length, cols),
+      getCell: (x) => line.getCell(x),
+    }),
+    wrapped: line.isWrapped,
+  };
 }
 
 /** Last path segment, for messages. */

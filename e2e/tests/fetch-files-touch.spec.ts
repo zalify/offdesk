@@ -61,25 +61,21 @@ for (const [half, needle] of [
       cwd: "/tmp",
       startupCommand: `mkdir -p /tmp/e2e-wrap; printf 'joined\\n' > /tmp/e2e-wrap/hard-wrapped-path-file.txt; (draw() { clear; ${DRAW}; }; trap draw WINCH; draw; while :; do sleep 1; done)`,
     });
-    await expect.poll(() => screenRows(page).then((s) => s.rows.some((line) => line.endsWith(HEAD) && line.length === s.cols)), { timeout: 15_000 }).toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const { cols, rows } = await screenRows(page);
+          return rows.some((line) => line.endsWith(HEAD) && line.length === cols);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
 
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    const point = await locate(page, needle);
-    let download;
-    try {
-      download = await tap(page, needle);
-    } catch (err) {
-      // TEMP diagnostics for CI
-      const info = await page.evaluate(({ x, y }) => {
-        const el = document.elementFromPoint(x, y) as HTMLElement | null;
-        const notices = document.body.innerText.split("\n").filter((l) => /取|找不到|已保存|目录|失败/.test(l));
-        return { under: el ? `${el.tagName}.${el.className} testid=${el.closest("[data-testid]")?.getAttribute("data-testid")}` : null, notices, active: document.activeElement?.className };
-      }, point);
-      const rows = await screenRows(page);
-      throw new Error(`${String(err)}\nDIAG ${JSON.stringify({ point, info, cols: rows.cols, rows: rows.rows.slice(0, 4) })}`);
-    }
+    const download = await tap(page, needle);
     expect(download.suggestedFilename()).toBe("hard-wrapped-path-file.txt");
     expect(await readDownload(download)).toBe("joined\n");
+    // The link took the tap: the terminal did not take focus (and the keyboard).
     expect(
       await page.evaluate(() => document.activeElement?.classList.contains("xterm-helper-textarea") ?? false),
     ).toBe(false);
@@ -98,7 +94,7 @@ async function screenRows(page: Page) {
             buffer: {
               active: {
                 viewportY: number;
-                getLine(y: number): { translateToString(trim: boolean): string } | undefined;
+                getLine(y: number): { translateToString(trim: boolean, start: number, end: number): string } | undefined;
               };
             };
           }
@@ -109,7 +105,8 @@ async function screenRows(page: Page) {
     const buf = term.buffer.active;
     const rows: string[] = [];
     for (let row = 0; row < term.rows; row++) {
-      rows.push(buf.getLine(buf.viewportY + row)?.translateToString(true) ?? "");
+      // Rows can run past the edge after a resize; read what is on screen.
+      rows.push(buf.getLine(buf.viewportY + row)?.translateToString(true, 0, term.cols) ?? "");
     }
     return { cols: term.cols, rows };
   });
