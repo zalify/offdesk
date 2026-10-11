@@ -6,6 +6,7 @@ import {
   Code2,
   Download,
   File as FileIcon,
+  Globe,
   Loader2,
 } from "lucide-react";
 import { readFile } from "@/lib/api";
@@ -19,6 +20,9 @@ import {
   resolvePreviewTheme,
   truncateText,
 } from "@/lib/filePreview";
+import { isHtmlFile } from "@/lib/htmlPreview";
+import { canPreviewHtml, openHtmlPreview } from "@/lib/nativeHtmlPreview";
+import { showNotice } from "@/lib/workspaceToast";
 import { PdfPreview } from "./PdfPreview.web";
 import { formatBytes } from "@/lib/resourceStats";
 
@@ -108,6 +112,8 @@ export function FilePreview({
   const [reloadTick, setReloadTick] = useState(0);
   const [showSource, setShowSource] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [opening, setOpening] = useState(false);
+  const pageable = isHtmlFile(name) && canPreviewHtml();
 
   useEffect(() => {
     let live = true;
@@ -135,6 +141,14 @@ export function FilePreview({
     setSaving(true);
     void saveFetchedFile(state.file).finally(() => setSaving(false));
   }, [state, saving]);
+
+  const openPage = useCallback(() => {
+    if (opening) return;
+    setOpening(true);
+    openHtmlPreview(machineId, path, name)
+      .catch((err) => showNotice(err instanceof Error ? err.message : String(err), { tone: "error" }))
+      .finally(() => setOpening(false));
+  }, [machineId, path, name, opening]);
 
   const kind = state.status === "ready" ? state.view.kind : state.status;
   const shownSize = state.status === "ready" ? state.file.size : size;
@@ -276,6 +290,20 @@ export function FilePreview({
         >
           <ChevronRight size={16} aria-hidden />
         </button>
+        {pageable && (
+          <button
+            type="button"
+            data-testid="file-browser-preview-page"
+            aria-label="预览网页"
+            title="预览网页"
+            disabled={opening}
+            onClick={openPage}
+            style={textButton(false, opening)}
+          >
+            {opening ? <Loader2 size={14} aria-hidden style={SPIN} /> : <Globe size={14} aria-hidden />}
+            预览
+          </button>
+        )}
         {downloadButton(false)}
       </div>
 

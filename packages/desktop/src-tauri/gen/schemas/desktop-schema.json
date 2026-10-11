@@ -573,6 +573,18 @@
           "markdownDescription": "Enables the desktop_role command without any pre-configured scope."
         },
         {
+          "description": "Enables the file_preview_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-file-preview-open",
+          "markdownDescription": "Enables the file_preview_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the file_preview_respond command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-file-preview-respond",
+          "markdownDescription": "Enables the file_preview_respond command without any pre-configured scope."
+        },
+        {
           "description": "Enables the hub_install command without any pre-configured scope.",
           "type": "string",
           "const": "allow-hub-install",
@@ -763,6 +775,18 @@
           "type": "string",
           "const": "deny-desktop-role",
           "markdownDescription": "Denies the desktop_role command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the file_preview_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-file-preview-open",
+          "markdownDescription": "Denies the file_preview_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the file_preview_respond command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-file-preview-respond",
+          "markdownDescription": "Denies the file_preview_respond command without any pre-configured scope."
         },
         {
           "description": "Denies the hub_install command without any pre-configured scope.",

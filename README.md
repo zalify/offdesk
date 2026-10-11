@@ -65,6 +65,8 @@ Linux can also host a Hub with tmux installed separately.
   [optional Offdesk Cloud setup](docs/managed-connections.md)
 - [Localhost web previews](docs/web-previews.md): opt-in forwarding with a
   dedicated preview domain and HTTPS ingress, separate from terminal E2EE
+- [HTML file previews](docs/html-file-previews.md): open an `.html` file of a
+  machine as a page in the desktop or Android app
 - [Customize terminal keys](docs/terminal-keys.md): key placement, Shift combinations
   and backward deletion without reopening the system keyboard
 - [Build from source](docs/building.md) · [Security model](SECURITY.md)

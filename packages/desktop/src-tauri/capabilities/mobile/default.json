@@ -41,6 +41,8 @@
     "process:default",
     "allow-save-download",
     "allow-open-download",
+    "allow-file-preview-open",
+    "allow-file-preview-respond",
     "allow-ui-status",
     "allow-ui-check",
     "allow-ui-ready",
