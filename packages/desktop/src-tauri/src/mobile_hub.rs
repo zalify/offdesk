@@ -138,7 +138,10 @@ pub fn grant_and_load<R: Runtime>(app: &AppHandle<R>, hub_url: &str) -> Result<(
             .permission("allow-clear-mobile-hub-url")
             // Saving a file the hub UI fetched onto the phone.
             .permission("allow-save-download")
-            .permission("allow-open-download"),
+            .permission("allow-open-download")
+            // Showing an HTML file of a machine as a page, in its own WebView.
+            .permission("allow-file-preview-open")
+            .permission("allow-file-preview-respond"),
     )
     .map_err(|e| format!("failed to grant {url} plugin access: {e}"))?;
 

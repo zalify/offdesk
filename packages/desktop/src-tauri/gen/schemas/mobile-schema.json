@@ -573,6 +573,18 @@
           "markdownDescription": "Enables the desktop_role command without any pre-configured scope."
         },
         {
+          "description": "Enables the file_preview_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-file-preview-open",
+          "markdownDescription": "Enables the file_preview_open command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the file_preview_respond command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-file-preview-respond",
+          "markdownDescription": "Enables the file_preview_respond command without any pre-configured scope."
+        },
+        {
           "description": "Enables the hub_install command without any pre-configured scope.",
           "type": "string",
           "const": "allow-hub-install",
@@ -723,6 +735,30 @@
           "markdownDescription": "Enables the start_oauth_listener command without any pre-configured scope."
         },
         {
+          "description": "Enables the ui_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-check",
+          "markdownDescription": "Enables the ui_check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ui_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-ready",
+          "markdownDescription": "Enables the ui_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ui_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-recover",
+          "markdownDescription": "Enables the ui_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the ui_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ui-status",
+          "markdownDescription": "Enables the ui_status command without any pre-configured scope."
+        },
+        {
           "description": "Denies the clear_mobile_hub_url command without any pre-configured scope.",
           "type": "string",
           "const": "deny-clear-mobile-hub-url",
@@ -739,6 +775,18 @@
           "type": "string",
           "const": "deny-desktop-role",
           "markdownDescription": "Denies the desktop_role command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the file_preview_open command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-file-preview-open",
+          "markdownDescription": "Denies the file_preview_open command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the file_preview_respond command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-file-preview-respond",
+          "markdownDescription": "Denies the file_preview_respond command without any pre-configured scope."
         },
         {
           "description": "Denies the hub_install command without any pre-configured scope.",
@@ -889,6 +937,30 @@
           "type": "string",
           "const": "deny-start-oauth-listener",
           "markdownDescription": "Denies the start_oauth_listener command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-check",
+          "markdownDescription": "Denies the ui_check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_ready command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-ready",
+          "markdownDescription": "Denies the ui_ready command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-recover",
+          "markdownDescription": "Denies the ui_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ui_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ui-status",
+          "markdownDescription": "Denies the ui_status command without any pre-configured scope."
         },
         {
           "description": "This permission set configures which\nbarcode scanning features are by default exposed.\n\n#### Granted Permissions\n\nIt allows all barcode related features.\n\n\n#### This default permission set includes:\n\n- `allow-cancel`\n- `allow-check-permissions`\n- `allow-open-app-settings`\n- `allow-request-permissions`\n- `allow-scan`\n- `allow-vibrate`",
@@ -3211,30 +3283,6 @@
           "type": "string",
           "const": "notification:deny-show",
           "markdownDescription": "Denies the show command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the check command without any pre-configured scope.",
-          "type": "string",
-          "const": "offdesk-android-updater:allow-check",
-          "markdownDescription": "Enables the check command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the install command without any pre-configured scope.",
-          "type": "string",
-          "const": "offdesk-android-updater:allow-install",
-          "markdownDescription": "Enables the install command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the check command without any pre-configured scope.",
-          "type": "string",
-          "const": "offdesk-android-updater:deny-check",
-          "markdownDescription": "Denies the check command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the install command without any pre-configured scope.",
-          "type": "string",
-          "const": "offdesk-android-updater:deny-install",
-          "markdownDescription": "Denies the install command without any pre-configured scope."
         },
         {
           "description": "This permission set allows opening `mailto:`, `tel:`, `https://` and `http://` urls using their default application\nas well as reveal file in directories using default file explorer\n#### This default permission set includes:\n\n- `allow-open-url`\n- `allow-reveal-item-in-dir`\n- `allow-default-urls`",

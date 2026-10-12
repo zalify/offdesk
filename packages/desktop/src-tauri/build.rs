@@ -38,6 +38,8 @@ fn main() {
         "clear_mobile_hub_url",
         "save_download",
         "open_download",
+        "file_preview_open",
+        "file_preview_respond",
     ]);
     let attributes = tauri_build::Attributes::new().app_manifest(app_manifest);
 

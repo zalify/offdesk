@@ -3046,6 +3046,7 @@ dependencies = [
  "offdesk-secure",
  "offdesk-ui-updates",
  "open",
+ "percent-encoding",
  "reqwest 0.12.28",
  "security-framework 3.7.0",
  "serde",
@@ -3057,6 +3058,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-notification",
  "tauri-plugin-offdesk-android-downloads",
+ "tauri-plugin-offdesk-android-file-preview",
  "tauri-plugin-offdesk-android-updater",
  "tauri-plugin-offdesk-keystore",
  "tauri-plugin-opener",
@@ -5195,6 +5197,15 @@ dependencies = [
 
 [[package]]
 name = "tauri-plugin-offdesk-android-downloads"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
+name = "tauri-plugin-offdesk-android-file-preview"
 version = "0.1.0"
 dependencies = [
  "serde_json",

@@ -3,6 +3,7 @@
 #[allow(dead_code)]
 mod hub_url;
 mod downloads;
+mod file_preview;
 #[cfg(mobile)]
 mod mobile_hub;
 #[cfg(any(mobile, test))]
@@ -31,6 +32,7 @@ pub fn run() {
         .manage(updates.clone())
         .plugin(ui_updates::plugin(updates))
         .manage(secure::SecureState::default())
+        .manage(file_preview::FilePreviewState::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -41,7 +43,8 @@ pub fn run() {
     let builder = builder
         .plugin(tauri_plugin_offdesk_keystore::init())
         .plugin(tauri_plugin_offdesk_android_updater::init())
-        .plugin(tauri_plugin_offdesk_android_downloads::init());
+        .plugin(tauri_plugin_offdesk_android_downloads::init())
+        .plugin(tauri_plugin_offdesk_android_file_preview::init());
 
     #[cfg(desktop)]
     let builder = configure_desktop(builder);
@@ -75,7 +78,9 @@ pub fn run() {
             secure::secure_socket_send,
             secure::secure_socket_close,
             downloads::save_download,
-            downloads::open_download
+            downloads::open_download,
+            file_preview::file_preview_open,
+            file_preview::file_preview_respond
         ]);
 
     builder
@@ -98,6 +103,7 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
     let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::Backquote);
 
     builder
+        .register_asynchronous_uri_scheme_protocol(file_preview::SCHEME, file_preview::protocol)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             ui_updates::ui_status,
@@ -128,7 +134,9 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
             secure::secure_socket_send,
             secure::secure_socket_close,
             downloads::save_download,
-            downloads::open_download
+            downloads::open_download,
+            file_preview::file_preview_open,
+            file_preview::file_preview_respond
         ])
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()

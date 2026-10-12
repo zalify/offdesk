@@ -33,6 +33,7 @@ serde_json = "1"
 offdesk-secure = { path = "../../../crates/secure" }
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"
+percent-encoding = "2"
 getrandom = "0.3"
 zeroize = { version = "1", features = ["derive"] }
 
@@ -64,3 +65,4 @@ keyring = { version = "3.6.3", features = ["sync-secret-service", "crypto-rust",
 tauri-plugin-offdesk-keystore = { path = "../keystore" }
 tauri-plugin-offdesk-android-updater = { path = "../android-updater" }
 tauri-plugin-offdesk-android-downloads = { path = "../android-downloads" }
+tauri-plugin-offdesk-android-file-preview = { path = "../android-file-preview" }
