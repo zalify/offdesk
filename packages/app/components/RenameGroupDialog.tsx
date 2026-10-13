@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
+import "./Primitives.css";
 
 interface RenameGroupDialogProps {
   open: boolean;
@@ -54,7 +55,7 @@ export function RenameGroupDialog({
         position: "fixed",
         inset: 0,
         zIndex: 1000,
-        background: colorAlpha.backgroundShadow,
+        background: colorAlpha.overlay,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -63,26 +64,24 @@ export function RenameGroupDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className="odk-float"
         style={{
-          background: colors.surface,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 10,
           minWidth: 280,
           maxWidth: 420,
           width: "100%",
-          padding: 20,
-          boxShadow: "0 20px 60px rgba(0, 0, 0, 0.4)",
+          padding: 24,
           display: "flex",
           flexDirection: "column",
-          gap: 14,
+          gap: 12,
         }}
       >
         <div
           id="rename-group-dialog-title"
           style={{
-            fontSize: 15,
-            fontWeight: 700,
-            color: colors.foreground,
+            fontSize: 17,
+            fontWeight: 600,
+            letterSpacing: "-0.02em",
+            color: colors.fg0,
           }}
         >
             Rename tab
@@ -99,17 +98,7 @@ export function RenameGroupDialog({
               submit();
             }
           }}
-          style={{
-            background: colors.background,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 6,
-            color: colors.foreground,
-            fontSize: 13,
-            padding: "6px 10px",
-            outline: "none",
-            width: "100%",
-            boxSizing: "border-box",
-          }}
+          className="odk-input"
         />
         <div
           style={{
@@ -119,39 +108,11 @@ export function RenameGroupDialog({
             marginTop: 4,
           }}
         >
-          <button
-            type="button"
-            onClick={onCancel}
-            style={{
-              background: "transparent",
-              border: `1px solid ${colors.border}`,
-              borderRadius: 6,
-              color: colors.foreground,
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 500,
-              padding: "6px 14px",
-            }}
-          >
-            Cancel
+          <button type="button" onClick={onCancel} aria-label="Cancel" className="odk-btn odk-btn--secondary odk-btn--sm">
+            cancel
           </button>
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={submit}
-            style={{
-              background: colors.accent,
-              border: "none",
-              borderRadius: 6,
-              color: colors.onAccent,
-              cursor: canSubmit ? "pointer" : "not-allowed",
-              opacity: canSubmit ? 1 : 0.45,
-              fontSize: 13,
-              fontWeight: 700,
-              padding: "6px 14px",
-            }}
-          >
-            Rename
+          <button type="button" disabled={!canSubmit} onClick={submit} aria-label="Rename" className="odk-btn odk-btn--primary odk-btn--sm">
+            rename
           </button>
         </div>
       </div>

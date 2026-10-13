@@ -981,38 +981,38 @@ function TerminalWorkspaceComponent({
     : null;
   const paneMenuItems: ContextMenuEntry[] = paneMenuTerminal
     ? [
-        { label: "Open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
+        { label: "open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
         {
-          label: "Split right",
+          label: "split right",
           shortcut: formatPrefixBinding("splitRight"),
           disabled: !isController || activeGroupFull,
           onClick: () => void handleSplit("right"),
         },
         {
-          label: "Split down",
+          label: "split down",
           shortcut: formatPrefixBinding("splitDown"),
           disabled: !isController || activeGroupFull,
           onClick: () => void handleSplit("down"),
         },
         {
-          label: "Rotate layout",
+          label: "rotate layout",
           shortcut: formatPrefixBinding("rotateLayout"),
           disabled: !isController || activeGroupPaneCount < 2,
           onClick: handleRotateLayout,
         },
         {
-          label: "Tile panes",
+          label: "tile panes",
           shortcut: formatPrefixBinding("tilePanes"),
           disabled: !isController || activeGroupPaneCount < 2,
           onClick: handleTileLayout,
         },
         {
-          label: "Zoom",
+          label: "zoom",
           shortcut: formatPrefixBinding("zoomPane"),
           onClick: toggleMaximizeActivePane,
         },
         {
-          label: "Fit to window",
+          label: "fit to window",
           disabled: !isController,
           // Same behaviour as the deleted toolbar Fit button: the pane is
           // already active (right-click focused it), and the fit always
@@ -1021,7 +1021,7 @@ function TerminalWorkspaceComponent({
         },
         { type: "separator" },
         {
-          label: "Move pane to tab",
+          label: "move pane to tab",
           disabled: !isController,
           onClick: () => {},
           children: [
@@ -1066,7 +1066,7 @@ function TerminalWorkspaceComponent({
         },
         { type: "separator" },
         {
-          label: "Close pane",
+          label: "close pane",
           shortcut: formatPrefixBinding("closePane"),
           disabled: !isController,
           onClick: () => handleDestroy(paneMenuTerminal),

@@ -152,7 +152,7 @@ export function FilePreview({
 
   const kind = state.status === "ready" ? state.view.kind : state.status;
   const shownSize = state.status === "ready" ? state.file.size : size;
-  const hit = touch ? 44 : 30;
+  const hit = touch ? 44 : 32;
 
   const iconButton = (disabled = false) =>
     ({
@@ -162,10 +162,12 @@ export function FilePreview({
       alignItems: "center",
       justifyContent: "center",
       padding: 0,
-      border: "none",
-      borderRadius: 6,
+      border: `1px solid ${colors.line}`,
+      borderRadius: 4,
       background: "transparent",
-      color: colors.fg2,
+      color: colors.fg0,
+      fontFamily: "var(--font-display)",
+      fontSize: 13,
       cursor: disabled ? "default" : "pointer",
       opacity: disabled ? 0.4 : 1,
       flexShrink: 0,
@@ -179,13 +181,15 @@ export function FilePreview({
       justifyContent: "center",
       gap: 6,
       padding: "0 12px",
-      border: primary ? "none" : `1px solid ${colors.border}`,
-      borderRadius: 6,
-      background: primary ? colors.accent : "transparent",
-      color: primary ? colors.onAccent : colors.fg1,
+      border: primary ? "none" : `1px solid ${colors.line}`,
+      borderRadius: 4,
+      background: primary ? colors.primary : "transparent",
+      color: primary ? colors.onPrimary : colors.fg0,
       cursor: disabled ? "default" : "pointer",
       opacity: disabled ? 0.5 : 1,
-      fontSize: 13,
+      fontFamily: "var(--font-display)",
+      fontSize: 12.5,
+      fontWeight: primary ? 600 : 500,
       flexShrink: 0,
     }) as const;
 
@@ -200,8 +204,8 @@ export function FilePreview({
         ...(big ? { minHeight: 44, padding: "0 24px", fontSize: 14 } : null),
       }}
     >
-      {saving ? <Loader2 size={14} aria-hidden style={SPIN} /> : <Download size={14} aria-hidden />}
-      下载
+      {saving ? <Loader2 size={14} aria-hidden style={SPIN} /> : null}
+      download
     </button>
   );
 
@@ -216,8 +220,8 @@ export function FilePreview({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 4,
-          padding: touch ? "4px 6px" : "4px 8px",
+          gap: 8,
+          padding: touch ? "6px 10px" : "10px 20px",
           borderBottom: `1px solid ${colors.lineSoft}`,
           flexShrink: 0,
         }}
@@ -225,13 +229,12 @@ export function FilePreview({
         <button
           type="button"
           data-testid="file-browser-preview-back"
-          aria-label="返回列表"
-          title="返回列表 (Esc)"
+          aria-label="Back to the list"
+          title="Back to the list (Esc)"
           onClick={onBack}
-          style={touch ? iconButton() : { ...textButton(false, false), border: "none", color: colors.fg2, padding: "0 8px" }}
+          style={{ ...textButton(false, false), border: "none", color: colors.fg2, padding: "0 6px" }}
         >
-          <ArrowLeft size={16} aria-hidden />
-          {!touch && "返回列表"}
+          ←{!touch && " back to the list"}
         </button>
         <div style={{ flex: 1, minWidth: 0, padding: "0 4px" }}>
           <div
@@ -239,7 +242,7 @@ export function FilePreview({
             title={path}
             style={{
               fontSize: 13,
-              fontWeight: 600,
+              fontWeight: 500,
               overflow: "hidden",
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
@@ -255,53 +258,52 @@ export function FilePreview({
           <button
             type="button"
             data-testid="file-browser-preview-source"
-            aria-label={showSource ? "查看渲染效果" : "查看源码"}
+            aria-label={showSource ? "Show rendered" : "Show source"}
             aria-pressed={showSource}
-            title={showSource ? "查看渲染效果" : "查看源码"}
+            title={showSource ? "Show rendered" : "Show source"}
             onClick={() => setShowSource((v) => !v)}
             style={{
-              ...iconButton(),
-              background: showSource ? colorAlpha.accentSoft : "transparent",
-              color: showSource ? colors.accent : colors.fg2,
+              ...textButton(false, false),
+              background: showSource ? colors.bg3 : "transparent",
             }}
           >
-            <Code2 size={16} aria-hidden />
+            {showSource ? "show rendered" : "show source"}
           </button>
         )}
         <button
           type="button"
           data-testid="file-browser-preview-prev"
-          aria-label="上一个文件"
-          title="上一个文件 (←)"
+          aria-label="Previous file"
+          title="Previous file (←)"
           disabled={!onPrev}
           onClick={onPrev}
           style={iconButton(!onPrev)}
         >
-          <ChevronLeft size={16} aria-hidden />
+          ←
         </button>
         <button
           type="button"
           data-testid="file-browser-preview-next"
-          aria-label="下一个文件"
-          title="下一个文件 (→)"
+          aria-label="Next file"
+          title="Next file (→)"
           disabled={!onNext}
           onClick={onNext}
           style={iconButton(!onNext)}
         >
-          <ChevronRight size={16} aria-hidden />
+          →
         </button>
         {pageable && (
           <button
             type="button"
             data-testid="file-browser-preview-page"
-            aria-label="预览网页"
-            title="预览网页"
+            aria-label="Preview the page"
+            title="Preview the page"
             disabled={opening}
             onClick={openPage}
             style={textButton(false, opening)}
           >
-            {opening ? <Loader2 size={14} aria-hidden style={SPIN} /> : <Globe size={14} aria-hidden />}
-            预览
+            {opening ? <Loader2 size={14} aria-hidden style={SPIN} /> : null}
+            preview
           </button>
         )}
         {downloadButton(false)}
@@ -310,7 +312,7 @@ export function FilePreview({
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
         {state.status === "loading" && (
           <Message testId="file-browser-preview-loading">
-            <Loader2 size={16} aria-hidden style={SPIN} /> 正在读取…
+            <Loader2 size={16} aria-hidden style={SPIN} /> reading…
           </Message>
         )}
         {state.status === "error" && (
@@ -322,9 +324,9 @@ export function FilePreview({
               type="button"
               data-testid="file-browser-preview-retry"
               onClick={() => setReloadTick((n) => n + 1)}
-              style={textButton(true, false)}
+              style={textButton(false, false)}
             >
-              重试
+              try again
             </button>
           </Message>
         )}
@@ -391,7 +393,7 @@ function ReadyView({
   if (view.kind === "markdown" && !showSource) {
     return (
       <>
-        {view.truncated && <Notice>只显示前 1 MB</Notice>}
+        {view.truncated && <Notice>Showing the first 1 MB</Notice>}
         <iframe
           data-testid="file-browser-preview-rich"
           title={file.name}
@@ -434,7 +436,7 @@ function ReadyView({
     const text = view.kind === "text" ? view.text : view.source;
     return (
       <>
-        {view.truncated && <Notice>只显示前 1 MB</Notice>}
+        {view.truncated && <Notice>Showing the first 1 MB</Notice>}
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", overscrollBehavior: "contain" }}>
           <pre
             data-testid="file-browser-preview-text"
@@ -461,7 +463,7 @@ function ReadyView({
       <FileIcon size={40} aria-hidden style={{ color: colors.fg3 }} />
       <div style={{ fontSize: 14, color: colors.fg0, wordBreak: "break-all" }}>{file.name}</div>
       <div style={{ fontSize: 12 }}>{formatBytes(file.size)}</div>
-      <div style={{ marginBottom: 10 }}>无法预览这种文件</div>
+      <div style={{ marginBottom: 10 }}>This kind of file has no preview</div>
       {downloadButton}
     </Message>
   );

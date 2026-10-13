@@ -1,6 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { acknowledgeUiReady, checkUiUpdate, getUiUpdateState, refreshUiStatus, subscribeUiUpdates } from '../lib/uiUpdates';
 import { isTauri } from '../lib/platform';
+import { colors } from '../lib/colors';
+import { Button } from './Primitives.web';
 
 /** Only this successfully mounted subtree acknowledges the new UI, not its error boundary. */
 export function UiUpdateLifecycle() {
@@ -21,9 +23,14 @@ export function UiUpdateNotification({inline=false}: {inline?: boolean}) {
   const [dismissed,setDismissed] = useState<string | null>(null);
   if (!status?.enabled) return null;
   if (!inline && (!status.pendingVersion || dismissed === status.pendingVersion)) return null;
-  return <div style={inline ? {fontSize:12,marginTop:12} : {position:'fixed',bottom:24,right:16,maxWidth:340,padding:16,borderRadius:12,background:'#222',color:'#fff',zIndex:10000}}>
-    {inline && <div>Interface: {status.currentVersion} · {status.channel}</div>}
-    <div role="status" aria-live="polite">{busy || status.checking ? 'Checking for interface updates…' : status.pendingVersion ? `Interface ${status.pendingVersion} is ready. It will apply the next time the app starts.` : message ?? 'Interface updates install without replacing the app.'}</div>
-    {inline ? <button type="button" disabled={busy || status.checking} onClick={() => void checkUiUpdate()} style={{marginTop:8}}>Check interface updates</button> : <button type="button" onClick={() => setDismissed(status.pendingVersion)} style={{marginTop:8}}>Got it</button>}
+  const text = busy || status.checking ? 'Checking for interface updates…' : status.pendingVersion ? `Interface ${status.pendingVersion} is ready. It will apply the next time the app starts.` : message ?? 'Interface updates install without replacing the app.';
+  if (inline) return <div style={{fontSize:12,marginTop:12,display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start'}}>
+    <div style={{color:colors.fg3}}>interface {status.currentVersion} · {status.channel}</div>
+    <div role="status" aria-live="polite" style={{fontFamily:'var(--font-sans)',fontSize:13,color:colors.fg2}}>{text}</div>
+    <Button size="sm" kind="secondary" disabled={busy || status.checking} onClick={() => void checkUiUpdate()} ariaLabel="Check interface updates">check interface updates</Button>
+  </div>;
+  return <div className="odk-float" style={{position:'fixed',bottom:50,right:16,maxWidth:340,padding:'14px 16px',zIndex:10000,display:'flex',flexDirection:'column',gap:10,fontSize:13}}>
+    <div role="status" aria-live="polite" style={{fontFamily:'var(--font-sans)',lineHeight:1.5}}>{text}</div>
+    <div><Button size="xs" kind="secondary" ariaLabel="Got it" onClick={() => setDismissed(status.pendingVersion)}>got it</Button></div>
   </div>;
 }

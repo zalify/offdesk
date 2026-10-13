@@ -258,12 +258,12 @@ function TabBarComponent({
       tabMenu
         ? [
             {
-              label: "New tab",
+              label: "new tab",
               disabled: !isController,
               onClick: onNewGroup,
             },
             {
-              label: "Rename tab",
+              label: "rename tab",
               // Same gate as delete: cwd fallback groups have no persisted
               // row to rename, and only the controller may mutate tabs.
               disabled: !tabMenu.group.persistent || !isController,
@@ -271,7 +271,7 @@ function TabBarComponent({
             },
             { type: "separator" },
             {
-              label: `Close tab "${tabMenu.group.label}"…`,
+              label: `close tab "${tabMenu.group.label}"…`,
               // cwd fallback groups only exist while their panes do — there
               // is nothing to delete; persistent groups are user-owned rows.
               disabled: !tabMenu.group.persistent || !isController,

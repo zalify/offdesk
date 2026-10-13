@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
+import "./Primitives.css";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -50,8 +51,9 @@ export function ConfirmDialog({
 
   if (!open) return null;
 
-  const confirmBg =
-    variant === "danger" ? colors.danger : colors.accent;
+  // Chrome is lowercase; callers pass sentence-case labels ("Close
+  // terminal"), so the buttons lowercase them for display only.
+  const label = { textTransform: "lowercase" } as const;
 
   return (
     <div
@@ -64,7 +66,7 @@ export function ConfirmDialog({
         position: "fixed",
         inset: 0,
         zIndex: 1000,
-        background: colorAlpha.backgroundShadow,
+        background: colorAlpha.overlay,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -73,35 +75,34 @@ export function ConfirmDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
+        className="odk-float"
         style={{
-          background: colors.surface,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 10,
           minWidth: 280,
-          maxWidth: 420,
+          maxWidth: 460,
           width: "100%",
-          padding: 20,
-          boxShadow: "0 20px 60px rgba(0, 0, 0, 0.4)",
+          padding: 24,
           display: "flex",
           flexDirection: "column",
-          gap: 14,
+          gap: 12,
         }}
       >
         <div
           id="confirm-dialog-title"
           style={{
-            fontSize: 15,
-            fontWeight: 700,
-            color: colors.foreground,
+            fontSize: 17,
+            fontWeight: 600,
+            letterSpacing: "-0.02em",
+            color: colors.fg0,
           }}
         >
           {title}
         </div>
         <div
           style={{
-            fontSize: 13,
-            lineHeight: 1.5,
-            color: colors.foregroundSecondary,
+            fontFamily: "var(--font-sans)",
+            fontSize: 14,
+            lineHeight: 1.55,
+            color: colors.fg2,
             wordBreak: "break-word",
           }}
         >
@@ -111,58 +112,24 @@ export function ConfirmDialog({
           style={{
             display: "flex",
             justifyContent: "flex-end",
+            flexWrap: "wrap",
             gap: 8,
-            marginTop: 4,
+            marginTop: 8,
           }}
         >
-          <button
-            ref={cancelRef}
-            type="button"
-            onClick={onCancel}
-            style={{
-              background: "transparent",
-              border: `1px solid ${colors.border}`,
-              borderRadius: 6,
-              color: colors.foreground,
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 500,
-              padding: "6px 14px",
-            }}
-          >
+          <button ref={cancelRef} type="button" onClick={onCancel} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
             {cancelLabel}
           </button>
           {secondaryLabel && onSecondary ? (
-            <button
-              type="button"
-              onClick={onSecondary}
-              style={{
-                background: "transparent",
-                border: `1px solid ${colors.border}`,
-                borderRadius: 6,
-                color: colors.foreground,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: 500,
-                padding: "6px 14px",
-              }}
-            >
+            <button type="button" onClick={onSecondary} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
               {secondaryLabel}
             </button>
           ) : null}
           <button
             type="button"
             onClick={onConfirm}
-            style={{
-              background: confirmBg,
-              border: "none",
-              borderRadius: 6,
-              color: colors.onAccent,
-              cursor: "pointer",
-              fontSize: 13,
-              fontWeight: 700,
-              padding: "6px 14px",
-            }}
+            className={`odk-btn odk-btn--sm ${variant === "danger" ? "odk-btn--danger" : "odk-btn--primary"}`}
+            style={variant === "danger" ? { ...label, borderColor: colors.err } : label}
           >
             {confirmLabel}
           </button>

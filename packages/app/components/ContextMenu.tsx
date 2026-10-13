@@ -113,17 +113,20 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           alignItems: "center",
           justifyContent: "space-between",
           width: "100%",
+          minHeight: 32,
           padding: "6px 12px",
           background: "none",
           border: "none",
-          color: entry.disabled ? colors.foregroundMuted : colors.foreground,
+          borderRadius: 3,
+          color: entry.disabled ? colors.fg3 : colors.fg0,
           cursor: entry.disabled ? "default" : "pointer",
+          fontFamily: "var(--font-display)",
           fontSize: 13,
           textAlign: "left",
         }}
         onMouseEnter={(e) => {
           if (!entry.disabled) {
-            e.currentTarget.style.background = colors.background;
+            e.currentTarget.style.background = colors.bg3;
           }
         }}
         onMouseLeave={(e) => {
@@ -140,7 +143,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           }}
         >
           {entry.shortcut && (
-            <span style={{ fontSize: 11, color: colors.foregroundMuted }}>
+            <span style={{ fontSize: 11.5, color: colors.fg3 }}>
               {entry.shortcut}
             </span>
           )}
@@ -180,11 +183,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
               left: "calc(100% - 4px)",
               top: -4,
               zIndex: 10000,
-              background: colors.surface,
-              border: `1px solid ${colors.border}`,
+              background: colors.bg2,
+              border: `1px solid ${colors.line}`,
               borderRadius: 6,
-              padding: "4px 0",
-              boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+              padding: 4,
+              boxShadow: "0 24px 64px rgb(0 0 0 / 0.45)",
               minWidth: 160,
             }}
           >
@@ -207,11 +210,11 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
         left: x,
         top: y,
         zIndex: 9999,
-        background: colors.surface,
-        border: `1px solid ${colors.border}`,
+        background: colors.bg2,
+        border: `1px solid ${colors.line}`,
         borderRadius: 6,
-        padding: "4px 0",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+        padding: 4,
+        boxShadow: "0 24px 64px rgb(0 0 0 / 0.45)",
         minWidth: 180,
       }}
     >
@@ -222,7 +225,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
               key={`sep-${i}`}
               style={{
                 height: 1,
-                background: colors.border,
+                background: colors.lineSoft,
                 margin: "4px 0",
               }}
             />

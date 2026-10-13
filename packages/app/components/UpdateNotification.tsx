@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { isDesktopShell } from "@/lib/desktopHub";
 import { colors } from "@/lib/colors";
+import { Button, FloatCard } from "./Primitives.web";
 
 /** Automatic toast and the always-available check in Settings → About. */
 export function UpdateNotification({ inline = false }: { inline?: boolean }) {
@@ -58,24 +59,28 @@ export function UpdateNotification({ inline = false }: { inline?: boolean }) {
   };
 
   if (!isDesktopShell() || (!inline && (dismissed || (!version && !message && !error)))) return null;
-  const foreground = inline ? colors.foreground : colors.onAccent;
-  const buttonStyle = {
-    border: `1px solid ${inline ? colors.border : "currentColor"}`,
-    background: "transparent", color: foreground, borderRadius: 6,
-    padding: "6px 10px", fontSize: 12, cursor: busy ? "default" : "pointer",
-  };
-  return (
-    <div data-testid={inline ? "desktop-update-settings" : "desktop-update-toast"}
-      style={{ display: "flex", flexDirection: "column", gap: 8, padding: inline ? "12px 0" : 12,
-        maxWidth: 400, fontSize: 12, background: inline ? "transparent" : colors.accent,
-        color: foreground, borderRadius: 8 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-        <span role="status">{busy === "installing" ? "Installing update…" : busy === "checking" ? "Checking…" : version ? `v${version} available` : message ?? "Desktop app updates"}</span>
-        {version && <button type="button" disabled={!!busy} onClick={() => void install()} style={buttonStyle}>Install update</button>}
-        {inline && <button type="button" disabled={!!busy} onClick={() => void checkForUpdate()} style={buttonStyle}>Check for updates</button>}
-        {!inline && <button type="button" disabled={!!busy} aria-label="Dismiss update" onClick={() => setDismissed(true)} style={buttonStyle}>×</button>}
+  const status = busy === "installing" ? "Installing update…" : busy === "checking" ? "Checking…" : version ? (inline ? `v${version} available` : `offdesk/dev ${version} is ready`) : message ?? "Desktop app updates";
+  if (inline) {
+    return (
+      <div data-testid="desktop-update-settings" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 0", maxWidth: 480 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span role="status" style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: colors.fg2 }}>{status}</span>
+          {version && <Button size="sm" disabled={!!busy} onClick={() => void install()}>install update</Button>}
+          <Button size="sm" kind="secondary" disabled={!!busy} onClick={() => void checkForUpdate()}>check for updates</Button>
+        </div>
+        {error && <div role="alert" style={{ overflowWrap: "anywhere", fontSize: 12, color: colors.err }}>{error}</div>}
       </div>
-      {error && <div role="alert" style={{ overflowWrap: "anywhere" }}>{error}</div>}
-    </div>
+    );
+  }
+  // The card above the status line (wireframe Main).
+  return (
+    <FloatCard testId="desktop-update-toast" style={{ width: 300, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+      <div role="status" style={{ fontWeight: 600 }}>{status}</div>
+      {error && <div role="alert" style={{ overflowWrap: "anywhere", fontSize: 12, color: colors.err }}>{error}</div>}
+      <div style={{ display: "flex", gap: 8 }}>
+        {version && <Button size="xs" disabled={!!busy} onClick={() => void install()}>install update</Button>}
+        <Button size="xs" kind="ghost" disabled={!!busy} ariaLabel="Dismiss update" onClick={() => setDismissed(true)}>later</Button>
+      </div>
+    </FloatCard>
   );
 }
