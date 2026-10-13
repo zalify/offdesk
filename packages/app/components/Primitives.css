@@ -1,10 +1,14 @@
-/* Direction B primitives. Values are DESIGN.md's; colours come from the
-   tokens in global.css so both themes follow. Touch targets grow to 44px
-   on coarse pointers. */
+/* Direction B primitives. Sizes, radii and copy style follow the wireframes
+   (DEV-Tokens, Main, B-Desktop, B-Phone, D01–D13, P01–P08); colours come from
+   the tokens in global.css so both themes follow. Touch targets grow to
+   44px on coarse pointers. No pills: 3px keys, tabs, chips; 4px buttons,
+   inputs, toasts; 6px panels and floating cards. */
 
+/* ── Buttons ─────────────────────────────────────────────────────── */
 .odk-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border:1px solid rgb(var(--color-line));border-radius:4px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color 120ms ease,border-color 120ms ease,opacity 120ms ease}
 .odk-btn:disabled,.odk-btn[aria-disabled=true]{opacity:.45;cursor:default}
 .odk-btn--sm{height:32px;padding:0 12px;font-size:12px}
+.odk-btn--xs{height:28px;padding:0 12px;font-size:12px}
 .odk-btn--primary{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-btn--ghost{border-color:transparent;color:rgb(var(--color-fg-2))}
 .odk-btn--danger{border-color:transparent;color:rgb(var(--color-err))}
@@ -16,13 +20,29 @@
   .odk-btn--danger:not(:disabled):hover{background:rgb(var(--color-err) / .1)}
 }
 @media(pointer:coarse){.odk-btn{min-height:44px}}
-.odk-bracket{color:rgb(var(--color-fg-3))}
 
+/* Plain lowercase chrome text: `files`, `settings`, `[+]`, `≡`, `mac-mini ▾`.
+   No box; muted until hovered, pressed or open. */
+.odk-text-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:28px;padding:0 6px;border:0;border-radius:3px;background:transparent;color:rgb(var(--color-fg-3));font-family:var(--font-display);font-size:12.5px;font-weight:400;line-height:1;white-space:nowrap;cursor:pointer}
+.odk-text-btn--strong{color:rgb(var(--color-fg-0))}
+.odk-text-btn[aria-pressed=true],.odk-text-btn[aria-expanded=true]{color:rgb(var(--color-fg-0))}
+.odk-text-btn:disabled{opacity:.45;cursor:default}
+.odk-text-btn-alert{color:rgb(var(--color-err))}
+@media(hover:hover){.odk-text-btn:not(:disabled):hover{color:rgb(var(--color-fg-0));background:rgb(var(--color-bg-3))}}
+/* Square 44px targets for the phone title bar's [f] [b] [m]. */
+.odk-text-btn--square{width:44px;height:44px;padding:0;font-size:13px;color:rgb(var(--color-fg-0))}
+@media(pointer:coarse){.odk-text-btn{min-height:44px;min-width:44px}}
+
+/* ── Chips and badges ────────────────────────────────────────────── */
 .odk-chip{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:1px solid rgb(var(--color-line));border-radius:3px;font-family:var(--font-display);font-size:11px;font-weight:500;line-height:1;color:rgb(var(--color-fg-2));white-space:nowrap}
 .odk-chip--solid{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-chip--waiting{border-color:transparent;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-weight:600}
+.odk-chip--md{height:24px}
 .odk-chip-glyph{color:rgb(var(--color-accent))}
+/* A square status block: `waiting`, `2 waiting`. */
+.odk-badge{flex-shrink:0;display:inline-flex;align-items:center;padding:2px 8px;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-family:var(--font-display);font-size:12px;font-weight:600;line-height:1.3;white-space:nowrap}
 
+/* ── Fields ──────────────────────────────────────────────────────── */
 .odk-field{display:flex;flex-direction:column;gap:6px;min-width:0}
 .odk-label{font-family:var(--font-display);font-size:12px;font-weight:500;color:rgb(var(--color-fg-0))}
 .odk-help{font-family:var(--font-sans);font-size:12px;line-height:18px;color:rgb(var(--color-fg-3))}
@@ -32,12 +52,18 @@
 .odk-input:focus-visible{outline:2px solid rgb(var(--color-focus));outline-offset:2px}
 @media(pointer:coarse){.odk-input{min-height:44px}}
 
+/* ── Surfaces ────────────────────────────────────────────────────── */
 .odk-panel{box-sizing:border-box;background:rgb(var(--color-bg-1));border:1px solid rgb(var(--color-line-soft));border-radius:6px;padding:24px}
+/* Floating card: the updater, menus, dialogs. */
+.odk-float{box-sizing:border-box;background:rgb(var(--color-bg-2));border:1px solid rgb(var(--color-line));border-radius:6px;box-shadow:0 24px 64px rgb(0 0 0 / .45);color:rgb(var(--color-fg-0));font-family:var(--font-display)}
+/* Transient message: square, mono, never a pill. */
+.odk-toast{box-sizing:border-box;display:inline-flex;align-items:center;gap:10px;padding:8px 12px;background:rgb(var(--color-bg-2));border:1px solid rgb(var(--color-line));border-radius:4px;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:12px;line-height:1.4}
 
 .odk-waiting{box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid rgb(var(--color-err));border-radius:4px}
 .odk-waiting-title{font-family:var(--font-display);font-size:12px;font-weight:600;color:rgb(var(--color-err))}
 .odk-waiting-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 
+/* ── Status line ─────────────────────────────────────────────────── */
 .odk-status{box-sizing:border-box;display:flex;align-items:center;gap:12px;height:34px;padding-left:12px;background:rgb(var(--color-bg-2));border-top:1px solid rgb(var(--color-line-soft));font-family:var(--font-display);font-size:12px;color:rgb(var(--color-fg-0));min-width:0;flex-shrink:0}
 .odk-status-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .odk-status-muted{color:rgb(var(--color-fg-3));white-space:nowrap}
@@ -47,19 +73,38 @@
 .odk-status-end--active{border-left-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-status-btn{flex-shrink:0;padding:3px 10px;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent;color:rgb(var(--color-fg-0));font:inherit;font-weight:500;cursor:pointer}
 .odk-status-btn--quiet{border-color:transparent;color:rgb(var(--color-fg-3))}
-@media(hover:hover){.odk-status-btn:hover{background:rgb(var(--color-bg-3));color:rgb(var(--color-fg-0))}}
+.odk-status-btn:disabled{opacity:.45;cursor:default}
+@media(hover:hover){.odk-status-btn:not(:disabled):hover{background:rgb(var(--color-bg-3));color:rgb(var(--color-fg-0))}}
+button.odk-status-btn--end{border-top:0;border-right:0;border-bottom:0;background:transparent;font:inherit;cursor:pointer}
+button.odk-status-end--active.odk-status-btn--end{border-left:0;background:rgb(var(--color-primary))}
+@media(hover:hover){button.odk-status-btn--end:hover{filter:brightness(1.08)}}
+@media(pointer:coarse){.odk-status{height:44px}.odk-status-btn{min-height:36px}}
 
+/* ── Tabs ────────────────────────────────────────────────────────── */
 .odk-tab{box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:rgb(var(--color-fg-3));font-family:var(--font-display);font-size:12.5px;white-space:nowrap;cursor:pointer}
 .odk-tab[aria-selected=true]{border-bottom-color:rgb(var(--color-accent));color:rgb(var(--color-fg-0))}
 .odk-tab-meta{color:rgb(var(--color-fg-3))}
 .odk-tab-alert{color:rgb(var(--color-err))}
 @media(hover:hover){.odk-tab:hover{color:rgb(var(--color-fg-0))}}
 
+/* ── Key bar keys (phone, Fold) ─────────────────────────────────── */
+.odk-key{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;height:36px;min-width:36px;padding:0 10px;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:12px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
+.odk-key--accent{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
+.odk-key[aria-pressed=true]{border-color:rgb(var(--color-accent));color:rgb(var(--color-accent))}
+.odk-key:disabled{opacity:.4;cursor:not-allowed}
+.odk-key:active{background:rgb(var(--color-bg-3))}
+.odk-key--accent:active{background:rgb(var(--color-primary));filter:brightness(.92)}
+
+/* ── Setup steps and the cursor ─────────────────────────────────── */
 .odk-step{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid rgb(var(--color-line-soft));font-family:var(--font-display);font-size:14px}
 .odk-step:last-child{border-bottom:0}
 .odk-step-mark{flex-shrink:0;color:rgb(var(--color-fg-0))}
 .odk-step-mark--active{color:rgb(var(--color-accent))}
 .odk-step-mark--todo{color:rgb(var(--color-fg-3))}
+
+/* The lockup's /dev: lime text on dark, a lime highlight on paper. */
+.odk-wordmark-dev{color:rgb(var(--color-accent))}
+:root:not(.dark) .odk-wordmark-dev{padding:0 3px;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary))}
 
 .odk-cursor{display:inline-block;width:.5em;height:.9em;margin-left:6px;vertical-align:-.1em;background:rgb(var(--color-primary))}
 @media(prefers-reduced-motion:no-preference){.odk-cursor--blink{animation:offdeskBlink 1.1s step-end infinite}}

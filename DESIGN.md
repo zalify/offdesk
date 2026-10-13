@@ -8,6 +8,12 @@ triplets) and are consumed via Tailwind (`tailwind.config.ts`),
 `packages/app/lib/themePalette.ts` for React Native inline styles. The
 primitives are `packages/app/components/Primitives.web.tsx` (+ `.css`).
 
+The wireframes in the Offdesk DEV design canvas (desktop D01–D13 and Main,
+phone P01–P08, the B boards and DEV-Tokens) are the spec for layout,
+components and copy, element by element — not only for colour. When a screen
+changes, compare it with its board at the same viewport (1280×800 desktop,
+390×844 phone) and list any intentional difference in the PR.
+
 ## Principles
 
 1. **The terminal is the interface.** Chrome exists to be ignored: one tab bar
@@ -94,6 +100,16 @@ Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
   edge; `ghost` text only; `danger` red text; `bracket` = `[enter]`, brackets
   in `fg-3` and kept out of the accessible name. 40px (32px `sm`), 44px on
   touch.
+- **Text buttons** (`TextButton`): chrome as plain lowercase text, no box —
+  `files`, `settings`, `≡`, `[+]`, `mac-mini ▾`, `browser[2]` with a red `!`
+  when the agent needs you; `square` gives the phone title bar's 44px
+  `[f]` `[b]` `[m]`. Icon buttons in boxes are not part of the system.
+- **Keys** (`Key`): the key bar's 36px keys, 1px `line` edge, 3px radius,
+  lowercase labels (`esc`, `tab`, `⇧tab`, `[enter]`, `paste`); `^C` is the
+  accent fill; a latched modifier (`ctrl`) is `aria-pressed` in the accent.
+- **Badges** (`Badge`): square `waiting` / `2 waiting` blocks on `err`.
+- **Toasts and floating cards** (`Toast`, `FloatCard`): 4px and 6px radii,
+  `bg-2` with a `line` edge. Never pills.
 - **Chips** (`Chip`): 22px, 3px radius. `outline` ("watching"), `solid`
   ("in control"), `waiting`. `AgentMarker` = `⌁ opened by agent · cli`.
 - **Fields** (`Field`): lowercase mono label above, 38px input on `bg-1`,

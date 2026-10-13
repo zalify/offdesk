@@ -27,7 +27,8 @@ export function Button({
   ariaLabel,
 }: {
   kind?: ButtonKind;
-  size?: "md" | "sm";
+  /** 40px, 32px, or 28px for in-line banners. */
+  size?: "md" | "sm" | "xs";
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
@@ -44,7 +45,7 @@ export function Button({
       disabled={disabled}
       data-testid={testId}
       aria-label={ariaLabel}
-      className={`odk-btn odk-btn--${variant}${size === "sm" ? " odk-btn--sm" : ""}`}
+      className={`odk-btn odk-btn--${variant}${size === "md" ? "" : ` odk-btn--${size}`}`}
       style={style}
     >
       {kind === "bracket" ? <Bracketed>{children}</Bracketed> : children}
@@ -55,12 +56,118 @@ export function Button({
 /** `[enter]`: the brackets are decoration, so they stay out of the name. */
 export function Bracketed({ children }: { children: ReactNode }) {
   return (
-    <>
-      <span className="odk-bracket" aria-hidden="true">[</span>
+    <span>
+      <span aria-hidden="true">[</span>
       {children}
-      <span className="odk-bracket" aria-hidden="true">]</span>
-    </>
+      <span aria-hidden="true">]</span>
+    </span>
   );
+}
+
+/** Chrome as text: `files`, `settings`, `[+]`, `≡`, `mac-mini ▾`. The
+ *  accessible name comes from `label` when the text is a glyph or bracketed. */
+export function TextButton({
+  children,
+  label,
+  title,
+  onClick,
+  disabled,
+  pressed,
+  expanded,
+  strong = false,
+  square = false,
+  alert,
+  testId,
+  style,
+}: {
+  children: ReactNode;
+  label?: string;
+  title?: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  pressed?: boolean;
+  expanded?: boolean;
+  /** Primary-text colour instead of muted: the machine switcher. */
+  strong?: boolean;
+  /** 44px square, for the phone title bar's [f] [b] [m]. */
+  square?: boolean;
+  /** A red `!` after the text: something needs you there. */
+  alert?: { label: string; testId?: string };
+  testId?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <button
+      type="button"
+      className={`odk-text-btn${strong ? " odk-text-btn--strong" : ""}${square ? " odk-text-btn--square" : ""}`}
+      aria-label={label}
+      title={title ?? label}
+      aria-pressed={pressed}
+      aria-expanded={expanded}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+      style={style}
+    >
+      {children}
+      {alert ? (
+        <span className="odk-text-btn-alert" role="img" aria-label={alert.label} title={alert.label} data-testid={alert.testId}>
+          !
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+/** A key on the phone's key bar: `^C` (accent), `esc`, `tab`, `↑`. */
+export function Key({
+  children,
+  label,
+  accent = false,
+  pressed,
+  disabled,
+  onClick,
+  testId,
+  style,
+}: {
+  children: ReactNode;
+  label?: string;
+  accent?: boolean;
+  pressed?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  testId?: string;
+  style?: CSSProperties;
+}) {
+  return (
+    <button
+      type="button"
+      className={`odk-key${accent ? " odk-key--accent" : ""}`}
+      aria-label={label}
+      aria-pressed={pressed}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+      style={style}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** A square status block: `waiting`, `2 waiting`. */
+export function Badge({ children, testId }: { children: ReactNode; testId?: string }) {
+  return <span className="odk-badge" data-testid={testId}>{children}</span>;
+}
+
+/** A transient message, square-cornered: "Picked up where you left off". */
+export function Toast({ children, style, testId, role = "status" }: { children: ReactNode; style?: CSSProperties; testId?: string; role?: string }) {
+  return <div className="odk-toast" role={role} style={style} data-testid={testId}>{children}</div>;
+}
+
+/** A floating card above the workspace: the updater, small dialogs. */
+export function FloatCard({ children, style, testId }: { children: ReactNode; style?: CSSProperties; testId?: string }) {
+  return <div className="odk-float" style={style} data-testid={testId}>{children}</div>;
 }
 
 type ChipKind = "outline" | "solid" | "waiting";
@@ -300,7 +407,7 @@ export function Wordmark({ size = 18 }: { size?: number }) {
     <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="img" aria-label="Offdesk DEV">
       <Logo size={Math.round(size * 2)} />
       <span aria-hidden="true" style={{ fontFamily: fontDisplay, fontSize: size, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>
-        offdesk<span style={{ color: colors.accent }}>/dev</span>
+        offdesk<span className="odk-wordmark-dev">/dev</span>
       </span>
     </div>
   );
