@@ -367,8 +367,8 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             pointerEvents: "all",
           }}
         >
-          <span style={{ color: terminalTheme.foreground, fontSize: 14 }}>
-            Waiting for reconnection…
+          <span style={{ color: terminalTheme.foreground, fontFamily: "var(--font-display)", fontSize: 13 }}>
+            waiting for the machine to reconnect…
           </span>
         </div>
       )}
@@ -407,15 +407,16 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                 right: 10,
                 zIndex: 20,
                 pointerEvents: "none",
-                padding: "3px 7px",
-                borderRadius: 999,
-                background: "rgba(20, 20, 24, 0.88)",
-                border: `1px solid ${colors.border}`,
-                color: terminalTheme.foreground,
-                fontSize: 10,
+                padding: "3px 8px",
+                borderRadius: 3,
+                background: colors.bg2,
+                border: `1px solid ${colors.line}`,
+                color: colors.fg1,
+                fontFamily: "var(--font-display)",
+                fontSize: 11,
               }}
             >
-              Reconnecting…
+              reconnecting…
             </div>
           </>
         )}

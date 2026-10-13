@@ -2232,49 +2232,35 @@ function EmptyState({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        color: colors.fg3,
-        fontSize: 14,
+        color: colors.fg2,
+        fontSize: 13,
       }}
     >
-      <div style={{ textAlign: "center" }}>
-        <TerminalIcon size={40} style={{ opacity: 0.35 }} />
-        <div style={{ marginTop: 12 }}>
-          {scopeLabel === "All"
-            ? "No terminals yet"
-            : `No terminals in ${scopeLabel}`}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
+        <div style={{ fontSize: 13, color: colors.fg3 }}>
+          <span aria-hidden="true" style={{ color: colors.accent }}>~</span>
+          <span aria-hidden="true"> $ </span>
+          {scopeLabel === "All" ? "no terminals yet" : `no terminals in ${scopeLabel}`}
+          <span aria-hidden="true" className="odk-cursor" />
         </div>
         {!canCreate && onTakeControl && (
-          <div>
-            <p>You’re viewing this machine. Take control to create a terminal.</p>
-            <button
-              data-testid="empty-take-control"
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+            <p style={{ margin: 0, fontFamily: "var(--font-sans)", fontSize: 14, color: colors.fg2 }}>You’re viewing this machine. Take control to create a terminal.</p>
+            <Button
+              testId="empty-take-control"
               disabled={requesting}
               onClick={() => void takeControl()}
-              style={{ background: colors.accent, color: colors.onAccent, border: "none", borderRadius: 999, padding: "8px 14px", fontSize: 12, fontWeight: 700, cursor: requesting ? "wait" : "pointer" }}
+              ariaLabel={requesting ? "Taking control…" : "Take control"}
             >
-              {requesting ? "Taking control…" : "Take control"}
-            </button>
-            {error && <p role="alert">{error}</p>}
+              {requesting ? "taking control…" : "take control"}
+            </Button>
+            {error && <p role="alert" style={{ margin: 0, color: colors.err, fontSize: 12 }}>{error}</p>}
           </div>
         )}
         {canCreate && (
-          <button
-            data-testid="empty-new-terminal"
-            onClick={onNewTerminal}
-            style={{
-              marginTop: 14,
-              background: colors.accent,
-              color: colors.onAccent,
-              border: "none",
-              borderRadius: 999,
-              padding: "8px 14px",
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            Start terminal
-          </button>
+          <Button testId="empty-new-terminal" onClick={onNewTerminal} ariaLabel="Start terminal">
+            start terminal
+          </Button>
         )}
       </div>
     </div>

@@ -117,7 +117,7 @@ export const darkAlpha = {
   accentLine: "rgba(212, 255, 58, 0.35)",
   dangerSoft: "rgba(255, 138, 117, 0.14)",
   dangerLine: "rgba(255, 138, 117, 0.5)",
-  overlay: "rgba(0, 0, 0, 0.6)",
+  overlay: "rgba(12, 12, 11, 0.72)",
 
   accentSubtle: "rgba(212, 255, 58, 0.06)",
   accentLight: "rgba(212, 255, 58, 0.08)",

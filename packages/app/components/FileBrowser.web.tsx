@@ -186,7 +186,7 @@ export function FileBrowser({
     if (previewPath !== null) {
       // Handled (and prevented) here so the overlay's window-level Escape
       // listener sees defaultPrevented and leaves the overlay open.
-      if (event.key === "Escape" || event.key === "Backspace") {
+      if (event.key === "Escape" || (event.key === "Backspace" && target !== filterRef.current)) {
         event.preventDefault();
         closePreview();
       } else if (event.key === "ArrowLeft") {
@@ -255,6 +255,58 @@ export function FileBrowser({
       cursor: "pointer",
       flexShrink: 0,
     }) as const;
+
+  // Filter and hidden files: in the toolbar on the desktop (D08), on a row
+  // of their own on the phone (P08).
+  const filterControls = (
+    <>
+          <input
+            ref={filterRef}
+            data-testid="file-browser-filter"
+            aria-label="Filter by name"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="filter by name"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{
+              flex: touch ? 1 : "0 0 220px",
+              minWidth: 0,
+              minHeight: touch ? 40 : 32,
+              padding: "0 12px",
+              fontFamily: "var(--font-display)",
+              fontSize: touch ? 16 : 13,
+              color: colors.fg0,
+              background: colors.bg0,
+              border: `1px solid ${colors.line}`,
+              borderRadius: 4,
+              outline: "none",
+            }}
+          />
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12.5,
+              color: colors.fg2,
+              cursor: "pointer",
+              flexShrink: 0,
+              minHeight: touch ? 38 : undefined,
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="file-browser-hidden"
+              checked={showHidden}
+              onChange={(event) => setShowHidden(event.target.checked)}
+              style={{ accentColor: "rgb(var(--color-primary))" }}
+            />
+            show hidden files
+          </label>
+    </>
+  );
 
   return (
     <div
@@ -362,82 +414,39 @@ export function FileBrowser({
             );
           })}
         </nav>
+        {!touch && filterControls}
       </div>
 
-      {previewPath !== null && (
-        <FilePreview
-          key={previewPath}
-          machineId={machineId}
-          path={previewPath}
-          name={previewEntry?.name ?? previewPath.split("/").pop() ?? previewPath}
-          size={previewEntry?.size}
-          touch={touch}
-          onBack={closePreview}
-          onPrev={onPrev}
-          onNext={onNext}
-        />
-      )}
-
-      {previewPath === null && (
+      {/* The list and the open file side by side on the desktop (D08); on
+          the phone the preview takes the whole surface (P08). */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+      {(previewPath === null || !touch) && (
+        <div
+          style={{
+            flex: previewPath !== null ? "0 0 380px" : 1,
+            minWidth: 0,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            borderRight: previewPath !== null ? `1px solid ${colors.lineSoft}` : "none",
+          }}
+        >
+      {touch && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             gap: 10,
-            padding: touch ? "8px 12px" : "8px 20px",
+            padding: "8px 12px",
             borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
           }}
         >
-          <input
-            ref={filterRef}
-            data-testid="file-browser-filter"
-            aria-label="Filter by name"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="filter by name"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              minHeight: touch ? 40 : 32,
-              padding: "0 12px",
-              fontFamily: "var(--font-display)",
-              fontSize: touch ? 16 : 13,
-              color: colors.fg0,
-              background: colors.bg0,
-              border: `1px solid ${colors.line}`,
-              borderRadius: 4,
-              outline: "none",
-            }}
-          />
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12.5,
-              color: colors.fg2,
-              cursor: "pointer",
-              flexShrink: 0,
-              minHeight: touch ? 38 : undefined,
-            }}
-          >
-            <input
-              type="checkbox"
-              data-testid="file-browser-hidden"
-              checked={showHidden}
-              onChange={(event) => setShowHidden(event.target.checked)}
-              style={{ accentColor: "rgb(var(--color-primary))" }}
-            />
-            show hidden files
-          </label>
+          {filterControls}
         </div>
       )}
 
-      {previewPath === null && (
+      {(
         <div
           ref={listRef}
           data-testid="file-browser-list"
@@ -556,6 +565,22 @@ export function FileBrowser({
             })}
         </div>
       )}
+        </div>
+      )}
+      {previewPath !== null && (
+        <FilePreview
+          key={previewPath}
+          machineId={machineId}
+          path={previewPath}
+          name={previewEntry?.name ?? previewPath.split("/").pop() ?? previewPath}
+          size={previewEntry?.size}
+          touch={touch}
+          onBack={closePreview}
+          onPrev={onPrev}
+          onNext={onNext}
+        />
+      )}
+      </div>
     </div>
   );
 }

@@ -148,8 +148,8 @@ function WorkspaceManagerComponent({
           background: colors.bg1,
           borderRight: isSheet ? "none" : `1px solid ${colors.line}`,
           borderTop: isSheet ? `1px solid ${colors.line}` : "none",
-          borderTopLeftRadius: isSheet ? 16 : 0,
-          borderTopRightRadius: isSheet ? 16 : 0,
+          borderTopLeftRadius: isSheet ? 6 : 0,
+          borderTopRightRadius: isSheet ? 6 : 0,
           boxShadow: isSheet
             ? "0 -20px 60px rgba(0, 0, 0, 0.35)"
             : "20px 0 60px rgba(0, 0, 0, 0.35)",
@@ -169,12 +169,9 @@ function WorkspaceManagerComponent({
 
         <header style={headerStyle}>
           <div style={headerIdentityStyle}>
-            <span style={headerIconStyle}>
-              <FolderTree size={16} />
-            </span>
             <div style={{ minWidth: 0 }}>
               <div id="workspace-manager-title" style={titleStyle}>
-                Tabs
+                tabs
               </div>
               <div style={subtitleStyle}>{machineName || "No host"}</div>
             </div>
@@ -186,9 +183,9 @@ function WorkspaceManagerComponent({
             aria-label="Close the tab list"
             title="Close"
             onClick={onClose}
-            style={iconButtonStyle}
+            className="odk-text-btn"
           >
-            <X size={16} />
+            [esc]
           </button>
         </header>
 
@@ -198,14 +195,9 @@ function WorkspaceManagerComponent({
             data-testid="workspace-manager-new"
             disabled={!canManage}
             onClick={onNewGroup}
-            style={{
-              ...primaryButtonStyle,
-              cursor: canManage ? "pointer" : "not-allowed",
-              opacity: canManage ? 1 : 0.45,
-            }}
+            className="odk-btn odk-btn--primary odk-btn--sm"
           >
-            <Plus size={14} />
-            New tab
+            new tab
           </button>
           <span style={summaryStyle}>
             {groups.length} {groups.length === 1 ? "tab" : "tabs"}
@@ -221,7 +213,6 @@ function WorkspaceManagerComponent({
         <div style={treeStyle}>
           {groups.length === 0 ? (
             <div data-testid="workspace-manager-empty" style={emptyStyle}>
-              <FolderTree size={28} style={{ opacity: 0.35 }} />
               <span>No tabs yet</span>
               <span style={{ color: colors.fg3 }}>
                 Create one, then start a terminal inside it.
@@ -275,7 +266,7 @@ function WorkspaceManagerComponent({
                           onReorderGroups(group.id, groups[index - 1].id, "before")
                         }
                       >
-                        <ArrowUp size={14} />
+                        ↑
                       </ManagerIconButton>
                       <ManagerIconButton
                         label={`Move ${group.label} down`}
@@ -285,7 +276,7 @@ function WorkspaceManagerComponent({
                           onReorderGroups(group.id, groups[index + 1].id, "after")
                         }
                       >
-                        <ArrowDown size={14} />
+                        ↓
                       </ManagerIconButton>
                       <ManagerIconButton
                         label={`Rename ${group.label}`}
@@ -293,7 +284,7 @@ function WorkspaceManagerComponent({
                         disabled={!canRenameOrDelete}
                         onClick={() => onRenameGroup(group)}
                       >
-                        <Pencil size={14} />
+                        <span style={{ fontSize: 11.5 }}>rename</span>
                       </ManagerIconButton>
                       <ManagerIconButton
                         label={`Delete ${group.label}`}
@@ -302,7 +293,7 @@ function WorkspaceManagerComponent({
                         danger
                         onClick={() => onDeleteGroup(group)}
                       >
-                        <Trash2 size={14} />
+                        [x]
                       </ManagerIconButton>
                     </div>
                   </div>
@@ -323,7 +314,7 @@ function WorkspaceManagerComponent({
                             style={{
                               ...terminalRowStyle,
                               background: isTerminalActive
-                                ? colorAlpha.accentLight
+                                ? colors.bg3
                                 : "transparent",
                             }}
                           >
@@ -339,7 +330,6 @@ function WorkspaceManagerComponent({
                               <span style={treeBranchStyle} aria-hidden>
                                 {terminalIndex === groupTerminals.length - 1 ? "└" : "├"}
                               </span>
-                              <TerminalIcon size={13} style={{ flexShrink: 0 }} />
                               <span style={terminalTextStyle}>
                                 <span style={terminalTitleStyle}>
                                   {displayTerminalTitle(terminal)}
@@ -351,7 +341,7 @@ function WorkspaceManagerComponent({
                                     title={terminalOpenerDescription(terminal) ?? undefined}
                                     style={terminalCwdStyle}
                                   >
-                                    opened by {terminalOpenerText(terminal)}
+                                    ⌁ opened by {terminalOpenerText(terminal)}
                                   </span>
                                 )}
                               </span>
@@ -379,8 +369,7 @@ function WorkspaceManagerComponent({
                                   opacity: canManage ? 1 : 0.35,
                                 }}
                               >
-                                <ArrowRightLeft size={12} aria-hidden />
-                                Move
+                                move
                               </button>
                             ) : null}
 
@@ -390,7 +379,7 @@ function WorkspaceManagerComponent({
                               disabled={!canManage}
                               onClick={() => onCloseTerminal(terminal)}
                             >
-                              <X size={14} />
+                              [x]
                             </ManagerIconButton>
                           </div>
                         );
@@ -414,8 +403,7 @@ function WorkspaceManagerComponent({
                             : 0.4,
                       }}
                     >
-                      <Plus size={13} />
-                      New terminal here
+                      [+] new terminal here
                     </button>
                   </div>
                 </section>
@@ -462,7 +450,7 @@ function ManagerIconButton({
       onClick={onClick}
       style={{
         ...iconButtonStyle,
-        color: danger ? colors.danger : colors.fg2,
+        color: danger ? colors.danger : colors.fg3,
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.35 : 1,
       }}
@@ -505,8 +493,8 @@ const headerIconStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   color: colors.fg0,
-  fontSize: 14,
-  fontWeight: 700,
+  fontSize: 15,
+  fontWeight: 600,
 };
 
 const subtitleStyle: CSSProperties = {
@@ -551,10 +539,11 @@ const viewOnlyStyle: CSSProperties = {
   margin: "0 12px 8px",
   padding: "7px 9px",
   border: `1px solid ${colors.lineSoft}`,
-  borderRadius: 6,
+  borderRadius: 4,
   color: colors.fg2,
   background: colors.bg2,
-  fontSize: 11,
+  fontFamily: "var(--font-sans)",
+  fontSize: 12,
 };
 
 const treeStyle: CSSProperties = {
@@ -568,7 +557,7 @@ const groupStyle: CSSProperties = {
   marginBottom: 8,
   overflow: "hidden",
   border: "1px solid",
-  borderRadius: 8,
+  borderRadius: 4,
   background: colors.bg0,
 };
 
@@ -607,16 +596,16 @@ const groupLabelStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   color: colors.fg0,
-  fontSize: 12,
-  fontWeight: 700,
+  fontSize: 12.5,
+  fontWeight: 500,
 };
 
 const automaticBadgeStyle: CSSProperties = {
-  padding: "2px 5px",
-  borderRadius: 999,
+  padding: "1px 6px",
+  border: `1px solid ${colors.line}`,
+  borderRadius: 3,
   color: colors.fg3,
-  background: colors.bg2,
-  fontSize: 9,
+  fontSize: 10.5,
   whiteSpace: "nowrap",
 };
 
@@ -626,11 +615,10 @@ const countBadgeStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  borderRadius: 999,
-  color: colors.fg2,
-  background: colors.bg2,
-  fontFamily: "var(--font-mono)",
-  fontSize: 10,
+  borderRadius: 3,
+  color: colors.fg3,
+  background: "transparent",
+  fontSize: 11,
 };
 
 const groupActionsStyle: CSSProperties = {
@@ -649,9 +637,11 @@ const iconButtonStyle: CSSProperties = {
   justifyContent: "center",
   padding: 0,
   border: "none",
-  borderRadius: 6,
+  borderRadius: 3,
   background: "transparent",
   color: colors.fg2,
+  fontFamily: "var(--font-display)",
+  fontSize: 12.5,
   cursor: "pointer",
 };
 
@@ -664,7 +654,7 @@ const terminalRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 2,
-  borderRadius: 6,
+  borderRadius: 3,
 };
 
 const terminalSelectStyle: CSSProperties = {
@@ -704,8 +694,7 @@ const terminalCwdStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   color: colors.fg3,
-  fontFamily: "var(--font-mono)",
-  fontSize: 9,
+  fontSize: 10.5,
 };
 
 const moveButtonStyle: CSSProperties = {
@@ -715,13 +704,13 @@ const moveButtonStyle: CSSProperties = {
   alignItems: "center",
   gap: 5,
   padding: "0 10px",
-  border: `1px solid ${colors.lineSoft}`,
-  borderRadius: 999,
-  background: colors.bg1,
-  color: colors.fg1,
+  border: `1px solid ${colors.line}`,
+  borderRadius: 3,
+  background: "transparent",
+  color: colors.fg0,
   fontFamily: fontDisplay,
   fontSize: 12,
-  fontWeight: 600,
+  fontWeight: 500,
 };
 
 const emptyGroupStyle: CSSProperties = {
@@ -738,11 +727,12 @@ const newTerminalStyle: CSSProperties = {
   gap: 6,
   margin: "4px 0 0 18px",
   padding: "0 8px",
-  border: `1px dashed ${colors.line}`,
-  borderRadius: 6,
+  border: "none",
+  borderRadius: 3,
   background: "transparent",
-  color: colors.fg2,
-  fontSize: 10,
+  color: colors.fg3,
+  fontFamily: "var(--font-display)",
+  fontSize: 12,
 };
 
 const emptyStyle: CSSProperties = {
@@ -761,7 +751,8 @@ const footerStyle: CSSProperties = {
   padding: "9px 14px",
   borderTop: `1px solid ${colors.lineSoft}`,
   color: colors.fg3,
-  fontSize: 10,
+  fontFamily: "var(--font-sans)",
+  fontSize: 12,
   lineHeight: 1.45,
 };
 
@@ -774,6 +765,6 @@ const sheetHandleContainerStyle: CSSProperties = {
 const sheetHandleStyle: CSSProperties = {
   width: 36,
   height: 4,
-  borderRadius: 999,
+  borderRadius: 2,
   background: colors.line,
 };

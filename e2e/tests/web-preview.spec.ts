@@ -32,7 +32,7 @@ test('web preview: browser launch, isolated native handoff, Vite and Next hot up
   // Exercise the shipped manual entry and synchronous browser launcher.
   const pane = page.locator(`[data-testid="terminal-card-${terminal}"]`);
   await pane.click({ button: 'right', position: { x: 50, y: 50 } });
-  await page.getByText('Open web preview', { exact: true }).click();
+  await page.getByText('open web preview', { exact: true }).click();
   await expect(page.getByRole('dialog')).toBeVisible();
   await page.getByLabel('Local address').fill('http://localhost:5127/');
   await page.screenshot({ path: testInfo.outputPath('preview-dialog.png') });

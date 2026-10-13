@@ -28,20 +28,20 @@ export function WebPreviewDialog({ machineId, terminalId, onClose }: { machineId
     setBusy(true); setError("");
     void openWebPreview(machineId, terminalId, local).then(url => { if (url) setLauncher(url); else onClose(); }).catch(e => setError(e instanceof Error ? e.message : "Could not open preview")).finally(() => setBusy(false));
   };
-  const button = { padding: "10px 14px", borderRadius: 6, border: `1px solid ${colors.border}`, cursor: "pointer", color: colors.foreground, background: colors.surface };
-  return <div role="dialog" aria-modal="true" aria-labelledby="web-preview-title" onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: colorAlpha.backgroundShadow, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-    <div onClick={e => e.stopPropagation()} style={{ background: colors.surface, color: colors.foreground, border: `1px solid ${colors.border}`, borderRadius: 10, padding: 20, width: "100%", maxWidth: 440, maxHeight: "85vh", overflowY: "auto" }}>
-      <h2 id="web-preview-title" style={{ marginTop: 0 }}>Open web preview</h2>
-      <p>View a website running on this machine in your browser.</p>
-      {configured === false ? <p role="status">Web previews are not configured on this Hub.</p> : <form onSubmit={e => { e.preventDefault(); submit(); }}>
-        <label htmlFor="web-preview-address">Local address</label>
-        <input id="web-preview-address" ref={input} value={address} onChange={e => setAddress(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} style={{ width: "100%", boxSizing: "border-box", margin: "8px 0 16px", padding: 10, fontSize: 16, color: colors.foreground, background: colors.background, border: `1px solid ${colors.border}`, borderRadius: 6 }} />
-        <button type="submit" disabled={busy || configured !== true} style={button}>{busy ? "Opening…" : "Open in browser"}</button>
+  return <div role="dialog" aria-modal="true" aria-labelledby="web-preview-title" onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: colorAlpha.overlay, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+    <div onClick={e => e.stopPropagation()} className="odk-float" style={{ padding: 24, width: "100%", maxWidth: 460, maxHeight: "85vh", overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ fontSize: 13, color: colors.fg3 }}><span aria-hidden style={{ color: colors.accent }}>~</span> $ web preview</div>
+      <h2 id="web-preview-title" style={{ margin: 0, fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em" }}>Open web preview</h2>
+      <p style={{ margin: 0, fontFamily: "var(--font-sans)", fontSize: 14, lineHeight: 1.55, color: colors.fg2 }}>View a website running on this machine in your browser.</p>
+      {configured === false ? <p role="status" style={{ margin: 0, fontFamily: "var(--font-sans)", fontSize: 14, color: colors.fg2 }}>Web previews are not configured on this Hub.</p> : <form onSubmit={e => { e.preventDefault(); submit(); }} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <label htmlFor="web-preview-address" className="odk-label">local address</label>
+        <input id="web-preview-address" ref={input} value={address} onChange={e => setAddress(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="http://localhost:3127/" className="odk-input" />
+        <div style={{ marginTop: 10 }}><button type="submit" disabled={busy || configured !== true} className="odk-btn odk-btn--primary odk-btn--sm">{busy ? "opening…" : "open in browser"}</button></div>
       </form>}
-      {launcher && <p role="status">If the preview did not open, <a href={launcher} target="_blank" rel="noopener noreferrer" style={{ color: colors.accent }}>open preview here</a>.</p>}
-      {error && <p role="alert">{error}</p>}
-      {previews.length > 0 && <><h3>Active previews</h3>{previews.map(p => <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}><span>Port {p.port}</span><button style={button} onClick={() => { void api.closeWebPreview(p.id).then(() => setPreviews(all => all.filter(item => item.id !== p.id))).catch(() => setError("Could not close preview.")); }}>Close preview</button></div>)}</>}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}><button style={button} onClick={onClose}>{launcher ? "Done" : "Cancel"}</button></div>
+      {launcher && <p role="status" style={{ margin: 0, fontFamily: "var(--font-sans)", fontSize: 14 }}>If the preview did not open, <a href={launcher} target="_blank" rel="noopener noreferrer" style={{ color: colors.accent }}>open preview here</a>.</p>}
+      {error && <p role="alert" style={{ margin: 0, color: colors.err, fontSize: 12 }}>{error}</p>}
+      {previews.length > 0 && <><div style={{ marginTop: 8, fontSize: 11.5, fontWeight: 500, color: colors.fg3 }}>active previews</div>{previews.map(p => <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, fontSize: 13 }}><span>port {p.port}</span><button className="odk-btn odk-btn--secondary odk-btn--sm" onClick={() => { void api.closeWebPreview(p.id).then(() => setPreviews(all => all.filter(item => item.id !== p.id))).catch(() => setError("Could not close preview.")); }}>close preview</button></div>)}</>}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}><button className="odk-btn odk-btn--secondary odk-btn--sm" aria-label={launcher ? "Done" : "Cancel"} onClick={onClose}>{launcher ? "done" : "cancel"}</button></div>
     </div>
   </div>;
 }

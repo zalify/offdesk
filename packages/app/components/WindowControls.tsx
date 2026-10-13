@@ -89,16 +89,32 @@ function WinLinuxControls() {
     await getCurrentWindow().close();
   }, []);
 
+  // Our own window buttons as text, on the right (wireframe D13).
   const buttonBase: React.CSSProperties = {
+    width: 46,
     background: "none",
     border: "none",
+    borderRadius: 0,
     cursor: "pointer",
-    padding: "0 16px",
+    padding: 0,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
     height: "100%",
+    color: colors.fg2,
+    fontFamily: "var(--font-display)",
+    fontSize: 13,
   };
+  const hover = (danger = false) => ({
+    onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.background = danger ? colors.err : colors.bg3;
+      e.currentTarget.style.color = danger ? colors.onErr : colors.fg0;
+    },
+    onMouseLeave: (e: React.MouseEvent<HTMLButtonElement>) => {
+      e.currentTarget.style.background = "none";
+      e.currentTarget.style.color = colors.fg2;
+    },
+  });
 
   return (
     <div
@@ -106,73 +122,13 @@ function WinLinuxControls() {
         display: "flex",
         alignItems: "stretch",
         flexShrink: 0,
+        borderLeft: `1px solid ${colors.lineSoft}`,
         WebkitAppRegion: "no-drag",
       } as React.CSSProperties}
     >
-      <button
-        onClick={handleMinimize}
-        style={buttonBase}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = colors.surface;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "none";
-        }}
-        aria-label="Minimize"
-      >
-        <svg width="10" height="1" viewBox="0 0 10 1">
-          <rect width="10" height="1" fill={colors.foregroundSecondary} />
-        </svg>
-      </button>
-      <button
-        onClick={handleMaximize}
-        style={buttonBase}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = colors.surface;
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "none";
-        }}
-        aria-label="Maximize"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10">
-          <rect
-            x="0.5"
-            y="0.5"
-            width="9"
-            height="9"
-            fill="none"
-            stroke={colors.foregroundSecondary}
-            strokeWidth="1"
-          />
-        </svg>
-      </button>
-      <button
-        onClick={handleClose}
-        style={buttonBase}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = colors.danger;
-          const svg = e.currentTarget.querySelector("svg");
-          if (svg) {
-            svg.querySelectorAll("line").forEach((l) => l.setAttribute("stroke", "#fff"));
-          }
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = "none";
-          const svg = e.currentTarget.querySelector("svg");
-          if (svg) {
-            svg.querySelectorAll("line").forEach((l) =>
-              l.setAttribute("stroke", colors.foregroundSecondary),
-            );
-          }
-        }}
-        aria-label="Close"
-      >
-        <svg width="10" height="10" viewBox="0 0 10 10">
-          <line x1="0" y1="0" x2="10" y2="10" stroke={colors.foregroundSecondary} strokeWidth="1.2" />
-          <line x1="10" y1="0" x2="0" y2="10" stroke={colors.foregroundSecondary} strokeWidth="1.2" />
-        </svg>
-      </button>
+      <button onClick={handleMinimize} style={buttonBase} {...hover()} aria-label="Minimize">_</button>
+      <button onClick={handleMaximize} style={buttonBase} {...hover()} aria-label="Maximize">[ ]</button>
+      <button onClick={handleClose} style={buttonBase} {...hover(true)} aria-label="Close">x</button>
     </div>
   );
 }

@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X } from "lucide-react";
-import { Wordmark } from "./Primitives.web";
+import { Body, Button, Display, Eyebrow, StepMark, Wordmark, fontDisplay } from "./Primitives.web";
 import { createRegistrationToken } from "@/lib/api";
 import { buildOnboardingScript, getJoinCommand } from "@/lib/nodeInstaller";
 import {
@@ -8,7 +7,7 @@ import {
   shouldGenerateRegistrationToken,
 } from "@/lib/onboardingFlow";
 import { isRegistrationTokenFresh } from "@/lib/tokenExpiry";
-import { colors } from "@/lib/colors";
+import { colors, colorAlpha } from "@/lib/colors";
 import { getServerUrl } from "@/lib/serverUrl";
 import { MobileAppPanel } from "./MobileAppPanel.web";
 
@@ -40,39 +39,31 @@ function CodeBlock({
   code: string;
 }) {
   return (
-    <div style={{ marginBottom: 20 }}>
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          color: colors.foregroundSecondary,
-          textTransform: "uppercase" as const,
-          letterSpacing: 1,
-          marginBottom: 6,
-        }}
-      >
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 500, color: colors.fg0 }}>
         {label}
       </div>
       <div
         style={{
-          backgroundColor: colors.surface,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 6,
-          padding: "12px 14px",
+          backgroundColor: colors.termBg,
+          border: `1px solid ${colors.lineSoft}`,
+          borderRadius: 4,
+          padding: "16px 18px",
           overflowX: "auto" as const,
         }}
       >
         <pre
           style={{
             margin: 0,
-            fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', 'Menlo', monospace",
+            fontFamily: fontDisplay,
             fontSize: 13,
             lineHeight: 1.6,
-            color: colors.foreground,
+            color: "#ecebe6",
             whiteSpace: "pre-wrap" as const,
             wordBreak: "break-all" as const,
           }}
         >
+          <span style={{ color: "#d4ff3a" }} aria-hidden="true">$ </span>
           {code}
         </pre>
       </div>
@@ -158,6 +149,7 @@ export function OnboardingView({
 
   const hubUrl = getHubUrl();
   const joinCmd = token ? getJoinCommand(hubUrl, token) : "";
+  const tokenAction = getTokenActionLabel({ loading, token });
 
   return (
     <div
@@ -175,33 +167,19 @@ export function OnboardingView({
         background: embedded ? "transparent" : colors.background,
       }}
     >
-      <div style={{ maxWidth: embedded ? "100%" : 600, width: "100%" }}>
+      <div style={{ maxWidth: embedded ? "100%" : 640, width: "100%", display: "flex", flexDirection: "column", gap: 16 }}>
         {!embedded && (
-          <div style={{ marginBottom: 36 }}><Wordmark size={26} /></div>
+          <div style={{ marginBottom: 20 }}><Wordmark size={18} /></div>
         )}
-        {/* Header */}
-        <h1
-          style={{
-            fontSize: 24,
-            fontWeight: 700,
-            color: colors.foreground,
-            margin: "0 0 8px 0",
-          }}
-        >
-          Connect a machine
-        </h1>
-        <p
-          style={{
-            fontSize: 14,
-            color: colors.foregroundSecondary,
-            margin: "0 0 28px 0",
-            lineHeight: 1.5,
-          }}
-        >
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <Eyebrow prompt>add a machine</Eyebrow>
+          <Display size={30}>Connect a machine</Display>
+        </div>
+        <Body size={15}>
           One line, pasted into a terminal on the machine you want to reach.
           It installs the agent, registers the machine with this hub and keeps
           the agent running. Works on this machine too.
-        </p>
+        </Body>
 
         {!requested && !loading && !error && !token ? (
           <div
@@ -209,132 +187,56 @@ export function OnboardingView({
               display: "flex",
               flexDirection: "column",
               gap: 14,
-              padding: 24,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 10,
-              background: colors.surface,
+              padding: 20,
+              border: `1px solid ${colors.lineSoft}`,
+              borderRadius: 4,
             }}
           >
-            <p
-              style={{
-                margin: 0,
-                color: colors.foregroundSecondary,
-                lineHeight: 1.6,
-                fontSize: 14,
-              }}
-            >
+            <Body size={14}>
               Generate a token when you are ready to paste the line into a terminal on the machine. Each token works once.
-            </p>
-            <button
-              onClick={handleGenerateClick}
-              style={{
-                width: "fit-content",
-                backgroundColor: colors.accent,
-                border: "none",
-                borderRadius: 999,
-                color: colors.onAccent,
-                padding: "10px 18px",
-                fontSize: 13,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              {getTokenActionLabel({ loading, token })}
-            </button>
+            </Body>
+            <div>
+              <Button size="sm" onClick={handleGenerateClick} ariaLabel={tokenAction}>
+                {tokenAction.toLowerCase()}
+              </Button>
+            </div>
           </div>
         ) : loading ? (
-          <div
-            style={{
-              textAlign: "center" as const,
-              padding: "32px 0",
-              color: colors.foregroundSecondary,
-              fontSize: 14,
-            }}
-          >
-            Generating registration token…
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, fontSize: 13, color: colors.fg2 }}>
+            <StepMark state="active" />
+            generating a registration token…
           </div>
         ) : error ? (
-          <div>
-            <div
-              style={{
-                color: colors.danger,
-                fontSize: 14,
-                marginBottom: 16,
-              }}
-            >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-start" }}>
+            <div role="alert" style={{ padding: "10px 12px", border: `1px solid ${colors.err}`, borderRadius: 4, color: colors.err, fontSize: 12 }}>
               {error}
             </div>
-            <button
-              onClick={handleGenerateClick}
-              style={{
-                backgroundColor: colors.surface,
-                border: `1px solid ${colors.border}`,
-                borderRadius: 6,
-                color: colors.foreground,
-                padding: "8px 16px",
-                fontSize: 13,
-                cursor: "pointer",
-              }}
-            >
-              Try again
-            </button>
+            <Button kind="secondary" size="sm" onClick={handleGenerateClick} ariaLabel="Try again">
+              try again
+            </Button>
           </div>
         ) : token ? (
-          <div>
-            <CodeBlock label="On the machine you want to reach" code={joinCmd} />
-
-            {/* Action buttons */}
-            <div
-              style={{
-                display: "flex",
-                gap: 10,
-                marginBottom: 24,
-              }}
-            >
-              <button
-                onClick={() => void handleCopy()}
-                style={{
-                  backgroundColor: colors.accent,
-                  border: "none",
-                  borderRadius: 6,
-                  color: colors.onAccent,
-                  padding: "8px 20px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                {copied ? "Copied!" : "Copy the line"}
-              </button>
-              <button
-                onClick={handleRegenerate}
-                style={{
-                  backgroundColor: "transparent",
-                  border: `1px solid ${colors.border}`,
-                  borderRadius: 6,
-                  color: colors.foregroundSecondary,
-                  padding: "8px 16px",
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                {getTokenActionLabel({ loading, token })}
-              </button>
+          <>
+            <CodeBlock label="on the machine you want to reach" code={joinCmd} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <Button size="sm" onClick={() => void handleCopy()} ariaLabel={copied ? "Copied!" : "Copy the line"}>
+                {copied ? "copied" : "copy the line"}
+              </Button>
+              <Button kind="secondary" size="sm" onClick={handleRegenerate} ariaLabel={tokenAction}>
+                {tokenAction.toLowerCase()}
+              </Button>
+              <span style={{ flex: 1 }} />
+              <span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg3 }}>
+                Works once, expires after 24 hours
+              </span>
             </div>
-
-            {/* Footer note */}
-            <p
-              style={{
-                fontSize: 12,
-                color: colors.foregroundMuted,
-                margin: 0,
-                lineHeight: 1.5,
-              }}
+            <div
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, fontSize: 13, color: colors.fg2 }}
             >
-              The token on that line works once and expires after 24 hours. Once the
-              machine connects, this page updates by itself.
-            </p>
-          </div>
+              <StepMark state="active" />
+              waiting for the machine to come online… this page updates by itself
+            </div>
+          </>
         ) : null}
 
         {/* The other half of setting up: the phone. This page is where
@@ -344,16 +246,17 @@ export function OnboardingView({
         {!embedded && (
           <div
             style={{
-              marginTop: 32,
+              marginTop: 16,
               paddingTop: 24,
-              borderTop: `1px solid ${colors.border}`,
+              borderTop: `1px solid ${colors.lineSoft}`,
             }}
           >
             <h2
               style={{
-                fontSize: 15,
+                fontSize: 17,
                 fontWeight: 600,
-                color: colors.foreground,
+                letterSpacing: "-0.02em",
+                color: colors.fg0,
                 margin: "0 0 4px",
               }}
             >
@@ -367,20 +270,28 @@ export function OnboardingView({
   );
 }
 
-export function MachineOnboardingDialog({
+function DialogFrame({
+  testId,
+  width,
+  closeLabel,
   onClose,
+  children,
 }: {
+  testId: string;
+  width: number;
+  closeLabel: string;
   onClose: () => void;
+  children: React.ReactNode;
 }) {
   return (
     <div
-      data-testid="add-machine-dialog"
+      data-testid={testId}
       onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
         zIndex: 80,
-        background: "rgba(0, 0, 0, 0.56)",
+        background: colorAlpha.overlay,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -388,123 +299,69 @@ export function MachineOnboardingDialog({
       }}
     >
       <div
+        role="dialog"
         onClick={(event) => event.stopPropagation()}
+        className="odk-float"
         style={{
           position: "relative",
-          width: "min(720px, 100%)",
+          width: `min(${width}px, 100%)`,
           maxHeight: "min(820px, calc(100vh - 40px))",
           overflowY: "auto",
-          background: colors.background,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 16,
-          boxShadow: "0 28px 80px -24px rgba(0, 0, 0, 0.7)",
-          padding: 24,
+          padding: 32,
+          boxSizing: "border-box",
         }}
       >
         <button
+          type="button"
           onClick={onClose}
-          title="Close add machine"
-          aria-label="Close add machine"
-          style={{
-            position: "absolute",
-            top: 14,
-            right: 14,
-            width: 32,
-            height: 32,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            borderRadius: 999,
-            border: `1px solid ${colors.border}`,
-            background: colors.surface,
-            color: colors.foregroundSecondary,
-            cursor: "pointer",
-          }}
+          title={closeLabel}
+          aria-label={closeLabel}
+          className="odk-text-btn"
+          style={{ position: "absolute", top: 24, right: 24 }}
         >
-          <X size={16} />
+          [esc]
         </button>
-        <OnboardingView embedded />
+        {children}
       </div>
     </div>
+  );
+}
+
+export function MachineOnboardingDialog({
+  onClose,
+}: {
+  onClose: () => void;
+}) {
+  useEscape(onClose);
+  return (
+    <DialogFrame testId="add-machine-dialog" width={720} closeLabel="Close add machine" onClose={onClose}>
+      <OnboardingView embedded />
+    </DialogFrame>
   );
 }
 
 /// The phone, reachable from anywhere in the app — not only from the page a
 /// fresh hub opens with, which a hub with a machine never shows again.
 export function MobileAppDialog({ onClose }: { onClose: () => void }) {
+  useEscape(onClose);
   return (
-    <div
-      data-testid="phone-dialog"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 80,
-        background: "rgba(0, 0, 0, 0.56)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
-    >
-      <div
-        onClick={(event) => event.stopPropagation()}
-        style={{
-          position: "relative",
-          width: "min(640px, 100%)",
-          maxHeight: "min(820px, calc(100vh - 40px))",
-          overflowY: "auto",
-          background: colors.background,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 16,
-          boxShadow: "0 28px 80px -24px rgba(0, 0, 0, 0.7)",
-          padding: 24,
-        }}
-      >
-        <button
-          onClick={onClose}
-          title="Close"
-          aria-label="Close"
-          style={{
-            position: "absolute",
-            top: 14,
-            right: 14,
-            width: 32,
-            height: 32,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            borderRadius: 999,
-            border: `1px solid ${colors.border}`,
-            background: colors.surface,
-            color: colors.foregroundSecondary,
-            cursor: "pointer",
-          }}
-        >
-          <X size={16} />
-        </button>
-        <h1
-          style={{
-            fontSize: 20,
-            fontWeight: 700,
-            color: colors.foreground,
-            margin: "0 0 6px 0",
-          }}
-        >
-          On your phone
-        </h1>
-        <p
-          style={{
-            fontSize: 14,
-            color: colors.foregroundSecondary,
-            margin: "0 0 20px 0",
-            lineHeight: 1.5,
-          }}
-        >
-          The same terminals, from wherever you are.
-        </p>
-        <MobileAppPanel />
+    <DialogFrame testId="phone-dialog" width={640} closeLabel="Close" onClose={onClose}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+        <Eyebrow prompt>phone</Eyebrow>
+        <Display size={26}>On your phone</Display>
+        <Body size={15}>The same terminals, from wherever you are.</Body>
       </div>
-    </div>
+      <MobileAppPanel />
+    </DialogFrame>
   );
+}
+
+function useEscape(onClose: () => void) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 }

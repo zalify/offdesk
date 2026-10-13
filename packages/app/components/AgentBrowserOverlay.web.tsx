@@ -117,7 +117,7 @@ export function AgentBrowserOverlay({
         position: "fixed",
         inset: 0,
         zIndex: 900,
-        background: colorAlpha.backgroundShadow,
+        background: colorAlpha.overlay,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -134,11 +134,12 @@ export function AgentBrowserOverlay({
           height: "min(86vh, 900px)",
           display: "flex",
           flexDirection: "column",
-          background: colors.bg0,
+          background: colors.bg1,
           color: colors.fg0,
           border: `1px solid ${colors.line}`,
-          borderRadius: 12,
-          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+          borderRadius: 6,
+          boxShadow: "0 24px 64px rgb(0 0 0 / 0.45)",
+          fontFamily: "var(--font-display)",
           overflow: "hidden",
           outline: "none",
         }}
@@ -146,11 +147,11 @@ export function AgentBrowserOverlay({
         <div
           style={{
             display: "flex",
-            alignItems: "center",
+            alignItems: "stretch",
             gap: 4,
-            padding: "6px 8px",
-            background: colors.bg1,
-            borderBottom: `1px solid ${colors.border}`,
+            height: 36,
+            padding: "0 8px",
+            borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
           }}
         >
@@ -159,13 +160,12 @@ export function AgentBrowserOverlay({
             aria-label="Browser tabs"
             style={{
               display: "flex",
-              alignItems: "center",
-              gap: 4,
+              alignItems: "stretch",
               minWidth: 0,
               overflowX: "auto",
             }}
           >
-            {browsers.map((browser) => {
+            {browsers.map((browser, index) => {
               const active = browser.id === selectedBrowserId;
               const label = browserLabel(browser);
               const needsYou = browserNeedsPerson(browser);
@@ -183,40 +183,30 @@ export function AgentBrowserOverlay({
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: 6,
-                    maxWidth: 220,
-                    minWidth: 100,
-                    padding: "5px 6px 5px 10px",
-                    borderRadius: 6,
-                    border: `1px solid ${active ? colorAlpha.accentLine : "transparent"}`,
-                    background: active ? colors.bg0 : "transparent",
-                    color: active ? colors.fg0 : colors.fg2,
+                    gap: 8,
+                    maxWidth: 260,
+                    padding: "0 6px 0 12px",
+                    borderBottom: `2px solid ${active ? colors.accent : "transparent"}`,
+                    boxSizing: "border-box",
+                    color: active ? colors.fg0 : colors.fg3,
                     cursor: "pointer",
-                    fontSize: 12,
+                    fontSize: 12.5,
                     flexShrink: 0,
                     opacity: closing ? 0.5 : 1,
                   }}
                 >
-                  <Globe
-                    size={12}
-                    aria-hidden
-                    style={{ flexShrink: 0, color: active ? colors.accent : colors.fg3 }}
-                  />
                   {needsYou && (
                     <span
                       role="img"
                       aria-label="The agent needs you"
                       title="The agent needs you"
                       data-testid={`agent-browser-tab-attention-${browser.id}`}
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: "50%",
-                        background: colors.warn,
-                        flexShrink: 0,
-                      }}
-                    />
+                      style={{ color: colors.err, flexShrink: 0 }}
+                    >
+                      !
+                    </span>
                   )}
+                  <span aria-hidden style={{ flexShrink: 0 }}>{index}:</span>
                   <span
                     style={{
                       flex: 1,
@@ -232,10 +222,10 @@ export function AgentBrowserOverlay({
                     <span
                       data-testid={`agent-browser-tab-you-${browser.id}`}
                       style={{
-                        fontSize: 9,
+                        fontSize: 10.5,
                         padding: "0 5px",
-                        borderRadius: 999,
-                        background: colorAlpha.accentSoft,
+                        border: `1px solid ${colors.line}`,
+                        borderRadius: 3,
                         color: colors.accent,
                         flexShrink: 0,
                       }}
@@ -253,9 +243,10 @@ export function AgentBrowserOverlay({
                       event.stopPropagation();
                       void closeTab(browser);
                     }}
-                    style={{ ...iconButton, padding: 2, flexShrink: 0 }}
+                    className="odk-text-btn"
+                    style={{ minHeight: 24, padding: "0 4px", fontSize: 12, flexShrink: 0 }}
                   >
-                    <X size={12} aria-hidden />
+                    [x]
                   </button>
                 </div>
               );
@@ -270,9 +261,10 @@ export function AgentBrowserOverlay({
               setAdding((value) => !value);
               setError(null);
             }}
-            style={{ ...iconButton, color: colors.fg2, flexShrink: 0 }}
+            className="odk-text-btn"
+            style={{ alignSelf: "center", flexShrink: 0 }}
           >
-            <Plus size={16} aria-hidden />
+            [+]
           </button>
           <div style={{ flex: 1 }} />
           <button
@@ -281,9 +273,10 @@ export function AgentBrowserOverlay({
             aria-label="Close browser"
             title="Close"
             onClick={onClose}
-            style={{ ...iconButton, color: colors.fg2, flexShrink: 0 }}
+            className="odk-text-btn"
+            style={{ alignSelf: "center", flexShrink: 0 }}
           >
-            <X size={16} aria-hidden />
+            [esc]
           </button>
         </div>
 
@@ -295,8 +288,7 @@ export function AgentBrowserOverlay({
               alignItems: "center",
               gap: 8,
               padding: "8px 10px",
-              borderBottom: `1px solid ${colors.border}`,
-              background: colors.bg1,
+              borderBottom: `1px solid ${colors.lineSoft}`,
               flexShrink: 0,
             }}
           >
@@ -307,40 +299,22 @@ export function AgentBrowserOverlay({
               value={address}
               onChange={(event) => setAddress(event.target.value)}
               onKeyDown={onAddressKeyDown}
-              placeholder="Enter a web address, e.g. example.com"
+              placeholder="a web address, e.g. example.com"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
               disabled={opening}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: "6px 10px",
-                fontSize: 13,
-                color: colors.foreground,
-                background: colors.bg0,
-                border: `1px solid ${colors.border}`,
-                borderRadius: 6,
-                outline: "none",
-              }}
+              className="odk-input"
+              style={{ flex: 1, minWidth: 0, height: 32, background: colors.bg0 }}
             />
             <button
               type="submit"
               data-testid="agent-browser-url-submit"
               disabled={opening}
-              style={{
-                fontSize: 12,
-                padding: "6px 12px",
-                borderRadius: 6,
-                border: "none",
-                background: colors.accent,
-                color: colors.onAccent,
-                cursor: opening ? "default" : "pointer",
-                opacity: opening ? 0.6 : 1,
-                flexShrink: 0,
-              }}
+              className="odk-btn odk-btn--primary odk-btn--sm"
+              style={{ flexShrink: 0 }}
             >
-              {opening ? "Opening…" : "Open"}
+              {opening ? "opening…" : "open"}
             </button>
           </form>
         )}
@@ -351,8 +325,8 @@ export function AgentBrowserOverlay({
             style={{
               padding: "5px 10px",
               fontSize: 12,
-              color: colors.danger,
-              borderBottom: `1px solid ${colors.border}`,
+              color: colors.err,
+              borderBottom: `1px solid ${colors.lineSoft}`,
               flexShrink: 0,
             }}
           >
