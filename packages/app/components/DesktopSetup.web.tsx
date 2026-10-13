@@ -792,18 +792,9 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
   };
 
   const row = (label: string, ok: boolean | null) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: colors.fg1 }}>
-      <span
-        style={{
-          width: 9,
-          height: 9,
-          borderRadius: "50%",
-          background: ok ? colors.ok : "transparent",
-          border: ok ? "none" : `2px dashed ${colors.fg3}`,
-          flexShrink: 0,
-        }}
-      />
-      {label}
+    <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: fontDisplay, fontSize: 14, color: ok ? colors.fg0 : colors.fg2 }}>
+      <StepMark state={ok ? "done" : "todo"} />
+      <span style={{ textTransform: "lowercase" }}>{label}</span>
     </div>
   );
 
@@ -844,7 +835,7 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
             </Button>
           </>
         ) : (
-          <Button kind="ghost" onClick={() => setConfirmStop(true)} style={{ height: 36, fontSize: 13 }}>
+          <Button kind="danger" onClick={() => setConfirmStop(true)} style={{ height: 36, fontSize: 12.5 }}>
             Stop being the hub
           </Button>
         )}

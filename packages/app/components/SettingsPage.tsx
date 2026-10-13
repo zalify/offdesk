@@ -136,11 +136,12 @@ function FontSelect({
           placeholder="Enter font name..."
           style={{
             flex: 1,
-            background: colors.surface,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 6,
-            color: colors.foreground,
+            background: colors.bg1,
+            border: `1px solid ${colors.line}`,
+            borderRadius: 4,
+            color: colors.fg0,
             padding: "8px 12px",
+            fontFamily: "var(--font-display)",
             fontSize: 13,
             outline: "none",
           }}
@@ -153,7 +154,7 @@ function FontSelect({
           style={{
             background: "none",
             border: `1px solid ${colors.border}`,
-            borderRadius: 6,
+            borderRadius: 4,
             color: colors.foregroundSecondary,
             cursor: "pointer",
             padding: "8px 10px",
@@ -177,11 +178,12 @@ function FontSelect({
         }}
         style={{
           flex: 1,
-          background: colors.surface,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 6,
-          color: colors.foreground,
+          background: colors.bg1,
+          border: `1px solid ${colors.line}`,
+          borderRadius: 4,
+          color: colors.fg0,
           padding: "8px 12px",
+          fontFamily: "var(--font-display)",
           fontSize: 13,
           outline: "none",
           cursor: "pointer",
@@ -200,7 +202,7 @@ function FontSelect({
         style={{
           background: "none",
           border: `1px solid ${colors.border}`,
-          borderRadius: 6,
+          borderRadius: 4,
           color: colors.foregroundSecondary,
           cursor: "pointer",
           padding: "8px 10px",
@@ -213,21 +215,29 @@ function FontSelect({
   );
 }
 
+export function sectionId(title: string): string {
+  return `settings-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
 function SectionTitle({ children }: { children: React.ReactNode }) {
+  const title = typeof children === "string" ? children : "";
   return (
-    <h3
+    <h2
+      id={title ? sectionId(title) : undefined}
       style={{
-        fontSize: 11,
+        fontFamily: "var(--font-display)",
+        fontSize: 20,
+        lineHeight: "26px",
         fontWeight: 600,
-        color: colors.foregroundMuted,
-        textTransform: "uppercase",
-        letterSpacing: 1,
-        marginBottom: 16,
+        letterSpacing: "-0.02em",
+        color: colors.fg0,
+        marginBottom: 12,
         marginTop: 0,
+        scrollMarginTop: 24,
       }}
     >
       {children}
-    </h3>
+    </h2>
   );
 }
 
@@ -241,13 +251,14 @@ function SettingRow({
   children: React.ReactNode;
 }) {
   return (
-    <div style={{ marginBottom: 20 }}>
+    <div style={{ padding: "12px 0", borderBottom: `1px solid ${colors.lineSoft}` }}>
       <div
         style={{
-          fontSize: 13,
-          fontWeight: 500,
-          color: colors.foreground,
-          marginBottom: description ? 2 : 8,
+          fontFamily: "var(--font-display)",
+          fontSize: 14,
+          color: colors.fg0,
+          textTransform: "lowercase",
+          marginBottom: description ? 4 : 8,
         }}
       >
         {label}
@@ -255,8 +266,10 @@ function SettingRow({
       {description && (
         <div
           style={{
-            fontSize: 11,
-            color: colors.foregroundMuted,
+            fontFamily: "var(--font-sans)",
+            fontSize: 12,
+            lineHeight: "18px",
+            color: colors.fg3,
             marginBottom: 8,
           }}
         >
@@ -667,12 +680,29 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     setBindingConflict(null);
   }, []);
 
+  const wideSettings = useMinWidth(900);
+  // The sections the nav lists, in page order, as their titles read.
+  const [navSections, setNavSections] = useState<string[]>([]);
+  useEffect(() => {
+    const root = contentRef.current;
+    if (!root) return;
+    const read = () => {
+      const titles = Array.from(root.querySelectorAll<HTMLHeadingElement>("h2[id^='settings-']"), (h) => h.textContent ?? "").filter(Boolean);
+      setNavSections((previous) => (previous.join("|") === titles.join("|") ? previous : titles));
+    };
+    read();
+    const observer = new MutationObserver(read);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+
   const inputStyle: React.CSSProperties = {
-    background: colors.surface,
-    border: `1px solid ${colors.border}`,
-    borderRadius: 6,
-    color: colors.foreground,
+    background: colors.bg1,
+    border: `1px solid ${colors.line}`,
+    borderRadius: 4,
+    color: colors.fg0,
     padding: "8px 12px",
+    fontFamily: "var(--font-display)",
     fontSize: 13,
     outline: "none",
     width: 80,
@@ -689,42 +719,28 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         flexDirection: "column",
       }}
     >
-      {/* Header */}
+      {/* D09: a thin bar with the way back; the title lives with the nav. */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
           gap: 12,
-          padding: "16px 24px",
-          borderBottom: `1px solid ${colors.border}`,
+          minHeight: 40,
+          padding: "0 16px",
+          background: colors.bg1,
+          borderBottom: `1px solid ${colors.lineSoft}`,
           flexShrink: 0,
         }}
       >
         <button
           onClick={onClose}
-          style={{
-            background: "none",
-            border: "none",
-            color: colors.foregroundSecondary,
-            cursor: "pointer",
-            padding: 4,
-            display: "flex",
-            alignItems: "center",
-          }}
+          className="odk-text-btn"
+          style={{ fontSize: 12.5, color: colors.fg2 }}
           title="Back"
+          aria-label="Back"
         >
-          <ArrowLeft size={18} />
+          ← back to terminals
         </button>
-        <h2
-          style={{
-            fontSize: 16,
-            fontWeight: 600,
-            color: colors.foreground,
-            margin: 0,
-          }}
-        >
-          Settings
-        </h2>
       </div>
 
       {/* Content */}
@@ -738,13 +754,15 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           width: "100%",
         }}
       >
-        <div data-testid="settings-column" style={{ width: "100%", maxWidth: 880, margin: "0 auto", padding: "24px 24px 48px", boxSizing: "border-box" }}>
+        <div data-testid="settings-column" style={{ width: "100%", maxWidth: 880, margin: "0 auto", padding: "32px 24px 48px", boxSizing: "border-box", display: "grid", gridTemplateColumns: wideSettings ? "200px minmax(0, 1fr)" : "minmax(0, 1fr)", gap: 40, alignItems: "start" }}>
+        <SettingsNav wide={wideSettings} sections={navSections} scroller={contentRef} />
+        <div style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 0 }}>
         {/* Appearance Section */}
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Appearance</SectionTitle>
 
           <SettingRow label="Theme" description="Saved on this device. Terminal colors stay the same.">
-            <div role="group" aria-label="Theme" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div role="group" aria-label="Theme" style={{ display: "inline-flex", border: `1px solid ${colors.line}`, borderRadius: 4, overflow: "hidden" }}>
               {([
                 ["light", "Light"],
                 ["dark", "Dark"],
@@ -756,16 +774,15 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   aria-pressed={theme === value}
                   onClick={() => setTheme(value)}
                   style={{
-                    flex: 1,
-                    minHeight: 44,
-                    padding: "10px 16px",
-                    borderRadius: 8,
-                    border: `1px solid ${theme === value ? colors.accent : colors.border}`,
-                    background: theme === value ? colorAlpha.accentSoft : colors.surface,
-                    color: theme === value ? colors.accent : colors.foregroundSecondary,
-                    font: "inherit",
-                    fontSize: 13,
-                    fontWeight: theme === value ? 700 : 500,
+                    minHeight: 36,
+                    padding: "0 14px",
+                    border: 0,
+                    background: theme === value ? colors.primary : "transparent",
+                    color: theme === value ? colors.onPrimary : colors.fg2,
+                    fontFamily: "var(--font-display)",
+                    fontSize: 12.5,
+                    fontWeight: theme === value ? 600 : 500,
+                    textTransform: "lowercase",
                     cursor: "pointer",
                   }}
                 >
@@ -853,7 +870,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               style={{
                 background: "none",
                 border: `1px solid ${colors.border}`,
-                borderRadius: 6,
+                borderRadius: 4,
                 color: colors.foregroundSecondary,
                 cursor: "pointer",
                 padding: "6px 10px",
@@ -906,7 +923,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     onKeyDown={handlePrefixRecordKeyDown}
                     style={{
                       minHeight: 32,
-                      borderRadius: 6,
+                      borderRadius: 4,
                       border: `1px solid ${
                         recording ? colors.accent : colors.border
                       }`,
@@ -1021,7 +1038,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             style={{
               background: "none",
               border: `1px dashed ${colors.border}`,
-              borderRadius: 6,
+              borderRadius: 4,
               color: colors.foregroundMuted,
               cursor: "pointer",
               padding: "8px 16px",
@@ -1066,7 +1083,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   style={{
                     background: "none",
                     border: `1px solid ${colors.border}`,
-                    borderRadius: 6,
+                    borderRadius: 4,
                     color: colors.foreground,
                     cursor: "pointer",
                     padding: "8px 16px",
@@ -1122,10 +1139,10 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 <button
                   onClick={handleServerUrlSave}
                   style={{
-                    background: colors.accent,
+                    background: colors.primary,
                     border: "none",
-                    borderRadius: 6,
-                    color: colors.onAccent,
+                    borderRadius: 4,
+                    color: colors.onPrimary,
                     cursor: "pointer",
                     padding: "8px 16px",
                     fontSize: 13,
@@ -1176,10 +1193,10 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               onClick={handleCreateToken}
               disabled={!newTokenName.trim()}
               style={{
-                background: colors.accent,
+                background: colors.primary,
                 border: "none",
-                borderRadius: 6,
-                color: colors.onAccent,
+                borderRadius: 4,
+                color: colors.onPrimary,
                 cursor: newTokenName.trim() ? "pointer" : "default",
                 opacity: newTokenName.trim() ? 1 : 0.5,
                 padding: "8px 16px",
@@ -1199,7 +1216,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 padding: 12,
                 background: colors.surface,
                 border: `1px solid ${colors.border}`,
-                borderRadius: 6,
+                borderRadius: 4,
               }}
             >
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -1221,7 +1238,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   style={{
                     background: "none",
                     border: `1px solid ${colors.border}`,
-                    borderRadius: 6,
+                    borderRadius: 4,
                     color: colors.foregroundSecondary,
                     cursor: "pointer",
                     padding: "8px 12px",
@@ -1235,7 +1252,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   style={{
                     background: "none",
                     border: `1px solid ${colors.border}`,
-                    borderRadius: 6,
+                    borderRadius: 4,
                     color: colors.foregroundSecondary,
                     cursor: "pointer",
                     padding: "8px 12px",
@@ -1296,7 +1313,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     style={{
                       background: "none",
                       border: `1px solid ${confirming ? colors.danger : colors.border}`,
-                      borderRadius: 6,
+                      borderRadius: 4,
                       color: confirming
                         ? colors.danger
                         : colors.foregroundSecondary,
@@ -1358,7 +1375,82 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           Font changes are saved on this device and apply without reloading.
         </div>
         </div>
+        </div>
       </div>
     </div>
   );
+}
+
+/** D09's left column: ~ $ settings, the title, and the sections as lowercase
+ *  links that scroll to them; the one in view is lime. On narrow windows
+ *  only the title shows. */
+function SettingsNav({ wide, sections, scroller }: {
+  wide: boolean;
+  sections: string[];
+  scroller: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [current, setCurrent] = useState(sections[0] ?? "");
+  useEffect(() => {
+    const root = scroller.current;
+    if (!root || !wide) return;
+    const update = () => {
+      const top = root.getBoundingClientRect().top + 48;
+      let active = sections[0] ?? "";
+      for (const title of sections) {
+        const el = document.getElementById(sectionId(title));
+        if (el && el.getBoundingClientRect().top <= top) active = title;
+      }
+      setCurrent(active);
+    };
+    update();
+    root.addEventListener("scroll", update, { passive: true });
+    return () => root.removeEventListener("scroll", update);
+  }, [scroller, sections, wide]);
+  return (
+    <nav aria-label="Settings sections" style={{ position: wide ? "sticky" : "static", top: 0, display: "flex", flexDirection: "column", gap: 2, fontFamily: "var(--font-display)" }}>
+      <div style={{ margin: "0 12px 6px", fontSize: 12, color: colors.fg3 }}>
+        <span aria-hidden="true" style={{ color: colors.accent }}>~</span> $ settings
+      </div>
+      <h1 style={{ margin: "0 12px 16px", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em", color: colors.fg0 }}>Settings</h1>
+      {wide && sections.map((title) => (
+        <button
+          key={title}
+          type="button"
+          aria-current={title === current ? "true" : undefined}
+          onClick={() => {
+            document.getElementById(sectionId(title))?.scrollIntoView({ block: "start", behavior: "smooth" });
+            setCurrent(title);
+          }}
+          style={{
+            textAlign: "left",
+            padding: "8px 12px",
+            border: 0,
+            borderRadius: 3,
+            background: title === current ? colors.primary : "transparent",
+            color: title === current ? colors.onPrimary : colors.fg2,
+            fontFamily: "var(--font-display)",
+            fontSize: 13,
+            fontWeight: title === current ? 600 : 400,
+            textTransform: "lowercase",
+            cursor: "pointer",
+          }}
+        >
+          {title}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+function useMinWidth(width: number): boolean {
+  const query = `(min-width: ${width}px)`;
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [query]);
+  return matches;
 }
