@@ -20,6 +20,16 @@ export interface TerminalInfo {
   reachable: boolean
   /** Best-effort live-screen detection; absent on older nodes. */
   attention?: "confirmation" | null
+  /** Set when an API-token client (the CLI an agent drives) opened it;
+   *  absent when a person did, and from older hubs. */
+  opened_by?: TerminalOpener | null
+}
+
+export interface TerminalOpener {
+  /** "other" is a kind a newer hub added. */
+  kind: "cli" | "other"
+  /** The CLI's --label, else the API token's name. */
+  label?: string | null
 }
 
 export interface WorkspaceGroupInfo {

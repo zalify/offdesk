@@ -369,8 +369,8 @@ both.
 ```
 offdesk machines [--all] [--json]               # list machines (default: online; --all includes offline)
 offdesk machines rm <id|name> [--yes]           # forget a registered machine
-offdesk ls [--machine <id>] [--json]            # list terminals: id, title, group, cwd, size, reachable
-offdesk open <machine> --cwd <dir> [--cmd <shell command>] [--group <name>] [--json]
+offdesk ls [--machine <id>] [--json]            # list terminals: id, title, group, cwd, size, reachable, opened by
+offdesk open <machine> --cwd <dir> [--cmd <shell command>] [--group <name>] [--label <name>] [--json]
 offdesk read <term> [--lines N] [--json]        # capture the current screen as text
 offdesk read --all [--machine <id>] [--lines N] [--json] [--concurrency N] [--include-unreachable]
                                                 # batch-capture every terminal's screen in one call
@@ -395,6 +395,9 @@ offdesk link [--no-open]                        # open the hub in a browser; on 
 
 - Machines and terminals are addressed by **id prefix** (first column of `ls`);
   ambiguous prefixes list candidates.
+- Terminals the CLI opens are marked "opened by agent" in the apps and in
+  `ls`, named by `--label` or else the API token's name, so you can tell them
+  from your own. Terminals opened in an app are not marked.
 - Exit codes: `0` success or wait condition met · `1` wait timed out ·
   `2` usage/config/network error. `--json` on every command that prints.
 - `--lines N` means "the last N rendered lines of the current screen" (after

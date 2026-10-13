@@ -24,6 +24,9 @@ pub struct CreateTerminalRequest<'a> {
     pub rows: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device_id: Option<&'a str>,
+    /// Who is opening it; the hub falls back to the API token's name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opened_by_label: Option<&'a str>,
 }
 
 /// Response of `GET /api/machines/{m}/terminals/{t}/foreground-process`.

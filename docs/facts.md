@@ -27,6 +27,22 @@ rename mapping is at the bottom.
 - Hub time limits: `open` five minutes, `wait` its timeout plus fifteen
   seconds, other commands sixty seconds (`crates/hub/src/routes/agent_browser.rs`).
 
+## Terminals opened by an agent (implementation added 2026-10-13)
+
+- A terminal created with an API token (the `offdesk` CLI) records
+  `opened_by: { kind: "cli", label }`; one created from an app session records
+  nothing (`crates/hub/src/routes/terminals.rs` `opener_for`).
+- The label is `offdesk open --label`, else the API token's name, with control
+  characters dropped and at most 40 characters (`crates/protocol/src/lib.rs`
+  `clean_opener_label`, `crates/cli/src/commands/open.rs`). The token itself is
+  never stored on the terminal.
+- The opener is persisted with the terminal session and survives hub restarts
+  and machine reconnects (`crates/hub/src/db/terminal_sessions.rs`,
+  `crates/hub/src/machine_manager.rs`).
+- `offdesk ls` shows an OPENED BY column (`crates/cli/src/commands/ls.rs`);
+  the phone title bar, the phone session switcher, the workspace manager and
+  desktop tabs say "agent" (`packages/app/lib/terminalOpener.ts`).
+
 ## Web previews (implementation added 2026-09-05)
 
 These facts describe the web-preview feature in this branch, not a production

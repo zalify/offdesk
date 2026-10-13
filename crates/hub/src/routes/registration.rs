@@ -201,6 +201,7 @@ mod tests {
             State(state),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
         )
         .await
