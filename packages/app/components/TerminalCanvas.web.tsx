@@ -2071,6 +2071,12 @@ function TerminalCanvasInner() {
                   if (activeMachine) handleEngageViewOnly(activeMachine.id);
                 }}
                 onDisengageViewOnly={handleDisengageViewOnly}
+                browserWaiting={(() => {
+                  const browser = scopedAgentBrowsers.find(browserNeedsPerson);
+                  return browser && !browserOverlayOpen
+                    ? { label: browserLabel(browser), reason: browser.handoff?.reason ?? "", open: () => handleOpenBrowserTab(browser.id) }
+                    : null;
+                })()}
               />
               </main>
             </KeyBarSlotProvider>

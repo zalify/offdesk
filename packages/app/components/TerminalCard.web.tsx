@@ -328,7 +328,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
           : {
               position: "relative" as const,
               background: colors.surface,
-              borderRadius: 8,
+              borderRadius: 6,
               border: `1px solid ${colors.border}`,
               overflow: "hidden",
               display: "flex",

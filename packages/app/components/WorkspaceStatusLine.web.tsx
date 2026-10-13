@@ -31,6 +31,7 @@ export function WorkspaceStatusLine({
   onRequestControl,
   onEngageViewOnly,
   onDisengageViewOnly,
+  browserWaiting = null,
 }: {
   terminals: TerminalInfo[];
   machines: MachineInfo[];
@@ -48,6 +49,8 @@ export function WorkspaceStatusLine({
   onRequestControl: () => void;
   onEngageViewOnly: () => void;
   onDisengageViewOnly: () => void;
+  /** An agent browser tab that handed off to a person. */
+  browserWaiting?: { label: string; reason: string; open: () => void } | null;
 }) {
   const message = useWorkspaceMessage();
   const sizeNotice = usePaneSizeNotice();
@@ -133,6 +136,16 @@ export function WorkspaceStatusLine({
               {enter.error}
             </span>
           ) : null}
+        </>
+      ) : browserWaiting ? (
+        <>
+          <StatusBadge>waiting</StatusBadge>
+          <span className="odk-status-text" data-testid="status-waiting-browser">
+            browser · {browserWaiting.label}{browserWaiting.reason ? ` · ${browserWaiting.reason}` : ""}
+          </span>
+          <button type="button" className="odk-status-btn odk-status-btn--quiet" onClick={browserWaiting.open}>
+            open ↵
+          </button>
         </>
       ) : sizeNotice ? (
         <>

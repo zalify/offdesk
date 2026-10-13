@@ -1539,7 +1539,9 @@ function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: bool
         minHeight: 30,
         padding: "0 12px 0 16px",
         borderBottom: `1px solid ${colors.bg3}`,
-        background: terminalTheme.background,
+        // The page colour: the same as the terminal in the dark theme, a
+        // paper title strip over the (always dark) terminal in the light one.
+        background: colors.bg0,
         fontFamily: "var(--font-display)",
         fontSize: 11.5,
         color: colors.fg3,
