@@ -28,6 +28,27 @@ pub struct CreateTerminalRequest {
     pub rows: u16,
     #[serde(default)]
     pub startup_command: Option<String>,
+    /// Who the terminal is for, shown beside it ("claude", "ci-bot"). Only
+    /// API-token callers are recorded as openers; app sessions ignore it.
+    #[serde(default)]
+    pub opened_by_label: Option<String>,
+}
+
+/// The opener to record for a terminal this caller creates: API-token callers
+/// (the CLI an agent drives, scripts) are marked, labelled with the label they
+/// passed or else their token's name. People in an app are not marked.
+fn opener_for(
+    auth_user: &AuthUser,
+    requested_label: Option<&str>,
+) -> Option<offdesk_protocol::TerminalOpener> {
+    let token_name = auth_user.api_token_name.as_deref()?;
+    let label = requested_label
+        .and_then(offdesk_protocol::clean_opener_label)
+        .or_else(|| offdesk_protocol::clean_opener_label(token_name));
+    Some(offdesk_protocol::TerminalOpener {
+        kind: offdesk_protocol::TerminalOpenerKind::Cli,
+        label,
+    })
 }
 
 #[derive(Deserialize)]
@@ -278,10 +299,18 @@ async fn create_terminal(
     }
 
     let startup_command = req.startup_command.clone();
+    let opened_by = opener_for(&auth_user, req.opened_by_label.as_deref());
 
     let terminal = state
         .manager
-        .create_terminal(&machine_id, &req.cwd, req.cols, req.rows, startup_command)
+        .create_terminal(
+            &machine_id,
+            &req.cwd,
+            req.cols,
+            req.rows,
+            startup_command,
+            opened_by,
+        )
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -1219,8 +1248,8 @@ mod tests {
         Json,
     };
     use offdesk_protocol::{
-        AgentBrowserInfo, HubToMachine, MachineInfo, MachineToHub, TerminalInfo,
-        WorkspaceLayoutNode,
+        AgentBrowserInfo, HubToMachine, MachineInfo, MachineToHub, TerminalInfo, TerminalOpener,
+        TerminalOpenerKind, WorkspaceLayoutNode,
     };
     use r2d2::Pool;
     use r2d2_sqlite::SqliteConnectionManager;
@@ -1229,7 +1258,8 @@ mod tests {
 
     use super::{
         assign_terminal_workspace_group, control_action_allowed, create_terminal,
-        create_workspace_group, rename_workspace_group, validate_workspace_layout_node,
+        create_workspace_group, list_all_terminals, rename_workspace_group,
+        validate_workspace_layout_node,
         with_agent_browser_pane_ids, workspace_layout_terminal_ids_for_group_key,
         AssignWorkspaceGroupRequest,
         CreateTerminalRequest, CreateWorkspaceGroupRequest, RenameWorkspaceGroupRequest,
@@ -1289,6 +1319,7 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
+            opened_by: None,
             reachable: true,
         }
     }
@@ -1533,6 +1564,7 @@ mod tests {
                 State(state_for_request),
                 AuthUser {
                     user_id: "user-a".to_string(),
+                    api_token_name: None,
                 },
                 Path("machine-a".to_string()),
                 Json(CreateTerminalRequest {
@@ -1542,6 +1574,7 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     startup_command,
+                    opened_by_label: None,
                 }),
             )
             .await
@@ -1551,6 +1584,94 @@ mod tests {
         let _ = request.await.unwrap().unwrap();
 
         startup_command
+    }
+
+    async fn terminal_created_by(
+        state: &AppState,
+        api_token_name: Option<&str>,
+        opened_by_label: Option<&str>,
+    ) -> TerminalInfo {
+        let (_conn_id, mut cmd_rx) = state
+            .manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        state
+            .manager
+            .request_control("user-a", "machine-a", "device-a");
+
+        let state_for_request = state.clone();
+        let api_token_name = api_token_name.map(str::to_string);
+        let opened_by_label = opened_by_label.map(str::to_string);
+        let request = tokio::spawn(async move {
+            create_terminal(
+                State(state_for_request),
+                AuthUser {
+                    user_id: "user-a".to_string(),
+                    api_token_name,
+                },
+                Path("machine-a".to_string()),
+                Json(CreateTerminalRequest {
+                    cwd: "/tmp".to_string(),
+                    workspace_group_id: None,
+                    device_id: Some("device-a".to_string()),
+                    cols: 80,
+                    rows: 24,
+                    startup_command: None,
+                    opened_by_label,
+                }),
+            )
+            .await
+        });
+        receive_create_terminal_command(state, &mut cmd_rx).await;
+        request.await.unwrap().unwrap().0
+    }
+
+    #[tokio::test]
+    async fn terminals_opened_with_an_api_token_say_so_and_keep_it() {
+        let state = test_state();
+        let terminal = terminal_created_by(&state, Some("ci-bot"), None).await;
+        let expected = Some(TerminalOpener {
+            kind: TerminalOpenerKind::Cli,
+            label: Some("ci-bot".to_string()),
+        });
+        assert_eq!(terminal.opened_by, expected, "labelled with the token's name");
+
+        let listed = list_all_terminals(
+            State(state.clone()),
+            AuthUser {
+                user_id: "user-a".to_string(),
+                api_token_name: None,
+            },
+        )
+        .await
+        .0;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].opened_by, expected, "listed with its opener");
+
+        let conn = state.db.get().unwrap();
+        let rows = crate::db::terminal_sessions::find_all_active(&conn).unwrap();
+        assert_eq!(
+            crate::db::terminal_sessions::opener_from_row(&rows[0]),
+            expected,
+            "persisted, so it survives a hub restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_label_passed_by_the_cli_names_the_opener() {
+        let state = test_state();
+        let terminal = terminal_created_by(&state, Some("ci-bot"), Some(" claude ")).await;
+        assert_eq!(
+            terminal.opened_by.and_then(|opener| opener.label).as_deref(),
+            Some("claude")
+        );
+    }
+
+    #[tokio::test]
+    async fn terminals_opened_in_an_app_are_not_marked() {
+        let state = test_state();
+        let terminal = terminal_created_by(&state, None, Some("claude")).await;
+        assert_eq!(terminal.opened_by, None, "an app can't claim to be an agent");
     }
 
     #[tokio::test]
@@ -1591,6 +1712,7 @@ mod tests {
                 State(state_for_request),
                 AuthUser {
                     user_id: "user-a".to_string(),
+                    api_token_name: None,
                 },
                 Path("machine-a".to_string()),
                 Json(CreateTerminalRequest {
@@ -1600,6 +1722,7 @@ mod tests {
                     cols: 80,
                     rows: 24,
                     startup_command: None,
+                    opened_by_label: None,
                 }),
             )
             .await
@@ -2112,6 +2235,7 @@ mod tests {
             State(state),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path("machine-a".to_string()),
             Json(CreateWorkspaceGroupRequest {
@@ -2158,6 +2282,7 @@ mod tests {
             State(state.clone()),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path("machine-a".to_string()),
             Json(CreateTerminalRequest {
@@ -2167,6 +2292,7 @@ mod tests {
                 cols: 80,
                 rows: 24,
                 startup_command: None,
+                opened_by_label: None,
             }),
         )
         .await
@@ -2183,6 +2309,7 @@ mod tests {
             State(state.clone()),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path(("machine-a".to_string(), "terminal-loose".to_string())),
             Json(AssignWorkspaceGroupRequest {
@@ -2203,6 +2330,7 @@ mod tests {
             State(state.clone()),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path(("machine-a".to_string(), "terminal-0".to_string())),
             Json(AssignWorkspaceGroupRequest {
@@ -2244,6 +2372,7 @@ mod tests {
             State(state.clone()),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path(("machine-a".to_string(), "group-a".to_string())),
             Json(RenameWorkspaceGroupRequest {
@@ -2294,6 +2423,7 @@ mod tests {
             State(state.clone()),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path(("machine-a".to_string(), "group-a".to_string())),
             Json(RenameWorkspaceGroupRequest {
@@ -2308,6 +2438,7 @@ mod tests {
             State(state),
             AuthUser {
                 user_id: "user-a".to_string(),
+                api_token_name: None,
             },
             Path(("machine-a".to_string(), "group-missing".to_string())),
             Json(RenameWorkspaceGroupRequest {

@@ -65,7 +65,7 @@ fn valid_target(target: &str) -> bool {
 }
 
 async fn create(
-    AuthUser { user_id }: AuthUser,
+    AuthUser { user_id, .. }: AuthUser,
     State(state): State<AppState>,
     Path(machine): Path<String>,
     Json(body): Json<CreateRequest>,
@@ -123,7 +123,7 @@ async fn create(
         Err(error) => (StatusCode::TOO_MANY_REQUESTS, error).into_response(),
     }
 }
-async fn list(AuthUser { user_id }: AuthUser, State(state): State<AppState>) -> Response {
+async fn list(AuthUser { user_id, .. }: AuthUser, State(state): State<AppState>) -> Response {
     let previews: Vec<_> = state
         .web_previews
         .leases
@@ -138,7 +138,7 @@ async fn list(AuthUser { user_id }: AuthUser, State(state): State<AppState>) -> 
     response
 }
 async fn revoke(
-    AuthUser { user_id }: AuthUser,
+    AuthUser { user_id, .. }: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> StatusCode {

@@ -157,6 +157,12 @@ pub fn verify_bearer_token(
     db: &db::DbPool,
     jwt_secret: &str,
 ) -> Result<String, AuthError> {
+    verify_bearer(token, db, jwt_secret).map(|auth| auth.user_id)
+}
+
+/// Verify a bearer token and say how the caller authenticated: API tokens are
+/// what the `offdesk` CLI (and agents driving it) use; apps hold a JWT.
+fn verify_bearer(token: &str, db: &db::DbPool, jwt_secret: &str) -> Result<AuthUser, AuthError> {
     if token.starts_with(API_TOKEN_PREFIX) || token.starts_with(API_TOKEN_PREFIX_LEGACY) {
         // API token path
         let token_hash = hash_token(token);
@@ -178,10 +184,16 @@ pub fn verify_bearer_token(
         // Update last_used_at (fire and forget)
         let _ = db::tokens::update_api_token_last_used(&conn, &row.id);
 
-        Ok(row.user_id)
+        Ok(AuthUser {
+            user_id: row.user_id,
+            api_token_name: Some(row.name),
+        })
     } else {
         // JWT path
-        verify_jwt(token, jwt_secret)
+        verify_jwt(token, jwt_secret).map(|user_id| AuthUser {
+            user_id,
+            api_token_name: None,
+        })
     }
 }
 
@@ -193,6 +205,9 @@ pub fn verify_bearer_token(
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: String,
+    /// Name of the API token the request carried; `None` for app sessions (JWT).
+    /// Only the name is kept, never the token.
+    pub api_token_name: Option<String>,
 }
 
 impl FromRequestParts<crate::AppState> for AuthUser {
@@ -212,9 +227,7 @@ impl FromRequestParts<crate::AppState> for AuthUser {
             .strip_prefix("Bearer ")
             .ok_or(AuthError::MissingAuth)?;
 
-        let user_id = verify_bearer_token(token, &state.db, &state.jwt_secret)?;
-
-        Ok(AuthUser { user_id })
+        verify_bearer(token, &state.db, &state.jwt_secret)
     }
 }
 

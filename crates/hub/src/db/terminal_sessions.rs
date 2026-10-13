@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection};
-use offdesk_protocol::TerminalTitleSource;
+use offdesk_protocol::{TerminalOpener, TerminalOpenerKind, TerminalTitleSource};
 
 use super::now_ms;
 use super::types::TerminalSessionRow;
@@ -175,53 +175,71 @@ pub fn count_active_in_workspace_group(
     )
 }
 
+const SESSION_COLUMNS: &str = "id, machine_id, title, title_source, cwd, workspace_group_id, \
+     cols, rows, created_at, destroyed_at, opened_by_kind, opened_by_label";
+
+fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TerminalSessionRow> {
+    Ok(TerminalSessionRow {
+        id: row.get(0)?,
+        machine_id: row.get(1)?,
+        title: row.get(2)?,
+        title_source: row.get(3)?,
+        cwd: row.get(4)?,
+        workspace_group_id: row.get(5)?,
+        cols: row.get(6)?,
+        rows: row.get(7)?,
+        created_at: row.get(8)?,
+        destroyed_at: row.get(9)?,
+        opened_by_kind: row.get(10)?,
+        opened_by_label: row.get(11)?,
+    })
+}
+
 pub fn find_active_by_machine(
     conn: &Connection,
     machine_id: &str,
 ) -> rusqlite::Result<Vec<TerminalSessionRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, machine_id, title, title_source, cwd, workspace_group_id, cols, rows, created_at, destroyed_at
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SESSION_COLUMNS}
          FROM terminal_sessions WHERE machine_id = ?1 AND destroyed_at IS NULL
-         ORDER BY created_at ASC, id ASC",
-    )?;
-    let rows = stmt.query_map(params![machine_id], |row| {
-        Ok(TerminalSessionRow {
-            id: row.get(0)?,
-            machine_id: row.get(1)?,
-            title: row.get(2)?,
-            title_source: row.get(3)?,
-            cwd: row.get(4)?,
-            workspace_group_id: row.get(5)?,
-            cols: row.get(6)?,
-            rows: row.get(7)?,
-            created_at: row.get(8)?,
-            destroyed_at: row.get(9)?,
-        })
-    })?;
+         ORDER BY created_at ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map(params![machine_id], session_row)?;
     rows.collect()
 }
 
 pub fn find_all_active(conn: &Connection) -> rusqlite::Result<Vec<TerminalSessionRow>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, machine_id, title, title_source, cwd, workspace_group_id, cols, rows, created_at, destroyed_at
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SESSION_COLUMNS}
          FROM terminal_sessions WHERE destroyed_at IS NULL
-         ORDER BY machine_id ASC, created_at ASC, id ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(TerminalSessionRow {
-            id: row.get(0)?,
-            machine_id: row.get(1)?,
-            title: row.get(2)?,
-            title_source: row.get(3)?,
-            cwd: row.get(4)?,
-            workspace_group_id: row.get(5)?,
-            cols: row.get(6)?,
-            rows: row.get(7)?,
-            created_at: row.get(8)?,
-            destroyed_at: row.get(9)?,
-        })
-    })?;
+         ORDER BY machine_id ASC, created_at ASC, id ASC"
+    ))?;
+    let rows = stmt.query_map([], session_row)?;
     rows.collect()
+}
+
+/// Record who opened a terminal (an API-token client). Written once when the
+/// hub creates the terminal; a machine reconnect never touches it.
+pub fn set_opened_by(
+    conn: &Connection,
+    id: &str,
+    opener: &TerminalOpener,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE terminal_sessions SET opened_by_kind = ?1, opened_by_label = ?2 WHERE id = ?3",
+        params![opener.kind.as_str(), opener.label, id],
+    )?;
+    Ok(())
+}
+
+/// The opener stored on a row, if any. Unknown kinds (written by a later
+/// version, read after a downgrade) are dropped rather than failing the row.
+pub fn opener_from_row(row: &TerminalSessionRow) -> Option<TerminalOpener> {
+    let kind = TerminalOpenerKind::from_name(row.opened_by_kind.as_deref()?)?;
+    Some(TerminalOpener {
+        kind,
+        label: row.opened_by_label.clone(),
+    })
 }
 
 #[cfg(test)]

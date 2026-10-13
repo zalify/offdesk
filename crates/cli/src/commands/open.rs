@@ -9,6 +9,7 @@ pub struct OpenOptions {
     pub group: Option<String>,
     pub cols: Option<u16>,
     pub rows: Option<u16>,
+    pub label: Option<String>,
     pub json: bool,
 }
 
@@ -30,6 +31,7 @@ pub async fn run(
         cols: options.cols,
         rows: options.rows,
         device_id: Some(client.device_id()),
+        opened_by_label: options.label.as_deref(),
     };
     let mut terminal = client.create_terminal(&machine.id, &request).await?;
 

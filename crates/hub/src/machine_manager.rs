@@ -7,7 +7,7 @@ use offdesk_protocol::{
     AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
     AgentBrowserReclaim, AgentSessionInfo, MouseAction, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
     ControlLeaseSnapshot, DirEntry, HubToMachine, MachineInfo, MachineStatsSnapshot, MachineToHub,
-    TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
+    TerminalInfo, TerminalOpener, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
@@ -206,6 +206,9 @@ pub struct MachineManager {
     db: crate::db::DbPool,
     /// Persisted terminals loaded at startup, consumed during machine reconnect reconciliation
     persisted_terminals: Arc<Mutex<HashMap<String, Vec<TerminalInfo>>>>,
+    /// Who asked for each terminal still being created, by request id, so
+    /// the terminal carries it from the moment the machine reports it.
+    pending_openers: Arc<std::sync::Mutex<HashMap<String, TerminalOpener>>>,
 }
 
 impl MachineManager {
@@ -227,6 +230,7 @@ impl MachineManager {
             let rows = crate::db::terminal_sessions::find_all_active(&conn).unwrap_or_default();
             let mut by_machine: HashMap<String, Vec<TerminalInfo>> = HashMap::new();
             for row in rows {
+                let opened_by = crate::db::terminal_sessions::opener_from_row(&row);
                 by_machine
                     .entry(row.machine_id.clone())
                     .or_default()
@@ -243,6 +247,7 @@ impl MachineManager {
                         rows: u16::try_from(row.rows).unwrap_or(24),
                         attention: None,
                         reachable: false,
+                        opened_by,
                     });
             }
             by_machine
@@ -268,6 +273,7 @@ impl MachineManager {
             mode: Arc::new(std::sync::Mutex::new(HashMap::new())),
             db,
             persisted_terminals: Arc::new(Mutex::new(persisted_terminals)),
+            pending_openers: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -934,11 +940,62 @@ impl MachineManager {
         cols: u16,
         rows: u16,
         startup_command: Option<String>,
+        opened_by: Option<TerminalOpener>,
     ) -> Result<TerminalInfo, String> {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         // Register pending request
         let rx = self.register_pending(&request_id).await;
+        if let Some(opener) = &opened_by {
+            self.pending_openers
+                .lock()
+                .unwrap()
+                .insert(request_id.clone(), opener.clone());
+        }
+        let result = self
+            .send_create_terminal(machine_id, &request_id, rx, cwd, cols, rows, startup_command)
+            .await;
+        self.pending_openers.lock().unwrap().remove(&request_id);
+
+        match result? {
+            PendingResult::TerminalCreated {
+                terminal_id,
+                title,
+                cwd,
+                cols,
+                rows,
+            } => {
+                let terminal = TerminalInfo {
+                    id: terminal_id,
+                    machine_id: machine_id.to_string(),
+                    title,
+                    cwd,
+                    title_source: Default::default(),
+                    workspace_group_id: None,
+                    cols,
+                    rows,
+                    attention: None,
+                    reachable: true,
+                    opened_by,
+                };
+                Ok(terminal)
+            }
+            _ => Err("Unexpected response".to_string()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn send_create_terminal(
+        &self,
+        machine_id: &str,
+        request_id: &str,
+        rx: oneshot::Receiver<Result<PendingResult, String>>,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        startup_command: Option<String>,
+    ) -> Result<PendingResult, String> {
+        let request_id = request_id.to_string();
 
         // Send command to machine
         let cmd_tx = {
@@ -976,31 +1033,7 @@ impl MachineManager {
                 return Err("Timeout waiting for terminal creation".to_string());
             }
         };
-
-        match result? {
-            PendingResult::TerminalCreated {
-                terminal_id,
-                title,
-                cwd,
-                cols,
-                rows,
-            } => {
-                let terminal = TerminalInfo {
-                    id: terminal_id,
-                    machine_id: machine_id.to_string(),
-                    title,
-                    cwd,
-                    title_source: Default::default(),
-                    workspace_group_id: None,
-                    cols,
-                    rows,
-                    attention: None,
-                    reachable: true,
-                };
-                Ok(terminal)
-            }
-            _ => Err("Unexpected response".to_string()),
-        }
+        result
     }
 
     /// Destroy a terminal on a machine
@@ -1902,6 +1935,7 @@ impl MachineManager {
                 cols,
                 rows,
             } => {
+                let opened_by = self.pending_openers.lock().unwrap().get(&request_id).cloned();
                 {
                     let mut machines = self.machines.lock().await;
                     if let Some(conn) = machines.get_mut(machine_id) {
@@ -1917,6 +1951,7 @@ impl MachineManager {
                             rows,
                             attention: None,
                             reachable: true,
+                            opened_by: opened_by.clone(),
                         };
                         conn.terminals.insert(terminal_id.clone(), terminal.clone());
 
@@ -1936,6 +1971,15 @@ impl MachineManager {
                         rows,
                     ) {
                         tracing::warn!("Failed to persist terminal session: {}", e);
+                    }
+                    if let Some(opener) = &opened_by {
+                        if let Err(e) = crate::db::terminal_sessions::set_opened_by(
+                            &db_conn,
+                            &terminal_id,
+                            opener,
+                        ) {
+                            tracing::warn!("Failed to persist terminal opener: {}", e);
+                        }
                     }
                 }
 
@@ -2176,6 +2220,7 @@ impl MachineManager {
                             // sidecar cannot erase an OSC-derived title.
                             terminal.title = persisted_terminal.title.clone();
                             terminal.title_source = persisted_terminal.title_source;
+                            terminal.opened_by = persisted_terminal.opened_by.clone();
                         }
                         conn.terminals.insert(terminal.id.clone(), terminal.clone());
 
@@ -3175,6 +3220,7 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
+            opened_by: None,
             reachable: true,
         }
     }
@@ -3635,7 +3681,7 @@ mod tests {
         let manager = MachineManager::new(test_db());
 
         let error = manager
-            .create_terminal("missing-machine", "/tmp", 80, 24, None)
+            .create_terminal("missing-machine", "/tmp", 80, 24, None, None)
             .await
             .unwrap_err();
 
@@ -3653,7 +3699,7 @@ mod tests {
         drop(cmd_rx);
 
         let error = manager
-            .create_terminal("machine-a", "/tmp", 80, 24, None)
+            .create_terminal("machine-a", "/tmp", 80, 24, None, None)
             .await
             .unwrap_err();
 
@@ -4309,6 +4355,58 @@ mod tests {
         assert_eq!(snapshot.terminals.len(), 1);
         assert_eq!(snapshot.terminals[0].id, "term-a");
         assert!(snapshot.terminals[0].reachable);
+    }
+
+    #[tokio::test]
+    async fn reconcile_keeps_who_opened_a_terminal() {
+        let pool = test_db();
+        let opener = TerminalOpener {
+            kind: offdesk_protocol::TerminalOpenerKind::Cli,
+            label: Some("ci-bot".to_string()),
+        };
+        {
+            let conn = pool.get().unwrap();
+            conn.execute(
+                "INSERT INTO users (id, provider, provider_id, display_name, role, created_at) VALUES ('user-a', 'test', 'test', 'Test', 'user', 0)",
+                [],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO machines (id, user_id, name, machine_secret_hash, status, created_at) VALUES ('machine-a', 'user-a', 'Machine A', 'hash', 'offline', 0)",
+                [],
+            ).unwrap();
+            crate::db::terminal_sessions::insert(
+                &conn,
+                "term-a",
+                "machine-a",
+                "bash",
+                "/home",
+                80,
+                24,
+            )
+            .unwrap();
+            crate::db::terminal_sessions::set_opened_by(&conn, "term-a", &opener).unwrap();
+        }
+
+        let manager = MachineManager::new(pool.clone());
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(snapshot.terminals[0].opened_by.as_ref(), Some(&opener));
+
+        // The machine doesn't know who opened it; the hub keeps that.
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![terminal("machine-a", "term-a")],
+                },
+            )
+            .await;
+
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert!(snapshot.terminals[0].reachable);
+        assert_eq!(snapshot.terminals[0].opened_by.as_ref(), Some(&opener));
     }
 
     #[tokio::test]

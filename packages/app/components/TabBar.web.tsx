@@ -30,6 +30,7 @@ import { FolderOpen, FolderTree, Globe, Lock, Plus, Settings, Smartphone } from 
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
+import { terminalOpenerDescription } from "@/lib/terminalOpener";
 import { diskPercent, diskTooltip } from "@/lib/resourceStats";
 import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { HostSwitcher } from "./HostSwitcher.web";
@@ -376,6 +377,7 @@ function TabBarComponent({
         {groups.map((group) => {
           const active = group.id === activeGroupId;
           const annotation = groupAnnotation(group, terminalsById);
+          const opener = groupOpenerDescription(group, terminalsById);
           return (
             <div
               key={group.id}
@@ -478,6 +480,21 @@ function TabBarComponent({
                     }}
                   >
                     {annotation}
+                  </span>
+                )}
+                {opener && (
+                  <span
+                    data-testid={`workspace-group-opener-${group.id}`}
+                    title={opener}
+                    style={{
+                      marginLeft: 6,
+                      color: active ? terminalTheme.white : colors.fg3,
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      flexShrink: 0,
+                    }}
+                  >
+                    agent
                   </span>
                 )}
               </button>
@@ -826,6 +843,20 @@ function groupAnnotation(
   }
   const shown = titles.slice(0, 2).join(" ▏");
   return titles.length > 2 ? `${shown} +${titles.length - 2}` : shown;
+}
+
+// Spelled-out opener of the first pane an agent opened (through the CLI),
+// so a tab it opened says so; null when people opened every pane.
+function groupOpenerDescription(
+  group: WorkspaceGroup,
+  terminalsById: Map<string, TerminalInfo>,
+): string | null {
+  for (const id of collectPaneTerminalIds(group.root)) {
+    const terminal = terminalsById.get(id);
+    const description = terminal && terminalOpenerDescription(terminal);
+    if (description) return description;
+  }
+  return null;
 }
 
 /* ---------- cpu/mem/disk micro-meters ---------- */

@@ -91,10 +91,22 @@ pub fn group_label(terminal: &TerminalInfo, names: &HashMap<String, String>) -> 
     })
 }
 
+/// Who opened a terminal, for tables: "agent" or "agent (label)" for
+/// terminals opened through an API token; None when a person opened it.
+pub fn opener_label(terminal: &TerminalInfo) -> Option<String> {
+    terminal
+        .opened_by
+        .as_ref()
+        .map(|opener| match &opener.label {
+            Some(label) => format!("agent ({label})"),
+            None => "agent".to_string(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::group_label;
-    use offdesk_protocol::TerminalInfo;
+    use super::{group_label, opener_label};
+    use offdesk_protocol::{TerminalInfo, TerminalOpener, TerminalOpenerKind};
     use std::collections::HashMap;
 
     fn terminal(group_id: Option<&str>) -> TerminalInfo {
@@ -108,6 +120,7 @@ mod tests {
             cols: 80,
             rows: 24,
             attention: None,
+            opened_by: None,
             reachable: true,
         }
     }
@@ -125,5 +138,21 @@ mod tests {
             Some("group-bb".to_string())
         );
         assert_eq!(group_label(&terminal(None), &names), None);
+    }
+
+    #[test]
+    fn opener_label_marks_terminals_an_agent_opened() {
+        let mut opened = terminal(None);
+        assert_eq!(opener_label(&opened), None);
+        opened.opened_by = Some(TerminalOpener {
+            kind: TerminalOpenerKind::Cli,
+            label: None,
+        });
+        assert_eq!(opener_label(&opened), Some("agent".to_string()));
+        opened.opened_by = Some(TerminalOpener {
+            kind: TerminalOpenerKind::Cli,
+            label: Some("claude".to_string()),
+        });
+        assert_eq!(opener_label(&opened), Some("agent (claude)".to_string()));
     }
 }

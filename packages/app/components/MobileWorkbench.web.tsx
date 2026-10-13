@@ -51,6 +51,7 @@ import {
 import { colors, colorAlpha } from "@/lib/colors";
 import { pickSelectedBrowserId } from "@/lib/agentBrowserOverlay";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
+import { terminalOpenerDescription, terminalOpenerText } from "@/lib/terminalOpener";
 import { diskPercent, diskTooltip } from "@/lib/resourceStats";
 import {
   buildMobileSessionGroups,
@@ -450,7 +451,10 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           type="button"
           data-testid="mobile-title-bar-label"
           aria-label="Open terminal switcher"
-          aria-description={`Session ${activePosition} of ${chips.length}`}
+          aria-description={[
+            `Session ${activePosition} of ${chips.length}`,
+            activeChip && terminalOpenerDescription(activeChip.terminal),
+          ].filter(Boolean).join(". ")}
           aria-expanded={sessionSwitcherOpen}
           onClick={() => {
             if (suppressTitleBarClickRef.current) { suppressTitleBarClickRef.current = false; return; }
@@ -494,6 +498,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 }}
               >
                 {activeChip.group.label} · {activeMachine?.name ?? ""}
+                {terminalOpenerText(activeChip.terminal) && (
+                  <span data-testid="mobile-title-bar-opener">
+                    {" · "}{terminalOpenerText(activeChip.terminal)}
+                  </span>
+                )}
               </span>
             </>
           ) : (
@@ -958,6 +967,21 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                       >
                         {terminal.cwd}
                       </span>
+                      {terminalOpenerText(terminal) && (
+                        <span
+                          data-testid={`mobile-session-opener-${terminal.id}`}
+                          title={terminalOpenerDescription(terminal) ?? undefined}
+                          style={{
+                            display: "block",
+                            marginTop: 3,
+                            color: colors.fg3,
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 11,
+                          }}
+                        >
+                          opened by {terminalOpenerText(terminal)}
+                        </span>
+                      )}
                     </button>
                     <button
                       type="button"
