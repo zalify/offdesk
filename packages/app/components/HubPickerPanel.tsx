@@ -63,7 +63,7 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
     if (mounted.current) setIdentity(endpoint);
   });
   return <div data-testid="hub-picker" style={{ padding: 16, display: "grid", gap: 16, color: colors.fg0, fontFamily: "var(--font-display)" }}>
-    {(adding || selected) && <Button kind="ghost" disabled={busy !== null} onClick={back} style={{ justifySelf: "start", padding: "0 4px" }}>← Saved Hubs</Button>}
+    {(adding || selected) && <Button kind="ghost" disabled={busy !== null} onClick={back} style={{ justifySelf: "start", padding: "0 4px" }}><span aria-hidden="true">←</span> Saved Hubs</Button>}
     {!adding && !selected && <>
       <Body size={13}>Choose a Hub, then its connection. Your terminals keep running when you switch.</Body>
       {hubs.length > 0 && <div style={{ border: `1px solid ${colors.lineSoft}`, borderRadius: 6, overflow: "hidden" }}>
