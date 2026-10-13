@@ -152,7 +152,9 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             cols INTEGER NOT NULL,
             rows INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
-            destroyed_at INTEGER
+            destroyed_at INTEGER,
+            opened_by_kind TEXT,
+            opened_by_label TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_terminal_sessions_machine
@@ -215,6 +217,22 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     if !column_exists(conn, "terminal_sessions", "title_source")? {
         conn.execute(
             "ALTER TABLE terminal_sessions ADD COLUMN title_source TEXT NOT NULL DEFAULT 'none'",
+            [],
+        )?;
+    }
+
+    // Who opened a terminal when it wasn't a person in an app (an API-token
+    // client such as the `offdesk` CLI). NULL for everything created before.
+    if !column_exists(conn, "terminal_sessions", "opened_by_kind")? {
+        conn.execute(
+            "ALTER TABLE terminal_sessions ADD COLUMN opened_by_kind TEXT",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "terminal_sessions", "opened_by_label")? {
+        conn.execute(
+            "ALTER TABLE terminal_sessions ADD COLUMN opened_by_label TEXT",
             [],
         )?;
     }
@@ -450,6 +468,64 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    #[test]
+    fn terminal_opener_columns_are_added_to_an_existing_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        // terminal_sessions as hubs created it before openers were recorded.
+        conn.execute_batch(
+            "CREATE TABLE terminal_sessions (
+                id TEXT PRIMARY KEY,
+                machine_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                title_source TEXT NOT NULL DEFAULT 'none',
+                cwd TEXT NOT NULL,
+                workspace_group_id TEXT,
+                cols INTEGER NOT NULL,
+                rows INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                destroyed_at INTEGER
+            );",
+        )
+        .unwrap();
+
+        init_db(&conn).unwrap();
+
+        assert!(column_exists(&conn, "terminal_sessions", "opened_by_kind").unwrap());
+        assert!(column_exists(&conn, "terminal_sessions", "opened_by_label").unwrap());
+        // Running it again is a no-op.
+        init_db(&conn).unwrap();
+    }
+
+    #[test]
+    fn terminal_opener_round_trips_and_defaults_to_none() {
+        use offdesk_protocol::{TerminalOpener, TerminalOpenerKind};
+
+        let conn = migrated_db();
+        terminal_sessions::insert(&conn, "by-cli", "machine-a", "claude", "/repo", 80, 24)
+            .unwrap();
+        terminal_sessions::insert(&conn, "by-app", "machine-a", "bash", "/repo", 80, 24).unwrap();
+        let opener = TerminalOpener {
+            kind: TerminalOpenerKind::Cli,
+            label: Some("ci-bot".to_string()),
+        };
+        terminal_sessions::set_opened_by(&conn, "by-cli", &opener).unwrap();
+
+        let rows = terminal_sessions::find_all_active(&conn).unwrap();
+        let opener_of = |id: &str| {
+            terminal_sessions::opener_from_row(rows.iter().find(|row| row.id == id).unwrap())
+        };
+        assert_eq!(opener_of("by-cli"), Some(opener));
+        assert_eq!(opener_of("by-app"), None);
+
+        // A later machine report (insert's upsert) keeps the opener.
+        terminal_sessions::insert(&conn, "by-cli", "machine-a", "claude", "/repo2", 100, 30)
+            .unwrap();
+        let rows = terminal_sessions::find_active_by_machine(&conn, "machine-a").unwrap();
+        let row = rows.iter().find(|row| row.id == "by-cli").unwrap();
+        assert_eq!(row.opened_by_kind.as_deref(), Some("cli"));
+        assert_eq!(row.opened_by_label.as_deref(), Some("ci-bot"));
     }
 
     #[test]

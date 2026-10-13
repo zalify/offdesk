@@ -42,6 +42,62 @@ pub struct TerminalInfo {
     /// Best-effort detection of an interactive confirmation on the live screen.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention: Option<TerminalAttention>,
+    /// Set when the terminal was opened through the API with an API token
+    /// (the `offdesk` CLI an agent drives) rather than by a person in an app.
+    /// Hub-authoritative: machines never set it. Absent from older hubs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opened_by: Option<TerminalOpener>,
+}
+
+/// Who opened a terminal that a person didn't open from an app.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalOpener {
+    pub kind: TerminalOpenerKind,
+    /// Human label: the `--label` the client passed, else the API token's name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOpenerKind {
+    /// An API-token client: the `offdesk` CLI, its MCP server, or a script.
+    Cli,
+    /// A kind added by a newer hub, so older clients still read the terminal.
+    #[serde(other)]
+    Other,
+}
+
+impl TerminalOpenerKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TerminalOpenerKind::Cli => "cli",
+            TerminalOpenerKind::Other => "other",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "cli" => Some(TerminalOpenerKind::Cli),
+            _ => None,
+        }
+    }
+}
+
+/// Longest opener label kept, in characters.
+pub const TERMINAL_OPENER_LABEL_MAX: usize = 40;
+
+/// Make a label safe to show: control characters dropped, whitespace trimmed,
+/// at most `TERMINAL_OPENER_LABEL_MAX` characters. Empty labels become `None`.
+pub fn clean_opener_label(label: &str) -> Option<String> {
+    let without_controls: String = label.chars().filter(|c| !c.is_control()).collect();
+    let cleaned: String = without_controls
+        .trim()
+        .chars()
+        .take(TERMINAL_OPENER_LABEL_MAX)
+        .collect();
+    let cleaned = cleaned.trim_end();
+    (!cleaned.is_empty()).then(|| cleaned.to_string())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -1340,8 +1396,9 @@ mod tests {
         encode_attach_output_frame, encode_terminal_preview_output_frame, AgentBrowserController,
         AgentBrowserDialogKind, AgentBrowserInfo, AgentBrowserInputEvent, AgentBrowserNav,
         BrowserEventsClientMessage, BrowserEventsPong, HubToMachine, MachineToHub, MouseButton,
-        NavAction, TerminalInfo, TerminalTitleSource, AGENT_BROWSER_MAX_INPUT_TEXT,
-        AGENT_BROWSER_MAX_URL,
+        clean_opener_label, NavAction, TerminalInfo, TerminalOpener, TerminalOpenerKind,
+        TerminalTitleSource, AGENT_BROWSER_MAX_INPUT_TEXT, AGENT_BROWSER_MAX_URL,
+        TERMINAL_OPENER_LABEL_MAX,
     };
     use bytes::Bytes;
 
@@ -1550,6 +1607,50 @@ mod tests {
         let round_tripped =
             serde_json::from_str::<TerminalInfo>(&serde_json::to_string(&info).unwrap()).unwrap();
         assert_eq!(round_tripped, info);
+    }
+
+    #[test]
+    fn terminal_opener_is_optional_and_additive() {
+        let json = r#"{
+            "id": "term-a",
+            "machine_id": "machine-a",
+            "title": "bash",
+            "cwd": "/tmp",
+            "cols": 80,
+            "rows": 24
+        }"#;
+        let mut info = serde_json::from_str::<TerminalInfo>(json).unwrap();
+        assert_eq!(info.opened_by, None);
+        // Absent rather than null, so older clients see the same shape.
+        assert!(serde_json::to_value(&info).unwrap().get("opened_by").is_none());
+
+        info.opened_by = Some(TerminalOpener {
+            kind: TerminalOpenerKind::Cli,
+            label: Some("ci-bot".to_string()),
+        });
+        let value = serde_json::to_value(&info).unwrap();
+        assert_eq!(
+            value["opened_by"],
+            serde_json::json!({ "kind": "cli", "label": "ci-bot" })
+        );
+        assert_eq!(serde_json::from_value::<TerminalInfo>(value).unwrap(), info);
+
+        // A kind from a newer hub still reads.
+        let opener: TerminalOpener =
+            serde_json::from_value(serde_json::json!({ "kind": "something_new" })).unwrap();
+        assert_eq!(opener.kind, TerminalOpenerKind::Other);
+    }
+
+    #[test]
+    fn opener_labels_are_trimmed_and_bounded() {
+        assert_eq!(clean_opener_label("  claude \n"), Some("claude".to_string()));
+        assert_eq!(clean_opener_label("ci\u{1b}[31m-bot"), Some("ci[31m-bot".to_string()));
+        assert_eq!(clean_opener_label("   "), None);
+        let long = "x".repeat(100);
+        assert_eq!(
+            clean_opener_label(&long).unwrap().chars().count(),
+            TERMINAL_OPENER_LABEL_MAX
+        );
     }
 
     #[test]

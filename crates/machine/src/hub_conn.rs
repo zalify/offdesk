@@ -286,6 +286,7 @@ impl HubConnection {
                 cols: s.cols,
                 rows: s.rows,
                 attention: None,
+                opened_by: None,
                 reachable: true,
             })
             .collect();

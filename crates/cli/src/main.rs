@@ -136,6 +136,10 @@ enum Commands {
         cols: Option<u16>,
         #[arg(long)]
         rows: Option<u16>,
+        /// Who is opening it, shown on the terminal as "opened by agent"
+        /// (e.g. claude); defaults to the API token's name
+        #[arg(long)]
+        label: Option<String>,
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -743,6 +747,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             group,
             cols,
             rows,
+            label,
             json,
         } => {
             let options = commands::open::OpenOptions {
@@ -751,6 +756,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 group,
                 cols,
                 rows,
+                label,
                 json,
             };
             commands::open::run(&hub_client, &machine, options).await

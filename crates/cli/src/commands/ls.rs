@@ -19,18 +19,19 @@ pub async fn run(client: &HubClient, machine: Option<String>, json: bool) -> Res
     let group_names = super::fetch_group_names(client, &terminals).await?;
 
     super::out_line(&format!(
-        "{:<10} {:<24} {:<16} {:<32} {:>9} {:<9}",
-        "ID", "TITLE", "GROUP", "CWD", "SIZE", "REACHABLE"
+        "{:<10} {:<24} {:<16} {:<32} {:>9} {:<9} {}",
+        "ID", "TITLE", "GROUP", "CWD", "SIZE", "REACHABLE", "OPENED BY"
     ));
     for terminal in &terminals {
         super::out_line(&format!(
-            "{:<10} {:<24} {:<16} {:<32} {:>9} {:<9}",
+            "{:<10} {:<24} {:<16} {:<32} {:>9} {:<9} {}",
             short_id(&terminal.id),
             terminal.title,
             super::group_label(terminal, &group_names).unwrap_or_else(|| "-".to_string()),
             terminal.cwd,
             format!("{}x{}", terminal.cols, terminal.rows),
             if terminal.reachable { "yes" } else { "no" },
+            super::opener_label(terminal).unwrap_or_else(|| "-".to_string()),
         ));
     }
     Ok(())

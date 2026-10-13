@@ -287,6 +287,7 @@ mod tests {
             cols: 107,
             rows: 59,
             attention: None,
+            opened_by: None,
             reachable: true,
         }
     }

@@ -17,6 +17,7 @@ import { colors, colorAlpha } from "@/lib/colors";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { fontDisplay } from "./Warm.web";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
+import { terminalOpenerDescription, terminalOpenerText } from "@/lib/terminalOpener";
 import {
   collectPaneTerminalIds,
   type WorkspaceGroup,
@@ -344,6 +345,15 @@ function WorkspaceManagerComponent({
                                   {displayTerminalTitle(terminal)}
                                 </span>
                                 <span style={terminalCwdStyle}>{terminal.cwd}</span>
+                                {terminalOpenerText(terminal) && (
+                                  <span
+                                    data-testid={`workspace-manager-opener-${terminal.id}`}
+                                    title={terminalOpenerDescription(terminal) ?? undefined}
+                                    style={terminalCwdStyle}
+                                  >
+                                    opened by {terminalOpenerText(terminal)}
+                                  </span>
+                                )}
                               </span>
                             </button>
 
