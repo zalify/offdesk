@@ -25,7 +25,7 @@ export function UiUpdateNotification({inline=false}: {inline?: boolean}) {
   if (!inline && (!status.pendingVersion || dismissed === status.pendingVersion)) return null;
   const text = busy || status.checking ? 'Checking for interface updates…' : status.pendingVersion ? `Interface ${status.pendingVersion} is ready. It will apply the next time the app starts.` : message ?? 'Interface updates install without replacing the app.';
   if (inline) return <div style={{fontSize:12,marginTop:12,display:'flex',flexDirection:'column',gap:8,alignItems:'flex-start'}}>
-    <div style={{color:colors.fg3}}>interface {status.currentVersion} · {status.channel}</div>
+    <div style={{color:colors.fg3,textTransform:'lowercase'}}>Interface: {status.currentVersion} · {status.channel}</div>
     <div role="status" aria-live="polite" style={{fontFamily:'var(--font-sans)',fontSize:13,color:colors.fg2}}>{text}</div>
     <Button size="sm" kind="secondary" disabled={busy || status.checking} onClick={() => void checkUiUpdate()} ariaLabel="Check interface updates">check interface updates</Button>
   </div>;

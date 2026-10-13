@@ -332,6 +332,9 @@ function TabBarComponent({
           overflowY: "hidden",
           minWidth: 0,
           flex: "0 1 auto",
+          // Reach over the bar's bottom border, so the active tab's accent
+          // rule sits on it, the way tmux marks the current window.
+          marginBottom: -1,
         }}
       >
         {groups.map((group, index) => {
