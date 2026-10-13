@@ -546,6 +546,9 @@ export function FileBrowser({
                       {size}
                     </span>
                   )}
+                  {touch && entry.is_dir && (
+                    <span aria-hidden style={{ color: colors.fg3, flexShrink: 0 }}>›</span>
+                  )}
                   {!touch && (
                     <span
                       style={{

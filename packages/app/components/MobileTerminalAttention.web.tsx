@@ -153,6 +153,20 @@ export function MobileWaitingCard({ terminal, deviceId, canSend, isController, o
   const request = useRef<AbortController | null>(null);
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => { setHidden(false); setState("idle"); setError(null); }, [terminal.id]);
+  // Sit just above the key bar, which lives inside the terminal area.
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [bottom, setBottom] = useState(12);
+  useEffect(() => {
+    const area = cardRef.current?.closest('[data-testid="mobile-terminal-area"]');
+    const bar = area?.querySelector<HTMLElement>('[data-testid="extended-keybar"]');
+    if (!area || !bar || typeof ResizeObserver === "undefined") return;
+    const update = () => setBottom(Math.max(12, area.getBoundingClientRect().bottom - bar.getBoundingClientRect().top + 12));
+    const observer = new ResizeObserver(update);
+    observer.observe(bar);
+    observer.observe(area);
+    update();
+    return () => observer.disconnect();
+  }, [hidden, terminal.id]);
   if (hidden) return null;
   const title = displayTerminalTitle(terminal);
   const enter = async () => {
@@ -174,8 +188,8 @@ export function MobileWaitingCard({ terminal, deviceId, canSend, isController, o
     }
   };
   return (
-    <div data-testid="mobile-waiting-card" aria-live="polite"
-      style={{ position: "absolute", left: 16, right: 16, bottom: 12, zIndex: 6, display: "flex", flexDirection: "column", gap: 10, padding: 12,
+    <div ref={cardRef} data-testid="mobile-waiting-card" aria-live="polite"
+      style={{ position: "absolute", left: 16, right: 16, bottom, zIndex: 6, display: "flex", flexDirection: "column", gap: 10, padding: 12,
         border: `1px solid ${colors.err}`, borderRadius: 4, background: colors.bg0, fontFamily: "var(--font-display)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: colors.err, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>

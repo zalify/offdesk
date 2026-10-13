@@ -513,12 +513,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {activeMachine?.name ?? ""}
                 </span>
                 {terminalOpenerText(activeChip.terminal) && (
+                  // The 44px bar has room for the marker, not the whole chip;
+                  // the Sessions sheet spells it out.
                   <span
                     data-testid="mobile-title-bar-opener"
-                    style={{ flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 4, padding: "0 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: 10.5, color: colors.fg2 }}
+                    title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
+                    style={{ flexShrink: 0, color: colors.accent }}
                   >
-                    <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
-                    {terminalOpenerText(activeChip.terminal)}
+                    ⌁
                   </span>
                 )}
               </span>
@@ -809,7 +811,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               >
                 <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{groupIndex}:{group.label}</span>
                 <span style={{ whiteSpace: "nowrap" }}>
-                  {" · "}
+                  {"\u00a0·\u00a0"}
                   {panes.length} {panes.length === 1 ? "pane" : "panes"}
                 </span>
               </div>
