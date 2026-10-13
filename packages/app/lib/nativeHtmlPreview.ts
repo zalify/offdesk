@@ -33,7 +33,7 @@ export async function openHtmlPreview(machineId: string, path: string, title: st
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // An app from before previews, running this newer web UI.
-    if (/not found/i.test(message)) throw new Error("更新 Offdesk App 后才能预览网页");
-    throw new Error(`无法打开预览：${message}`);
+    if (/not found/i.test(message)) throw new Error("Update the Offdesk DEV app to preview web pages");
+    throw new Error(`Could not open the preview: ${message}`);
   }
 }

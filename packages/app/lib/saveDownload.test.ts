@@ -54,7 +54,7 @@ describe("saveDownloadedFile", () => {
     const revokeObjectURL = vi.fn();
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
     const saved = await saveDownloadedFile({ ...input, filename: "../a.txt" });
-    expect(saved.location).toBe("浏览器下载");
+    expect(saved.location).toBe("your browser's downloads");
     expect(saved.open).toBeUndefined();
     expect(links[0].download).toBe(".._a.txt");
     expect(links[0].href).toBe("blob:x");
@@ -72,7 +72,7 @@ describe("saveDownloadedFile", () => {
     invoke.mockRejectedValueOnce("Command save_download not found");
     await expect(
       saveDownloadedFile(input),
-    ).rejects.toThrow("需要更新 Offdesk App 才能保存文件");
+    ).rejects.toThrow("Update the Offdesk DEV app to save files");
   });
 
   it("invokes the native command inside Tauri and can reveal the file", async () => {
@@ -99,7 +99,7 @@ describe("saveDownloadedFile", () => {
     vi.stubGlobal("navigator", { userAgent: "iPhone" });
     vi.stubGlobal("URL", { createObjectURL: () => "blob:i", revokeObjectURL: vi.fn() });
     const saved = await saveDownloadedFile(input);
-    expect(saved.location).toBe("浏览器下载");
+    expect(saved.location).toBe("your browser's downloads");
     expect(invoke).not.toHaveBeenCalled();
   });
 });

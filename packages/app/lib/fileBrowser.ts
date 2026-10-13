@@ -78,16 +78,16 @@ export function formatRelativeTime(ms: number | undefined, now = Date.now()): st
   if (ms === undefined || !Number.isFinite(ms)) return "";
   const diff = Math.max(0, now - ms);
   const sec = Math.floor(diff / 1000);
-  if (sec < 45) return "刚刚";
+  if (sec < 45) return "just now";
   const min = Math.floor(sec / 60);
-  if (min < 60) return `${Math.max(1, min)} 分钟前`;
+  if (min < 60) return `${Math.max(1, min)} min ago`;
   const hour = Math.floor(min / 60);
-  if (hour < 24) return `${hour} 小时前`;
+  if (hour < 24) return `${hour} h ago`;
   const day = Math.floor(hour / 24);
-  if (day < 30) return `${day} 天前`;
+  if (day < 30) return `${day} d ago`;
   const month = Math.floor(day / 30);
-  if (month < 12) return `${month} 个月前`;
-  return `${Math.floor(day / 365)} 年前`;
+  if (month < 12) return `${month} mo ago`;
+  return `${Math.floor(day / 365)} y ago`;
 }
 
 export function formatEntrySize(entry: DirEntry): string {
@@ -131,14 +131,14 @@ export function classifyListError(err: unknown): ListErrorKind {
 export function describeListError(err: unknown, path: string): string {
   switch (classifyListError(err)) {
     case "permission_denied":
-      return `没有权限打开 ${path}`;
+      return `No permission to open ${path}`;
     case "not_found":
-      return `找不到目录 ${path}`;
+      return `Folder not found: ${path}`;
     case "offline":
-      return "机器不在线或没有响应";
+      return "The machine is offline or not responding";
     default: {
       const message = err instanceof Error ? err.message : String(err);
-      return `无法打开 ${path}：${message}`;
+      return `Could not open ${path}: ${message}`;
     }
   }
 }

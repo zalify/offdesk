@@ -1,15 +1,16 @@
-// Desktop tab bar — the single permanent chrome row of the D1 shell.
-// Left: one tab per workspace group (persistent groups + cwd fallback
-// groups, same grouping TerminalWorkspace computes) plus a ＋ button for a
-// new terminal. Right: host meta — online dot + machine name (HostSwitcher
-// dropdown), real cpu/mem micro-meters, and a "viewing" pill that only
-// appears while the user is not the controller.
+// Desktop tab bar — the single permanent chrome row of the workspace, drawn
+// like tmux's window list (wireframes Main / B-Desktop). Left: ≡ opens the
+// tabs drawer, then one `0:name` tab per workspace group (persistent groups
+// + cwd fallback groups, same grouping TerminalWorkspace computes) with its
+// programs muted after it, then [+]. Right, as plain text: the machine
+// switcher (`mac-mini ▾`), cpu/mem/disk, `files`, `browser[n]`, `phone`,
+// `settings`. Who has the keyboard and the round trip moved to the status
+// line (WorkspaceStatusLine).
 //
-// The active tab is filled with the terminal background so it visually
-// merges into the terminal below, like a terminal-emulator tab. Tabs can be
-// reordered by dragging anywhere on the tab (persistent tabs also have a
-// grip handle) — same mouse-drag protocol the old workspace toolbar strip
-// used, no new DnD library. Dropping a cwd fallback tab promotes it to a
+// The active tab is marked only by a 2px accent rule. Tabs can be reordered
+// by dragging anywhere on the tab (the window number is the handle tests
+// grab) — same mouse-drag protocol the old workspace toolbar strip used, no
+// new DnD library. Dropping a cwd fallback tab promotes it to a
 // persistent group at drop time; see TerminalWorkspace handleReorderGroups.
 
 import {
@@ -26,9 +27,8 @@ import type {
   ResourceStats,
   TerminalInfo,
 } from "@offdesk/shared";
-import { FolderOpen, FolderTree, Globe, Lock, Plus, Settings, Smartphone } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
-import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
+import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { terminalOpenerDescription } from "@/lib/terminalOpener";
 import { diskPercent, diskTooltip } from "@/lib/resourceStats";
@@ -36,6 +36,7 @@ import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorks
 import { HostSwitcher } from "./HostSwitcher.web";
 import { useLongPress } from "@/lib/longPress";
 import { WorkspaceManager } from "./WorkspaceManager.web";
+import { TextButton } from "./Primitives.web";
 
 export type TabDropPlacement = "before" | "after";
 
@@ -55,10 +56,8 @@ interface TabBarProps {
   deviceId: string | null;
   machineStats: Record<string, ResourceStats>;
   stats: ResourceStats | undefined;
-  rttMs: number | null;
   isController: boolean;
   isTouch?: boolean;
-  viewOnlyLocked: boolean;
   onSelectGroup: (groupId: string) => void;
   onSelectTerminal: (terminalId: string) => void;
   onNewGroup: () => void;
@@ -83,9 +82,6 @@ interface TabBarProps {
   filesButton?: { open: boolean };
   onToggleFiles?: () => void;
   onRemoveHost: (machineId: string) => void;
-  onRequestControl: () => void;
-  onEngageViewOnly: () => void;
-  onDisengageViewOnly: () => void;
 }
 
 function TabBarComponent({
@@ -100,10 +96,8 @@ function TabBarComponent({
   deviceId,
   machineStats,
   stats,
-  rttMs,
   isController,
   isTouch = false,
-  viewOnlyLocked,
   onSelectGroup,
   onSelectTerminal,
   onNewGroup,
@@ -122,9 +116,6 @@ function TabBarComponent({
   filesButton,
   onToggleFiles,
   onRemoveHost,
-  onRequestControl,
-  onEngageViewOnly,
-  onDisengageViewOnly,
 }: TabBarProps) {
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   // ---- tab drag-to-reorder ----
@@ -203,16 +194,6 @@ function TabBarComponent({
     [finishGroupDrag, removeDocumentGroupDragEnd, resetGroupDrag],
   );
 
-  const startGroupMouseDrag = useCallback(
-    (sourceGroupId: string, event: ReactMouseEvent<HTMLElement>) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      event.stopPropagation();
-      beginGroupDrag(sourceGroupId);
-    },
-    [beginGroupDrag],
-  );
-
   // Pressing anywhere on a tab arms a drag: moving past a small
   // threshold promotes it to the same drag the grip handle starts, while
   // releasing earlier behaves like a plain click. No preventDefault here so
@@ -262,7 +243,6 @@ function TabBarComponent({
     [removeDocumentGroupDragEnd],
   );
 
-  const [hoveredGroupId, setHoveredGroupId] = useState<string | null>(null);
   const [tabMenu, setTabMenu] = useState<{
     group: WorkspaceGroup;
     x: number;
@@ -313,43 +293,29 @@ function TabBarComponent({
     <div
       data-testid="tab-bar"
       style={{
-        // 40px minimum hit target on touch; desktop stays the compact 34px row.
-        height: isTouch ? 40 : 34,
+        // 44px hit targets on touch; the mouse bar is the wireframes' 40px.
+        height: isTouch ? 44 : 40,
         flexShrink: 0,
         display: "flex",
         alignItems: "stretch",
+        gap: 4,
+        padding: "0 10px 0 6px",
         background: colors.bg0,
         borderBottom: `1px solid ${colors.lineSoft}`,
         minWidth: 0,
         userSelect: "none",
       }}
     >
-      {/* Left: group tabs + new-group button */}
-      <button
-        type="button"
-        data-testid="desktop-workspace-manager-button"
-        aria-label="Tabs"
-        title="Tabs"
+      {/* Left: ≡ tabs, the tmux tabs, [+] */}
+      <TextButton
+        testId="desktop-workspace-manager-button"
+        label="Tabs"
+        pressed={workspaceManagerOpen}
         onClick={() => setWorkspaceManagerOpen(true)}
-        style={{
-          alignSelf: "center",
-          width: isTouch ? 40 : 30,
-          height: isTouch ? 40 : 30,
-          marginLeft: 4,
-          flexShrink: 0,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 0,
-          border: "none",
-          borderRadius: 6,
-          background: workspaceManagerOpen ? colors.bg2 : "transparent",
-          color: colors.fg2,
-          cursor: "pointer",
-        }}
+        style={{ alignSelf: "center", fontSize: 13 }}
       >
-        <FolderTree size={15} />
-      </button>
+        ≡
+      </TextButton>
       <div
         data-testid="group-tab-strip"
         className="scrollbar-hidden"
@@ -362,28 +328,22 @@ function TabBarComponent({
         style={{
           display: "flex",
           alignItems: "stretch",
-          gap: 2,
-          paddingLeft: 6,
           overflowX: "auto",
           overflowY: "hidden",
-          // Reach over the bar's bottom border so the active tab's 1px
-          // overlap stays inside the strip instead of overflowing it.
-          paddingBottom: 1,
-          marginBottom: -1,
           minWidth: 0,
-          flex: 1,
+          flex: "0 1 auto",
         }}
       >
-        {groups.map((group) => {
+        {groups.map((group, index) => {
           const active = group.id === activeGroupId;
           const annotation = groupAnnotation(group, terminalsById);
           const opener = groupOpenerDescription(group, terminalsById);
+          const waiting = groupWaiting(group, terminalsById);
           return (
             <div
               key={group.id}
               data-workspace-group-drop-id={group.id}
               onMouseEnter={() => {
-                setHoveredGroupId(group.id);
                 if (isTouch) return;
                 if (
                   group.id !== activeGroupId &&
@@ -392,11 +352,6 @@ function TabBarComponent({
                   onSelectGroup(group.id);
                 }
               }}
-              onMouseLeave={() =>
-                setHoveredGroupId((current) =>
-                  current === group.id ? null : current,
-                )
-              }
               onMouseDown={(event) => armGroupTabDrag(group.id, event)}
               onContextMenu={(event) => {
                 event.preventDefault();
@@ -416,41 +371,35 @@ function TabBarComponent({
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: 0,
-                padding: "0 2px",
-                marginTop: 4,
-                // The active tab reaches 1px past the bar's bottom border so
-                // its terminal-background fill merges into the terminal below.
-                marginBottom: active ? -1 : 0,
-                position: "relative",
-                borderRadius: "7px 7px 0 0",
-                background: active
-                  ? terminalTheme.background
-                  : hoveredGroupId === group.id
-                    ? colors.bg2
-                    : "transparent",
-                border: active
-                  ? `1px solid ${colors.lineSoft}`
-                  : "1px solid transparent",
-                borderBottom: active ? "none" : "1px solid transparent",
+                padding: "0 0 0 14px",
+                // tmux-style: the active tab is only the 2px accent rule.
+                borderBottom: `2px solid ${active ? colors.accent : "transparent"}`,
+                borderTop: "2px solid transparent",
+                boxSizing: "border-box",
+                color: active ? colors.fg0 : colors.fg3,
                 flexShrink: 0,
-                maxWidth: 220,
+                maxWidth: 280,
                 opacity: draggingGroupId === group.id ? 0.5 : 1,
+                cursor: draggingGroupId ? "grabbing" : undefined,
               }}
             >
-              {group.persistent && (
-                <span
-                  role="button"
-                  tabIndex={-1}
-                  data-testid={`workspace-group-drag-${group.id}`}
-                  title="Drag group"
-                  aria-label={`Drag group ${group.label}`}
-                  onMouseDown={(event) => startGroupMouseDrag(group.id, event)}
-                  style={dragHandleStyle}
-                >
-                  <span style={dragGripStyle} />
-                </span>
-              )}
+              {/* The window number doubles as the drag handle; the whole
+                  tab body drags too, past a small threshold. */}
+              <span
+                data-testid={group.persistent ? `workspace-group-drag-${group.id}` : undefined}
+                title={group.persistent ? "Drag to reorder" : undefined}
+                aria-hidden="true"
+                onClick={() => {
+                  if (suppressGroupClickRef.current) {
+                    suppressGroupClickRef.current = false;
+                    return;
+                  }
+                  onSelectGroup(group.id);
+                }}
+                style={{ fontSize: 12.5, cursor: group.persistent ? "grab" : "pointer", touchAction: "none" }}
+              >
+                {index}:
+              </span>
               <button
                 type="button"
                 onClick={() => {
@@ -463,38 +412,34 @@ function TabBarComponent({
                   onSelectGroup(group.id);
                 }}
                 data-testid={`workspace-group-${group.id}`}
+                aria-current={active ? "page" : undefined}
                 title={group.label}
-                style={{
-                  ...tabButtonStyle,
-                  color: active ? terminalTheme.foreground : colors.fg2,
-                }}
+                style={tabButtonStyle}
               >
                 <span style={truncateStyle}>{group.label}</span>
                 {annotation && (
-                  <span
-                    style={{
-                      color: active ? terminalTheme.white : colors.fg3,
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 10,
-                      ...truncateStyle,
-                    }}
-                  >
-                    {annotation}
-                  </span>
+                  <span style={{ color: colors.fg3, ...truncateStyle }}>{annotation}</span>
                 )}
                 {opener && (
                   <span
                     data-testid={`workspace-group-opener-${group.id}`}
+                    role="img"
+                    aria-label={opener}
                     title={opener}
-                    style={{
-                      marginLeft: 6,
-                      color: active ? terminalTheme.white : colors.fg3,
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 10,
-                      flexShrink: 0,
-                    }}
+                    style={{ color: colors.accent, flexShrink: 0 }}
                   >
-                    agent
+                    ⌁
+                  </span>
+                )}
+                {waiting && (
+                  <span
+                    data-testid={`workspace-tab-attention-${group.id}`}
+                    role="img"
+                    aria-label="Waiting for you"
+                    title="A terminal here is waiting for you"
+                    style={{ color: colors.err, flexShrink: 0 }}
+                  >
+                    !
                   </span>
                 )}
               </button>
@@ -502,32 +447,17 @@ function TabBarComponent({
           );
         })}
       </div>
-        <button
-          type="button"
-          data-testid="tab-bar-new-group"
-          onClick={onNewGroup}
-          disabled={!isController}
-          title={isController ? "New tab" : "Take control to create a terminal"}
-          aria-label="New tab"
-          style={{
-            alignSelf: "center",
-            width: isTouch ? 40 : 26,
-            height: isTouch ? 40 : 26,
-            borderRadius: 6,
-            border: "none",
-            background: "transparent",
-            color: colors.fg2,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            flexShrink: 0,
-            cursor: isController ? "pointer" : "not-allowed",
-            opacity: isController ? 1 : 0.45,
-          }}
-        >
-          <Plus size={14} />
-        </button>
+      <TextButton
+        testId="tab-bar-new-group"
+        onClick={onNewGroup}
+        disabled={!isController}
+        label="New tab"
+        title={isController ? "New tab" : "Take control to create a terminal"}
+        style={{ alignSelf: "center" }}
+      >
+        [+]
+      </TextButton>
+      <div style={{ flex: 1, minWidth: 8 }} />
 
       {tabMenu && (
         <ContextMenu
@@ -561,13 +491,12 @@ function TabBarComponent({
         onCloseTerminal={onCloseTerminal}
       />
 
-      {/* Right: host meta */}
+      {/* Right: machine, load, then the places you can open — as text. */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 12,
-          padding: "0 10px",
+          gap: 10,
           flexShrink: 0,
         }}
       >
@@ -585,217 +514,54 @@ function TabBarComponent({
         />
         <MicroMeters stats={stats} />
         {filesButton && onToggleFiles && (
-          <button
-            type="button"
-            data-testid="tab-bar-files"
-            data-open={filesButton.open ? "true" : "false"}
+          <TextButton
+            testId="tab-bar-files"
+            label="Files"
+            pressed={filesButton.open}
+            open={filesButton.open}
             onClick={onToggleFiles}
-            title="文件"
-            aria-label="文件"
-            aria-pressed={filesButton.open}
-            style={{
-              width: isTouch ? 40 : 30,
-              height: isTouch ? 40 : 30,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-              border: `1px solid ${filesButton.open ? colorAlpha.accentLine : colors.line}`,
-              borderRadius: 6,
-              background: filesButton.open ? colorAlpha.accentSoft : "transparent",
-              color: filesButton.open ? colors.accent : colors.fg2,
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
           >
-            <FolderOpen size={15} />
-          </button>
+            files
+          </TextButton>
         )}
         {browserButton && onToggleBrowser && (
-          <button
-            type="button"
-            data-testid="tab-bar-browser"
-            data-open={browserButton.open ? "true" : "false"}
-            onClick={onToggleBrowser}
-            title={
-              browserButton.needsPerson ? "The agent needs you" : "Browser"
-            }
-            aria-label="Browser"
-            aria-pressed={browserButton.open}
-            style={{
-              position: "relative",
-              width: isTouch ? 40 : 30,
-              height: isTouch ? 40 : 30,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-              border: `1px solid ${browserButton.open ? colorAlpha.accentLine : colors.line}`,
-              borderRadius: 6,
-              background: browserButton.open ? colorAlpha.accentSoft : "transparent",
-              color: browserButton.open ? colors.accent : colors.fg2,
-              cursor: "pointer",
-              flexShrink: 0,
-            }}
-          >
-            <Globe size={15} />
-            {browserButton.count > 0 && (
-              <span
-                data-testid="tab-bar-browser-count"
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  top: -6,
-                  right: -6,
-                  minWidth: 16,
-                  height: 16,
-                  padding: "0 4px",
-                  boxSizing: "border-box",
-                  borderRadius: 8,
-                  background: colors.accent,
-                  color: colors.onAccent,
-                  fontSize: 10,
-                  fontWeight: 700,
-                  lineHeight: "16px",
-                  textAlign: "center",
-                }}
-              >
-                {browserButton.count > 99 ? "99+" : browserButton.count}
+          <TextButton
+              testId="tab-bar-browser"
+              label="Browser"
+              title={browserButton.needsPerson ? "The agent needs you" : "Browser"}
+              pressed={browserButton.open}
+              open={browserButton.open}
+              onClick={onToggleBrowser}
+              alert={
+                browserButton.needsPerson
+                  ? { label: "The agent needs you", testId: "tab-bar-browser-attention" }
+                  : undefined
+              }
+            >
+              <span>
+                browser
+                {browserButton.count > 0 && (
+                  <>
+                    [<span data-testid="tab-bar-browser-count">
+                      {browserButton.count > 99 ? "99+" : browserButton.count}
+                    </span>]
+                  </>
+                )}
               </span>
-            )}
-            {browserButton.needsPerson && (
-              <span
-                role="img"
-                aria-label="The agent needs you"
-                title="The agent needs you"
-                data-testid="tab-bar-browser-attention"
-                style={{
-                  position: "absolute",
-                  bottom: -2,
-                  right: -2,
-                  width: 9,
-                  height: 9,
-                  borderRadius: "50%",
-                  background: colors.warn,
-                  border: `1.5px solid ${colors.bg1}`,
-                  boxSizing: "border-box",
-                }}
-              />
-            )}
-          </button>
+            </TextButton>
         )}
-        <button
-          type="button"
-          data-testid="tab-bar-settings"
-          onClick={onOpenSettings}
-          title="Settings"
-          aria-label="Settings"
-          style={{
-            width: isTouch ? 40 : 30,
-            height: isTouch ? 40 : 30,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            border: `1px solid ${colors.line}`,
-            borderRadius: 6,
-            background: "transparent",
-            color: colors.fg2,
-            cursor: "pointer",
-            flexShrink: 0,
-          }}
-        >
-          <Settings size={15} />
-        </button>
         {onOpenPhone && (
-        <button
-          type="button"
-          data-testid="tab-bar-phone"
-          onClick={onOpenPhone}
-          title="Open this hub on your phone"
-          aria-label="Open this hub on your phone"
-          style={{
-            height: 24,
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            padding: "0 8px",
-            borderRadius: 6,
-            background: "transparent",
-            border: `1px solid ${colors.line}`,
-            color: colors.fg2,
-            cursor: "pointer",
-            fontSize: 11,
-          }}
-        >
-          <Smartphone size={13} />
-          Phone
-        </button>
+          <TextButton
+            testId="tab-bar-phone"
+            label="Open this hub on your phone"
+            onClick={onOpenPhone}
+          >
+            phone
+          </TextButton>
         )}
-        <span
-          data-testid="tab-bar-rtt"
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 10,
-            color: colors.fg1,
-            minWidth: 34,
-            textAlign: "right",
-          }}
-        >
-          {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
-        </span>
-        {viewOnlyLocked ? (
-          <button
-            type="button"
-            data-testid="workbench-request-control"
-            onClick={onDisengageViewOnly}
-            title="Unlock input claims"
-            style={controlPillStyle}
-          >
-            🔒 view only
-          </button>
-        ) : !isController ? (
-          <button
-            type="button"
-            data-testid="workbench-request-control"
-            onClick={onRequestControl}
-            title="Take control"
-            style={controlPillStyle}
-          >
-            <span
-              style={{
-                width: 6,
-                height: 6,
-                borderRadius: 999,
-                background: colors.fg2,
-              }}
-            />
-            viewing
-          </button>
-        ) : (
-          <button
-            type="button"
-            data-testid="workbench-view-only-lock"
-            onClick={onEngageViewOnly}
-            title="Lock to view only"
-            aria-label="Lock to view only"
-            style={{
-              width: 24,
-              height: 24,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-              borderRadius: 6,
-              background: "transparent",
-              border: `1px solid ${colors.line}`,
-              color: colors.fg2,
-              cursor: "pointer",
-            }}
-          >
-            <Lock size={13} />
-          </button>
-        )}
+        <TextButton testId="tab-bar-settings" label="Settings" onClick={onOpenSettings}>
+          settings
+        </TextButton>
       </div>
     </div>
   );
@@ -803,27 +569,22 @@ function TabBarComponent({
 
 export const TabBar = memo(TabBarComponent);
 
-const controlPillStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  height: 22,
-  padding: "0 9px",
-  borderRadius: 999,
-  background: colorAlpha.mutedLight,
-  border: `1px solid ${colors.line}`,
-  color: colors.fg2,
-  fontSize: 11,
-  fontWeight: 600,
-  whiteSpace: "nowrap",
-  cursor: "pointer",
-};
-
 /* ---------- tab attention ---------- */
+
+// A pane in this tab is stopped at a confirmation prompt.
+function groupWaiting(
+  group: WorkspaceGroup,
+  terminalsById: Map<string, TerminalInfo>,
+): boolean {
+  return collectPaneTerminalIds(group.root).some((id) => {
+    const terminal = terminalsById.get(id);
+    return Boolean(terminal?.reachable && terminal.attention === "confirmation");
+  });
+}
 
 /* ---------- tab annotation ---------- */
 
-// Distinct pane titles joined with ▏ (deduped, max 2 shown then +N).
+// Distinct pane titles joined with · (deduped, max 2 shown then +N).
 // Hidden when the group has a single pane whose title equals the label.
 function groupAnnotation(
   group: WorkspaceGroup,
@@ -841,7 +602,7 @@ function groupAnnotation(
   if (paneIds.length === 1 && titles.length === 1 && titles[0] === group.label) {
     return null;
   }
-  const shown = titles.slice(0, 2).join(" ▏");
+  const shown = titles.slice(0, 2).join(" · ");
   return titles.length > 2 ? `${shown} +${titles.length - 2}` : shown;
 }
 
@@ -859,7 +620,7 @@ function groupOpenerDescription(
   return null;
 }
 
-/* ---------- cpu/mem/disk micro-meters ---------- */
+/* ---------- cpu/mem/disk as text ---------- */
 
 function MicroMeters({ stats }: { stats: ResourceStats | undefined }) {
   const cpu = stats ? Math.round(stats.cpu_percent) : null;
@@ -874,14 +635,17 @@ function MicroMeters({ stats }: { stats: ResourceStats | undefined }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        fontFamily: "var(--font-mono)",
-        fontSize: 10,
+        gap: 0,
+        fontFamily: "var(--font-display)",
+        fontSize: 11,
         color: colors.fg3,
+        whiteSpace: "nowrap",
       }}
     >
       <Meter label="cpu" percent={cpu} />
+      <span aria-hidden="true">&nbsp;·&nbsp;</span>
       <Meter label="mem" percent={mem} />
+      <span aria-hidden="true">&nbsp;·&nbsp;</span>
       <Meter label="disk" percent={disk} title={diskTooltip(stats)} />
     </div>
   );
@@ -897,35 +661,8 @@ function Meter({
   title?: string;
 }) {
   return (
-    <span
-      data-testid={`tab-bar-meter-${label}`}
-      title={title}
-      style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-    >
-      <span>{label}</span>
-      <span
-        style={{
-          width: 30,
-          height: 4,
-          borderRadius: 2,
-          background: colors.bg2,
-          overflow: "hidden",
-          display: "inline-block",
-        }}
-      >
-        <span
-          style={{
-            display: "block",
-            height: "100%",
-            width: `${percent ?? 0}%`,
-            background: percent === null ? "transparent" : colors.fg2,
-            borderRadius: 2,
-          }}
-        />
-      </span>
-      <span style={{ color: colors.fg1, minWidth: 32, textAlign: "right" }}>
-        {percent === null ? "—" : `${percent}%`}
-      </span>
+    <span data-testid={`tab-bar-meter-${label}`} title={title}>
+      {label} {percent === null ? "—" : `${percent}%`}
     </span>
   );
 }
@@ -936,34 +673,16 @@ const tabButtonStyle: CSSProperties = {
   minWidth: 0,
   display: "inline-flex",
   alignItems: "center",
-  gap: 7,
+  gap: 8,
   border: "none",
   background: "transparent",
-  padding: "0 8px",
+  color: "inherit",
+  padding: "0 14px 0 0",
   height: "100%",
-  fontSize: 12,
+  font: "inherit",
+  fontFamily: "var(--font-display)",
+  fontSize: 12.5,
   cursor: "pointer",
-};
-
-const dragHandleStyle: CSSProperties = {
-  width: 10,
-  height: 20,
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  cursor: "grab",
-  flexShrink: 0,
-  touchAction: "none",
-  userSelect: "none",
-};
-
-// Two vertical dotted columns, like a window-manager drag grip.
-const dragGripStyle: CSSProperties = {
-  width: 6,
-  height: 10,
-  backgroundImage: `radial-gradient(${colors.fg3} 1px, transparent 1px)`,
-  backgroundSize: "3px 3px",
-  opacity: 0.8,
 };
 
 const truncateStyle: CSSProperties = {

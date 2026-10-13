@@ -4,10 +4,13 @@ import type {
   ResourceStats,
   TerminalInfo,
 } from "@offdesk/shared";
-import { ChevronRight, Plus, X } from "lucide-react";
-import { fontDisplay } from "./Primitives.web";
+import { Button, fontDisplay } from "./Primitives.web";
 import { colors } from "@/lib/colors";
 import { diskPercent } from "@/lib/resourceStats";
+
+// The machine switcher in the tab bar: `mac-mini ▾` as text, opening a
+// list of machines (● online, name, os, load, terminals), `[x]` to remove
+// one, and `add a machine`.
 
 interface HostSwitcherProps {
   machines: MachineInfo[];
@@ -19,7 +22,7 @@ interface HostSwitcherProps {
   onSelectMachine: (id: string) => void;
   onAddMachine?: () => void;
   onRemoveHost?: (machineId: string) => void;
-  // Chromeless trigger (dot + name + chevron) for the Phase 2 TabBar.
+  // Chromeless text trigger for the tab bar.
   compact?: boolean;
 }
 
@@ -54,19 +57,9 @@ function HostSwitcherComponent({
 
   if (!active) {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          color: colors.fg3,
-          fontSize: 12,
-          minWidth: 0,
-        }}
-      >
-        <Logomark />
-        <span>No machine</span>
-      </div>
+      <span style={{ fontFamily: fontDisplay, fontSize: 12.5, color: colors.fg3 }}>
+        no machine
+      </span>
     );
   }
 
@@ -81,115 +74,47 @@ function HostSwitcherComponent({
   return (
     <div ref={ref} style={{ position: "relative", minWidth: 0 }}>
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         data-testid="host-switcher-button"
-        style={
-          compact
-            ? {
-                display: "flex",
-                alignItems: "center",
-                gap: 7,
-                padding: "3px 4px",
-                borderRadius: 6,
-                background: "transparent",
-                border: "none",
-                textAlign: "left",
-                minWidth: 0,
-                color: colors.fg1,
-                cursor: "pointer",
-              }
-            : {
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                width: "100%",
-                padding: "6px 10px",
-                borderRadius: 10,
-                background: open ? colors.bg2 : colors.bg1,
-                border: `1px solid ${colors.lineSoft}`,
-                textAlign: "left",
-                minWidth: 0,
-                color: colors.fg1,
-                cursor: "pointer",
-              }
-        }
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        title={`${active.name}${onlineFor(active.id) ? "" : " (offline)"}${controllingActive ? " · you are in control" : ""}`}
+        className="odk-text-btn odk-text-btn--strong"
+        style={compact ? { maxWidth: 200 } : { width: "100%", justifyContent: "space-between" }}
       >
-        <HostDot online={onlineFor(active.id)} controlling={controllingActive} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "baseline",
-              gap: 6,
-            }}
-          >
-            <span
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: colors.fg0,
-                whiteSpace: "nowrap",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-              }}
-            >
-              {active.name}
-            </span>
-            {!compact && (
-              <span
-                style={{
-                  fontSize: 10,
-                  color: colors.fg3,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.08em",
-                }}
-              >
-                {active.os}
-              </span>
-            )}
-          </div>
-        </div>
-        <ChevronRight
-          size={12}
-          color={colors.fg3}
-          style={{
-            transform: open ? "rotate(90deg)" : "rotate(0)",
-            transition: "transform 120ms",
-            flexShrink: 0,
-          }}
-        />
+        {!onlineFor(active.id) && (
+          <span style={{ color: colors.fg3 }} role="img" aria-label="Offline">○</span>
+        )}
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {active.name}
+        </span>
+        <span aria-hidden="true">▾</span>
       </button>
 
       {open && (
         <div
+          className="odk-float"
           style={{
             position: "absolute",
-            top: "calc(100% + 6px)",
+            top: "calc(100% + 8px)",
             ...(compact ? { right: 0 } : { left: 0 }),
-            minWidth: 320,
+            minWidth: 340,
             zIndex: 20,
-            background: colors.bg1,
-            border: `1px solid ${colors.lineSoft}`,
-            borderRadius: 18,
-            padding: 10,
-            boxShadow: "0 18px 50px -20px rgb(43 35 64 / 0.45)",
+            padding: 8,
             maxHeight: 360,
             overflow: "auto",
           }}
         >
           <div
             style={{
-              padding: "6px 10px 4px",
-              fontFamily: fontDisplay,
-              fontSize: 11,
-              color: colors.accent,
-              textTransform: "uppercase",
-              letterSpacing: "0.06em",
-              fontWeight: 600,
-              marginBottom: 6,
+              padding: "4px 12px 6px",
+              fontSize: 11.5,
+              fontWeight: 500,
+              color: colors.fg3,
             }}
           >
-            Machines · {machines.length}
+            machines · {machines.length}
           </div>
           {machines.map((m) => {
             const isActive = m.id === active.id;
@@ -204,12 +129,12 @@ function HostSwitcherComponent({
                   display: "grid",
                   gridTemplateColumns: "1fr auto",
                   alignItems: "stretch",
-                  marginBottom: 4,
-                  borderRadius: 8,
-                  background: isActive ? colors.bg2 : "transparent",
+                  borderRadius: 3,
+                  background: isActive ? colors.bg3 : "transparent",
                 }}
               >
                 <button
+                  type="button"
                   onClick={() => {
                     onSelectMachine(m.id);
                     setOpen(false);
@@ -220,76 +145,42 @@ function HostSwitcherComponent({
                     gap: 10,
                     alignItems: "center",
                     width: "100%",
+                    minHeight: 40,
                     textAlign: "left",
-                    padding: "8px 10px",
-                    borderRadius: 8,
+                    padding: "6px 12px",
+                    borderRadius: 3,
                     background: "transparent",
-                    color: colors.fg1,
+                    color: colors.fg0,
                     cursor: "pointer",
                     border: "none",
+                    fontFamily: fontDisplay,
+                    fontSize: 13,
                   }}
                 >
-                  <HostDot online={online} controlling={controlling} />
-                  <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "baseline",
-                      gap: 6,
-                    }}
+                  <span
+                    role="img"
+                    aria-label={online ? (controlling ? "Online, you are in control" : "Online") : "Offline"}
+                    style={{ color: online ? colors.ok : colors.fg3 }}
                   >
-                    <span
-                      style={{
-                        fontFamily: fontDisplay,
-                        fontSize: 14,
-                        fontWeight: 600,
-                        color: colors.fg0,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        minWidth: 0,
-                      }}
-                    >
-                      {m.name}
+                    {online ? "●" : "○"}
+                  </span>
+                  <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+                    <span style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
+                        {m.name}
+                      </span>
+                      <span style={{ fontSize: 11, color: colors.fg3 }}>{m.os}</span>
                     </span>
-                    <span
-                      style={{
-                        fontSize: 10,
-                        color: colors.fg3,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.08em",
-                      }}
-                    >
-                      {m.os}
+                    <span style={{ fontSize: 11, color: colors.fg3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {m.home_dir}
                     </span>
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 10.5,
-                      color: colors.fg3,
-                      whiteSpace: "nowrap",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                    }}
-                  >
-                    {m.home_dir}
-                  </div>
-                  </div>
-                  <div
-                    style={{
-                      textAlign: "right",
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 10.5,
-                      color: colors.fg3,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <div>
+                  </span>
+                  <span style={{ textAlign: "right", fontSize: 11, color: colors.fg3, lineHeight: 1.5 }}>
+                    <span style={{ display: "block" }}>
                       {online ? machineRowStatus(machineStats[m.id]) : "offline"}
-                    </div>
-                    <div>{termCountFor(m.id)} term</div>
-                  </div>
+                    </span>
+                    <span style={{ display: "block" }}>{termCountFor(m.id)} term</span>
+                  </span>
                 </button>
                 {onRemoveHost && (
                   <button
@@ -297,57 +188,34 @@ function HostSwitcherComponent({
                     data-testid={`host-switcher-remove-${m.id}`}
                     title={`Remove ${m.name}`}
                     aria-label={`Remove ${m.name}`}
+                    className="odk-text-btn"
                     onClick={() => {
                       setOpen(false);
                       onRemoveHost(m.id);
                     }}
-                    style={{
-                      width: 36,
-                      border: "none",
-                      borderRadius: 8,
-                      background: "transparent",
-                      color: colors.fg3,
-                      cursor: "pointer",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
+                    style={{ alignSelf: "center", marginRight: 4 }}
                   >
-                    <X size={13} />
+                    [x]
                   </button>
                 )}
               </div>
             );
           })}
           {onAddMachine && (
-            <button
-              data-testid="host-switcher-add-machine"
-              onClick={() => {
-                setOpen(false);
-                onAddMachine();
-              }}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-                width: "100%",
-                marginTop: 6,
-                height: 40,
-                padding: "0 14px",
-                borderRadius: 999,
-                border: "2px solid rgb(43 35 64 / 0.15)",
-                background: colors.bg1,
-                color: colors.fg0,
-                fontFamily: fontDisplay,
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              <Plus size={14} />
-              Add a machine
-            </button>
+            <div style={{ padding: "8px 4px 2px" }}>
+              <Button
+                kind="secondary"
+                size="sm"
+                testId="host-switcher-add-machine"
+                style={{ width: "100%" }}
+                onClick={() => {
+                  setOpen(false);
+                  onAddMachine();
+                }}
+              >
+                add a machine
+              </Button>
+            </div>
           )}
         </div>
       )}
@@ -357,108 +225,9 @@ function HostSwitcherComponent({
 
 export const HostSwitcher = memo(HostSwitcherComponent);
 
-function HostDot({
-  online,
-  controlling,
-}: {
-  online: boolean;
-  controlling: boolean;
-}) {
-  const dotColor = online ? colors.ok : colors.fg3;
-  return (
-    <span
-      style={{
-        position: "relative",
-        width: 10,
-        height: 10,
-        display: "inline-block",
-        flexShrink: 0,
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          inset: 0,
-          borderRadius: 999,
-          background: dotColor,
-          boxShadow: `0 0 0 3px ${
-            online
-              ? "rgba(99, 209, 143, 0.22)"
-              : "rgba(91, 94, 98, 0.22)"
-          }`,
-        }}
-      />
-      {controlling && (
-        <span
-          style={{
-            position: "absolute",
-            right: -3,
-            bottom: -3,
-            width: 5,
-            height: 5,
-            borderRadius: 999,
-            background: colors.accent,
-            border: `1.5px solid ${colors.bg1}`,
-          }}
-        />
-      )}
-    </span>
-  );
-}
-
 function machineRowStatus(stats: ResourceStats | undefined): string {
   if (!stats) return "online";
   const disk = diskPercent(stats);
   const cpu = `${Math.round(stats.cpu_percent)}% cpu`;
   return disk === null ? cpu : `${cpu} · ${disk}% disk`;
-}
-
-function Logomark({ size = 18 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden
-      style={{ flexShrink: 0 }}
-    >
-      <rect
-        x="2.5"
-        y="3.5"
-        width="19"
-        height="17"
-        rx="3.5"
-        stroke={colors.accent}
-        strokeWidth="1.6"
-      />
-      <line
-        x1="2.5"
-        y1="8.5"
-        x2="21.5"
-        y2="8.5"
-        stroke={colors.accent}
-        strokeWidth="1.6"
-      />
-      <circle cx="5.5" cy="6" r="0.8" fill={colors.accent} />
-      <rect
-        x="5"
-        y="11.5"
-        width="5"
-        height="6.5"
-        rx="1"
-        fill={colors.accent}
-        opacity={0.35}
-      />
-      <rect
-        x="11"
-        y="11.5"
-        width="8"
-        height="6.5"
-        rx="1"
-        fill={colors.accent}
-        opacity={0.8}
-      />
-    </svg>
-  );
 }

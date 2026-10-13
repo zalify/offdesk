@@ -74,6 +74,8 @@ import { CheatSheetOverlay } from "./CheatSheetOverlay.web";
 import { UpdateNotification } from "./UpdateNotification";
 import { useAuth } from "@/lib/auth";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
+import { WorkspaceStatusLine } from "./WorkspaceStatusLine.web";
+import { Button, TextButton } from "./Primitives.web";
 import { reclaimNoticeText } from "@/lib/useAgentBrowserReclaimNotice";
 import {
   browserLabel,
@@ -87,10 +89,12 @@ import { FileBrowserOverlay } from "./FileBrowserOverlay.web";
 import { FileBrowserMobileSurface } from "./FileBrowserMobileSurface.web";
 import { OpenDirectoryContext } from "./OpenDirectoryContext";
 import { resolveStartPath } from "@/lib/fileBrowser";
+import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import {
   MAX_PANES_PER_TAB,
   buildReorderPersistentGroupIds,
   collectGroupPaneTerminalIds,
+  collectPaneTerminalIds,
   createTerminalWorkspace,
   planNewTerminalPlacement,
   type WorkspaceGroup,
@@ -1665,7 +1669,7 @@ function TerminalCanvasInner() {
       {
         id: "new-terminal",
         section: "actions",
-        label: "New terminal",
+        label: "new terminal",
         hint: formatPrefixBinding("newTerminal", bindings),
         disabled: !isActiveController,
         action: () => void handleNewTerminalFromHeader(),
@@ -1673,7 +1677,7 @@ function TerminalCanvasInner() {
       {
         id: "new-tab",
         section: "actions",
-        label: "New tab",
+        label: "new tab",
         keywords: "group workspace tab",
         disabled: !isActiveController,
         action: () => void handleNewGroup(),
@@ -1681,7 +1685,7 @@ function TerminalCanvasInner() {
       {
         id: "split-right",
         section: "actions",
-        label: "Split right",
+        label: "split right",
         hint: formatPrefixBinding("splitRight", bindings),
         disabled: !isActiveController,
         action: () =>
@@ -1690,7 +1694,7 @@ function TerminalCanvasInner() {
       {
         id: "split-down",
         section: "actions",
-        label: "Split down",
+        label: "split down",
         hint: formatPrefixBinding("splitDown", bindings),
         disabled: !isActiveController,
         action: () =>
@@ -1699,7 +1703,7 @@ function TerminalCanvasInner() {
       {
         id: "rotate-layout",
         section: "actions",
-        label: "Rotate layout",
+        label: "rotate layout",
         hint: formatPrefixBinding("rotateLayout", bindings),
         disabled: !isActiveController,
         action: () =>
@@ -1708,7 +1712,7 @@ function TerminalCanvasInner() {
       {
         id: "tile-panes",
         section: "actions",
-        label: "Tile panes",
+        label: "tile panes",
         hint: formatPrefixBinding("tilePanes", bindings),
         disabled: !isActiveController,
         action: () =>
@@ -1716,11 +1720,16 @@ function TerminalCanvasInner() {
       },
       ...tabGroups.map((group, index): PaletteRow => {
         const tabAction = `selectTab${index + 1}` as PrefixActionId;
+        const panes = collectPaneTerminalIds(group.root)
+          .map((id) => scopedTerminalsById.get(id))
+          .filter((t): t is TerminalInfo => Boolean(t));
         return {
           id: `tab-${group.id}`,
           section: "tabs",
-          label: group.label,
-          keywords: group.cwd,
+          label: `${index}:${group.label}`,
+          meta: [...new Set(panes.map(displayTerminalTitle))].join(" · ") || undefined,
+          opener: panes.find((t) => t.opened_by)?.opened_by?.label ?? (panes.some((t) => t.opened_by) ? "" : undefined),
+          keywords: `${group.label} ${group.cwd}`,
           hint:
             index < 9 ? formatPrefixBinding(tabAction, bindings) : undefined,
           action: () => workspaceCommandsRef.current.selectGroup?.(group.id),
@@ -1731,6 +1740,8 @@ function TerminalCanvasInner() {
           id: `host-${machine.id}`,
           section: "hosts",
           label: machine.name,
+          meta: machine.os,
+          online: true,
           keywords: machine.os,
           action: () => setActiveMachineId(machine.id),
         }),
@@ -1738,8 +1749,8 @@ function TerminalCanvasInner() {
       {
         id: "browse-files",
         section: "actions",
-        label: "Browse files",
-        keywords: "文件 files download fetch",
+        label: "browse files",
+        keywords: "files browse download fetch",
         disabled: !activeMachine || !machineOnline[activeMachine.id],
         action: () => {
           if (activeMachine) handleOpenFiles(activeMachine.id);
@@ -1748,25 +1759,25 @@ function TerminalCanvasInner() {
       {
         id: "add-host",
         section: "actions",
-        label: "Add a machine…",
+        label: "add a machine",
         action: () => setAddMachineOpen(true),
       },
       {
         id: "reconnect",
         section: "actions",
-        label: "Reconnect",
+        label: "reconnect",
         action: () => window.location.reload(),
       },
       {
         id: "settings",
         section: "actions",
-        label: "Settings",
+        label: "settings",
         action: () => setShowSettings(true),
       },
       {
         id: "sign-out",
         section: "actions",
-        label: "Sign out",
+        label: "sign out",
         action: () => void logout(),
       },
     ];
@@ -1940,10 +1951,8 @@ function TerminalCanvasInner() {
                 deviceId={deviceId}
                 machineStats={machineStats}
                 stats={activeStats}
-                rttMs={rttMs}
                 isController={isActiveController}
                 isTouch={isTouch}
-                viewOnlyLocked={viewOnlyLocked}
                 onSelectGroup={(groupId) =>
                   workspaceCommandsRef.current.selectGroup?.(groupId)
                 }
@@ -1972,13 +1981,6 @@ function TerminalCanvasInner() {
                 filesButton={filesButtonProps}
                 onToggleFiles={handleToggleFiles}
                 onRemoveHost={handleRemoveHost}
-                onRequestControl={() => {
-                  if (activeMachine) void handleRequestControl(activeMachine.id);
-                }}
-                onEngageViewOnly={() => {
-                  if (activeMachine) handleEngageViewOnly(activeMachine.id);
-                }}
-                onDisengageViewOnly={handleDisengageViewOnly}
               />
               {!phoneHintDismissed && machines.length > 0 && (
                 <div
@@ -1987,49 +1989,25 @@ function TerminalCanvasInner() {
                     display: "flex",
                     alignItems: "center",
                     gap: 12,
-                    padding: "6px 12px",
-                    borderBottom: `1px solid ${colors.border}`,
-                    background: colors.surface,
-                    color: colors.foregroundSecondary,
-                    fontSize: 12,
+                    padding: "8px 16px",
+                    borderBottom: `1px solid ${colors.lineSoft}`,
+                    background: colors.bg0,
+                    color: colors.fg2,
+                    fontFamily: "var(--font-sans)",
+                    fontSize: 13,
                     flexShrink: 0,
                   }}
                 >
                   <span style={{ flex: 1 }}>
-                    Your phone can open these same terminals — scan a code, nothing
-                    to type.
+                    Your phone can open these same terminals. Scan a code,
+                    nothing to type.
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setPhoneOpen(true)}
-                    style={{
-                      background: colors.accent,
-                      border: "none",
-                      borderRadius: 6,
-                      color: colors.onAccent,
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 600,
-                      padding: "4px 10px",
-                    }}
-                  >
-                    Show me
-                  </button>
-                  <button
-                    type="button"
-                    onClick={dismissPhoneHint}
-                    aria-label="Dismiss"
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      color: colors.foregroundMuted,
-                      cursor: "pointer",
-                      fontSize: 14,
-                      padding: "0 4px",
-                    }}
-                  >
-                    ×
-                  </button>
+                  <Button kind="secondary" size="xs" onClick={() => setPhoneOpen(true)}>
+                    show me
+                  </Button>
+                  <TextButton label="Dismiss" onClick={dismissPhoneHint}>
+                    [x]
+                  </TextButton>
                 </div>
               )}
 
@@ -2070,6 +2048,30 @@ function TerminalCanvasInner() {
                 />
               )}
               <WorkspaceKeyBarSlot />
+              <WorkspaceStatusLine
+                terminals={terminals}
+                machines={machines}
+                activeMachine={activeMachine ?? null}
+                machineOnline={machineOnline}
+                groups={tabGroups}
+                rttMs={rttMs}
+                isController={isActiveController}
+                viewOnlyLocked={viewOnlyLocked}
+                prefixArmed={prefixKey.armed}
+                deviceId={deviceId}
+                canSend={(machineId) => !eventsReconnecting && canTypeOnMachine(machineId)}
+                onOpenTerminal={(terminal) => {
+                  setActiveMachineId(terminal.machine_id);
+                  handleZoomTerminal(terminal.id);
+                }}
+                onRequestControl={() => {
+                  if (activeMachine) void handleRequestControl(activeMachine.id);
+                }}
+                onEngageViewOnly={() => {
+                  if (activeMachine) handleEngageViewOnly(activeMachine.id);
+                }}
+                onDisengageViewOnly={handleDisengageViewOnly}
+              />
               </main>
             </KeyBarSlotProvider>
           )}
@@ -2084,7 +2086,7 @@ function TerminalCanvasInner() {
         {!isCompact && (
           // Tauri updater toast — floating bottom-right mount, replaces the
           // deleted StatusBar's slot. Renders nothing outside Tauri.
-          <div style={{ position: "fixed", right: 12, bottom: isTouch ? 96 : 12, zIndex: 55 }}>
+          <div style={{ position: "fixed", right: 16, bottom: isTouch ? 96 : 50, zIndex: 55 }}>
             <UpdateNotification />
           </div>
         )}
@@ -2127,27 +2129,6 @@ function TerminalCanvasInner() {
           />
         )}
 
-        {!isCompact && prefixKey.armed && (
-          <div
-            data-testid="prefix-armed-indicator"
-            style={{
-              position: "fixed",
-              right: 16,
-              bottom: isTouch ? 96 : 16,
-              zIndex: 60,
-              padding: "4px 10px",
-              borderRadius: 6,
-              background: colors.accent,
-              color: colors.onAccent,
-              fontSize: 12,
-              fontWeight: 700,
-              fontFamily: "var(--font-mono)",
-              pointerEvents: "none",
-            }}
-          >
-            ⌃B
-          </div>
-        )}
 
         {cheatSheetOpen && (
           <CheatSheetOverlay onClose={() => setCheatSheetOpen(false)} />

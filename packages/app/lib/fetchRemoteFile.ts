@@ -52,34 +52,34 @@ export function describeFetchError(err: unknown, path: string): string {
     switch (err.code) {
       case "too_large":
         return err.size
-          ? `${name} 有 ${formatMb(err.size)}，超过 ${formatMb(MAX_FETCH_BYTES)} 上限`
-          : `${name} 超过 ${formatMb(MAX_FETCH_BYTES)} 上限`;
+          ? `${name} is ${formatMb(err.size)}, over the ${formatMb(MAX_FETCH_BYTES)} limit`
+          : `${name} is over the ${formatMb(MAX_FETCH_BYTES)} limit`;
       case "not_found":
-        return `找不到 ${name}`;
+        return `${name} not found`;
       case "machine_not_found":
-        return "找不到这台机器";
+        return "Machine not found";
       case "permission_denied":
-        return `没有权限读取 ${name}`;
+        return `No permission to read ${name}`;
       case "machine_outdated":
-        return "这台机器的 node 版本太旧，升级后才能取文件";
+        return "This machine's node is too old to fetch files. Update it first.";
       case "machine_disconnected":
-        return "机器已断开连接，无法取文件";
+        return "The machine disconnected, so the file could not be fetched";
       case "timeout":
-        return `取 ${name} 超时，机器没有响应`;
+        return `Fetching ${name} timed out; the machine did not respond`;
       case "bad_request":
-        return `无法取 ${name}：路径无效`;
+        return `Could not fetch ${name}: invalid path`;
       default:
-        if (err.status === 504) return `取 ${name} 超时，机器没有响应`;
-        return `取 ${name} 失败：${err.message}`;
+        if (err.status === 504) return `Fetching ${name} timed out; the machine did not respond`;
+        return `Could not fetch ${name}: ${err.message}`;
     }
   }
   const message = err instanceof Error ? err.message : String(err);
-  return `取 ${name} 失败：${message}`;
+  return `Could not fetch ${name}: ${message}`;
 }
 
 /**
  * Saves an already-loaded remote file on this device and announces it
- * ("已保存 … → …" with an 打开 action when the platform supports it). Errors
+ * ("Saved … → …" with an "open" action when the platform supports it). Errors
  * become toasts; this never throws.
  */
 export async function saveFetchedFile(
@@ -94,15 +94,15 @@ export async function saveFetchedFile(
     });
     const open = saved.open;
     deps.notify(
-      `已保存 ${file.name} → ${saved.location}`,
+      `Saved ${file.name} → ${saved.location}`,
       open
         ? {
             action: {
-              label: "打开",
+              label: "open",
               run: () => {
                 void open().catch((err) =>
                   deps.notify(
-                    `打开失败：${err instanceof Error ? err.message : String(err)}`,
+                    `Could not open it: ${err instanceof Error ? err.message : String(err)}`,
                     { tone: "error" },
                   ),
                 );
@@ -113,7 +113,7 @@ export async function saveFetchedFile(
     );
   } catch (err) {
     deps.notify(
-      `保存 ${file.name} 失败：${err instanceof Error ? err.message : String(err)}`,
+      `Could not save ${file.name}: ${err instanceof Error ? err.message : String(err)}`,
       { tone: "error", timeoutMs: 8000 },
     );
   }
@@ -157,7 +157,7 @@ export async function fetchRemoteFile(
   inFlight.add(key);
   const name = baseName(path);
   try {
-    deps.notify(`正在取 ${name}…`, { timeoutMs: 0 });
+    deps.notify(`Fetching ${name}…`, { timeoutMs: 0 });
     let file: RemoteFile;
     try {
       file = await readWithFallback(deps, machineId, path, fallbackPath, cwd);
@@ -165,10 +165,10 @@ export async function fetchRemoteFile(
       if (err instanceof RemoteFileError && err.code === "is_directory") {
         const resolved = err.path ?? path;
         if (onDirectory) {
-          deps.notify(`${baseName(resolved) || resolved} 是目录`, { timeoutMs: 1500 });
+          deps.notify(`${baseName(resolved) || resolved} is a folder`, { timeoutMs: 1500 });
           onDirectory(resolved);
         } else {
-          deps.notify(`${baseName(resolved) || resolved} 是目录，不能直接取`, {
+          deps.notify(`${baseName(resolved) || resolved} is a folder and cannot be fetched`, {
             tone: "error",
           });
         }

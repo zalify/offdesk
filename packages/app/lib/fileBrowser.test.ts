@@ -81,12 +81,12 @@ describe("formatRelativeTime", () => {
   const now = 1_700_000_000_000;
   it("buckets", () => {
     expect(formatRelativeTime(undefined, now)).toBe("");
-    expect(formatRelativeTime(now - 5_000, now)).toBe("刚刚");
-    expect(formatRelativeTime(now - 5 * 60_000, now)).toBe("5 分钟前");
-    expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe("3 小时前");
-    expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe("2 天前");
-    expect(formatRelativeTime(now - 90 * 86_400_000, now)).toBe("3 个月前");
-    expect(formatRelativeTime(now - 800 * 86_400_000, now)).toBe("2 年前");
+    expect(formatRelativeTime(now - 5_000, now)).toBe("just now");
+    expect(formatRelativeTime(now - 5 * 60_000, now)).toBe("5 min ago");
+    expect(formatRelativeTime(now - 3 * 3_600_000, now)).toBe("3 h ago");
+    expect(formatRelativeTime(now - 2 * 86_400_000, now)).toBe("2 d ago");
+    expect(formatRelativeTime(now - 90 * 86_400_000, now)).toBe("3 mo ago");
+    expect(formatRelativeTime(now - 800 * 86_400_000, now)).toBe("2 y ago");
   });
 });
 
