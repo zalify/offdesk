@@ -315,7 +315,10 @@ jobs:
         run: |
           tag="${{ steps.version.outputs.tag }}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
+            # Never Latest: the repository's global Latest belongs to the
+            # standalone Hub release, which install.sh downloads from.
             gh release create "$tag" \
+              --latest=false \
               --title "Mobile ${tag}" \
               --notes "Tauri-based Android client. Sideload via 'install from unknown sources'. Pick the **arm64-v8a** APK on modern phones; the **universal** APK works on any architecture but is larger. On first launch the app asks for your hub's address; legacy connections load their UI from the Hub; encrypted pairing retains the trusted App bundle and requires an App update for UI changes."
           fi
