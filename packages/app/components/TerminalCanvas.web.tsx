@@ -2247,7 +2247,9 @@ function EmptyState({
         <div style={{ fontSize: 13, color: colors.fg3 }}>
           <span aria-hidden="true" style={{ color: colors.accent }}>~</span>
           <span aria-hidden="true"> $ </span>
-          {scopeLabel === "All" ? "no terminals yet" : `no terminals in ${scopeLabel}`}
+          <span style={{ textTransform: "lowercase" }}>
+            {scopeLabel === "All" ? "No terminals yet" : `No terminals in ${scopeLabel}`}
+          </span>
           <span aria-hidden="true" className="odk-cursor" />
         </div>
         {!canCreate && onTakeControl && (
