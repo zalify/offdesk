@@ -281,7 +281,8 @@ export default function LoginScreen({
       });
   };
 
-  // One frame for every sign-in: sand, a cream card, the wordmark.
+  // One frame for every sign-in (D11): a 6px panel on wide screens, the
+  // whole screen on a phone (P01/P02).
   const frame = (children: React.ReactNode) => (
     <div
       style={{
@@ -294,9 +295,16 @@ export default function LoginScreen({
         overflow: "auto",
       }}
     >
-      <div style={{ margin: "auto", width: "100%", maxWidth: 520, padding: "32px 20px", boxSizing: "border-box" }}>
-        <Card style={{ display: "flex", flexDirection: "column", gap: 20, padding: 32 }}>{children}</Card>
+      <div style={{ margin: "auto", width: "100%", maxWidth: 480, padding: "32px 16px", boxSizing: "border-box" }}>
+        <div className="odk-panel odk-signin" style={{ display: "flex", flexDirection: "column", gap: 16, padding: 40 }}>{children}</div>
       </div>
+    </div>
+  );
+  const rule = (text: string) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0" }}>
+      <div style={{ flexGrow: 1, height: 1, background: colors.lineSoft }} />
+      <span style={{ fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>{text}</span>
+      <div style={{ flexGrow: 1, height: 1, background: colors.lineSoft }} />
     </div>
   );
   const note = (text: string, tone: "muted" | "error" = "muted") => (
@@ -320,7 +328,8 @@ export default function LoginScreen({
 
   if (pairingUri !== null || showSavedHubs) return frame(<>
     <Wordmark />
-    <Display size={28}>Hubs & connections</Display>
+    <Eyebrow prompt>hubs</Eyebrow>
+    <Display size={30}>Hubs & connections</Display>
     <HubPickerPanel initialUri={pairingUri ?? ""} />
     <Button kind="ghost" onClick={() => { setPairingUri(null); setShowSavedHubs(false); }}>Back</Button>
   </>);
@@ -328,6 +337,7 @@ export default function LoginScreen({
   if (isSecureConnection()) {
     return frame(<>
       <Wordmark />
+      <Eyebrow prompt>reconnecting</Eyebrow>
       <Display size={28}>Encrypted connection</Display>
       <Body>{secureConnectionStatus()?.endpoint.hub_url ?? "Your paired Hub"}</Body>
       <Body size={14}>{secureConnectionError() ?? "Could not reconnect. Check that your Hub is running, then try again."}</Body>
@@ -358,11 +368,11 @@ export default function LoginScreen({
       }
     })();
     const step = (n: string, title: string, sub: string) => (
-      <div style={{ display: "flex", gap: 14, alignItems: "flex-start", padding: 16, borderRadius: 20, background: colors.bg0, border: `1px solid ${colors.lineSoft}` }}>
-        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: "50%", border: `5px solid ${colors.accent}`, background: colors.bg1, fontFamily: fontDisplay, fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{n}</span>
+      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        <span style={{ flexShrink: 0, fontFamily: fontDisplay, fontSize: 14, fontWeight: 500, color: colors.accent }}>{n}.</span>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontFamily: fontDisplay, fontSize: 16, fontWeight: 600, color: colors.fg0 }}>{title}</div>
-          <Body size={14}>{sub}</Body>
+          <div style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, color: colors.fg0 }}>{title}</div>
+          <Body size={13}>{sub}</Body>
         </div>
       </div>
     );
@@ -370,25 +380,25 @@ export default function LoginScreen({
       <>
         <Wordmark />
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Eyebrow>Can't reach the hub</Eyebrow>
+          <Eyebrow color={colors.err}>error: can't reach the hub</Eyebrow>
           <Display size={28}>
             {permissionBlocked
               ? "The hub is there. This phone isn't allowed to see it yet."
               : "Nothing answered at that address."}
           </Display>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 12, background: colors.bg0, border: `1px solid ${colors.lineSoft}` }}>
-            <span style={{ width: 9, height: 9, borderRadius: "50%", border: `2px dashed ${colors.fg3}`, flexShrink: 0 }} />
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: colors.fg2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{address}</span>
-            <span style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 600, color: colors.fg3, marginLeft: "auto", flexShrink: 0 }}>
-              {blockedMessage === "launch" ? "not reached on launch" : "no answer"}
+          <div style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 3, border: `1px dashed ${colors.line}`, fontFamily: fontDisplay, fontSize: 12, color: colors.fg2 }}>
+            <span aria-hidden="true" style={{ color: colors.fg3 }}>○</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{address}</span>
+            <span style={{ color: colors.fg3, flexShrink: 0 }}>
+              · {blockedMessage === "launch" ? "not reached on launch" : "not reached"}
             </span>
           </div>
         </div>
         {permissionBlocked ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <Body size={14} style={{ fontFamily: fontDisplay, fontWeight: 600 }}>Two switches on a phone can block a hub on your own Wi-Fi:</Body>
-            {step("1", "Local Network", "Settings → Apps → offdesk → Local Network. iOS asks once, and a No sticks until you flip it here.")}
-            {step("2", "Wireless Data", "On phones sold in China: Settings → offdesk → Wireless Data → WLAN & Cellular.")}
+            <Body size={14}>Two switches on a phone can block a hub on your own Wi-Fi:</Body>
+            {step("1", "allow local network", "Settings → Apps → Offdesk DEV → Local Network. iOS asks once, and a No sticks until you flip it here.")}
+            {step("2", "allow wi‑fi and mobile data", "On phones sold in China: Settings → Offdesk DEV → Wireless Data → WLAN & Cellular.")}
           </div>
         ) : (
           <Body size={14}>
@@ -397,16 +407,18 @@ export default function LoginScreen({
               : blockedMessage}
           </Body>
         )}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
           {permissionBlocked ? (
-            <Button onClick={() => void openSettings()}>Open Settings</Button>
+            <Button onClick={() => void openSettings()} style={{ height: 48 }}>Open Settings</Button>
           ) : null}
-          <Button kind={permissionBlocked ? "secondary" : "primary"} onClick={handleRetry} disabled={connecting}>
-            {connecting ? "Trying…" : "Try again"}
-          </Button>
-          <Button kind="ghost" onClick={() => setRetyping(true)} style={{ alignSelf: "center", height: 40, fontSize: 14 }}>
-            Use another address
-          </Button>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+            <Button kind={permissionBlocked ? "secondary" : "primary"} onClick={handleRetry} disabled={connecting} style={{ height: 44 }}>
+              {connecting ? "Trying…" : "Try again"}
+            </Button>
+            <Button kind="ghost" onClick={() => setRetyping(true)} style={{ height: 44 }}>
+              Use another address
+            </Button>
+          </div>
         </div>
       </>,
     );
@@ -417,25 +429,24 @@ export default function LoginScreen({
       <>
         <Wordmark />
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <Eyebrow>Welcome</Eyebrow>
-          <Display size={30}>Your terminal stays home.</Display>
+          <Eyebrow prompt>welcome</Eyebrow>
+          <Display size={32} cursor>Your terminal stays home.</Display>
           <Body>
             Point this at the code your hub shows: on the Mac's screen, or in its menu bar under Show the phone
             code. That's the sign-in, nothing to type.
           </Body>
         </div>
-        <Button kind="secondary" onClick={() => setShowSavedHubs(true)}>Saved Hubs</Button>
-        <Button onClick={() => void handleScanForHub()} disabled={connecting}>
+        <Button onClick={() => void handleScanForHub()} disabled={connecting} style={{ height: 48 }}>
           Scan the code
         </Button>
+        <Button kind="secondary" onClick={() => setShowSavedHubs(true)} style={{ height: 48 }}>Saved Hubs</Button>
         {scanError ? note(scanError, "error") : null}
         {hubError ? note(hubError, "error") : null}
-        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-          <div style={{ flexGrow: 1, height: 1, background: colors.line }} />
-          <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg3 }}>No code handy?</span>
-          <div style={{ flexGrow: 1, height: 1, background: colors.line }} />
-        </div>
+        {rule("no code handy?")}
+        <label htmlFor="hub-address" className="odk-label">hub address or pairing link</label>
+        <div style={{ display: "flex", gap: 8 }}>
         <input
+          id="hub-address"
           type="url"
           value={serverUrlInput}
           onChange={(event) => setServerUrlInput(event.target.value)}
@@ -447,25 +458,18 @@ export default function LoginScreen({
           autoCorrect="off"
           spellCheck={false}
           inputMode="url"
-          style={inputStyle}
+          className="odk-input"
+          style={{ flex: 1, minWidth: 0, height: 44 }}
         />
-        <Button kind="secondary" onClick={handleHubConnect} disabled={connecting || !serverUrlInput.trim()}>
+        <Button kind="secondary" onClick={handleHubConnect} disabled={connecting || !serverUrlInput.trim()} style={{ height: 44 }}>
           {connecting ? "Connecting…" : "Connect"}
         </Button>
+        </div>
       </>,
     );
   }
 
   if (isDesktop) {
-    const rule = (
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-        <div style={{ flexGrow: 1, height: 1, background: colors.line }} />
-        <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg3 }}>
-          or, with a hub address and an account
-        </span>
-        <div style={{ flexGrow: 1, height: 1, background: colors.line }} />
-      </div>
-    );
     return (
       <div
         style={{
@@ -474,32 +478,33 @@ export default function LoginScreen({
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          padding: 40,
+          padding: "40px 32px",
           background: colors.bg0,
           boxSizing: "border-box",
           overflow: "auto",
         }}
       >
-        <Card style={{ width: "100%", maxWidth: 560, flexShrink: 0, margin: "auto", display: "flex", flexDirection: "column", gap: 22, padding: 40 }}>
+        <div style={{ width: "100%", maxWidth: 600, flexShrink: 0, margin: "0 auto auto", display: "flex", flexDirection: "column", gap: 18 }}>
           {onBackToSetup ? (
-            <Button kind="secondary" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start" }} testId="login-back-to-setup">
-              ← Back to setup
-            </Button>
+            <button type="button" className="odk-text-btn" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start", padding: 0, fontSize: 13, color: colors.fg2 }} data-testid="login-back-to-setup">
+              ← back to setup
+            </button>
           ) : null}
           {onBecomeHub ? (
-            <div style={{ padding: 16, border: `1px solid ${colors.line}`, borderRadius: 12, display: "flex", flexDirection: "column", gap: 10 }}>
-              <Body size={14}>Want to access this Mac from your phone?</Body>
-              <Button kind="secondary" onClick={onBecomeHub} disabled={connecting} testId="login-become-hub">
-                Set up a Hub on this Mac
+            <div style={{ padding: "12px 16px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <Body size={13} style={{ flex: 1, minWidth: 200 }}>Want to reach this Mac from your phone instead?</Body>
+              <Button kind="secondary" size="sm" onClick={onBecomeHub} disabled={connecting} testId="login-become-hub">
+                Set up a hub on this Mac
               </Button>
             </div>
           ) : null}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Eyebrow color={colors.info}>Connect to another Hub</Eyebrow>
-            <Display size={34}>Point it at your hub</Display>
-            <Body>Paste the link the hub printed. It has the sign-in on it, so nothing else to type.</Body>
+            <Eyebrow prompt>connect to another hub</Eyebrow>
+            <Display size={36}>Point it at your hub</Display>
           </div>
+          <label htmlFor="desktop-link" className="odk-label">hub sign-in link or pairing link</label>
           <input
+            id="desktop-link"
             type="text"
             value={desktopLink}
             onChange={(event) => {
@@ -514,21 +519,28 @@ export default function LoginScreen({
             autoCorrect="off"
             spellCheck={false}
             data-testid="desktop-link-input"
-            style={inputStyle}
+            className="odk-input"
+            style={{ height: 40, marginTop: -12 }}
           />
-          <Body size={13.5}>
-            Where to find it again: on the hub's machine, the menu bar icon shows it, and so does{" "}
-            <code style={{ background: "rgb(43 35 64 / 0.06)", padding: "2px 6px", borderRadius: 6 }}>offdesk link</code>{" "}
-            in any terminal there.
+          <Body size={12} style={{ color: colors.fg3, marginTop: -12 }}>
+            The hub's menu bar icon shows it, or run{" "}
+            <code style={{ fontFamily: fontDisplay, color: colors.fg0 }}>offdesk link</code>{" "}
+            on the hub.
           </Body>
           {desktopLinkError ? <Body size={13} style={{ color: colors.err }}>{desktopLinkError}</Body> : null}
-          <Button onClick={handleDesktopLink} disabled={connecting || !desktopLink.trim()} testId="desktop-link-connect">
-            {connecting ? "Connecting…" : "Connect"}
-          </Button>
+          <div>
+            <Button onClick={handleDesktopLink} disabled={connecting || !desktopLink.trim()} testId="desktop-link-connect">
+              {connecting ? "Connecting…" : "Connect"}
+            </Button>
+          </div>
 
-          {rule}
+          {rule("or a hub address and an account")}
 
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+          <label htmlFor="desktop-address" className="odk-label">hub address</label>
           <input
+            id="desktop-address"
             type="text"
             value={serverUrlInput}
             onChange={(event) => setServerUrlInput(event.target.value)}
@@ -540,15 +552,18 @@ export default function LoginScreen({
             autoCorrect="off"
             spellCheck={false}
             data-testid="desktop-server-url"
-            style={inputStyle}
+            className="odk-input"
+            style={{ height: 40 }}
           />
+          </div>
           <Button kind="secondary" onClick={handleDesktopConnect} disabled={connecting || !serverUrlInput.trim()}>
             Sign in in the browser
           </Button>
-          <div style={{ fontFamily: fontDisplay, fontSize: 12.5, fontWeight: 600, color: colors.fg3 }}>
-            Only hubs reachable from outside your network have GitHub or Google sign-in. At home, the link is the sign-in.
           </div>
-        </Card>
+          <Body size={12} style={{ color: colors.fg3 }}>
+            Only hubs reachable from outside your network have GitHub or Google sign-in. At home, the link is the sign-in.
+          </Body>
+        </div>
       </div>
     );
   }
@@ -573,7 +588,9 @@ export default function LoginScreen({
         autoCorrect="off"
         spellCheck={false}
         inputMode="url"
-        style={inputStyle}
+        aria-label="Sign-in link"
+        className="odk-input"
+        style={{ height: 40 }}
       />
       {linkError ? note(linkError, "error") : null}
       <Button onClick={handleOpenLink} disabled={!pastedLink.trim()}>
@@ -601,8 +618,7 @@ export default function LoginScreen({
     <>
       <Wordmark />
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <Eyebrow>Sign in</Eyebrow>
-        <Display size={30}>Your terminal stays home.</Display>
+        <Display size={32} cursor style={{ marginTop: 8 }}>Your terminal stays home.</Display>
         {providers === null ? <Body>Asking this hub how it signs people in…</Body> : null}
         {providersError ? (
           <Body size={13} style={{ color: colors.err }}>
@@ -628,6 +644,7 @@ export default function LoginScreen({
                 kind={index === 0 ? "primary" : "secondary"}
                 onClick={() => handleWebLogin(provider.value)}
                 disabled={activeProvider !== null}
+                style={{ height: 44 }}
               >
                 {active ? "Opening…" : provider.label}
               </Button>

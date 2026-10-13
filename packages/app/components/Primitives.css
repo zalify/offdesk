@@ -65,6 +65,8 @@
 
 /* ── Surfaces ────────────────────────────────────────────────────── */
 .odk-panel{box-sizing:border-box;background:rgb(var(--color-bg-1));border:1px solid rgb(var(--color-line-soft));border-radius:6px;padding:24px}
+/* Sign-in and setup: a panel on wide screens, the whole screen on a phone. */
+@media(max-width:520px){.odk-signin{border:0!important;background:transparent!important;padding:24px 8px!important}}
 /* Floating card: the updater, menus, dialogs. */
 .odk-float{box-sizing:border-box;background:rgb(var(--color-bg-2));border:1px solid rgb(var(--color-line));border-radius:6px;box-shadow:0 24px 64px rgb(0 0 0 / .45);color:rgb(var(--color-fg-0));font-family:var(--font-display)}
 /* Transient message: square, mono, never a pill. */

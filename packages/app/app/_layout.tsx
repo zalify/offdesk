@@ -56,19 +56,22 @@ class AppErrorBoundary extends Component<
 
     return (
       <View className="flex-1 min-h-screen bg-background items-center justify-center px-6 py-10">
-        <View className="w-full max-w-2xl items-center gap-4">
-          <Text className="text-2xl font-semibold text-foreground">Something went wrong</Text>
-          <Pressable
-            accessibilityRole="button"
-            className="rounded-md bg-accent px-5 py-3"
-            onPress={this.reload}
-          >
-            <Text className="font-semibold text-on-accent">Reload</Text>
-          </Pressable>
-          {getUiUpdateState().status?.enabled && <Pressable accessibilityRole="button" onPress={() => void recoverUi().catch(() => this.reload())}>
-            <Text className="text-foreground">Restore previous interface</Text>
-          </Pressable>}
-          <View className="mt-4 w-full rounded-md bg-surface p-4">
+        <View className="w-full max-w-2xl gap-4">
+          <Text className="font-display text-sm" style={{ color: colors.err }}>error: the app stopped</Text>
+          <Text className="font-display text-3xl font-semibold text-foreground" style={{ letterSpacing: -1 }}>Something went wrong</Text>
+          <View className="flex-row flex-wrap gap-2">
+            <Pressable
+              accessibilityRole="button"
+              className="rounded bg-primary px-5 py-3"
+              onPress={this.reload}
+            >
+              <Text className="font-display font-semibold text-on-primary" style={{ textTransform: "lowercase" }}>Reload</Text>
+            </Pressable>
+            {getUiUpdateState().status?.enabled && <Pressable accessibilityRole="button" className="rounded border border-border px-5 py-3" onPress={() => void recoverUi().catch(() => this.reload())}>
+              <Text className="font-display text-foreground" style={{ textTransform: "lowercase" }}>Restore previous interface</Text>
+            </Pressable>}
+          </View>
+          <View className="mt-4 w-full rounded-md border border-border-outline bg-surface p-4">
             <Text className="font-mono text-xs text-foreground-muted">
               {error.message}
               {error.stack ? `\n\n${error.stack}` : ""}
