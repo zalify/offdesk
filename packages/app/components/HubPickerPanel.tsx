@@ -72,7 +72,7 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
         <span style={{ minWidth: 0 }}><span style={{ display: "block", overflowWrap: "anywhere", fontSize: 14, fontWeight: current ? 600 : 400 }}>{hub.name === hub.status.endpoint.hub_url ? address(hub.name) : hub.name}</span><span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg2 }}>{current ? "Current Hub · " : "Saved · "}Encrypted pairing</span></span><span aria-hidden="true" style={{ color: colors.fg3 }}>›</span>
       </button>; })}
       </div>}
-      {!hubs.length && !busy && <Body size={13}>No saved Hubs yet. Open Mobile app on your Hub’s computer to get its encrypted pairing code.</Body>}
+      {!hubs.length && !busy && <Body size={13}>No saved Hubs yet. Open Settings → Phone on your Hub’s computer to get its encrypted pairing code.</Body>}
       <Button kind="secondary" disabled={busy !== null} onClick={() => setAdding(true)}>Add a Hub</Button>
     </>}
     {selected && <>
@@ -107,7 +107,7 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
         <Button disabled={busy !== null} onClick={() => void run("Pairing with Hub…", () => pairAndOpenHub(uri))}>Pair and connect</Button>
         <Button kind="ghost" disabled={busy !== null} onClick={() => { setIdentity(null); setUri(""); }}>Use another code</Button>
       </> : <>
-        <Body size={13}>On the Hub computer, open Settings → Mobile app. Use the encrypted App code. Your existing Hubs stay saved.</Body>
+        <Body size={13}>On the Hub computer, open Settings → Phone. Use the encrypted App code. Your existing Hubs stay saved.</Body>
         {isTauriMobile() && <Button disabled={busy !== null} onClick={() => void scan()}>Scan QR Code</Button>}
         <label className="odk-label" style={{ display: "grid", gap: 6 }}>or paste the pairing link<input type="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={uri} onChange={e => setUri(e.target.value)} placeholder="offdesk://pair?…" style={{ ...field, marginTop: 8 }} /></label>
         <Button kind="secondary" disabled={busy !== null || !uri.trim()} onClick={() => void run("Reading pairing code…", async () => { const result = await pairingIdentity(uri.trim()); if (mounted.current) { setUri(uri.trim()); setIdentity(result); } })}>Continue</Button>

@@ -352,7 +352,7 @@ offdesk kill $T --yes
 ### Setting up the CLI
 
 The installer already placed it. Create an API token in the web UI (Settings →
-API Tokens → Create), then either write it to a config file:
+API tokens → Create), then either write it to a config file:
 
 ```toml
 # ~/.config/offdesk/config.toml  (chmod 600)

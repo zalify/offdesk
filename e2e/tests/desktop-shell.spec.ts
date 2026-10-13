@@ -477,7 +477,7 @@ test("desktop connection setup has a visible way back before any form fields", a
   expect(await page.evaluate(() => (window as any).__desktopTest.calls)).not.toContain("hub_install");
 });
 
-test("settings centers desktop content and keeps the scrollbar at the window edge", async ({ page }, testInfo) => {
+test("settings keeps the section nav and the scrollbar at the window edges", async ({ page }, testInfo) => {
   await desktopBridge(page, "hub");
   await openApp(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -487,9 +487,15 @@ test("settings centers desktop content and keeps the scrollbar at the window edg
     const column = page.getByTestId("settings-column");
     const outer = (await scroller.boundingBox())!;
     const inner = (await column.boundingBox())!;
-    expect(outer.width).toBeGreaterThan(width - 30);
-    expect(Math.abs(inner.x + inner.width / 2 - (outer.x + outer.width / 2))).toBeLessThan(12);
+    expect(Math.abs(outer.x + outer.width - width)).toBeLessThan(2);
     expect(inner.width).toBeLessThanOrEqual(880);
+    const nav = page.getByRole("navigation", { name: "Settings sections" });
+    if (width >= 900) {
+      expect((await nav.boundingBox())!.x).toBeLessThan(2);
+      expect(inner.x).toBeLessThan(outer.x + 2);
+    } else {
+      expect(outer.width).toBeGreaterThan(width - 30);
+    }
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`settings-${width}.png`) });
   }

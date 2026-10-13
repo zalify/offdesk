@@ -35,7 +35,7 @@ On the Mac, open **Settings → This machine → Offdesk Cloud**:
    disabled connection offers **Enable remote connection**; failed checks offer
    **Verify connection** to retry.
 3. Once **Encryption verified** appears, choose **Connect your phone**. This
-   opens the same App pairing panel used by **Settings → Mobile app**. Scan its
+   opens the same App pairing panel used by **Settings → Phone**. Scan its
    code inside Offdesk, compare the Hub identity, then confirm. An already paired
    phone can check its saved connection methods without another QR.
 
