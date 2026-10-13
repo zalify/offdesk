@@ -119,7 +119,7 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
   );
 }
 
-// A chip in the strip: 3px corners, the control edge, 44px tall to tap.
+// A chip in the strip: 3px corners, the control edge.
 const chip = {
   display: "flex",
   alignItems: "center",
@@ -134,3 +134,68 @@ const chip = {
   whiteSpace: "nowrap",
   cursor: "pointer",
 } as const;
+
+/** The card over the active terminal while it waits on a confirmation
+ *  (wireframe B-Phone): `[enter]` accepts the selected option — the same
+ *  one-shot Enter as the strip — and `take control` when you are watching. */
+export function MobileWaitingCard({ terminal, deviceId, canSend, isController, onTakeControl }: {
+  terminal: TerminalInfo;
+  deviceId: string | null;
+  canSend: boolean;
+  isController: boolean;
+  onTakeControl: () => void;
+}) {
+  const [hidden, setHidden] = useState(false);
+  const [state, setState] = useState<"idle" | "sending" | "sent" | "check">("idle");
+  const [error, setError] = useState<string | null>(null);
+  const live = useRef({ canSend, attention: terminal.attention });
+  live.current = { canSend, attention: terminal.attention };
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => { setHidden(false); setState("idle"); setError(null); }, [terminal.id]);
+  if (hidden) return null;
+  const title = displayTerminalTitle(terminal);
+  const enter = async () => {
+    if (state !== "idle" || !deviceId) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setState("sending");
+    try {
+      await sendAttentionEnter({
+        machineId: terminal.machine_id, terminalId: terminal.id, deviceId, signal: controller.signal,
+        isAllowed: () => live.current.canSend && live.current.attention === "confirmation",
+      });
+      if (!controller.signal.aborted) setState("sent");
+    } catch (reason) {
+      if (!controller.signal.aborted) {
+        setState("check");
+        setError(reason instanceof Error ? reason.message : "Open the terminal to check.");
+      }
+    }
+  };
+  return (
+    <div data-testid="mobile-waiting-card" aria-live="polite"
+      style={{ position: "absolute", left: 16, right: 16, bottom: 12, zIndex: 6, display: "flex", flexDirection: "column", gap: 10, padding: 12,
+        border: `1px solid ${colors.err}`, borderRadius: 4, background: colors.bg0, fontFamily: "var(--font-display)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: colors.err, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {title} is waiting for you
+        </span>
+        <button type="button" aria-label="Hide" onClick={() => setHidden(true)} className="odk-text-btn" style={{ minHeight: 28, minWidth: 28 }}>[x]</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: isController ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+        <button type="button" data-testid="mobile-waiting-enter" disabled={!deviceId || !canSend || state !== "idle"}
+          onPointerDown={event => event.preventDefault()} onClick={() => void enter()}
+          aria-label={`Send Enter to ${title}`} className="odk-btn odk-btn--secondary" style={{ height: 42 }}>
+          {state === "sent" ? "sent" : state === "check" ? "check the terminal" : state === "sending" ? "…" : "[enter]"}
+        </button>
+        {!isController && (
+          <button type="button" data-testid="mobile-waiting-take-control" onClick={onTakeControl} className="odk-btn odk-btn--primary" style={{ height: 42 }}>
+            take control
+          </button>
+        )}
+      </div>
+      {error && <span role="alert" style={{ fontSize: 12, color: colors.err }}>{error}</span>}
+    </div>
+  );
+}

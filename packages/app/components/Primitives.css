@@ -37,6 +37,10 @@
 .odk-bracketed::before{content:"["}
 .odk-bracketed::after{content:"]"}
 
+/* `› browse files`: phone menu rows. */
+.odk-menu-row::before{content:"›";color:rgb(var(--color-fg-3));text-transform:none}
+@media(hover:hover){.odk-menu-row:not(:disabled):hover{background:rgb(var(--color-bg-3))!important}}
+
 /* ── Chips and badges ────────────────────────────────────────────── */
 .odk-chip{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:1px solid rgb(var(--color-line));border-radius:3px;font-family:var(--font-display);font-size:11px;font-weight:500;line-height:1;color:rgb(var(--color-fg-2));white-space:nowrap}
 .odk-chip--solid{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
