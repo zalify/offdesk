@@ -61,14 +61,15 @@ png icon-tile-32 32 "$icons/32x32.png"
 png icon-tile-32 30 "$icons/Square30x30Logo.png"
 png icon-tile-32 44 "$icons/Square44x44Logo.png"
 
-# icon.ico: one drawing per size.
+# icon.ico: one drawing per size, 32 first — tauri-codegen takes the first
+# entry as the Windows window icon.
 png icon-tile-16 16 "$tmp/ico-16.png"
 png icon-tile-32 24 "$tmp/ico-24.png"
 png icon-tile-32 32 "$tmp/ico-32.png"
 png icon-tile-32 48 "$tmp/ico-48.png"
 png icon-tile 64 "$tmp/ico-64.png"
 png icon-tile 256 "$tmp/ico-256.png"
-node "$root/scripts/ico.mjs" "$icons/icon.ico" "$tmp"/ico-{16,24,32,48,64,256}.png
+node "$root/scripts/ico.mjs" "$icons/icon.ico" "$tmp"/ico-{32,16,24,48,64,256}.png
 
 # icon.icns, from the macOS tile.
 set_dir="$tmp/icon.iconset"
