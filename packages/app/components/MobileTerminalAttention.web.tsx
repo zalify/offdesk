@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { sendAttentionEnter } from "@/lib/attentionEnter";
 import type { AgentBrowserInfo, MachineInfo, TerminalInfo } from "@offdesk/shared";
-import { CircleAlert, ChevronRight, Globe } from "lucide-react";
 import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { browserLabel } from "@/lib/agentBrowserOverlay";
@@ -67,30 +66,23 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
   if (waiting === 0) return null;
   return (
     <nav aria-label="Sessions needing attention" data-testid="mobile-terminal-attention"
-      style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "4px 8px", borderBottom: `1px solid ${colors.lineSoft}`, background: colors.bg1, minWidth: 0 }}>
-      <span role="status" style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0, color: colors.accent, fontSize: 12 }}>
-        <CircleAlert size={16} aria-hidden="true" />
-        <span>{waiting} waiting</span>
+      style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "6px 12px", borderBottom: `1px solid ${colors.lineSoft}`, background: colors.bg1, minWidth: 0, fontFamily: "var(--font-display)" }}>
+      <span role="status" className="odk-badge" style={{ fontSize: 11.5 }}>
+        {waiting} waiting
       </span>
       <div style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0, flex: 1, overscrollBehaviorX: "contain" }}>
         {handoffs.map(browser => {
           const title = browserLabel(browser);
           const reason = browser.handoff?.reason ?? "";
           return (
-            <div key={browser.id} style={{ display: "flex", alignItems: "stretch", flexShrink: 0, border: `1px solid ${colors.line}`, borderRadius: 10, overflow: "hidden", background: colors.bg0 }}>
-              <button type="button" data-testid={`mobile-attention-browser-${browser.id}`}
-                aria-label={`Open browser ${title}, the agent needs you: ${reason}`}
-                title={`${title} — the agent needs you: ${reason}`}
-                onClick={() => onPickBrowser?.(browser.id)}
-                style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, maxWidth: 220, minHeight: 44, padding: "4px 10px", border: 0, background: colors.bg0, color: colors.fg0, textAlign: "left", cursor: "pointer" }}>
-                <Globe size={14} aria-hidden="true" style={{ flexShrink: 0, color: colors.accent }} />
-                <span style={{ minWidth: 0 }}>
-                  <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 600 }}>{title}</span>
-                  <span data-testid={`mobile-attention-browser-reason-${browser.id}`} style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, color: colors.fg2 }}>{reason}</span>
-                </span>
-                <ChevronRight size={14} aria-hidden="true" style={{ flexShrink: 0 }} />
-              </button>
-            </div>
+            <button key={browser.id} type="button" data-testid={`mobile-attention-browser-${browser.id}`}
+              aria-label={`Open browser ${title}, the agent needs you: ${reason}`}
+              title={`${title} — the agent needs you: ${reason}`}
+              onClick={() => onPickBrowser?.(browser.id)}
+              style={{ ...chip, padding: "0 10px", color: colors.fg2 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>browser · {title}</span>
+              <span data-testid={`mobile-attention-browser-reason-${browser.id}`} style={{ overflow: "hidden", textOverflow: "ellipsis", color: colors.fg3, maxWidth: 120 }}>{reason}</span>
+            </button>
           );
         })}
         {pending.map(terminal => {
@@ -98,33 +90,47 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
           const machine = machines.find(m => m.id === terminal.machine_id)?.name;
           const group = groupLabels.get(terminal.id) ?? terminal.cwd.split(/[\\/]/).filter(Boolean).pop();
           const context = [group, machine].filter(Boolean).join(" · ");
+          const blocked = !deviceId || !canSend(terminal.machine_id) || sent.has(terminal.id);
           return (
-            <div key={terminal.id} style={{ display: "flex", alignItems: "stretch", flexShrink: 0, border: `1px solid ${colors.line}`, borderRadius: 10, overflow: "hidden", background: colors.bg0 }}>
-            <button type="button" data-testid={`mobile-attention-${terminal.id}`}
-              aria-label={`Open ${title}, ${context}, confirmation requested`}
-              title={`${title} · ${context} — confirmation requested`}
-              onClick={() => onPick(terminal.id)}
-              style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0, maxWidth: 180, minHeight: 44, padding: "4px 10px", border: 0, background: colors.bg0, color: colors.fg0, textAlign: "left", cursor: "pointer" }}>
-              <span style={{ minWidth: 0 }}>
-                <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12, fontWeight: 600 }}>{title}</span>
-                <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 10, color: colors.fg2 }}>{context}</span>
-              </span>
-              <ChevronRight size={14} aria-hidden="true" style={{ flexShrink: 0 }} />
-            </button>
-            <button type="button" data-testid={`mobile-attention-enter-${terminal.id}`}
-              aria-label={`Send Enter to ${title}, ${context}`}
-              title="Confirm the currently selected option in this terminal"
-              disabled={!deviceId || !canSend(terminal.machine_id) || sent.has(terminal.id)}
-              onPointerDown={event => event.preventDefault()}
-              onClick={() => void enter(terminal)}
-              style={{ minWidth: 52, minHeight: 44, padding: "4px 8px", border: 0, borderLeft: `1px solid ${colors.lineSoft}`, background: "transparent", color: colors.accent, font: "inherit", fontSize: 12, cursor: "pointer", opacity: !deviceId || !canSend(terminal.machine_id) || sent.has(terminal.id) ? 0.45 : 1 }}>
-              {sent.has(terminal.id) ? result[terminal.id] === "sent" ? "Sent" : result[terminal.id] === "check" ? "Check" : "…" : "Enter"}
-            </button>
+            <div key={terminal.id} style={{ ...chip, padding: "0 3px 0 0" }}>
+              <button type="button" data-testid={`mobile-attention-${terminal.id}`}
+                aria-label={`Open ${title}, ${context}, confirmation requested`}
+                title={`${title} · ${context} — confirmation requested`}
+                onClick={() => onPick(terminal.id)}
+                style={{ display: "flex", alignItems: "center", alignSelf: "stretch", maxWidth: 170, padding: "0 8px", border: 0, background: "transparent", color: colors.fg0, font: "inherit", fontSize: 12, fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{title} · {group ?? machine}</span>
+              </button>
+              <button type="button" data-testid={`mobile-attention-enter-${terminal.id}`}
+                aria-label={`Send Enter to ${title}, ${context}`}
+                title="Confirm the currently selected option in this terminal"
+                disabled={blocked}
+                onPointerDown={event => event.preventDefault()}
+                onClick={() => void enter(terminal)}
+                className="odk-bracketed"
+                style={{ minWidth: 52, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: blocked ? "transparent" : colors.primary, color: blocked ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: 11, fontWeight: 600, textTransform: "lowercase", cursor: "pointer", opacity: blocked ? 0.7 : 1 }}>
+                {sent.has(terminal.id) ? result[terminal.id] === "sent" ? "Sent" : result[terminal.id] === "check" ? "Check" : "…" : "Enter"}
+              </button>
             </div>
           );
         })}
       </div>
-      {error && <span role="alert" style={{ flexBasis: "100%", color: colors.accent, fontSize: 12 }}>{error}</span>}
+      {error && <span role="alert" style={{ flexBasis: "100%", color: colors.err, fontSize: 12 }}>{error}</span>}
     </nav>
   );
 }
+
+// A chip in the strip: 3px corners, the control edge, 44px tall to tap.
+const chip = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexShrink: 0,
+  minHeight: 36,
+  border: `1px solid ${colors.line}`,
+  borderRadius: 3,
+  background: "transparent",
+  fontFamily: "inherit",
+  fontSize: 12,
+  whiteSpace: "nowrap",
+  cursor: "pointer",
+} as const;
