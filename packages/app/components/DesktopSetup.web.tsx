@@ -32,7 +32,7 @@ import {
 import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
 import LoginScreen from "../app/login";
 import { AppTitleBar } from "./AppTitleBar.web";
-import { Body, Button, Card, Check, Display, Donut, Eyebrow, Spinner, fontDisplay } from "./Primitives.web";
+import { Body, Button, Card, Display, Eyebrow, Spinner, StepMark, Wordmark, fontDisplay } from "./Primitives.web";
 
 const IPHONE_URL = "https://testflight.apple.com/join/rV4ktaGv";
 const ANDROID_URL = "https://offdesk.dev/apk";
@@ -245,73 +245,67 @@ function FirstRun({ onPick }: { onPick: (role: DesktopRole) => Promise<void> }) 
   };
   return (
     <Screen>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
-        <Eyebrow>First run</Eyebrow>
-        <Display size={42}>Which machine is this?</Display>
-        <Body size={17} style={{ color: colors.fg1, maxWidth: 560 }}>
-          Same app either way. The only question is whether this is the machine that stays on.
-        </Body>
+      <div style={{ width: "100%", maxWidth: 880, display: "flex", flexDirection: "column", gap: 14 }}>
+        <Wordmark size={18} />
+        <div style={{ marginTop: 20 }}><Eyebrow prompt>first run</Eyebrow></div>
+        <Display size={40} cursor>Which machine is this?</Display>
+        <Body size={16}>Same app either way. Tell it what this machine does and it sets itself up.</Body>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 28, width: "100%", maxWidth: 880 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 16, width: "100%", maxWidth: 880 }}>
         <RoleCard
-          accent={colors.accent}
-          icon={<ServerIcon />}
+          label="hub"
+          accent
           title="The one that stays on"
-          body="A Mac on the desk, a Mini in the closet. It becomes your hub: the one address your phone and every other machine talk to. Starts at login, restarts if it stops."
+          body="The Mac mini under the desk, or your work machine. It runs the hub, keeps your terminals alive and is the address everything else connects to."
           note="Installs the hub, the node and tmux here. No account, no cloud."
           action={
             <Button onClick={() => choose("hub")} disabled={busy !== null} testId="first-run-hub">
-              <Check color={colors.onAccent} /> {busy === "hub" ? "One moment…" : "Set this machine up"}
+              {busy === "hub" ? "One moment…" : "Set this machine up"}
             </Button>
           }
         />
         <RoleCard
-          accent={colors.info}
-          icon={<LaptopIcon />}
+          label="client"
           title="Just connecting"
-          body="You already have a hub somewhere else. Open its terminals from this machine, the way the phone does."
+          body="A laptop or a second machine. It opens the terminals that live on your hub."
           note="Paste the link the hub printed, or sign in."
           action={
             <Button kind="secondary" onClick={() => choose("client")} disabled={busy !== null} testId="first-run-client">
-              <LinkIcon /> Connect to a hub
+              Connect to a hub
             </Button>
           }
         />
       </div>
-      {error ? <Body style={{ color: colors.err }}>{error}</Body> : null}
-      <div style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, color: colors.fg2 }}>
-        You can change this later in Settings.
+      {error ? <div role="alert" style={errorBox}>{error}</div> : null}
+      <div style={{ width: "100%", maxWidth: 880 }}>
+        <Body size={12} style={{ color: colors.fg3 }}>You can change this later in settings.</Body>
       </div>
     </Screen>
   );
 }
 
 function RoleCard({
-  accent,
-  icon,
+  label,
+  accent = false,
   title,
   body,
   note,
   action,
 }: {
-  accent: string;
-  icon: ReactNode;
+  label: string;
+  accent?: boolean;
   title: string;
   body: string;
   note: string;
   action: ReactNode;
 }) {
   return (
-    <Card style={{ display: "flex", flexDirection: "column", gap: 18, padding: 32 }}>
-      <Donut color={accent} size={56}>
-        {icon}
-      </Donut>
-      <Display size={26}>{title}</Display>
-      <Body size={16} style={{ flexGrow: 1 }}>
-        {body}
-      </Body>
-      {action}
-      <div style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg3 }}>{note}</div>
+    <Card style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, padding: 24 }}>
+      <span style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 500, color: accent ? colors.accent : colors.fg3 }}>{label}</span>
+      <Display size={22}>{title}</Display>
+      <Body size={15} style={{ flexGrow: 1 }}>{body}</Body>
+      <div style={{ marginTop: 8 }}>{action}</div>
+      <Body size={12} style={{ color: colors.fg3 }}>{note}</Body>
     </Card>
   );
 }
@@ -363,64 +357,86 @@ export function HubSetup({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempt, status.supported]);
 
+  const steps = [
+    { done: checked?.hub_running ?? status.listening, title: "start your hub", meta: "offdesk-hub", sub: "Starts at login and restarts if it stops." },
+    { done: checked?.machine_registered ?? false, title: "connect this Mac to your hub", sub: "Its node runs as a service too, so the first terminal you open is a shell right here." },
+    { done: checked?.node_online ?? false, title: "wait for this Mac to come online", sub: "Checks the live connection, so your phone has a machine to open." },
+    { done: checked?.tmux_available ?? false, title: "check terminal tools", meta: "tmux", sub: "Checks that tmux can run on this Mac." },
+  ];
+  const active = error ? -1 : steps.findIndex((step) => !step.done);
+
   return (
     <Screen>
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
-        <Eyebrow>This machine is your hub</Eyebrow>
-        <Display size={38}>{error ? "Let’s finish setting up this Mac" : "Getting this Mac ready…"}</Display>
-        <Body>Your phone can connect after these checks finish. No Terminal commands needed.</Body>
+      <div style={{ width: "100%", maxWidth: 600, display: "flex", flexDirection: "column", gap: 10 }}>
+        <Eyebrow prompt>setting up the hub</Eyebrow>
+        <Display size={36}>{error ? "Let’s finish setting up this Mac" : "Getting this Mac ready…"}</Display>
+        <Body size={15}>Takes about a minute. You can leave this window open.</Body>
       </div>
-      <Card style={{ width: "100%", maxWidth: 560, display: "flex", flexDirection: "column", gap: 16 }}>
-        <SetupStep done={checked?.hub_running ?? status.listening} pending={!error} title="Start your Hub" sub="Starts at login and restarts if it stops." />
-        <SetupStep done={checked?.machine_registered ?? false} pending={!error} title="Connect this Mac to your Hub" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
-        <SetupStep done={checked?.node_online ?? false} pending={!error} title="Wait for this Mac to come online" sub="Checks the live connection, so your phone has a machine to open." />
-        <SetupStep done={checked?.tmux_available ?? false} pending={!error} title="Check terminal tools" sub="Checks that tmux can run on this Mac." />
-      </Card>
+      <StepList steps={steps} active={active} />
       {error ? (
-        <>
-          <Body style={{ color: colors.err, maxWidth: 560, textAlign: "center", fontFamily: "var(--font-mono)", fontSize: 13 }}>{error}</Body>
-          <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ width: "100%", maxWidth: 600, display: "flex", flexDirection: "column", gap: 10, paddingTop: 12, borderTop: `1px dashed ${colors.lineSoft}` }}>
+          <div style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 500, color: colors.fg3 }}>if a step fails</div>
+          <div role="alert" style={errorBox}>{error}</div>
+          <div style={{ display: "flex", gap: 8 }}>
             {status.supported ? (
-              <Button onClick={() => setAttempt((n) => n + 1)} testId="hub-setup-retry">
+              <Button size="sm" onClick={() => setAttempt((n) => n + 1)} testId="hub-setup-retry">
                 Try again
               </Button>
             ) : null}
-            <Button kind="secondary" onClick={onGiveUp}>
-              Connect to another Hub
+            <Button size="sm" kind="secondary" onClick={onGiveUp}>
+              Connect to another hub
             </Button>
           </div>
-        </>
+        </div>
       ) : (
-        <Body size={14} style={{ textAlign: "center" }}>
-          macOS may ask whether offdesk can accept incoming connections. It can; that is your phone.
-        </Body>
+        <div style={{ width: "100%", maxWidth: 600, boxSizing: "border-box", padding: "12px 16px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4 }}>
+          <Body size={13}>macOS may ask whether Offdesk DEV can accept incoming connections. Choose Allow so your phone can reach this Mac.</Body>
+        </div>
       )}
     </Screen>
   );
 }
 
-function SetupStep({ done, pending, title, sub }: { done: boolean; pending: boolean; title: string; sub: string }) {
+const errorBox = {
+  boxSizing: "border-box",
+  width: "100%",
+  maxWidth: 600,
+  padding: "10px 12px",
+  border: `1px solid ${colors.err}`,
+  borderRadius: 4,
+  color: colors.err,
+  fontFamily: "var(--font-display)",
+  fontSize: 12,
+  overflowWrap: "anywhere",
+} as const;
+
+type Step = { done: boolean; title: string; sub: string; meta?: string };
+
+/** The setup checklist: [✓] done, [~] the one in progress, [ ] still to come. */
+function StepList({ steps, active, compact = false }: { steps: Step[]; active: number; compact?: boolean }) {
   return (
-    <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          width: 30,
-          height: 30,
-          borderRadius: "50%",
-          background: done ? colors.ok : colors.bg3,
-          flexShrink: 0,
-          opacity: pending && !done ? 0.6 : 1,
-        }}
-      >
-        {done ? <Check color={colors.onAccent} /> : null}
-      </span>
-      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ fontFamily: fontDisplay, fontSize: 17, fontWeight: 600, color: colors.fg0 }}>{title}</div>
-        <Body size={14}>{sub}</Body>
-      </div>
+    <div
+      style={{
+        width: "100%",
+        maxWidth: compact ? undefined : 600,
+        boxSizing: "border-box",
+        padding: compact ? 0 : "6px 20px",
+        background: compact ? "transparent" : colors.bg1,
+        border: compact ? "none" : `1px solid ${colors.lineSoft}`,
+        borderRadius: 6,
+      }}
+    >
+      {steps.map((step, index) => (
+        <div key={step.title} className="odk-step" title={step.sub} style={compact ? { padding: "4px 0", borderBottom: 0 } : undefined}>
+          <StepMark state={step.done ? "done" : index === active ? "active" : "todo"} />
+          <span style={{ flexGrow: 1, color: step.done || index === active ? colors.fg0 : colors.fg2 }}>{step.title}</span>
+          {index === active ? (
+            <span style={{ fontSize: 12, color: colors.accent }}>waiting…</span>
+          ) : step.meta ? (
+            <span style={{ fontSize: 12, color: colors.fg3 }}>{step.meta}</span>
+          ) : null}
+        </div>
+      ))}
     </div>
   );
 }
@@ -476,30 +492,23 @@ export function HubReadyScreen({
     return () => { cancelled = true; };
   }, []);
 
+  const steps = [
+    { done: verified?.setup?.hub_running ?? verified?.listening ?? false, title: "hub is running", sub: "Starts at login and restarts if it stops." },
+    { done: verified?.setup?.node_online ?? false, title: "this Mac is online", sub: "Its node runs as a service too, so the first terminal you open is a shell right here." },
+    { done: verified?.setup?.tmux_available ?? false, title: "terminal tools are available", sub: "Your sessions outlive the app, the network, and you walking away." },
+  ];
   return (
     <Screen wide>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 340px), 1fr))", gap: 40, width: "100%", maxWidth: 1000, alignItems: "start" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <Eyebrow>This machine is your hub</Eyebrow>
-            <Display size={38}>Connect your phone</Display>
-          </div>
-          <Card style={{ display: "flex", flexDirection: "column", gap: 16, padding: 24 }}>
-            <SetupStep done={verified?.setup?.hub_running ?? verified?.listening ?? false} pending={!verified} title="Hub is running" sub="Starts at login and restarts if it stops." />
-            <SetupStep done={verified?.setup?.node_online ?? false} pending={!verified} title="This Mac is online" sub="Its node runs as a service too, so the first terminal you open is a shell right here." />
-            <SetupStep done={verified?.setup?.tmux_available ?? false} pending={!verified} title="Terminal tools are available" sub="Your sessions outlive the app, the network, and you walking away." />
-          </Card>
-          <div style={{ display: "grid", gap: 12 }}>
-            <strong>Where will you connect?</strong>
-            <Body size={13}>On the same network, you can pair now. To connect away from home, enable Offdesk Cloud first.</Body>
-            <Button kind="secondary" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide Cloud setup" : "Set up remote access"}</Button>
-            {showCloud && <CloudConnectionPanel onPairPhone={() => { setLink(null); setShowCloud(false); }} />}
-          </div>
-          {error ? <Body style={{ color: colors.err }}>{error}</Body> : null}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 380px), 1fr))", gap: 48, width: "100%", maxWidth: 940, alignItems: "center" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <Eyebrow prompt>hub ready</Eyebrow>
+          <Display size={36}>Your terminals now stay home</Display>
+          <StepList steps={steps} active={verified ? -1 : steps.findIndex((step) => !step.done)} compact />
+          {error ? <div role="alert" style={errorBox}>{error}</div> : null}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {onClose ? (
               <Button kind="secondary" onClick={onClose} testId="hub-ready-back">
-                <TerminalIcon /> Back to the terminal
+                Back to the terminal
               </Button>
             ) : (
               <Button
@@ -514,9 +523,17 @@ export function HubReadyScreen({
                   });
                 }}
               >
-                <TerminalIcon /> {opening ? "Opening…" : "Open my terminal"}
+                {opening ? "Opening…" : "Open my terminal"}
               </Button>
             )}
+          </div>
+          <div style={{ marginTop: 10, padding: 16, display: "flex", flexDirection: "column", gap: 8, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6 }}>
+            <div style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600 }}>Where will you connect from?</div>
+            <Body size={13}>At home your phone reaches this Mac over Wi‑Fi. Away from home, turn on remote access with Offdesk Cloud or your own tunnel.</Body>
+            <div>
+              <Button kind="secondary" size="sm" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide Cloud setup" : "Set up remote access"}</Button>
+            </div>
+            {showCloud && <CloudConnectionPanel onPairPhone={() => { setLink(null); setShowCloud(false); }} />}
           </div>
         </div>
         <PhoneCodePanel link={link} onLink={setLink} onError={setError} />
@@ -557,9 +574,9 @@ export function PhoneCodePanel({
       type: "svg",
       margin: 4,
       errorCorrectionLevel: "M",
-      // Hex only — the encoder rejects CSS variables. Ink on cream reads
-      // fine through a camera and matches the page.
-      color: { dark: "#2b2340", light: "#fffbf4" },
+      // Hex only — the encoder rejects CSS variables. Ink on white reads
+      // best through a camera, in both themes.
+      color: { dark: "#0c0c0b", light: "#ffffff" },
     })
       .then((svg) => {
         if (!cancelled) setQr(svg);
@@ -596,19 +613,22 @@ export function PhoneCodePanel({
   // or a Settings section it sits flat, the surface around it is the card.
   const body = (
     <>
-      {!compact ? <Display size={22} style={{ textAlign: "center" }}>Connect your phone</Display> : null}
-      <div role="group" aria-label="Connect using" style={{ display: "flex", flexWrap: "wrap", width: "100%", gap: 8 }}>
+      {!compact ? <Display size={20} style={{ alignSelf: "stretch" }}>Connect your phone</Display> : null}
+      {/* D03: a two-way switch, the app first and recommended. */}
+      <div role="group" aria-label="Connect using" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", width: "100%", border: `1px solid ${colors.line}`, borderRadius: 4, overflow: "hidden" }}>
         {(["app", "browser"] as const).map((value) => (
           <button key={value} type="button" aria-pressed={purpose === value} onClick={() => setPurpose(value)}
             data-testid={`phone-purpose-${value}`}
-            style={{ flex: 1, minHeight: 44, padding: "10px 12px", borderRadius: 12, cursor: "pointer",
-              fontFamily: fontDisplay, fontSize: 14, fontWeight: 600,
-              border: `1.5px solid ${purpose === value ? colors.accent : colors.line}`,
-              background: purpose === value ? colors.surface : colors.bg0, color: colors.fg0 }}>
-            {value === "app" ? "Offdesk App · Recommended" : "Browser access"}
+            aria-label={value === "app" ? "Offdesk DEV app, recommended" : "Browser access"}
+            style={{ minHeight: 36, padding: "0 10px", border: 0, cursor: "pointer",
+              fontFamily: fontDisplay, fontSize: 12, fontWeight: purpose === value ? 600 : 500,
+              background: purpose === value ? colors.primary : "transparent",
+              color: purpose === value ? colors.onPrimary : colors.fg2 }}>
+            {value === "app" ? "offdesk/dev app" : "browser access"}
           </button>
         ))}
       </div>
+      {purpose === "app" ? <Body size={12} style={{ alignSelf: "stretch" }}>Recommended. End-to-end encrypted between the app and this hub.</Body> : null}
       {purpose === "browser" ? <>
       <Body size={14} style={{ textAlign: "center" }}>No app needed. Scan with your phone’s camera to sign in in a browser. This does not pair an encrypted device.</Body>
       <div
@@ -616,8 +636,8 @@ export function PhoneCodePanel({
           width: compact ? 168 : 212,
           height: compact ? 168 : 212,
           padding: 12,
-          borderRadius: 18,
-          background: "#fffbf4",
+          borderRadius: 4,
+          background: "#ffffff",
           border: `1px solid ${colors.lineSoft}`,
           display: "flex",
           alignItems: "center",
@@ -630,20 +650,20 @@ export function PhoneCodePanel({
       </> : null}
 
       {purpose === "browser" || !link?.secure_url ? <label style={{ width: "100%", display: "flex", flexDirection: "column", gap: 6 }}>
-        <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg2 }}>Your phone can reach it at</span>
+        <span className="odk-label">your phone can reach it at</span>
         <select
           value={link?.url ?? ""}
           onChange={(event) => pickAddress(event.target.value)}
           disabled={!link || picking}
           data-testid="hub-address-picker"
           style={{
-            height: 44,
+            height: 40,
             padding: "0 12px",
-            borderRadius: 12,
-            border: `1.5px solid ${colors.line}`,
-            background: colors.bg0,
+            borderRadius: 4,
+            border: `1px solid ${colors.line}`,
+            background: colors.bg1,
             color: colors.fg0,
-            fontFamily: "var(--font-mono)",
+            fontFamily: fontDisplay,
             fontSize: 13,
           }}
         >
@@ -653,18 +673,16 @@ export function PhoneCodePanel({
             </option>
           ))}
         </select>
-        <span style={{ fontSize: 12.5, color: colors.fg2 }}>{link?.public_url === link?.url && link?.public_url ? "Internet address — keep this Mac awake and online." : "Local address — your phone must be on the same network."}</span>
+        <span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg3 }}>{link?.public_url === link?.url && link?.public_url ? "Internet address — keep this Mac awake and online." : "Local address — your phone must be on the same network."}</span>
       </label> : null}
 
       {purpose === "app" ? <>
         {link ? <SecurePairingPanel baseUrl={link.secure_url ?? link.url} managed={Boolean(link.secure_url)} /> : <Body>Waiting for the hub…</Body>}
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-        <Button kind="secondary" onClick={() => void openOutside(IPHONE_URL)}>
-          <PhoneIcon /> iPhone app
-        </Button>
-        <Button kind="secondary" onClick={() => void openOutside(ANDROID_URL)}>
-          <PhoneIcon /> Android app
-        </Button>
+      <div style={{ alignSelf: "stretch", display: "flex", gap: 8, justifyContent: "center", paddingTop: 12, borderTop: `1px solid ${colors.lineSoft}`, fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>
+        no app yet?
+        <button type="button" className="odk-text-btn" style={{ minHeight: 0, padding: 0, fontSize: 12, color: colors.fg0, textDecoration: "underline" }} onClick={() => void openOutside(IPHONE_URL)} aria-label="iPhone app">iphone</button>
+        ·
+        <button type="button" className="odk-text-btn" style={{ minHeight: 0, padding: 0, fontSize: 12, color: colors.fg0, textDecoration: "underline" }} onClick={() => void openOutside(ANDROID_URL)} aria-label="Android app">android</button>
       </div>
       </> : <>
       <div
@@ -673,8 +691,9 @@ export function PhoneCodePanel({
           alignItems: "center",
           gap: 8,
           width: "100%",
-          padding: "8px 8px 8px 12px",
-          borderRadius: 12,
+          padding: "6px 6px 6px 12px",
+          boxSizing: "border-box",
+          borderRadius: 4,
           background: colors.bg0,
           border: `1px solid ${colors.lineSoft}`,
         }}
@@ -692,12 +711,12 @@ export function PhoneCodePanel({
         >
           {link?.link ? link.link.replace(/token=.{6}.*$/, "token=…") : link?.url ?? "…"}
         </span>
-        <Button onClick={copy} disabled={!link} style={{ height: 32, padding: "0 14px", fontSize: 12, boxShadow: "none" }} testId="hub-copy-link">
+        <Button onClick={copy} disabled={!link} size="sm" kind="secondary" testId="hub-copy-link" ariaLabel={copied ? "Copied" : "Copy link"}>
           {copied ? "Copied" : "Copy link"}
         </Button>
       </div>
       {link ? (
-        <div style={{ fontFamily: fontDisplay, fontSize: 12.5, fontWeight: 600, color: colors.fg3, textAlign: "center" }}>
+        <div style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg3, textAlign: "center" }}>
           {link.link
             ? "The link signs in whoever has it. Keep it off shared screens."
             : "This hub signs in through GitHub or Google, so the code is just the address."}
@@ -709,7 +728,7 @@ export function PhoneCodePanel({
   const column = { display: "flex", flexDirection: "column", alignItems: "center", gap: 16 } as const;
   if (compact) return <div style={column}>{body}</div>;
   return (
-    <Card style={{ ...column, padding: 28 }}>
+    <Card style={{ ...column, padding: 24, maxWidth: 400 }}>
       {body}
     </Card>
   );
@@ -863,12 +882,12 @@ function Screen({ children, wide = false }: { children: ReactNode; wide?: boolea
         style={{
           margin: "auto",
           width: "100%",
-          maxWidth: wide ? 1100 : 980,
+          maxWidth: wide ? 1040 : 980,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
-          gap: 28,
-          padding: wide ? "36px 48px" : "36px 56px",
+          gap: 24,
+          padding: wide ? "40px 48px" : "32px 56px",
           boxSizing: "border-box",
         }}
       >
