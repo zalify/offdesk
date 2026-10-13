@@ -4,6 +4,10 @@
 <dict>
   <!-- Merged into the generated Info.plist by the Tauri CLI. Everything an
        offdesk phone needs that the template does not ask for. -->
+  <!-- The name under the icon and in Settings. The Xcode product keeps its
+       name (PRODUCT_NAME, tauri.ios.conf.json), so the build is unchanged. -->
+  <key>CFBundleDisplayName</key>
+  <string>Offdesk DEV</string>
   <key>NSCameraUsageDescription</key>
   <string>offdesk reads the sign-in code your hub shows, so you never type an address or a token on the phone.</string>
   <key>NSLocalNetworkUsageDescription</key>

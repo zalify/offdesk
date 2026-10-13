@@ -92,6 +92,7 @@ jobs:
       - run: cargo check --manifest-path packages/desktop/src-tauri/Cargo.toml
       - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib mobile_shell
       - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib secure::route_tests
+      - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib bundle_name
       - run: cargo check --manifest-path packages/desktop/src-tauri/Cargo.toml --target aarch64-apple-ios
 
   frontend-build:
