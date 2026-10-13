@@ -94,3 +94,18 @@ test("GitHub being down still lands on the releases list, not an error page", as
     globalThis.fetch = realFetch;
   }
 });
+
+test("downloads still resolve once the app is named Offdesk DEV (GitHub turns the space into a dot)", () => {
+  const renamed = [{
+    tag_name: "desktop-v0.7.12",
+    html_url: "https://github.com/zalify/offdesk/releases/tag/desktop-v0.7.12",
+    assets: [
+      { name: "Offdesk.DEV_0.7.12_universal.dmg", browser_download_url: "https://github.com/zalify/offdesk/releases/download/desktop-v0.7.12/Offdesk.DEV_0.7.12_universal.dmg" },
+      { name: "Offdesk.DEV_0.7.12_x64_en-US.msi", browser_download_url: "https://github.com/zalify/offdesk/releases/download/desktop-v0.7.12/Offdesk.DEV_0.7.12_x64_en-US.msi" },
+      { name: "Offdesk.DEV_0.7.12_amd64.AppImage", browser_download_url: "https://github.com/zalify/offdesk/releases/download/desktop-v0.7.12/Offdesk.DEV_0.7.12_amd64.AppImage" },
+    ],
+  }, ...releases];
+  assert.match(desktopTarget(renamed, "mac"), /Offdesk\.DEV_0\.7\.12_universal\.dmg$/);
+  assert.match(desktopTarget(renamed, "windows"), /Offdesk\.DEV_0\.7\.12_x64_en-US\.msi$/);
+  assert.match(desktopTarget(renamed, "linux"), /Offdesk\.DEV_0\.7\.12_amd64\.AppImage$/);
+});

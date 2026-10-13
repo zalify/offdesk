@@ -2,6 +2,9 @@
 // app has a hub address to parse.
 #[allow(dead_code)]
 mod hub_url;
+// The app was "Offdesk" up to 0.7.11: renames an updated bundle on macOS.
+#[cfg(any(target_os = "macos", test))]
+mod bundle_name;
 mod downloads;
 mod file_preview;
 #[cfg(mobile)]
@@ -22,6 +25,11 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything else: a renamed bundle restarts from its new path.
+    #[cfg(target_os = "macos")]
+    if bundle_name::migrate() {
+        return;
+    }
     let updates = ui_updates::RuntimeState::default();
     let mut context = tauri::generate_context!();
     context.assets = Box::new(ui_updates::UpdatingAssets::new(

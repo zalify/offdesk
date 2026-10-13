@@ -1,5 +1,5 @@
 {
-  "productName": "Offdesk",
+  "productName": "Offdesk DEV",
   "version": "0.7.11",
   "identifier": "dev.offdesk.desktop",
   "build": {
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Offdesk",
+        "title": "Offdesk DEV",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
@@ -36,6 +36,23 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "wix": {
+        "upgradeCode": "bea287da-34e4-5477-bf62-d5323c321270"
+      },
+      "nsis": {
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    },
+    "linux": {
+      "deb": {
+        "conflicts": ["offdesk"],
+        "replaces": ["offdesk"]
+      },
+      "rpm": {
+        "obsoletes": ["offdesk"]
+      }
+    },
     "macOS": {
       "dmg": {
         "background": "dmg/background.png",
