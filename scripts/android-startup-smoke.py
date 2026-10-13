@@ -58,7 +58,8 @@ def wait_for_screen(text):
             root = hierarchy()
             if dismiss_update(root):
                 continue
-            if any(text in (n.get("text", "") + n.get("content-desc", "")) for n in root.iter("node")):
+            # Chrome is lowercased by CSS, and the WebView reports the rendered text.
+            if any(text.casefold() in (n.get("text", "") + n.get("content-desc", "")).casefold() for n in root.iter("node")):
                 return root
         except (ET.ParseError, subprocess.SubprocessError):
             pass
