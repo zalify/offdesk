@@ -469,7 +469,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             setSessionSwitcherOpen(true);
           }}
           style={{
-            background: "none", border: 0, padding: "6px 0", textAlign: "left", cursor: "pointer", alignSelf: "stretch",
+            background: "none", border: 0, padding: "5px 0", textAlign: "left", cursor: "pointer", alignSelf: "stretch",
             flex: 1,
             minWidth: 0,
             display: "flex",
