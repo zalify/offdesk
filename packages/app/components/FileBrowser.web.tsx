@@ -323,7 +323,7 @@ export function FileBrowser({
         flexDirection: "column",
         outline: "none",
         color: colors.fg0,
-        background: colors.bg1,
+        background: "transparent",
         fontFamily: "var(--font-display)",
       }}
     >

@@ -1,4 +1,3 @@
-import { ArrowLeft } from "lucide-react";
 import { FileBrowser } from "./FileBrowser.web";
 import { colors } from "@/lib/colors";
 
@@ -34,52 +33,25 @@ export function FileBrowserMobileSurface({
         color: colors.fg0,
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 4,
-          padding: "2px 4px",
-          background: colors.bg1,
-          borderBottom: `1px solid ${colors.lineSoft}`,
-          flexShrink: 0,
-        }}
-      >
+      {/* P08: `← back to terminal`, then the Files heading and where. */}
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", padding: "4px 8px" }}>
         <button
           type="button"
           data-testid="mobile-file-browser-surface-back"
           aria-label="Back to terminal"
           title="Back to terminal"
           onClick={onClose}
-          style={{
-            width: 44,
-            height: 44,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 0,
-            border: "none",
-            background: "transparent",
-            color: colors.fg2,
-            cursor: "pointer",
-          }}
+          className="odk-text-btn"
+          style={{ height: 44, padding: "0 8px", fontSize: 13, color: colors.fg2 }}
         >
-          <ArrowLeft size={18} aria-hidden />
+          ← back to terminal
         </button>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>Files</span>
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 12,
-            color: colors.fg3,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
+      </div>
+      <div style={{ flexShrink: 0, padding: "0 16px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
+        <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em" }}>Files</h1>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 12, color: colors.fg3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {machineName}
-        </span>
+        </div>
       </div>
       <FileBrowser machineId={machineId} homeDir={homeDir} startPath={startPath} touch />
     </div>

@@ -6,6 +6,9 @@
 
 /* ── Buttons ─────────────────────────────────────────────────────── */
 .odk-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border:1px solid rgb(var(--color-line));border-radius:4px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color 120ms ease,border-color 120ms ease,opacity 120ms ease}
+/* Chrome is lowercase on screen. Callers may pass sentence-case labels: the
+   DOM keeps them for screen readers, tests and translators. */
+.odk-btn{text-transform:lowercase}
 .odk-btn:disabled,.odk-btn[aria-disabled=true]{opacity:.45;cursor:default}
 .odk-btn--sm{height:32px;padding:0 12px;font-size:12px}
 .odk-btn--xs{height:28px;padding:0 12px;font-size:12px}

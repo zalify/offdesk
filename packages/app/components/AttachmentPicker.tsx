@@ -12,10 +12,10 @@ export function AttachmentPicker({ onPhotos, onFiles, onClose }: {
     element?.showModal();
     return () => { element?.close(); };
   }, []);
-  const style = { minHeight: 44, border: `1px solid ${colors.border}`, borderRadius: 8, padding: "10px 16px", background: colors.background, color: colors.foreground, font: "inherit", cursor: "pointer" };
+  const style = { minHeight: 44, border: `1px solid ${colors.line}`, borderRadius: 4, padding: "10px 16px", background: "transparent", color: colors.fg0, font: "inherit", fontFamily: "var(--font-display)", fontSize: 13, textTransform: "lowercase" as const, cursor: "pointer" };
   return createPortal(<dialog ref={dialog} aria-label="Add attachment" onCancel={onClose}
-    style={{ color: colors.foreground, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 14, width: "min(320px, calc(100vw - 40px))", boxSizing: "border-box", padding: 16 }}>
-    <p style={{ margin: "0 0 12px", fontWeight: 600 }}>Add attachment</p>
+    style={{ color: colors.fg0, background: colors.bg2, border: `1px solid ${colors.line}`, borderRadius: 6, width: "min(320px, calc(100vw - 40px))", boxSizing: "border-box", padding: 16, fontFamily: "var(--font-display)" }}>
+    <p style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 600 }}>Add attachment</p>
     <div style={{ display: "grid", gap: 8 }}>
       <button style={style} onClick={() => { onPhotos(); onClose(); }}>Choose photos</button>
       <button style={style} onClick={() => { onFiles(); onClose(); }}>Choose files</button>
@@ -38,16 +38,16 @@ export function AttachmentReview({ files, uploading, error, canSend, onSend, onR
     dialog.current?.showModal();
     return () => dialog.current?.close();
   }, []);
-  const button: CSSProperties = { minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", minHeight: 44, border: `1px solid ${colors.border}`, borderRadius: 8, padding: "8px 12px", background: colors.background, color: colors.foreground, font: "inherit", cursor: "pointer" };
+  const button: CSSProperties = { minWidth: 0, maxWidth: "100%", overflowWrap: "anywhere", minHeight: 44, border: `1px solid ${colors.line}`, borderRadius: 4, padding: "8px 12px", background: "transparent", color: colors.fg0, font: "inherit", fontFamily: "var(--font-display)", fontSize: 13, textTransform: "lowercase", cursor: "pointer" };
   return createPortal(<dialog ref={dialog} aria-label="Review attachments"
     onCancel={event => { event.preventDefault(); if (!uploading) onCancel(); }}
-    style={{ color: colors.foreground, background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 14, width: "min(420px, calc(100vw - 32px))", maxHeight: "80dvh", overflow: "hidden", boxSizing: "border-box", padding: 16 }}>
+    style={{ color: colors.fg0, background: colors.bg2, border: `1px solid ${colors.line}`, borderRadius: 6, width: "min(420px, calc(100vw - 32px))", maxHeight: "80dvh", overflow: "hidden", boxSizing: "border-box", padding: 16, fontFamily: "var(--font-display)" }}>
     <div style={{ display: "flex", flexDirection: "column", maxHeight: "calc(80dvh - 34px)" }}>
-    <p style={{ margin: "0 0 12px", fontWeight: 600, flexShrink: 0 }}>Attachments · {files.length}</p>
+    <p style={{ margin: "0 0 12px", fontSize: 15, fontWeight: 600, flexShrink: 0 }}>Attachments · {files.length}</p>
     <ul style={{ listStyle: "none", margin: 0, padding: 4, maxHeight: "40dvh", minHeight: 0, flex: "0 1 auto", overflowY: "auto" }}>
       {files.map((file, index) => <li key={index} style={{ display: "flex", alignItems: "center", gap: 8, paddingBlock: 4 }}>
         <span style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>{file.name}
-          <small style={{ display: "block", color: colors.fg2 }}>{formatAttachmentSize(file.size)}</small>
+          <small style={{ display: "block", color: colors.fg3 }}>{formatAttachmentSize(file.size)}</small>
         </span>
         <button type="button" style={{ ...button, flexShrink: 0 }} disabled={uploading} aria-label={`Remove ${file.name}`} onClick={() => onRemove(index)}>Remove</button>
       </li>)}
@@ -56,7 +56,7 @@ export function AttachmentReview({ files, uploading, error, canSend, onSend, onR
     {!canSend && <p role="status">Take control to send these attachments.</p>}
     <div style={{ display: "flex", flexWrap: "wrap", flexShrink: 0, justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
       <button type="button" style={button} disabled={uploading} onClick={onCancel}>Cancel</button>
-      <button type="button" style={{ ...button, background: colors.accent, color: colors.onAccent }} disabled={uploading || !canSend || !files.length} onClick={onSend}>
+      <button type="button" style={{ ...button, border: "none", background: colors.primary, color: colors.onPrimary, fontWeight: 600 }} disabled={uploading || !canSend || !files.length} onClick={onSend}>
         {uploading ? "Sending…" : `Send ${files.length === 1 ? "attachment" : "attachments"}`}
       </button>
     </div>

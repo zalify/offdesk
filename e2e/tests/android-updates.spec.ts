@@ -30,7 +30,7 @@ test("Android checks for updates before login and supports permission retry", as
   await androidBridge(page);
   await page.goto("/login");
   const toast = page.getByTestId("android-update-toast");
-  await expect(toast).toContainText("Offdesk 0.7.0 is available", { timeout: 15000 });
+  await expect(toast).toContainText("offdesk/dev 0.7.0 is ready", { timeout: 15000 });
   await toast.getByRole("button", { name: "Install update" }).click();
   await expect(toast).toContainText("Allow Offdesk to install apps");
   await toast.getByRole("button", { name: "Install update" }).click();
