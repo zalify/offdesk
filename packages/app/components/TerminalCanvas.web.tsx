@@ -1835,6 +1835,7 @@ function TerminalCanvasInner() {
             </Suspense>
           ) : isCompact ? (
             <MobileWorkbench
+              resumeNotice={showHandoffBanner ? <HandoffBanner isMobile inline onDone={hideHandoffBanner} /> : null}
               machines={machines}
               activeMachineId={activeMachineId}
               controlLeases={controlLeases}
@@ -2081,9 +2082,9 @@ function TerminalCanvasInner() {
               </main>
             </KeyBarSlotProvider>
           )}
-          {showHandoffBanner && (
+          {showHandoffBanner && !isCompact && (
             <HandoffBanner
-              isMobile={isCompact}
+              isMobile={false}
               onDone={hideHandoffBanner}
             />
           )}

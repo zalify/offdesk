@@ -96,6 +96,8 @@ interface MobileWorkbenchProps {
   filesSurface?: React.ReactNode;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
+  /** "Picked up where you left off": shown in the subtitle line for a moment. */
+  resumeNotice?: React.ReactNode;
   onPickTerminal: (id: string) => void;
   onSelectGroup: (groupId: string) => void;
   // null group = machine home directory (empty state / no active group).
@@ -162,6 +164,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     filesSurface,
     canCreateTerminal,
     canSendAttention,
+    resumeNotice,
     onPickTerminal,
     onSelectGroup,
     onNewTerminal,
@@ -439,7 +442,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         style={{
           // 44px, the compact strip's height in DESIGN.md: taller than that and
           // a desktop-sized terminal no longer fits a phone at scale 1.
-          height: 44,
+          minHeight: 44,
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
@@ -466,7 +469,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             setSessionSwitcherOpen(true);
           }}
           style={{
-            background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", height: "100%",
+            background: "none", border: 0, padding: "6px 0", textAlign: "left", cursor: "pointer", alignSelf: "stretch",
             flex: 1,
             minWidth: 0,
             display: "flex",
@@ -491,39 +494,40 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 style={{
                   display: "flex",
                   alignItems: "center",
-                  gap: 6,
                   minWidth: 0,
                   overflow: "hidden",
-                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
                   color: colors.fg3,
                   fontSize: 11,
                   lineHeight: 1.15,
                 }}
               >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-                  {activeGroupIndex >= 0 ? `${activeGroupIndex}:` : ""}{activeChip.group.label} ·{" "}
-                  <span
-                    data-testid="mobile-title-bar-dot"
-                    role="img"
-                    aria-label={activeMachine && machineOnline(activeMachine) ? "Online" : "Offline"}
-                    style={{ color: activeMachine && machineOnline(activeMachine) ? colors.ok : colors.fg3 }}
-                  >
-                    {activeMachine && machineOnline(activeMachine) ? "●" : "○"}
-                  </span>{" "}
-                  {activeMachine?.name ?? ""}
-                </span>
-                {terminalOpenerText(activeChip.terminal) && (
-                  // The 44px bar has room for the marker, not the whole chip;
-                  // the Sessions sheet spells it out.
-                  <span
-                    data-testid="mobile-title-bar-opener"
-                    title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
-                    style={{ flexShrink: 0, color: colors.accent }}
-                  >
-                    ⌁
+                {resumeNotice ?? (
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                    {activeGroupIndex >= 0 ? `${activeGroupIndex}:` : ""}{activeChip.group.label} ·{" "}
+                    <span
+                      data-testid="mobile-title-bar-dot"
+                      role="img"
+                      aria-label={activeMachine && machineOnline(activeMachine) ? "Online" : "Offline"}
+                      style={{ color: activeMachine && machineOnline(activeMachine) ? colors.ok : colors.fg3 }}
+                    >
+                      {activeMachine && machineOnline(activeMachine) ? "●" : "○"}
+                    </span>{" "}
+                    {activeMachine?.name ?? ""}
                   </span>
                 )}
               </span>
+              {terminalOpenerText(activeChip.terminal) && (
+                // P04: the opener chip on a line of its own.
+                <span
+                  data-testid="mobile-title-bar-opener"
+                  title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
+                  style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: 10, letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
+                >
+                  <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
+                  opened by {terminalOpenerText(activeChip.terminal)}
+                </span>
+              )}
             </>
           ) : (
             <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>

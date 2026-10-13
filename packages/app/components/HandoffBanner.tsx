@@ -2,11 +2,16 @@ import { useEffect, useState } from "react";
 
 import { colors } from "@/lib/colors";
 
+/** "Picked up where you left off". On the desktop a square notice under the
+ *  tab bar; on the phone (`inline`) it takes the title bar's subtitle line
+ *  for a few seconds, so it never covers terminal output. */
 export function HandoffBanner({
   isMobile,
+  inline = false,
   onDone,
 }: {
   isMobile: boolean;
+  inline?: boolean;
   onDone: () => void;
 }) {
   const [visible, setVisible] = useState(true);
@@ -19,6 +24,24 @@ export function HandoffBanner({
       window.clearTimeout(removeTimer);
     };
   }, [onDone]);
+
+  if (inline) {
+    return (
+      <span
+        data-testid="handoff-banner"
+        role="status"
+        style={{
+          color: colors.accent,
+          opacity: visible ? 1 : 0,
+          transition: "opacity 400ms ease",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+        }}
+      >
+        Picked up where you left off
+      </span>
+    );
+  }
 
   return (
     <div

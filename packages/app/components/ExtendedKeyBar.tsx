@@ -57,7 +57,6 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   const track = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const documentInput = useRef<HTMLInputElement>(null);
-  const [keyWidth, setKeyWidth] = useState(48);
   const [edges, setEdges] = useState({ left: false, right: false });
   const [choosingAttachment, setChoosingAttachment] = useState(false);
   const [attachmentStatus, setAttachmentStatus] = useState<{ message: string; submitted: boolean } | null>(null);
@@ -77,7 +76,6 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   };
   useEffect(() => {
     const update = () => {
-      if (bar.current) { const width = bar.current.clientWidth - 8; setKeyWidth(width / Math.max(7, Math.floor(width / 52))); }
       updateEdges();
     };
     const observer = new ResizeObserver(update);
@@ -123,8 +121,8 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       if (mounted.current) setUploading(false);
     }
   };
-  const key = (label: string, data: string, id?: string, icon?: ReactNode, repeat: boolean | "hold" = false) => <KeyButton key={data} label={label} testid={id}
-    disabled={!isController} repeat={repeat} onPress={() => onKey(data)}>{icon}</KeyButton>;
+  const key = (label: string, data: string, id?: string, icon?: ReactNode, repeat: boolean | "hold" = false, square = false) => <KeyButton key={data} label={label} testid={id}
+    disabled={!isController} repeat={repeat} square={square} onPress={() => onKey(data)}>{icon}</KeyButton>;
   const renderKey = (id: KeyBarKey): ReactNode => {
     const simple: Partial<Record<KeyBarKey, [string, string]>> = {
       esc: ["Esc", "\x1b"], tab: ["Tab", "\t"], slash: ["/", "/"], space: ["Space", " "],
@@ -143,7 +141,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
     switch (id) {
       case "ctrl-c": return <KeyButton key={id} label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")}>^C</KeyButton>;
       case "shift-tab": return key("Shift+Tab", "\x1b[Z", "extended-keybar-shift-tab", "⇧tab");
-      case "backspace": return key("Backspace", "\x7f", "extended-keybar-backspace", "⌫", "hold");
+      case "backspace": return key("Backspace", "\x7f", "extended-keybar-backspace", "bksp", "hold");
       case "shift": return onToggleShift && onShiftPress && onShiftRelease && <ShiftButton key={id} disabled={!isController} pressed={shiftArmed}
         onToggle={onToggleShift} onStart={onShiftPress} onEnd={onShiftRelease} />;
       case "paste": return onPasteText && <KeyButton key={id} label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}>paste</KeyButton>;
@@ -155,7 +153,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       case "ctrl-latch": return onToggleCtrl && <KeyButton key={id} label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl}>ctrl</KeyButton>;
     }
   };
-  return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar" style={{ "--key-width": `${keyWidth}px` } as CSSProperties}>
+  return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar">
     {selection ? <div className="offdesk-selection-bar" data-testid="extended-keybar-select-mode">
       <button onClick={onExitSelectMode} disabled={copying} data-testid="extended-keybar-select-done">Done</button>
       <span>Drag on the terminal to select text</span>
@@ -170,9 +168,9 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
         <span>{attachmentStatus.message}</span><button aria-label="Dismiss attachment status" onClick={() => setAttachmentStatus(null)}>Dismiss</button>
       </div>}
       <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
-        {layout.primary.map(renderKey)}
+        <div className="offdesk-keybar-primary">{layout.primary.map(renderKey)}</div>
         <span className="offdesk-keybar-spacer" />
-        {key("Arrow up", "\x1b[A", "extended-keybar-up", "↑", true)}
+        {key("Arrow up", "\x1b[A", "extended-keybar-up", "↑", true, true)}
         {key("Enter", "\r", "extended-keybar-enter", "[enter]")}
       </div>
       <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
@@ -185,9 +183,9 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
             </div>
           </div>
         </div>
-        {key("Arrow left", "\x1b[D", "extended-keybar-left", "←", true)}
-        {key("Arrow down", "\x1b[B", "extended-keybar-down", "↓", true)}
-        {key("Arrow right", "\x1b[C", "extended-keybar-right", "→", true)}
+        {key("Arrow left", "\x1b[D", "extended-keybar-left", "←", true, true)}
+        {key("Arrow down", "\x1b[B", "extended-keybar-down", "↓", true, true)}
+        {key("Arrow right", "\x1b[C", "extended-keybar-right", "→", true, true)}
       </div>
     </>}
     <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
@@ -200,8 +198,8 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   </div>;
 }
 
-function KeyButton({ label, children, onPress, testid, disabled = false, repeat = false, accent = false, pressed }: {
-  label: string; children?: ReactNode; onPress: () => void; testid?: string; disabled?: boolean; repeat?: boolean | "hold"; accent?: boolean; pressed?: boolean;
+function KeyButton({ label, children, onPress, testid, disabled = false, repeat = false, accent = false, pressed, square = false }: {
+  label: string; children?: ReactNode; onPress: () => void; testid?: string; disabled?: boolean; repeat?: boolean | "hold"; accent?: boolean; pressed?: boolean; square?: boolean;
 }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const delay = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -235,7 +233,7 @@ function KeyButton({ label, children, onPress, testid, disabled = false, repeat 
     button.addEventListener("touchend", touchEnd, { passive: false });
     return () => button.removeEventListener("touchend", touchEnd);
   }, [repeat]);
-  return <button ref={buttonRef} type="button" className="offdesk-terminal-key" disabled={disabled} data-testid={testid} aria-label={label} title={label}
+  return <button ref={buttonRef} type="button" className={`offdesk-terminal-key${square ? " offdesk-terminal-key--square" : ""}`} disabled={disabled} data-testid={testid} aria-label={label} title={label}
     aria-pressed={pressed} data-accent={accent} style={{ touchAction: repeat === true ? "none" : "pan-x" }}
     onPointerDown={event => {
       if (event.button !== 0 || disabled) return;
@@ -300,5 +298,5 @@ function ShiftButton({ disabled, pressed, onStart, onEnd, onToggle }: {
     onPointerCancel={() => { pointer.current = null; onEnd(true); }}
     onLostPointerCapture={() => { if (pointer.current !== null) { pointer.current = null; onEnd(true); } }}
     onMouseDown={event => event.preventDefault()} onContextMenu={event => event.preventDefault()}
-    onClick={event => { if (event.detail === 0) onToggle(); }}>⇧</button>;
+    onClick={event => { if (event.detail === 0) onToggle(); }}>shift</button>;
 }
