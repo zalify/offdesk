@@ -55,7 +55,7 @@ export function SecurePairingPanel({ baseUrl, managed = false }: { baseUrl?: str
         <Body size={13}>Hub verified · {pairing.connection_check.handshake_ms} ms handshake from this Mac</Body>
         {!pairing.connection_check.legacy_routes_hidden ? <Body size={12}>This address may also serve ordinary web connections. Use a dedicated encrypted address for a managed tunnel.</Body> : null}
       </div> : null}
-      <div ref={qrElement} style={{ width: 240, maxWidth: "100%", background: "#ffffff", padding: 12, borderRadius: 4, border: `1px solid ${colors.lineSoft}` }}><QrImage svg={qr} size={216} label="Encrypted device pairing QR code" /></div>
+      <div ref={qrElement} style={{ width: 242, maxWidth: "100%", background: "#ffffff", padding: 12, borderRadius: 4, border: `1px solid ${colors.lineSoft}` }}><QrImage svg={qr} size={216} label="Encrypted device pairing QR code" /></div>
       <Body size={12} style={{ overflowWrap: "anywhere", maxWidth: "100%", textAlign: "center" }}>{pairing.hub_url}</Body>
       <details style={{ maxWidth: "100%", textAlign: "center" }}><summary style={{ cursor: "pointer", minHeight: 44, padding: 10, fontFamily: "var(--font-display)", fontSize: 13 }}>compare hub identity</summary><code style={{ display: "block", overflowWrap: "anywhere", fontSize: 12 }}>{new URL(pairing.pairing_uri).searchParams.get("key")}</code><Body size={12}>Check this identity on your phone before confirming the pairing.</Body></details>
       <Body size={12}>Expires in {Math.ceil((pairing.expires_at - now) / 1000)} seconds. Keep this code private.</Body>
