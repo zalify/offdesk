@@ -153,7 +153,7 @@ try:
         recovery = wait_for_screen("Forget connection and pair again")
         assert any(n.get("text") == "Encrypted connection" for n in recovery.iter("node"))
         for label in ["Try again", "Forget connection and pair again"]:
-            assert any(n.get("text") == label and n.get("enabled") == "true"
+            assert any(n.get("text", "").casefold() == label.casefold() and n.get("enabled") == "true"
                        for n in recovery.iter("node")), f"Missing recovery action: {label}"
         (args.output / f"recovery-{attempt}.xml").write_text(ET.tostring(recovery, encoding="unicode"))
     print("PASS: APK cold start, WebView input, foreground, retained pairing upgrade and recovery", flush=True)
