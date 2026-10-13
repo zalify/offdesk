@@ -32,7 +32,7 @@ import {
 import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
 import LoginScreen from "../app/login";
 import { AppTitleBar } from "./AppTitleBar.web";
-import { Body, Button, Card, Check, Display, Donut, Eyebrow, Spinner, fontDisplay } from "./Warm.web";
+import { Body, Button, Card, Check, Display, Donut, Eyebrow, Spinner, fontDisplay } from "./Primitives.web";
 
 const IPHONE_URL = "https://testflight.apple.com/join/rV4ktaGv";
 const ANDROID_URL = "https://offdesk.dev/apk";
@@ -170,7 +170,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
   if (role === null) return <DesktopSetupFrame><FirstRun onPick={pick} /></DesktopSetupFrame>;
 
   if (role === "hub") {
-    if (!status) return <DesktopSetupFrame><Screen><Spinner /><Body>{statusError ? "Could not check this Mac. Retrying…" : "Checking this Mac…"}</Body><Button kind="sky" onClick={() => void pick("client")}>Connect to another Hub</Button></Screen></DesktopSetupFrame>;
+    if (!status) return <DesktopSetupFrame><Screen><Spinner /><Body>{statusError ? "Could not check this Mac. Retrying…" : "Checking this Mac…"}</Body><Button kind="secondary" onClick={() => void pick("client")}>Connect to another Hub</Button></Screen></DesktopSetupFrame>;
     // Keep existing terminals visible through brief Hub restarts. A first-run
     // install owns this screen until its command AND readiness checks finish;
     // the background status poll must not unmount it halfway through.
@@ -186,7 +186,7 @@ export function DesktopGate({ children }: { children: ReactNode }) {
           <Button disabled={recovering || !status.listening} onClick={() => void reconnectLocalHub()}>{recovering ? "Connecting…" : "Reconnect to this Mac"}</Button>
         </>}
         {recoveryError && <div role="alert">{recoveryError}</div>}
-        <Button kind="sky" disabled={recovering} onClick={() => { setReconnectAfterSetup(true); setSettingUp(true); }}>Check this Mac’s setup</Button>
+        <Button kind="secondary" disabled={recovering} onClick={() => { setReconnectAfterSetup(true); setSettingUp(true); }}>Check this Mac’s setup</Button>
       </Screen></DesktopSetupFrame>;
     }
     if (settingUp || !hubIsReady(status)) {
@@ -272,7 +272,7 @@ function FirstRun({ onPick }: { onPick: (role: DesktopRole) => Promise<void> }) 
           body="You already have a hub somewhere else. Open its terminals from this machine, the way the phone does."
           note="Paste the link the hub printed, or sign in."
           action={
-            <Button kind="sky" onClick={() => choose("client")} disabled={busy !== null} testId="first-run-client">
+            <Button kind="secondary" onClick={() => choose("client")} disabled={busy !== null} testId="first-run-client">
               <LinkIcon /> Connect to a hub
             </Button>
           }
@@ -385,7 +385,7 @@ export function HubSetup({
                 Try again
               </Button>
             ) : null}
-            <Button kind="sky" onClick={onGiveUp}>
+            <Button kind="secondary" onClick={onGiveUp}>
               Connect to another Hub
             </Button>
           </div>
@@ -492,13 +492,13 @@ export function HubReadyScreen({
           <div style={{ display: "grid", gap: 12 }}>
             <strong>Where will you connect?</strong>
             <Body size={13}>On the same network, you can pair now. To connect away from home, enable Offdesk Cloud first.</Body>
-            <Button kind="sky" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide Cloud setup" : "Set up remote access"}</Button>
+            <Button kind="secondary" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide Cloud setup" : "Set up remote access"}</Button>
             {showCloud && <CloudConnectionPanel onPairPhone={() => { setLink(null); setShowCloud(false); }} />}
           </div>
           {error ? <Body style={{ color: colors.err }}>{error}</Body> : null}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             {onClose ? (
-              <Button kind="sky" onClick={onClose} testId="hub-ready-back">
+              <Button kind="secondary" onClick={onClose} testId="hub-ready-back">
                 <TerminalIcon /> Back to the terminal
               </Button>
             ) : (
@@ -592,7 +592,7 @@ export function PhoneCodePanel({
     });
   };
 
-  // On Hub ready this is the sticker card beside the steps; inside a dialog
+  // On Hub ready this is the card beside the steps; inside a dialog
   // or a Settings section it sits flat, the surface around it is the card.
   const body = (
     <>
@@ -659,10 +659,10 @@ export function PhoneCodePanel({
       {purpose === "app" ? <>
         {link ? <SecurePairingPanel baseUrl={link.secure_url ?? link.url} managed={Boolean(link.secure_url)} /> : <Body>Waiting for the hub…</Body>}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-        <Button kind="sky" onClick={() => void openOutside(IPHONE_URL)}>
+        <Button kind="secondary" onClick={() => void openOutside(IPHONE_URL)}>
           <PhoneIcon /> iPhone app
         </Button>
-        <Button kind="sky" onClick={() => void openOutside(ANDROID_URL)}>
+        <Button kind="secondary" onClick={() => void openOutside(ANDROID_URL)}>
           <PhoneIcon /> Android app
         </Button>
       </div>
@@ -709,7 +709,7 @@ export function PhoneCodePanel({
   const column = { display: "flex", flexDirection: "column", alignItems: "center", gap: 16 } as const;
   if (compact) return <div style={column}>{body}</div>;
   return (
-    <Card sticker style={{ ...column, padding: 28 }}>
+    <Card style={{ ...column, padding: 28 }}>
       {body}
     </Card>
   );
@@ -795,7 +795,7 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Body size={13}>This app is a client: it opens terminals on a hub somewhere else.</Body>
         <div>
-          <Button kind="sky" onClick={() => void becomeHub()} disabled={busy} style={{ height: 36, fontSize: 13 }}>
+          <Button kind="secondary" onClick={() => void becomeHub()} disabled={busy} style={{ height: 36, fontSize: 13 }}>
             Make this machine the hub instead
           </Button>
         </div>
@@ -812,7 +812,7 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
         {row("Answering on this machine", status?.listening ?? null)}
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Button kind="sky" onClick={() => onPairPhone ? onPairPhone() : setShowCode((v) => !v)} style={{ height: 36, fontSize: 13 }} testId="settings-show-phone-code">
+        <Button kind="secondary" onClick={() => onPairPhone ? onPairPhone() : setShowCode((v) => !v)} style={{ height: 36, fontSize: 13 }} testId="settings-show-phone-code">
           {showCode ? "Hide the phone code" : "Show the phone code"}
         </Button>
         {confirmStop ? (

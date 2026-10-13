@@ -23,4 +23,9 @@ To regenerate the subset:
 
 Both terminal resources are served locally. Chinese and other unsupported
 characters use system fallback; no third-party font request is made.
-Nunito Variable and Fredoka Variable are the existing bundled interface fonts.
+Geist and Geist Mono are the interface fonts (Geist Mono for chrome,
+headings and labels; Geist for prose). The four files are the unmodified
+Latin and Latin Extended variable-weight subsets from @fontsource-variable/geist
+and @fontsource-variable/geist-mono 5.3.0 (upstream:
+https://github.com/vercel/geist-font). Their copyright and SIL Open Font
+License are in Geist-OFL.txt and GeistMono-OFL.txt.

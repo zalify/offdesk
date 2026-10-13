@@ -23,8 +23,8 @@ function readTheme(): Theme {
   } catch {
     // Storage can be unavailable in private browsing or server rendering.
   }
-  // Preserve the existing appearance until the user chooses another one.
-  return "light";
+  // Follow the system until the user chooses; dark is the design.
+  return "system";
 }
 
 function applyTheme(theme: ResolvedTheme) {
@@ -57,8 +57,8 @@ interface ThemeContextValue {
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
-  theme: "light",
-  resolvedTheme: "light",
+  theme: "system",
+  resolvedTheme: "dark",
   setTheme: () => {},
 });
 const useBrowserLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;

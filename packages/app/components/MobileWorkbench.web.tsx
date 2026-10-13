@@ -59,7 +59,7 @@ import {
 } from "@/lib/mobileSessionSwitcher";
 import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { WorkspaceManager } from "./WorkspaceManager.web";
-import { Button, fontDisplay } from "./Warm.web";
+import { Button, fontDisplay } from "./Primitives.web";
 
 interface MobileWorkbenchProps {
   machines: MachineInfo[];
@@ -854,7 +854,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         >
           <div style={{ display: "flex", gap: 10, padding: "4px 16px 10px" }}>
             <Button
-              kind="coral"
+              kind="primary"
               testId="mobile-session-switcher-new-terminal"
               disabled={!canCreateTerminal}
               onClick={() => {
@@ -866,7 +866,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               <Plus size={16} /> New terminal
             </Button>
             <Button
-              kind="sky"
+              kind="secondary"
               testId="mobile-workspace-manager-button"
               onClick={() => {
                 setSessionSwitcherOpen(false);

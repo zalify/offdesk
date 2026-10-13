@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { colors, colorAlpha } from "@/lib/colors";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
-import { fontDisplay } from "./Warm.web";
+import { fontDisplay } from "./Primitives.web";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { terminalOpenerDescription, terminalOpenerText } from "@/lib/terminalOpener";
 import {

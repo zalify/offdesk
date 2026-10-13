@@ -1,68 +1,117 @@
-# offdesk Design System
+# Offdesk DEV design system
 
-This documents the system the app actually ships. The site's palette,
-indoors: warm chrome, dark terminal, terminal-first. Canonical tokens live in
-`packages/app/global.css` (CSS custom properties, sRGB triplets; the hex
-values are `site/src/styles/global.css`'s) and are consumed via Tailwind
-(`tailwind.config.ts`), `packages/app/lib/colors.web.ts`, and the literal
-copies in `packages/app/lib/theme.tsx` for React Native inline styles.
+This documents the system the app actually ships: direction B, "terminal".
+A dark desk, monospace chrome, sans-serif prose, one lime accent. Canonical
+tokens live in `packages/app/global.css` (CSS custom properties, sRGB
+triplets) and are consumed via Tailwind (`tailwind.config.ts`),
+`packages/app/lib/colors.web.ts`, and the literal copies in
+`packages/app/lib/themePalette.ts` for React Native inline styles. The
+primitives are `packages/app/components/Primitives.web.tsx` (+ `.css`).
 
 ## Principles
 
 1. **The terminal is the interface.** Chrome exists to be ignored: one tab bar
-   on large screens, one strip + key bar on compact (phone / Fold cover). The
-   Fold inner screen is large *and* touch — tab bar plus a portaled key bar,
-   not the phone shell. See
+   and a status line on large screens, one title bar + key bar on compact
+   (phone / Fold cover). The Fold inner screen is large *and* touch — tab bar
+   plus a portaled key bar, not the phone shell. See
    `docs/plans/2026-08-13-fold-touch-workspace.md` and
    `docs/superpowers/specs/2026-07-18-raw-terminal-ux-redesign-design.md`.
    Anything that competes with the terminal for attention is a bug.
-2. **Dark is for the terminal, not the chrome.** The terminal body is the
-   night-dark the site draws terminals in; everything around it is sand and
-   cream, so the terminal reads as the object on the desk. (Until
-   2026-09-04 the chrome was dark too; the desktop-hub plan,
-   `docs/plans/2026-09-04-desktop-hub-role.md`, changed that.)
-3. **One accent.** Coral `--color-accent` is the one thing to press; cream
-   text sits on it (`--color-on-accent`). Semantic colors (ok/warn/err/info)
-   are reserved for state — they never decorate.
-4. **Real data or no data.** Meters and stats render only live values; no
+2. **The chrome is a terminal too.** Tabs are tmux windows (`0:app`), the
+   bottom of the workspace is a status line, buttons read like commands
+   (`take control`, `[enter]`). Dark is the design; the light theme prints the
+   same system on paper.
+3. **One accent.** Lime is only for the cursor, the primary action, the
+   active tab and focus. Never decoration.
+4. **Red means waiting.** `#ff8a75` is only for a terminal waiting on you,
+   errors and destructive actions, and always comes with a word.
+5. **Mono for machines, sans for people.** Terminals, labels, buttons and
+   headings are Geist Mono; explanations, settings descriptions and docs are
+   Geist.
+6. **Real data or no data.** Meters and stats render only live values; no
    placeholder/mock series.
 
-## Color tokens
+## Colour tokens
 
-| Token | sRGB | Role |
-|---|---|---|
-| `--color-bg-0` | `255 244 227` | canvas (sand) |
-| `--color-bg-1` | `255 251 244` | elevated (bars, sheets) (cream) |
-| `--color-bg-2` | `255 251 244` | surface (cards, menus) (cream) |
-| `--color-bg-3` | `255 233 204` | surface hover / pressed (sand-2) |
-| `--color-term-bg` | `30 27 46` | terminal body (`#1e1b2e`) |
-| `--color-line` | `230 207 174` | solid border |
-| `--color-line-soft` | `241 222 198` | subtle divider |
-| `--color-fg-0..3` | `43 35 64` → `157 149 179` | text scale (ink → faint) |
-| `--color-accent` | `255 107 87` | coral — the one thing to press |
-| `--color-on-accent` | `255 251 244` | cream, on coral |
-| `--color-ok` | `31 158 140` | success / online / running (lagoon, darkened to read on cream) |
-| `--color-warn` | `210 154 18` | warning (sun, same) |
-| `--color-err` | `232 84 63` | error / destructive (coral-2) |
-| `--color-info` | `31 143 194` | focus ring, informational (sea, same) |
-| `--color-violet` | `124 92 191` | auxiliary series |
+| Token | Dark | Light | Role |
+|---|---|---|---|
+| `--color-bg-0` | `#0c0c0b` | `#f5f5f3` | page |
+| `--color-bg-1` | `#111110` | `#fbfbfa` | bars, panels, inputs |
+| `--color-bg-2` | `#141413` | `#ffffff` | surfaces: menus, sheets, status line |
+| `--color-bg-3` | `#1c1c1a` | `#ebebe7` | hover / pressed |
+| `--color-line` | `#3a3936` | `#c4c2bb` | control edges (buttons, inputs, keys) |
+| `--color-line-soft` | `#2a2927` | `#e2e1dc` | hairlines — never a control's only edge |
+| `--color-fg-0` | `#ecebe6` | `#111111` | primary text |
+| `--color-fg-1` | `#cfcdc7` | `#2b2a27` | body text |
+| `--color-fg-2` | `#aeaca6` | `#4f4d48` | secondary text, prose |
+| `--color-fg-3` | `#8f8d87` | `#65635d` | the darkest grey allowed for small text |
+| `--color-primary` / `--color-on-primary` | `#d4ff3a` / `#0c0c0b` | same | the lime fill: primary button, "in control" |
+| `--color-accent` | `#d4ff3a` | `#4a6000` | lime's ink: active text, icons, the active tab's underline |
+| `--color-focus` | `#d4ff3a` | `#4a6000` | focus ring |
+| `--color-err` = `--color-warn` | `#ff8a75` | `#b4381f` | waiting, danger, errors |
+| `--color-on-err` | `#0c0c0b` | `#ffffff` | text on a waiting fill |
+| `--color-ok` | `#d4ff3a` | `#4a6000` | online, running |
+| `--color-term-bg` | `#0c0c0b` | `#0c0c0b` | terminal body — dark in both themes |
 
-Alpha composition uses `rgb(var(--x) / a)`. Focus-visible = 2px `info` ring;
-text selection = accent at 20%. The xterm theme (`lib/colors.shared.ts`) is
-the site's terminal: `#1e1b2e` body, `#f3eee6` text, coral cursor, sun
-selection.
+On paper lime cannot carry text (1.06:1), so in light it is only ever a fill
+behind dark text; anything that has to be read in the accent colour uses
+`--color-accent`, which darkens to olive. Every text pairing above is at least
+4.5:1 on `bg-0`…`bg-3`. Alpha composition uses `rgb(var(--x) / a)`.
+
+Focus-visible = 2px `focus` ring, 2px offset. Text selection = primary at
+35%. The xterm theme (`lib/colors.shared.ts`) is `#0c0c0b` body, `#ecebe6`
+text, lime block cursor; ANSI colours are tuned to read on the body.
+
+The theme setting is Light / Dark / System, default System.
 
 ## Typography
 
-- Display (titles, buttons, eyebrows): `Fredoka Variable` → ui-rounded →
-  system. UI sans: `Nunito Variable` → ui-rounded → system. Both ship in
-  `packages/app/public/fonts` so a hub with no internet has them; the site's
-  vocabulary for them is `components/Warm.web.tsx` (pill buttons with a hard
-  coral shadow, 28px cards, the coral "donut" step badge).
-- Mono (terminal + all metrics/ids): `Maple Mono NF CN` → `Noto Sans Mono CJK
-  SC` → `JetBrains Mono` → platform mono. User-overridable in Settings.
-- Sizes: UI 12–13.5px; terminal size user-set; uppercase micro-labels get
-  slight letter-spacing.
+- Chrome, headings, labels, buttons: `Geist Mono` (variable, 100–900).
+  Prose: `Geist`. Both ship in `packages/app/public/fonts` (Latin + Latin
+  Extended, SIL OFL) so a hub with no internet has them; other scripts fall
+  back to the system. CSS: `--font-display` (mono chrome, also the body
+  default), `--font-sans` (prose), `--font-mono` (ids, metrics).
+- Terminal: `JetBrains Mono` → `Offdesk Terminal Symbols` → platform mono
+  (`lib/terminalFonts.ts`). It stays the default because its box-drawing,
+  block and braille coverage is what TUIs (Claude Code, Codex, vim) draw
+  with; Geist Mono is offered in Settings. User-overridable.
+- Scale: display 36–56 / 600 / −0.035em; heading 20–34 / 600 / −0.02em;
+  label 12–13 / 500; terminal 12–13; prose 14–17 at 1.5.
+- **Lowercase chrome.** Buttons, labels, tabs and menus are lowercase.
+  Headings and prose use sentence case. Product name: "Offdesk DEV"; the
+  lockup is `offdesk/dev` with `/dev` in the accent.
+
+## Shape and space
+
+Radii: 3px keys, tabs, chips; 4px buttons, inputs; 6px panels and sheets.
+Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
+(menus, sheets): `0 24px 64px rgb(0 0 0 / .45)`. Touch targets are at least
+44px on coarse pointers.
+
+## Primitives
+
+- **Buttons** (`Button`): `primary` lime fill, 600; `secondary` 1px `line`
+  edge; `ghost` text only; `danger` red text; `bracket` = `[enter]`, brackets
+  in `fg-3` and kept out of the accessible name. 40px (32px `sm`), 44px on
+  touch.
+- **Chips** (`Chip`): 22px, 3px radius. `outline` ("watching"), `solid`
+  ("in control"), `waiting`. `AgentMarker` = `⌁ opened by agent · cli`.
+- **Fields** (`Field`): lowercase mono label above, 38px input on `bg-1`,
+  help text in Geist `fg-3`, errors in `err` with `role="alert"`.
+- **Panels** (`Card`): `bg-1`, `line-soft` edge, 6px, 24px padding.
+- **Waiting card** (`WaitingCard`): `err` edge, `"<program> is waiting for
+  you"`, then `[enter]` and `take control`.
+- **Status line** (`StatusLine`, `StatusBadge`, `StatusEnd`): 34px, `bg-2`,
+  hairline above. Left: `waiting` badge, the terminal, `[enter]` / `open ↵`.
+  Right: machine · latency, then the control state block (`in control` on
+  lime, otherwise `watching`).
+- **Tabs** (`Tab`): `0:app` + muted program; active = `fg-0` and a 2px
+  accent underline; a waiting tab shows a red `!`.
+- **Setup steps** (`StepMark`): `[✓]` done, `[~]` in progress (accent),
+  `[ ]` not started (`fg-3`).
+- **Logo** (`Logo`, `Wordmark`): v1 mark — a desk with a terminal window
+  flying off it, `>_` in the accent. Below 24px the speed lines and the
+  underscore drop.
 
 ## Chrome recipes
 
@@ -72,29 +121,28 @@ gets the single-column mobile layout — folding, rotation, or a soft keyboard
 cannot flip chrome); non-touch keeps `innerWidth ≤ 768`. History and the
 retired large-touch workspace: `docs/plans/2026-08-13-fold-touch-workspace.md`.
 
-- **Desktop / Fold-inner tab bar** (34px mouse, ≥40px touch): active tab fills
-  with `term-bg` so it merges into the terminal (the one dark thing in the
-  bar); inactive tabs transparent,
-  hover `bg-2`. Right meta: online dot + host + RTT + cpu/mem micro-meters
-  (30×4px bars, `bg-3` track, `fg-2` fill). Large+touch also pins one
-  ExtendedKeyBar at the bottom of the main column (portaled from the focused
-  pane).
-- **Mobile strip (~44px)** chips: `bg-2` fill, `line` border, active `bg-3` +
-  `fg-0`; group divider = 1px × 16px `line`. Key bar keys: 30px, `bg-3`,
-  mono 11px; `^C` accent; latched `Ctrl` info-blue.
-- **Overlays** (palette, cheat sheet, sheets): `bg-2`, `line` border, radius
-  10–13px, shadow `0 14px 40px rgb(0 0 0 / 0.5)`.
-- **Transient banners** (handoff, reconnect): tinted at 7–10% of their
-  semantic color, never blocking, auto-dismiss.
+- **Desktop tab bar** (40px mouse, ≥44px touch): tmux tabs, `[+]`, then on
+  the right the machine switcher (`nas ▾`), cpu/mem as text, and lowercase
+  text buttons (`files`, `browser[2]`, `phone`, `settings`).
+- **Pane header**: `●` (accent when it has focus), program, cwd, and the
+  agent marker on the right.
+- **Phone title bar**: program `▾` over `0:app · machine`, a control chip,
+  then 44px bracket buttons (`[f]`, `[b]`, `[m]`). Attention strip below it
+  on `bg-1`: `n waiting` badge, then chips with `[enter]`.
+- **Key bar**: `bg-1`, 3px keys with `line` edges, `^C` on lime; latched
+  `ctrl` in the accent.
+- **Overlays** (palette, cheat sheet, sheets): `bg-2`, `line` edge, 6px.
+- **Transient notices** go to the status line on the desktop workspace;
+  banners elsewhere are tinted at 6–10% of their semantic colour and never
+  block.
 
 ## Motion
 
-Fades/slides 150–350ms ease-out; status dots may pulse at 1.6s. Respect
+Fades/slides 150–350ms ease-out; the block cursor may blink. Respect
 `prefers-reduced-motion`. No decorative animation.
 
 ## History
 
-The dark-only, cool-neutral (hue 260°, amber accent) system shipped from the
-design refresh until 2026-09-04, when the chrome took the site's palette;
-git history has the old tokens. The earlier parchment/terracotta concept
-was never implemented.
+Until 0.8 the chrome took the site's warm palette (sand and cream, coral
+accent, Fredoka/Nunito, `components/Warm.web.tsx`); before 2026-09-04 it was a
+dark, cool-neutral system with an amber accent. Git history has both.

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { X } from "lucide-react";
-import { Wordmark } from "./Warm.web";
+import { Wordmark } from "./Primitives.web";
 import { createRegistrationToken } from "@/lib/api";
 import { buildOnboardingScript, getJoinCommand } from "@/lib/nodeInstaller";
 import {

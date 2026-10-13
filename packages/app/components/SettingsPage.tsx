@@ -65,8 +65,8 @@ async function getShellVersion(): Promise<string> {
 const UI_FONTS = [
   "App Default",
   "System UI",
-  "Nunito Variable",
-  "Fredoka Variable",
+  "Geist Mono",
+  "Geist",
   "Inter",
   "Roboto",
   "Segoe UI",
@@ -85,6 +85,7 @@ const TERMINAL_FONTS = [
   "Maple Mono NF CN",
   "Noto Sans Mono CJK SC",
   "JetBrains Mono",
+  "Geist Mono",
   "Fira Code",
   "Cascadia Code",
   "Source Code Pro",
@@ -189,7 +190,7 @@ function FontSelect({
       >
         {options.map((opt) => (
           <option key={opt} value={opt}>
-            {opt === options[0] ? emptyLabel : ["Nunito Variable", "Fredoka Variable", "JetBrains Mono"].includes(opt) ? `${opt} (included)` : opt}
+            {opt === options[0] ? emptyLabel : ["Geist Mono", "Geist", "JetBrains Mono"].includes(opt) ? `${opt} (included)` : opt}
           </option>
         ))}
       </select>

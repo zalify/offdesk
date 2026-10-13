@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Body, Button } from "./Warm.web";
+import { Body, Button } from "./Primitives.web";
 import { SecurePairingPanel } from "./SecureConnectionPanel";
 import { colors } from "../lib/colors";
 
@@ -135,7 +135,7 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
     {login?.state === "pending" ? <div style={{ padding: 16, background: colors.bg0, border: `1px solid ${colors.line}`, borderRadius: 12 }}>
       <Body size={13}>Continue in your browser. Check that it shows this same code before approving:</Body>
       <p style={{ fontFamily: "var(--font-mono)", fontSize: 22, letterSpacing: 3, margin: "12px 0" }}>{login.user_code}</p>
-      <Button kind="sky" onClick={() => void openCloud(login.verification_uri!).catch(cause => setError(message(cause)))}>Open sign-in page</Button>
+      <Button kind="secondary" onClick={() => void openCloud(login.verification_uri!).catch(cause => setError(message(cause)))}>Open sign-in page</Button>
     </div> : null}
     {login?.state === "expired" ? <Body size={13}>Sign-in expired. Start again to get a new code.</Body> : null}
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>

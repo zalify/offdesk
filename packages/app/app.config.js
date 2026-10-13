@@ -28,7 +28,7 @@ module.exports = ({ config }) => ({
     headTags: [
       {
         tag: "script",
-        innerHTML: `(function(){try{var t=localStorage.getItem('offdesk:theme');var d=t==='dark'||(t==='system'&&window.matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();`,
+        innerHTML: `(function(){try{var t=localStorage.getItem('offdesk:theme');var d=t==='dark'||((t==='system'||!t)&&window.matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();`,
       },
     ],
   },

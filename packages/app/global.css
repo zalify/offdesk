@@ -3,41 +3,52 @@
 @tailwind utilities;
 
 @layer base {
-  /* The site's palette, indoors: sand and cream for the chrome, ink for the
-     words, coral for the one thing to press. The terminal stays night-dark;
-     see --color-term-bg. Stored as space-separated sRGB triplets so
-     `rgb(var(--x) / <alpha>)` works with both Tailwind and inline styles.
-     Concrete React Native counterparts live in lib/themePalette.ts. */
+  /* Direction B, "terminal": a dark desk, monospace chrome, one lime accent.
+     Dark is the design; light is the same system printed on paper. Stored
+     as space-separated sRGB triplets so `rgb(var(--x) / <alpha>)` works with
+     both Tailwind and inline styles. Concrete React Native counterparts live
+     in lib/themePalette.ts; DESIGN.md has the rules. */
   :root {
     color-scheme: light;
-    --color-bg-0: 255 244 227;
-    --color-bg-1: 255 251 244;
-    --color-bg-2: 255 251 244;
-    --color-bg-3: 255 233 204;
-    --color-line: 230 207 174;
-    --color-line-soft: 241 222 198;
+    --color-bg-0: 245 245 243;
+    --color-bg-1: 251 251 250;
+    --color-bg-2: 255 255 255;
+    --color-bg-3: 235 235 231;
+    /* line = control edges (buttons, inputs); line-soft = hairlines. */
+    --color-line: 196 194 187;
+    --color-line-soft: 226 225 220;
 
-    /* Fredoka for what is said once (titles, buttons), Nunito for the rest;
-       both ship in public/fonts so a hub with no internet still has them. */
-    --font-display: 'Fredoka Variable', 'Fredoka', ui-rounded, 'Nunito Variable', system-ui, sans-serif;
-    --font-sans: 'Nunito Variable', 'Nunito', ui-rounded, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    --font-mono: 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace;
+    /* Geist Mono for chrome, headings and labels; Geist for prose. Both ship
+       in public/fonts so a hub with no internet still has them. The terminal
+       itself defaults to JetBrains Mono (lib/terminalFonts.ts). */
+    --font-display: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    --font-sans: 'Geist', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --font-mono: 'Geist Mono', 'JetBrains Mono', 'Offdesk Terminal Symbols', ui-monospace, monospace;
 
-    --color-fg-0: 43 35 64;
-    --color-fg-1: 74 65 96;
-    --color-fg-2: 110 100 134;
-    --color-fg-3: 119 107 136;
+    --color-fg-0: 17 17 17;
+    --color-fg-1: 43 42 39;
+    --color-fg-2: 79 77 72;
+    --color-fg-3: 101 99 93;
 
-    --color-accent: 174 61 46;
-    --color-on-accent: 255 251 244;
-    --color-ok: 24 125 110;
-    --color-warn: 135 98 11;
-    --color-err: 191 56 39;
-    --color-info: 23 117 157;
-    --color-violet: 124 92 191;
+    /* accent = lime's ink: text, icons and edges that mean "active". On paper
+       lime cannot carry text, so it darkens to olive; the lime itself is only
+       ever a fill behind dark text (--color-primary). */
+    --color-accent: 74 96 0;
+    --color-on-accent: 255 255 255;
+    --color-primary: 212 255 58;
+    --color-on-primary: 12 12 11;
+    --color-focus: 74 96 0;
+    --color-ok: 74 96 0;
+    /* Waiting, danger and errors share one colour, always with a word. */
+    --color-warn: 180 56 31;
+    --color-err: 180 56 31;
+    --color-on-err: 255 255 255;
+    --color-info: 74 96 0;
+    --color-violet: 79 77 72;
 
-    /* Terminal body — the night-dark the site draws terminals in. */
-    --color-term-bg: 30 27 46;
+    /* The terminal stays dark in both themes. */
+    --color-term-bg: 12 12 11;
+    --color-term-fg: 236 235 230;
 
     /* Legacy aliases — existing components reference these via colors.web.ts.
        Forwarded to the new tokens so the refactor can land in stages. */
@@ -57,46 +68,69 @@
   }
   :root.dark {
     color-scheme: dark;
-    --color-bg-0: 23 20 32;
-    --color-bg-1: 32 28 45;
-    --color-bg-2: 40 34 54;
-    --color-bg-3: 53 45 70;
-    --color-line: 82 70 95;
-    --color-line-soft: 57 48 68;
-    --color-fg-0: 245 239 251;
-    --color-fg-1: 223 213 232;
-    --color-fg-2: 186 172 201;
-    --color-fg-3: 162 149 177;
-    --color-accent: 255 146 126;
-    --color-on-accent: 43 24 32;
-    --color-ok: 99 209 184;
-    --color-warn: 240 198 107;
-    --color-err: 255 146 136;
-    --color-info: 130 202 255;
-    --color-violet: 197 164 245;
-    --color-term-bg: 30 27 46;
+    --color-bg-0: 12 12 11;
+    --color-bg-1: 17 17 16;
+    --color-bg-2: 20 20 19;
+    --color-bg-3: 28 28 26;
+    --color-line: 58 57 54;
+    --color-line-soft: 42 41 39;
+    --color-fg-0: 236 235 230;
+    --color-fg-1: 207 205 199;
+    --color-fg-2: 174 172 166;
+    --color-fg-3: 143 141 135;
+    --color-accent: 212 255 58;
+    --color-on-accent: 12 12 11;
+    --color-primary: 212 255 58;
+    --color-on-primary: 12 12 11;
+    --color-focus: 212 255 58;
+    --color-ok: 212 255 58;
+    --color-warn: 255 138 117;
+    --color-err: 255 138 117;
+    --color-on-err: 12 12 11;
+    --color-info: 212 255 58;
+    --color-violet: 174 172 166;
   }
 
 }
 
+/* Bundled under the adjacent SIL OFL licenses (Geist-OFL.txt,
+   GeistMono-OFL.txt). Latin and Latin Extended only; anything else falls
+   back to the system. */
 @font-face {
-  font-family: 'Fredoka Variable';
+  font-family: 'Geist Mono';
   font-style: normal;
-  font-weight: 300 700;
+  font-weight: 100 900;
   font-display: swap;
-  src: url('/fonts/fredoka-latin-wght-normal.woff2') format('woff2-variations');
+  src: url('/fonts/geist-mono-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
-
 @font-face {
-  font-family: 'Nunito Variable';
+  font-family: 'Geist Mono';
   font-style: normal;
-  font-weight: 200 1000;
+  font-weight: 100 900;
   font-display: swap;
-  src: url('/fonts/nunito-latin-wght-normal.woff2') format('woff2-variations');
+  src: url('/fonts/geist-mono-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geist-latin-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'Geist';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/geist-latin-ext-wght-normal.woff2') format('woff2-variations');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 html, body {
-  font-family: var(--font-sans);
+  font-family: var(--font-display);
   -webkit-font-smoothing: antialiased;
   background-color: rgb(var(--color-bg-0));
   color: rgb(var(--color-fg-1));
@@ -127,19 +161,19 @@ body {
 }
 
 :focus-visible {
-  outline: 2px solid rgb(var(--color-info));
+  outline: 2px solid rgb(var(--color-focus));
   outline-offset: 2px;
 }
 
 /* Terminal selection must never inherit the light chrome foreground. */
 .terminal-select-overlay::selection,
 .terminal-select-overlay ::selection {
-  background: #685139;
+  background: #4a6000;
   color: #ffffff;
 }
 
 ::selection {
-  background: rgb(var(--color-accent) / 0.2);
+  background: rgb(var(--color-primary) / 0.35);
   color: rgb(var(--color-fg-0));
 }
 
@@ -151,13 +185,13 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--color-bg-3));
-  border-radius: 10px;
+  background: rgb(var(--color-line));
+  border-radius: 3px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--color-line));
+  background: rgb(var(--color-fg-3));
   background-clip: content-box;
   border: 2px solid transparent;
 }
