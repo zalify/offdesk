@@ -1,6 +1,6 @@
 import { memo, useEffect, useState } from "react";
 
-import { colors, terminalTheme } from "@/lib/colors";
+import { colors } from "@/lib/colors";
 import { TerminalTailBuffer } from "@/lib/terminalTailBuffer";
 import { useTerminalPreviewOutputSource } from "@/lib/terminalPreviewMuxReact";
 
@@ -105,7 +105,7 @@ function TerminalPreviewTextComponent({
         padding,
         boxSizing: "border-box",
         overflow: "hidden",
-        color: terminalTheme.foreground,
+        color: colors.termFg,
         fontFamily: "var(--font-mono)",
         fontSize,
         lineHeight: `${lineHeightPx}px`,

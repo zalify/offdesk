@@ -86,7 +86,7 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await expect(page.getByTestId("tab-bar-new-group")).toBeInViewport();
   await expect(page.getByTestId("app-title-bar")).toHaveCount(1);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Dark", exact: true }).click();
+  await page.getByRole("button", { name: "Graphite theme", exact: true }).click();
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await expect(page.getByText("Shell version: 0.5.3-test")).toBeVisible();
   const updates = page.getByTestId("desktop-update-settings");
@@ -132,7 +132,7 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Light", exact: true }).click();
+  await page.getByRole("button", { name: "Paper theme", exact: true }).click();
   await page.getByTitle("Back", { exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath("desktop-workbench-light.png") });
   expect(pageErrors).toEqual([]);

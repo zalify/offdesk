@@ -18,6 +18,9 @@ export const colors = {
   info: 'rgb(var(--color-info))',
   violet: 'rgb(var(--color-violet))',
   termBg: 'rgb(var(--color-term-bg))',
+  termFg: 'rgb(var(--color-term-fg))',
+  // The terminal's own accent (its cursor colour), for prompts drawn on termBg.
+  termAccent: 'rgb(var(--color-term-accent))',
   onAccent: 'rgb(var(--color-on-accent))',
   // The lime fill (primary buttons, "in control") and what sits on it.
   primary: 'rgb(var(--color-primary))',

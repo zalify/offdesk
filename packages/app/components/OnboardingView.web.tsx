@@ -58,12 +58,12 @@ function CodeBlock({
             fontFamily: fontDisplay,
             fontSize: 13,
             lineHeight: 1.6,
-            color: "#ecebe6",
+            color: colors.termFg,
             whiteSpace: "pre-wrap" as const,
             wordBreak: "break-all" as const,
           }}
         >
-          <span style={{ color: "#d4ff3a" }} aria-hidden="true">$ </span>
+          <span style={{ color: colors.termAccent }} aria-hidden="true">$ </span>
           {code}
         </pre>
       </div>

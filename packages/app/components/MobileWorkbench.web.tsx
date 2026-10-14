@@ -1,3 +1,4 @@
+import { AppearanceSheet } from "./AppearanceSheet.web";
 import { HubPickerPanel } from "./HubPickerPanel";
 import { isSecureConnection } from "../lib/secureTransport";
 import { isTauriMobile } from "../lib/platform";
@@ -187,6 +188,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   } = props;
 
   const [hostSheetOpen, setHostSheetOpen] = useState(false);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   // Below 360px the title bar has no room for the Files button; the Machines
   // sheet always offers it instead.
   const wideTitleBar = useMinViewportWidth(TITLE_BAR_FILES_MIN_WIDTH);
@@ -1118,6 +1120,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             }}
           />}
           <MenuRow
+            label="Appearance"
+            testid="mobile-menu-appearance"
+            onClick={() => {
+              setHostSheetOpen(false);
+              setAppearanceOpen(true);
+            }}
+          />
+          <MenuRow
             icon={<SettingsIcon size={17} />}
             label="Settings"
             onClick={() => {
@@ -1127,6 +1137,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           />
         </Sheet>
       )}
+
+      {appearanceOpen && <AppearanceSheet onClose={() => setAppearanceOpen(false)} />}
 
       {/* Chip long-press sheet */}
       {chipSheet && (

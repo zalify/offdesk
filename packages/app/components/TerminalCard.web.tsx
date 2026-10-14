@@ -7,7 +7,7 @@ import type { TerminalViewRef, SelectionSnapshot } from "./TerminalView.types";
 import { ExtendedKeyBar } from "./ExtendedKeyBar";
 import { TerminalPreviewText } from "./TerminalPreviewText.web";
 import { terminalWsUrl } from "@/lib/api";
-import { colors, terminalTheme } from "@/lib/colors";
+import { colors } from "@/lib/colors";
 import { useTerminalModifiers } from "@/lib/useTerminalModifiers";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { useVisualViewportHeight } from "@/lib/hooks";
@@ -367,7 +367,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             pointerEvents: "all",
           }}
         >
-          <span style={{ color: terminalTheme.foreground, fontFamily: "var(--font-display)", fontSize: 13 }}>
+          <span style={{ color: colors.termFg, fontFamily: "var(--font-display)", fontSize: 13 }}>
             waiting for the machine to reconnect…
           </span>
         </div>
@@ -541,7 +541,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
           width: "100%", height: "100%", pointerEvents: "none" as const, overflow: "hidden",
         }}>
           <div ref={contentRef} style={isTab ? {
-            flex: 1, padding: "8px 10px", overflow: "hidden", background: terminalTheme.background,
+            flex: 1, padding: "8px 10px", overflow: "hidden", background: colors.termBg,
             position: "relative" as const,
           } : {
             width: "100%", height: "100%",
@@ -599,8 +599,8 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                   inset: 0,
                   margin: 0,
                   padding: "8px 10px",
-                  background: terminalTheme.background,
-                  color: terminalTheme.foreground,
+                  background: colors.termBg,
+                  color: colors.termFg,
                   fontFamily: selectSnapshot.fontFamily,
                   fontSize: selectSnapshot.fontSize,
                   // Slightly looser line-height so soft-wrapped lines
