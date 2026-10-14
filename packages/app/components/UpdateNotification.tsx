@@ -1,85 +1,69 @@
-import { useState, useEffect, useCallback } from "react";
-import { isDesktopShell } from "@/lib/desktopHub";
+import { useEffect, useState } from "react";
+import { desktopRole, isDesktopShell } from "@/lib/desktopHub";
 import { colors } from "@/lib/colors";
-import { Button, FloatCard } from "./Primitives.web";
+import {
+  cardVisible,
+  checkDesktopUpdate,
+  closeUpdateCard,
+  dismissUntilTomorrow,
+  restartToUpdate,
+  updateWhenQuitting,
+  useDesktopUpdate,
+} from "@/lib/desktopUpdate";
+import { openSettings } from "@/lib/openSettings";
+import { Button, Chip, FloatCard, fontProse, TextButton } from "./Primitives.web";
 
-/** Automatic toast and the always-available check in Settings → About. */
-export function UpdateNotification({ inline = false }: { inline?: boolean }) {
-  const [version, setVersion] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"checking" | "installing" | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+const RECHECK_MS = 12 * 60 * 60 * 1000;
 
-  const checkForUpdate = useCallback(async (silent = false) => {
-    setBusy("checking");
-    setError(null);
-    setMessage(null);
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      setVersion(update?.version ?? null);
-      if (!update && !silent) setMessage("You’re up to date.");
-      await update?.close();
-    } catch (e) {
-      if (!silent) setError(`Could not check for updates: ${String(e)}`);
-    } finally {
-      setBusy(null);
-    }
-  }, []);
+/** Wireframe Main (U01): the card above the status line once an update has
+ *  downloaded. It also does the checking — a few seconds after launch, then
+ *  twice a day — and hears the menu bar's `restart to update`. */
+export function UpdateNotification() {
+  const update = useDesktopUpdate();
+  const [isHub, setIsHub] = useState(false);
 
   useEffect(() => {
-    if (!isDesktopShell() || inline) return;
-    const timer = setTimeout(() => void checkForUpdate(true), 5000);
-    return () => clearTimeout(timer);
-  }, [inline, checkForUpdate]);
+    if (!isDesktopShell()) return;
+    desktopRole().then((role) => setIsHub(role === "hub")).catch(() => {});
+    const first = setTimeout(() => void checkDesktopUpdate({ silent: true }), 5000);
+    const again = setInterval(() => void checkDesktopUpdate({ silent: true }), RECHECK_MS);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void import("@tauri-apps/api/event")
+      .then(({ listen }) => listen("offdesk://restart-to-update", () => void restartToUpdate()))
+      .then((un) => {
+        if (disposed) un();
+        else unlisten = un;
+      })
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      clearTimeout(first);
+      clearInterval(again);
+      unlisten?.();
+    };
+  }, []);
 
-  const install = async () => {
-    setBusy("installing");
-    setError(null);
-    setMessage(null);
-    let update;
-    try {
-      const { check } = await import("@tauri-apps/plugin-updater");
-      update = await check();
-      if (!update) {
-        setVersion(null);
-        setMessage("You’re up to date.");
-        return;
-      }
-      await update.downloadAndInstall();
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
-    } catch (e) {
-      setError(`Update failed. You can try again: ${String(e)}`);
-    } finally {
-      setBusy(null);
-      await update?.close().catch(() => {});
-    }
-  };
-
-  if (!isDesktopShell() || (!inline && (dismissed || (!version && !message && !error)))) return null;
-  const status = busy === "installing" ? "Installing update…" : busy === "checking" ? "Checking…" : version ? (inline ? `v${version} available` : `offdesk/dev ${version} is ready`) : message ?? "Desktop app updates";
-  if (inline) {
-    return (
-      <div data-testid="desktop-update-settings" style={{ display: "flex", flexDirection: "column", gap: 8, padding: "12px 0", maxWidth: 480 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span role="status" style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: colors.fg2 }}>{status}</span>
-          {version && <Button size="sm" disabled={!!busy} onClick={() => void install()}>install update</Button>}
-          <Button size="sm" kind="secondary" disabled={!!busy} onClick={() => void checkForUpdate()}>check for updates</Button>
-        </div>
-        {error && <div role="alert" style={{ overflowWrap: "anywhere", fontSize: 12, color: colors.err }}>{error}</div>}
-      </div>
-    );
-  }
-  // The card above the status line (wireframe Main).
+  if (!isDesktopShell() || !cardVisible(update, Date.now())) return null;
+  const installing = update.phase === "installing";
+  const installed = update.phase === "installed";
+  const sentence = installed
+    ? "Installed. It takes over the next time Offdesk DEV starts."
+    : `Downloaded in the background.${isHub ? " This Mac is the hub, so the hub and node restart with the app. Terminals keep running in tmux." : ""}`;
   return (
-    <FloatCard testId="desktop-update-toast" style={{ width: 300, padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
-      <div role="status" style={{ fontWeight: 600 }}>{status}</div>
-      {error && <div role="alert" style={{ overflowWrap: "anywhere", fontSize: 12, color: colors.err }}>{error}</div>}
-      <div style={{ display: "flex", gap: 8 }}>
-        {version && <Button size="xs" disabled={!!busy} onClick={() => void install()}>install update</Button>}
-        <Button size="xs" kind="ghost" disabled={!!busy} ariaLabel="Dismiss update" onClick={() => setDismissed(true)}>later</Button>
+    <FloatCard testId="desktop-update-toast" style={{ width: 380, maxWidth: "calc(100vw - 32px)", padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span role="status" style={{ fontSize: 14, fontWeight: 600 }}>{update.available} is ready</span>
+        {update.current ? <Chip>you have {update.current}</Chip> : null}
+        <span style={{ flex: 1 }} />
+        <TextButton label="Dismiss until tomorrow" onClick={() => dismissUntilTomorrow()}>×</TextButton>
+      </div>
+      <div style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>{sentence}</div>
+      {update.error ? <div role="alert" style={{ overflowWrap: "anywhere", fontFamily: fontProse, fontSize: 12, color: colors.err }}>{update.error}</div> : null}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Button size="sm" disabled={installing} onClick={() => void restartToUpdate()}>{installing ? "installing…" : "restart now"}</Button>
+        {installed ? null : <Button size="sm" kind="secondary" disabled={installing} onClick={() => void updateWhenQuitting()}>when I quit</Button>}
+        <TextButton onClick={() => { closeUpdateCard(); openSettings("Versions"); }}>what's new</TextButton>
       </div>
     </FloatCard>
   );

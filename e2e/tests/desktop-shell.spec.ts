@@ -89,21 +89,40 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await page.getByRole("button", { name: "Graphite theme", exact: true }).click();
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await expect(page.getByText("Shell version: 0.5.3-test")).toBeVisible();
-  const updates = page.getByTestId("desktop-update-settings");
+  // Settings › versions (U02): the app's updater, the hub, its interface and nodes.
+  const versions = page.getByTestId("settings-versions");
+  await expect(versions.getByRole("row").filter({ hasText: "interface" })).toContainText("follows the hub");
+  await expect(versions.getByRole("row").filter({ hasText: "e2e-machine" })).toBeVisible();
   await page.evaluate(() => { (window as any).__desktopTest.updater = "error"; });
-  await updates.getByRole("button", { name: "Check for updates" }).click();
-  await expect(updates.getByRole("alert")).toContainText("Update server unavailable");
+  await versions.getByRole("button", { name: "check now" }).click();
+  await expect(versions.getByRole("alert")).toContainText("Update server unavailable");
   await page.evaluate(() => { (window as any).__desktopTest.updater = "current"; });
-  await updates.getByRole("button", { name: "Check for updates" }).click();
-  await expect(updates.getByRole("status")).toHaveText("You’re up to date.");
+  await versions.getByRole("button", { name: "check now" }).click();
+  await expect(versions.getByRole("row").filter({ hasText: "desktop app" })).toContainText("current");
   await page.evaluate(() => { (window as any).__desktopTest.updater = "available"; });
-  await updates.getByRole("button", { name: "Check for updates" }).click();
-  await expect(updates.getByRole("button", { name: "Install update" })).toBeEnabled();
-  // If another installation already picked up the update, don't get stuck.
-  await page.evaluate(() => { (window as any).__desktopTest.updater = "current"; });
-  await updates.getByRole("button", { name: "Install update" }).click();
-  await expect(updates.getByRole("status")).toHaveText("You’re up to date.");
-  await expect(updates.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+  await versions.getByRole("button", { name: "check now" }).click();
+  await expect(versions.getByRole("button", { name: "restart to update" })).toBeEnabled();
+  await expect(versions.getByRole("row").filter({ hasText: "desktop app" })).toContainText("0.5.4");
+
+  // The card above the status line (U01) and the status line's `↑ update`.
+  await page.getByTitle("Back", { exact: true }).click();
+  const card = page.getByTestId("desktop-update-toast");
+  await expect(card).toContainText("0.5.4 is ready");
+  await expect(card).toContainText("you have 0.5.3");
+  await page.screenshot({ path: testInfo.outputPath("desktop-update-card-dark.png") });
+  await card.getByRole("button", { name: "Dismiss until tomorrow" }).click();
+  await expect(card).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("offdesk:desktop-update-dismissed") ?? "null")?.version)).toBe("0.5.4");
+  await page.getByTestId("status-update").click();
+  await expect(card).toBeVisible();
+  await card.getByRole("button", { name: "what's new" }).click();
+  await expect(versions).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("desktop-settings-versions-dark.png") });
+  await page.evaluate(() => { (window as any).__desktopTest.calls = []; });
+  await versions.getByRole("button", { name: "restart to update" }).click();
+  // Installs, tells the menu bar (whose exit hook restarts a bundled hub), relaunches.
+  await expect.poll(() => page.evaluate(() => (window as any).__desktopTest.calls.filter((call: string) => ["plugin:updater|install", "app_update_state", "plugin:process|restart"].includes(call))))
+    .toEqual(["plugin:updater|install", "app_update_state", "plugin:process|restart"]);
 
   await page.getByRole("textbox", { name: "Server URL" }).fill("not a hub");
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -122,6 +141,11 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await page.getByTestId("workspace-manager-close").click();
   await page.getByTestId("tab-bar-phone").click();
   await expect(page.getByTestId("phone-dialog")).toBeVisible();
+  // A node's phone panel (U03): pair on the hub; the browser code is a fallback.
+  await expect(page.getByRole("region", { name: "Pair on the hub" })).toContainText("Pair your phone on hub");
+  await expect(page.getByRole("link", { name: "iPhone · TestFlight" })).toHaveCount(0);
+  await page.screenshot({ path: testInfo.outputPath("desktop-phone-node-dark.png") });
+  await page.getByRole("button", { name: "show browser code" }).click();
   await expect(page.getByRole("link", { name: "iPhone · TestFlight" })).toHaveAttribute("href", "https://testflight.apple.com/join/rV4ktaGv");
   await page.screenshot({ path: testInfo.outputPath("desktop-phone-dark.png") });
   await page.getByTestId("phone-dialog").getByRole("button", { name: "Close", exact: true }).click();
@@ -485,6 +509,8 @@ test("settings keeps the section nav and the scrollbar at the window edges", asy
     await page.setViewportSize({ width, height: 900 });
     const scroller = page.getByTestId("settings-content");
     const column = page.getByTestId("settings-column");
+    // The nav column comes and goes with a re-render after the resize.
+    await expect.poll(async () => (await scroller.boundingBox())!.x < 2).toBe(width < 900);
     const outer = (await scroller.boundingBox())!;
     const inner = (await column.boundingBox())!;
     expect(Math.abs(outer.x + outer.width - width)).toBeLessThan(2);

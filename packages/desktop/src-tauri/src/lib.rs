@@ -1,3 +1,5 @@
+#[cfg(desktop)]
+mod app_update;
 // Pure enough to build and test everywhere, even though only the mobile
 // app has a hub address to parse.
 #[allow(dead_code)]
@@ -107,8 +109,17 @@ pub fn run() {
             let _ = app;
             Ok(())
         })
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Quitting (or restarting into an update) finishes what the
+            // update started on the hub machine; see app_update.rs.
+            #[cfg(desktop)]
+            if let tauri::RunEvent::Exit = event {
+                app_update::on_exit(app);
+            }
+            let _ = (app, event);
+        });
 }
 
 #[cfg(desktop)]
@@ -120,7 +131,9 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
     builder
         .register_asynchronous_uri_scheme_protocol(file_preview::SCHEME, file_preview::protocol)
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(app_update::AppUpdate::default())
         .invoke_handler(tauri::generate_handler![
+            app_update::app_update_state,
             ui_updates::ui_status,
             ui_updates::ui_check,
             ui_updates::ui_ready,

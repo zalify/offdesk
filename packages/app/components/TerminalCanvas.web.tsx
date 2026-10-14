@@ -72,6 +72,7 @@ import {
 import { PrefixKeyProvider, usePrefixKey } from "@/lib/prefixKeyContext";
 import { CheatSheetOverlay } from "./CheatSheetOverlay.web";
 import { UpdateNotification } from "./UpdateNotification";
+import { subscribeOpenSettings } from "@/lib/openSettings";
 import { useAuth } from "@/lib/auth";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
 import { WorkspaceStatusLine } from "./WorkspaceStatusLine.web";
@@ -288,6 +289,13 @@ function TerminalCanvasInner() {
     window.addEventListener("keydown", openSettings, true);
     return () => window.removeEventListener("keydown", openSettings, true);
   }, []);
+
+  // The update card, the status line and the phone panel ask for Settings
+  // at a section (lib/openSettings.ts).
+  useEffect(() => subscribeOpenSettings(() => {
+    setPhoneOpen(false);
+    setShowSettings(true);
+  }), []);
 
   // The menu bar item on the hub machine opens the window and says what it
   // wants shown; see packages/desktop/src-tauri/src/tray.rs.

@@ -20,6 +20,7 @@ fn main() {
         "ui_check",
         "ui_ready",
         "ui_recover",
+        "app_update_state",
         "start_oauth_listener",
         "hub_pair",
         "cloud_action",
