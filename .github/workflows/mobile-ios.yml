@@ -59,6 +59,15 @@ jobs:
             exit 1
           fi
 
+      # `cargo tauri ios build` runs cargo from an Xcode build phase, which
+      # does not see this job's environment (ios-v0.9.1 shipped without the
+      # key that way). Cargo's [env] reaches rustc however cargo is started.
+      - name: Hand the Web UI key and channel to cargo
+        run: |
+          mkdir -p ~/.cargo
+          printf '[env]\nOFFDESK_UI_PUBLIC_KEY = "%s"\nOFFDESK_UI_CHANNEL = "%s"\n' \
+            "$OFFDESK_UI_PUBLIC_KEY" "$OFFDESK_UI_CHANNEL" >> ~/.cargo/config.toml
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10.23.0
@@ -217,6 +226,16 @@ jobs:
           mkdir -p artifacts
           src=$(find packages/desktop/src-tauri/gen/apple/build -name "*.ipa" | head -1)
           [ -n "$src" ] || { echo "no .ipa produced" >&2; exit 1; }
+          # The app must carry the Web UI key, or it never takes interface updates.
+          check=$(mktemp -d)
+          unzip -q "$src" -d "$check"
+          app=$(ls -d "$check"/Payload/*.app)
+          binary="$app/$(plutil -extract CFBundleExecutable raw "$app/Info.plist")"
+          if ! grep -q -a -F "$OFFDESK_UI_PUBLIC_KEY" "$binary"; then
+            echo "The app was built without the Web UI public key; it would not take interface updates." >&2
+            exit 1
+          fi
+          rm -rf "$check"
           cp "$src" "artifacts/offdesk-${version}.ipa"
           echo "path=artifacts/offdesk-${version}.ipa" >> "$GITHUB_OUTPUT"
           ls -lh artifacts/
