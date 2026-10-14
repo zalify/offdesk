@@ -60,7 +60,8 @@ import {
 } from "@/lib/mobileSessionSwitcher";
 import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { WorkspaceManager } from "./WorkspaceManager.web";
-import { Button, TextButton, fontDisplay } from "./Primitives.web";
+import { anyNodeBehind, copyNodeUpdateCommand, nodeUpdateChip, nodeVersionLabel, NODE_UPDATE_COMMAND, useSheetVersions } from "@/lib/machineVersions";
+import { Button, Chip, TextButton, fontDisplay, fontProse } from "./Primitives.web";
 
 // The title bar's [f] [b] [m]: 40px squares, so five fit beside the
 // session title on a 320px phone.
@@ -189,6 +190,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
 
   const [hostSheetOpen, setHostSheetOpen] = useState(false);
   const [appearanceOpen, setAppearanceOpen] = useState(false);
+  // P03: node and hub versions, asked when the sheet opens. Null on hubs from
+  // before 0.23, and then the sheet looks as it always did.
+  const { versions: sheetVersions, hubName } = useSheetVersions(hostSheetOpen);
+  const [updateCopy, setUpdateCopy] = useState<"copied" | "failed" | null>(null);
+  useEffect(() => { if (!hostSheetOpen) setUpdateCopy(null); }, [hostSheetOpen]);
   // Below 360px the title bar has no room for the Files button; the Machines
   // sheet always offers it instead.
   const wideTitleBar = useMinViewportWidth(TITLE_BAR_FILES_MIN_WIDTH);
@@ -967,7 +973,18 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
 
       {/* Host sheet */}
       {hostSheetOpen && (
-        <Sheet title="Machines" onClose={() => setHostSheetOpen(false)}>
+        <Sheet
+          title="Machines"
+          header={sheetVersions && hubName ? (
+            <div style={{ flexShrink: 0, padding: "4px 16px 10px", display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ flex: "1 0 auto", fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Machines</span>
+              <span data-testid="mobile-host-hub-version" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 500, color: colors.fg2 }}>
+                hub {hubName} · {sheetVersions.hub.hub}
+              </span>
+            </div>
+          ) : undefined}
+          onClose={() => setHostSheetOpen(false)}
+        >
           {(isSecureConnection() || isTauriMobile()) && <MenuRow
             icon={<ChevronRight size={18} />}
             label={isSecureConnection() ? "Hub & connection" : switchingHub ? "Opening setup…" : "Switch Hub"}
@@ -986,6 +1003,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             const controlling =
               deviceId !== null && controlLeases[m.id] === deviceId;
             const count = terminals.filter((t) => t.machine_id === m.id).length;
+            const node = sheetVersions?.machines[m.id];
+            const nodeLabel = online ? nodeVersionLabel(node) : null;
+            const chip = online ? nodeUpdateChip(node, sheetVersions?.hub.latest ?? null) : null;
             return (
               <div
                 key={m.id}
@@ -1000,6 +1020,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               >
               <button
                 type="button"
+                data-testid={`mobile-host-row-${m.id}`}
+                aria-current={isActive ? "true" : undefined}
                 onClick={() => {
                   onSelectMachine(m.id);
                   setHostSheetOpen(false);
@@ -1033,9 +1055,22 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   </span>
                   <span style={{ fontSize: 12, color: online ? colors.fg2 : colors.fg3 }}>
                     {online ? `${m.os} · ${count} ${count === 1 ? "terminal" : "terminals"}` : "offline"}
+                    {nodeLabel && node?.version ? ` · ${nodeLabel}` : null}
                   </span>
+                  {nodeLabel && !node?.version ? (
+                    <span style={{ fontSize: 12, color: colors.fg3 }}>{nodeLabel}</span>
+                  ) : null}
                 </span>
-                {isActive ? <span style={{ fontSize: 11.5, fontWeight: 500, color: colors.accent }}>current</span> : <span />}
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  {chip ? (
+                    <Chip testId={`mobile-host-update-${m.id}`} title={`${sheetVersions?.hub.latest} is out`} style={{ flexShrink: 0, color: colors.accent }}>
+                      {chip}
+                    </Chip>
+                  ) : null}
+                  {/* With a chip there is no room for both on a phone; the
+                      accent edge and aria-current still mark this one (P03). */}
+                  {isActive && !chip ? <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: 11.5, fontWeight: 500, color: colors.accent }}>current</span> : null}
+                </span>
               </button>
               <button
                 type="button"
@@ -1055,6 +1090,35 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             );
           })}
           </div>
+          {anyNodeBehind(sheetVersions) && (
+            <div
+              data-testid="mobile-node-update-card"
+              style={{ margin: "0 16px 12px", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6 }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 600, color: colors.fg0 }}>updates happen on each Mac</span>
+              <span style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+                The phone can't update a Mac. Open Offdesk DEV there, or run the command it shows.
+              </span>
+              {updateCopy === "failed" ? (
+                <code role="alert" style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: colors.fg1, overflowWrap: "anywhere" }}>
+                  {NODE_UPDATE_COMMAND}
+                </code>
+              ) : null}
+              <Button
+                kind="secondary"
+                size="sm"
+                testId="mobile-copy-node-update"
+                onClick={() => {
+                  void copyNodeUpdateCommand()
+                    .then(() => setUpdateCopy("copied"))
+                    .catch(() => setUpdateCopy("failed"));
+                }}
+                style={{ alignSelf: "flex-start", flexShrink: 0, whiteSpace: "nowrap" }}
+              >
+                {updateCopy === "copied" ? "copied" : "copy update command"}
+              </Button>
+            </div>
+          )}
           {filesButton && onToggleFiles && (
             <MenuRow
               icon={<FolderOpen size={17} />}

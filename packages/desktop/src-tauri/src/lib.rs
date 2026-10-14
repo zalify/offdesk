@@ -7,6 +7,10 @@ mod hub_url;
 mod bundle_name;
 mod downloads;
 mod file_preview;
+// Asked by the phone's setup screen before it opens a hub.
+#[cfg(any(mobile, test))]
+#[cfg_attr(not(mobile), allow(dead_code))]
+mod hub_version;
 #[cfg(mobile)]
 mod mobile_hub;
 #[cfg(any(mobile, test))]
@@ -19,6 +23,8 @@ mod secure;
 #[cfg(desktop)]
 mod tray;
 mod ui_updates;
+#[cfg(test)]
+mod workspace_version;
 
 #[cfg(desktop)]
 use tauri::Manager;
@@ -71,6 +77,7 @@ pub fn run() {
             mobile_hub::mobile_hub_url,
             mobile_hub::set_mobile_hub_url,
             mobile_hub::clear_mobile_hub_url,
+            hub_version::probe_hub_version,
             secure::secure_pairing_identity,
             secure::secure_hubs,
             secure::secure_rename_hub,

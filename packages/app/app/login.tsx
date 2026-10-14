@@ -1,4 +1,6 @@
 import { HubPickerPanel } from "../components/HubPickerPanel";
+import { OldHubNotice } from "../components/OldHubNotice.web";
+import { hubHost, plainScanVerdict, probeHubVersion } from "../lib/hubVersionCheck";
 import { scanWithCleanup } from "../lib/scanLifecycle";
 import { ConnectionRoutesPanel } from "../components/ConnectionRoutesPanel";
 import { isPairingUri, isSecureConnection, secureConnectionStatus, secureConnectionError, forgetSecureConnection } from "../lib/secureTransport";
@@ -207,6 +209,28 @@ export default function LoginScreen({
       return null;
     }
   };
+  const openScannedHub = (url: string) => {
+    setConnecting(true);
+    setHubError(null);
+    void import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke("set_mobile_hub_url", { url }))
+      .catch((error: unknown) => {
+        setHubError(String(error));
+        setConnecting(false);
+      });
+  };
+  // A browser code hands this WebView to the hub, which then shows the
+  // interface built into it. An older hub gets P01 first instead of quietly
+  // showing an older interface; a hub that cannot be asked opens as before.
+  const [oldHub, setOldHub] = useState<{ url: string; host: string; hub: string | null; expected: string } | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  useEffect(() => {
+    if (!needsHub) return;
+    void import("@tauri-apps/api/app")
+      .then(({ getVersion }) => getVersion())
+      .then(setAppVersion)
+      .catch(() => {});
+  }, [needsHub]);
   const handleScanForHub = async () => {
     const content = await scanCode();
     if (!content) return;
@@ -214,12 +238,24 @@ export default function LoginScreen({
     if (isPairingUri(content)) { await pair(content); return; }
     setConnecting(true);
     setHubError(null);
-    void import("@tauri-apps/api/core")
-      .then(({ invoke }) => invoke("set_mobile_hub_url", { url: content }))
-      .catch((error: unknown) => {
-        setHubError(String(error));
-        setConnecting(false);
-      });
+    const verdict = plainScanVerdict(await probeHubVersion(content));
+    if (verdict.kind === "older") {
+      setConnecting(false);
+      setOldHub({ url: content, host: hubHost(content), hub: verdict.hub, expected: verdict.expected });
+      return;
+    }
+    openScannedHub(content);
+  };
+  const handleScanEncrypted = async () => {
+    const content = await scanCode();
+    if (!content) return;
+    if (isPairingUri(content)) {
+      setOldHub(null);
+      setServerUrlInput(content);
+      await pair(content);
+      return;
+    }
+    setScanError(`That is the browser code again. On ${oldHub?.host ?? "the hub"}, open settings › phone and scan the encrypted code.`);
   };
   const handleScanForLink = async () => {
     const content = await scanCode();
@@ -333,6 +369,26 @@ export default function LoginScreen({
     <HubPickerPanel initialUri={pairingUri ?? ""} />
     <Button kind="ghost" onClick={() => { setPairingUri(null); setShowSavedHubs(false); }}>Back</Button>
   </>);
+
+  if (needsHub && oldHub) {
+    return (
+      <OldHubNotice
+        host={oldHub.host}
+        appVersion={appVersion}
+        hub={oldHub.hub}
+        expected={oldHub.expected}
+        busy={connecting}
+        error={scanError}
+        onScanEncrypted={() => void handleScanEncrypted()}
+        onOpenAnyway={() => {
+          const { url } = oldHub;
+          setOldHub(null);
+          setScanError(null);
+          openScannedHub(url);
+        }}
+      />
+    );
+  }
 
   if (isSecureConnection()) {
     return frame(<>

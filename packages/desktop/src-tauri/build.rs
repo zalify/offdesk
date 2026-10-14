@@ -1,4 +1,8 @@
+#[path = "src/workspace_version.rs"]
+mod workspace_version;
+
 fn main() {
+    hub_version();
     println!("cargo:rerun-if-env-changed=OFFDESK_UI_PUBLIC_KEY");
     println!("cargo:rerun-if-env-changed=OFFDESK_UI_CHANNEL");
     // The mobile hub URL is only a first-launch preset now (the app asks for
@@ -36,6 +40,7 @@ fn main() {
         "mobile_hub_url",
         "set_mobile_hub_url",
         "clear_mobile_hub_url",
+        "probe_hub_version",
         "save_download",
         "open_download",
         "file_preview_open",
@@ -46,4 +51,21 @@ fn main() {
     if let Err(error) = tauri_build::try_build(attributes) {
         panic!("failed to run tauri-build: {error:#}");
     }
+}
+
+/// The hub version this checkout builds, for the phone app to compare a
+/// hub's against (`hub_version.rs`). App versions are a separate line.
+fn hub_version() {
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Cargo.toml");
+    println!("cargo:rerun-if-changed={}", manifest.display());
+    let version = std::fs::read_to_string(&manifest)
+        .ok()
+        .and_then(|text| workspace_version::workspace_version(&text));
+    let version = version.unwrap_or_else(|| {
+        // Outside the repo nothing is known; 0.0.0 makes every hub look new
+        // enough, so only a hub without /api/version gets the warning.
+        println!("cargo:warning=no [workspace.package] version in {}", manifest.display());
+        "0.0.0".to_string()
+    });
+    println!("cargo:rustc-env=OFFDESK_HUB_VERSION={version}");
 }

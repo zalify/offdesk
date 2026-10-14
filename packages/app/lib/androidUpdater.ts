@@ -36,7 +36,7 @@ export async function installAndroidUpdate() {
   try {
     const result = await invoke<{ status: string }>("install");
     set({ message: result.status === "permission-required"
-      ? "Allow Offdesk to install apps, return here, then tap Install update again."
+      ? "Allow Offdesk to install apps, return here, then tap install again."
       : result.status === "installer-opened" ? "Finish the update in the Android installer." : null });
   } catch (error) { set({ error: `Update failed: ${String(error)}` }); }
   finally { set({ busy: null }); }
