@@ -3,10 +3,12 @@ members = ["crates/*"]
 exclude = ["packages/desktop/src-tauri"]
 resolver = "2"
 
-# What `offdesk --version` and `offdesk-node --version` print. Bump this
-# before tagging a v* release; the tag and the binaries should agree.
+# What `offdesk --version` and `offdesk-node --version` print. Every component
+# shares one version: bump this together with "version" in
+# packages/desktop/src-tauri/tauri.conf.json before tagging vX.Y.Z, or the
+# Release workflow refuses the tag (docs/releasing.md).
 [workspace.package]
-version = "0.22.0"
+version = "0.23.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

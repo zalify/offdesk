@@ -1,6 +1,7 @@
 # Building from source
 
-For changing offdesk, not for using it — the installer covers that.
+For changing offdesk, not for using it — the installer covers that. Releases
+are built by CI from a `vX.Y.Z` tag; see [Releasing](releasing.md).
 
 ## The hub, the agent and the CLI
 
@@ -75,8 +76,9 @@ Team ID from Membership details) and a matching signing identity in your
 keychain; Xcode's automatic signing takes care of that once you have opened the
 project (`pnpm tauri ios build --open`) and picked the team.
 
-Releases go through TestFlight from `.github/workflows/mobile-ios.yml` on an
-`ios-v*` tag; the secrets it needs are listed at the top of that file.
+Releases go through TestFlight from `.github/workflows/mobile-ios.yml`, which
+the Release workflow runs for every `vX.Y.Z` tag; the secrets it needs are
+listed at the top of that file.
 
 ### Internal iOS candidates built on a local Mac
 
@@ -109,7 +111,7 @@ without recompiling, signing or uploading the binary again.
 Record the commit, build number and physical-device results for every
 candidate. Validate Chinese IME punctuation/dictation, keyboard show/hide,
 focused-input layout, cold start, encrypted pairing and reconnect on the
-actual supported devices before creating formal release tags.
+actual supported devices before tagging a release.
 
 ## The desktop app, with the hub inside
 

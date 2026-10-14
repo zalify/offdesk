@@ -1,5 +1,8 @@
 name: Mobile (iOS)
-# Builds the iOS app on an ios-v* tag and hands it to TestFlight.
+# Builds the iOS app and hands it to TestFlight. release.yml calls this for
+# every vX.Y.Z release and the .ipa also goes into that release's draft;
+# dispatched by hand it builds on the rc Web UI channel, or signs and
+# distributes an internal RC (the prebuilt_release / existing_build inputs).
 #
 # Signing lives in repository secrets, all from the Apple Developer account:
 #
@@ -14,11 +17,14 @@ name: Mobile (iOS)
 #
 # The Tauri CLI reads the first four itself and signs the archive with them;
 # the upload is xcrun altool with the API key. The tag decides the version:
-# ios-v0.4.5 builds 0.4.5.
+# v0.23.0 builds 0.23.0.
 on:
-  push:
-    tags:
-      - "ios-v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "The vX.Y.Z release tag to build and upload into (its draft release must exist)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       prebuilt_release:
@@ -32,7 +38,7 @@ on:
         type: string
 
 concurrency:
-  group: mobile-ios-${{ github.ref }}
+  group: mobile-ios-${{ inputs.tag || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -45,12 +51,15 @@ jobs:
       contents: write
     env:
       # Baked in at compile time so the app only loads Web UI bundles signed
-      # with this key (docs/web-ui-updates.md). Tag releases follow the
-      # stable channel; manual builds rc.
+      # with this key (docs/web-ui-updates.md). Releases follow the stable
+      # channel; manual builds rc.
       OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
-      OFFDESK_UI_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'rc' }}
+      OFFDESK_UI_CHANNEL: ${{ inputs.tag && 'stable' || 'rc' }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
 
       - name: Require the Web UI release public key
         run: |
@@ -98,15 +107,17 @@ jobs:
       - name: Build trusted web bundle (retained for encrypted connections)
         run: |
           pnpm --filter @offdesk/app build
-          node scripts/stamp-build.mjs packages/app/dist "$GITHUB_REF_NAME"
+          node scripts/stamp-build.mjs packages/app/dist "${RELEASE_TAG:-$GITHUB_REF_NAME}"
 
       - name: Set release version from tag
         id: version
         run: |
-          tag="${GITHUB_REF_NAME:-ios-vlocal}"
-          version="${tag#ios-v}"
-          if [ "$version" = "$tag" ]; then version="0.1.0"; fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$RELEASE_TAG" ]; then
+            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag" >&2; exit 1; }
+            version="${RELEASE_TAG#v}"
+          else
+            version="0.1.0"
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           # An internal RC may already use the marketing version as its
           # CFBundleVersion. Give each CI upload (including retries) a new
@@ -186,7 +197,7 @@ jobs:
           for dir in ~/Library/MobileDevice/Provisioning\ Profiles ~/Library/Developer/Xcode/UserData/Provisioning\ Profiles; do
             echo "-- $dir"; ls -la "$dir" 2>/dev/null
           done
-          f=$(ls ~/Library/MobileDevice/Provisioning\ Profiles/*.mobileprovision | head -1)
+          f=$(find ~/Library/MobileDevice/Provisioning\ Profiles -name '*.mobileprovision' | head -1)
           echo "== the profile, minus the certificate blobs"
           security cms -D -i "$f" | plutil -p - | grep -vE '^\s+[0-9]+ => <|DER-Encoded' | grep -vE '^\s+"(DeveloperCertificates|DER-Encoded-Profile)"' | mask
 
@@ -251,27 +262,20 @@ jobs:
             exit 0
           fi
           mkdir -p ~/.private_keys
-          echo "$APP_STORE_CONNECT_API_KEY" | base64 --decode > ~/.private_keys/AuthKey_${APP_STORE_CONNECT_KEY_ID}.p8
+          echo "$APP_STORE_CONNECT_API_KEY" | base64 --decode > ~/.private_keys/AuthKey_"${APP_STORE_CONNECT_KEY_ID}".p8
           xcrun altool --upload-app --type ios \
             --file "${{ steps.ipa.outputs.path }}" \
             --apiKey "$APP_STORE_CONNECT_KEY_ID" \
             --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
 
-      - name: Release
-        uses: softprops/action-gh-release@v2
-        with:
-          # Keep the IPA staged until release artifact checks finish. The
-          # repository's global Latest belongs to the standalone Hub release.
-          draft: true
-          make_latest: "false"
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: iOS ${{ steps.version.outputs.tag }}
-          body: |
-            The offdesk iOS app, ${{ steps.version.outputs.version }}. Install it from TestFlight; the .ipa here is the same build, for the record.
-          files: artifacts/*.ipa
+      - name: Upload to the release
+        if: env.RELEASE_TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$RELEASE_TAG" "${{ steps.ipa.outputs.path }}" --clobber
 
   sign-prebuilt-rc:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.prebuilt_release != '' && inputs.existing_build == '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.tag && inputs.prebuilt_release && !inputs.existing_build }}
     runs-on: macos-26
     timeout-minutes: 30
     permissions:
@@ -319,7 +323,7 @@ jobs:
           retention-days: 7
 
   distribute-existing-rc:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.existing_build != '' && inputs.prebuilt_release == '' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.tag && inputs.existing_build && !inputs.prebuilt_release }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

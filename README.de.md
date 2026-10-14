@@ -369,7 +369,8 @@ Außerdem gibt es drei paketierte Clients:
   das Netz (ab 0.9.2), die App selbst über TestFlight. Ein Build funktioniert mit jedem Hub. Zwei Schalter auf dem
   Smartphone können einem Hub im LAN im Weg stehen, und die App nennt sie,
   wenn das passiert: Lokales Netzwerk und, auf in China verkauften Geräten,
-  WLAN & mobile Daten. Gebaut aus `ios-v*`-Tags.
+  WLAN & mobile Daten. Gebaut aus `v*`-Tags und zusammen mit dem Hub
+  veröffentlicht.
 - **Android** – ein APK von [offdesk.dev/apk](https://offdesk.dev/apk), das
   immer auf den neuesten App-Build zeigt (`/apk/universal` für den
   universellen); nimm `arm64-v8a` auf einem aktuellen Smartphone, im Zweifel
@@ -386,7 +387,7 @@ Außerdem gibt es drei paketierte Clients:
   Statuszeile, die ein Terminal zeigt, das auf dich wartet. Auf einem Mac
   kann die App der Hub sein – siehe [Installation](#installation); unter
   Windows und Linux ist sie ein Client und fragt nach dem Link des Hubs.
-  Gebaut aus `desktop-v*`-Tags.
+  Gebaut aus `v*`-Tags und zusammen mit dem Hub veröffentlicht.
 
 Alle selbst bauen: [docs/building.md](docs/building.md).
 

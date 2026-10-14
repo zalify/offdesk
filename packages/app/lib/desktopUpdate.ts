@@ -4,8 +4,9 @@
 // status line's `↑ update`, Settings › versions, and the menu bar item,
 // which hears about it through `app_update_state` (src-tauri/src/tray.rs).
 // The shell keeps whether a new bundle is installed, so a reloaded window
-// picks up where it was. Its numbers (0.9.x) are the app's; the hub's
-// (0.23.x) live in versions.ts.
+// picks up where it was. This is the app's own version; the hub's live in
+// hubVersions.ts. From 0.23.0 every component is released at the same version
+// (docs/releasing.md), but each is still checked on its own.
 
 import { useSyncExternalStore } from "react";
 import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";

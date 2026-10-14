@@ -335,8 +335,8 @@ macOS에서는 실행 중인 노드가 기본적으로 시스템의 자동 유�
   TestFlight로 업데이트하세요. 빌드 하나로 어떤 Hub에나
   연결됩니다. 휴대폰의 두 가지 설정이 LAN의 Hub 접속을 막을 수 있는데, 그럴
   때는 앱이 해당 설정을 알려 줍니다. 로컬 네트워크(Local Network), 그리고
-  중국에서 판매된 휴대폰의 무선 데이터(Wireless Data)입니다. `ios-v*` 태그에서
-  빌드됩니다.
+  중국에서 판매된 휴대폰의 무선 데이터(Wireless Data)입니다. `v*` 태그에서
+  빌드되어 Hub와 함께 배포됩니다.
 - **Android** — [offdesk.dev/apk](https://offdesk.dev/apk)의 APK. 항상 최신 앱
   빌드를 가리킵니다(유니버설 빌드는 `/apk/universal`). 최신 휴대폰이라면
   `arm64-v8a`, 잘 모르겠다면 `universal`을 받으세요. 사이드로드해 설치하며,
@@ -351,7 +351,7 @@ macOS에서는 실행 중인 노드가 기본적으로 시스템의 자동 유�
   터미널을 누가 열었는지 보여 주는 창(pane) 헤더, 나를 기다리는 터미널을
   알려 주는 상태 줄을 갖췄습니다. Mac에서는 Hub가 될 수 있고([설치](#설치)
   참고), Windows와 Linux에서는 클라이언트로서 Hub의 링크를 묻습니다.
-  `desktop-v*` 태그에서 빌드됩니다.
+  `v*` 태그에서 빌드되어 Hub와 함께 배포됩니다.
 
 직접 빌드하려면: [docs/building.md](docs/building.md).
 

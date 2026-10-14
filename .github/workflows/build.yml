@@ -1,39 +1,27 @@
 name: Build & Release
 
+# The CLI, the node agent and the hub, for Linux and macOS on x64 and arm64.
+# release.yml calls this for every vX.Y.Z release and the binaries go into
+# that release; dispatched by hand it builds them as run artifacts only.
+
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
+    inputs:
+      tag:
+        description: "The vX.Y.Z release tag to build and upload into (its draft release must exist)"
+        required: true
+        type: string
   workflow_dispatch:
 
 jobs:
-  create-release:
-    # Run once, before the matrix. Skipped on workflow_dispatch (no tag).
-    if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create release if missing
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${{ github.ref_name }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; skipping create."
-          else
-            gh release create "$tag" \
-              --title "offdesk ${tag}" \
-              --notes "The offdesk CLI, the offdesk-node machine agent, and the offdesk-hub server with the web UI baked in — linux and darwin, x64 and arm64. Install with: curl -fsSL https://offdesk.dev/install | sh"
-          fi
-
   web-bundle:
     # offdesk-hub bakes the web UI into the binary, and it is the same bundle
     # on every target — built once here rather than four times in the matrix.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
       - uses: pnpm/action-setup@v4
         with:
           version: 10.23.0
@@ -46,18 +34,14 @@ jobs:
       - run: cd packages/app && npx expo export --platform web
       # Metro's entry chunk keeps its filename while its contents change, so
       # without this a browser that cached one is pinned to an old chunk map.
-      - run: node scripts/stamp-build.mjs packages/app/dist "${{ github.ref_name }}"
+      - run: node scripts/stamp-build.mjs packages/app/dist "${{ inputs.tag || github.ref_name }}"
       - uses: actions/upload-artifact@v4
         with:
           name: web-bundle
           path: packages/app/dist
 
   build:
-    needs: [create-release, web-bundle]
-    # `needs` makes this implicitly skipped when create-release is skipped
-    # (i.e., workflow_dispatch with no tag). Re-enable with always() so the
-    # binaries still get uploaded as run artifacts in that mode.
-    if: always() && needs.web-bundle.result == 'success' && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    needs: web-bundle
     strategy:
       fail-fast: false
       matrix:
@@ -85,6 +69,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
 
       - uses: actions/download-artifact@v4
         with:
@@ -122,16 +108,17 @@ jobs:
             cp "target/${{ matrix.target }}/release/$name" "$name-${{ matrix.platform }}"
           done
 
-      - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload to the release
+        if: inputs.tag
         run: |
-          gh release upload ${{ github.ref_name }} \
+          gh release upload "$TAG" \
             offdesk-${{ matrix.platform }} \
             offdesk-node-${{ matrix.platform }} \
             offdesk-hub-${{ matrix.platform }} \
             --clobber
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

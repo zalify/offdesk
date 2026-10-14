@@ -1,9 +1,22 @@
 name: Desktop Build
 
+# The desktop app for macOS (universal), Windows and Linux. release.yml calls
+# this for every vX.Y.Z release, and tauri-action uploads the installers, the
+# updater bundles with their .sig files and latest.json into that release's
+# draft. Dispatched by hand it builds on the rc Web UI channel and keeps the
+# installers as run artifacts only.
+
 on:
-  push:
-    tags:
-      - "desktop-v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "The vX.Y.Z release tag to build and upload into"
+        required: true
+        type: string
+      release_id:
+        description: "The id of that tag's draft release"
+        required: true
+        type: string
   workflow_dispatch:
 
 permissions:
@@ -31,12 +44,14 @@ jobs:
     runs-on: ${{ matrix.platform }}
     env:
       # Baked in at compile time so the shell only loads Web UI bundles signed
-      # with this key. Tag releases follow the stable channel; manual builds rc.
+      # with this key. Releases follow the stable channel; manual builds rc.
       OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
-      OFFDESK_UI_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/') && 'stable' || 'rc' }}
+      OFFDESK_UI_CHANNEL: ${{ inputs.tag && 'stable' || 'rc' }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
 
       - name: Require the Web UI release public key
         shell: bash
@@ -132,6 +147,14 @@ jobs:
             echo "APPLE_API_KEY_PATH=$key"
           } >> "$GITHUB_ENV"
 
+      # With releaseId, tauri-action uploads into release.yml's draft instead
+      # of creating a release; tagName is still passed (literally — no
+      # __VERSION__ template applies with releaseId) because latest.json
+      # rewrites the draft's untagged-… download links to /download/<tag>/.
+      # Each matrix job merges its platforms into the latest.json already on
+      # the release, which tauri-action finds among the first 50 assets only
+      # (a release holds about 30). Without either input (a manual build) it
+      # uploads nothing.
       - name: Build desktop app
         uses: tauri-apps/tauri-action@v0
         env:
@@ -142,11 +165,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: packages/desktop
-          tagName: desktop-v__VERSION__
-          releaseName: "Desktop v__VERSION__"
+          releaseId: ${{ inputs.release_id }}
+          tagName: ${{ inputs.tag }}
+          # The notes in latest.json.
           releaseBody: "See the assets to download the desktop app for your platform."
-          releaseDraft: true
-          prerelease: false
           args: ${{ matrix.args }}
 
       - name: Verify macOS drag-to-install layout
@@ -155,3 +177,18 @@ jobs:
           for dmg in packages/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg; do
             scripts/verify-dmg-layout.sh "$dmg"
           done
+
+      - name: Keep the installers of a manual build
+        if: ${{ !inputs.tag }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          if-no-files-found: warn
+          path: |
+            packages/desktop/src-tauri/target/**/bundle/dmg/*.dmg
+            packages/desktop/src-tauri/target/**/bundle/macos/*.app.tar.gz
+            packages/desktop/src-tauri/target/**/bundle/msi/*.msi
+            packages/desktop/src-tauri/target/**/bundle/nsis/*.exe
+            packages/desktop/src-tauri/target/**/bundle/appimage/*.AppImage
+            packages/desktop/src-tauri/target/**/bundle/deb/*.deb
+            packages/desktop/src-tauri/target/**/bundle/rpm/*.rpm

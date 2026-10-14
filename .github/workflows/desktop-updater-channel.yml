@@ -1,37 +1,58 @@
 name: Desktop Updater Channel
 
-# Mirrors latest.json from a published desktop-v* release into the
-# floating "desktop-latest" prerelease so the in-app auto-updater
-# has a stable URL that is not affected by mobile/node releases.
+# Mirrors latest.json from a published release into the floating
+# "desktop-latest" prerelease. Installed desktop apps check
+# https://github.com/zalify/offdesk/releases/download/desktop-latest/latest.json
+# (the endpoint in every shipped app), so that pointer and its URL stay put
+# while the releases it points into change.
+#
+# release.yml calls this right after it publishes a vX.Y.Z release. Dispatch
+# it by hand only to retry that step for a published release.
 
 on:
-  release:
-    types: [released]
+  workflow_call:
+    inputs:
+      tag:
+        description: "Published release whose latest.json the desktop apps should follow"
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release whose latest.json the desktop apps should follow (vX.Y.Z)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 jobs:
   promote:
-    if: startsWith(github.event.release.tag_name, 'desktop-v')
     runs-on: ubuntu-22.04
     steps:
       - name: Mirror latest.json into updater channel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SOURCE_TAG: ${{ github.event.release.tag_name }}
+          SOURCE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
+          # A draft's links do not work for anyone else yet.
+          if [ "$(gh release view "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != false ]; then
+            echo "::error::$SOURCE_TAG is not a published release" >&2
+            exit 1
+          fi
           mkdir -p /tmp/latest
-          gh release download "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" -p latest.json -D /tmp/latest
+          gh release download "$SOURCE_TAG" --repo "$GITHUB_REPOSITORY" -p latest.json -D /tmp/latest --clobber
 
+          notes="Floating pointer for the desktop auto-updater. The actual installers live in the vX.Y.Z releases."
           if gh release view desktop-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload desktop-latest /tmp/latest/latest.json \
               --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit desktop-latest --repo "$GITHUB_REPOSITORY" --notes "$notes"
           else
             gh release create desktop-latest /tmp/latest/latest.json \
               --repo "$GITHUB_REPOSITORY" \
               --title "Desktop Updater Channel" \
-              --notes "Floating pointer for the desktop auto-updater. The actual installers live in the desktop-v* releases." \
+              --notes "$notes" \
               --prerelease
           fi

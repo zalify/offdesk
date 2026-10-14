@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Uploaded stable iOS release tag (ios-vX.Y.Z)"
+        description: "Release tag whose iOS build was uploaded (vX.Y.Z; ios-vX.Y.Z for builds before 0.23.0)"
         type: string
         required: true
       build_number:
@@ -51,9 +51,10 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
           BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
-          [[ "$RELEASE_TAG" =~ ^ios-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^(ios-)?v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$BUILD_NUMBER" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]
-          version="${RELEASE_TAG#ios-v}"
+          version="${RELEASE_TAG#ios-}"
+          version="${version#v}"
           gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fx "offdesk-${version}.ipa"
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
       - name: Check or apply TestFlight distribution

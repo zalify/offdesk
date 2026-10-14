@@ -1,7 +1,8 @@
 // What the hub says about versions (GET /api/version and
 // /api/machines/versions, hub 0.23+), for Settings › versions and the phone
-// panel on a node. Two numbering lines that are never compared: the desktop
-// app (0.9.x, lib/desktopUpdate.ts) and the hub, node and CLI (0.23.x, here).
+// panel on a node. The desktop app (lib/desktopUpdate.ts) and the hub, node
+// and CLI (here) are checked separately and never compared: before 0.23.0 they
+// had their own numbering, and an install can mix versions either way.
 
 import { useEffect, useSyncExternalStore } from "react";
 
