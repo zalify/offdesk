@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bundled-services"
+description = "Enables the bundled_services command without any pre-configured scope."
+commands.allow = ["bundled_services"]
+
+[[permission]]
+identifier = "deny-bundled-services"
+description = "Denies the bundled_services command without any pre-configured scope."
+commands.deny = ["bundled_services"]

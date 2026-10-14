@@ -1,5 +1,5 @@
-import { isSecureConnection } from "@/lib/secureTransport";
-import { useEffect, useState } from "react";
+import { isSecureConnection, savedHubs, secureConnectionStatus } from "@/lib/secureTransport";
+import { useEffect, useState, type ReactNode } from "react";
 import * as QRCode from "qrcode";
 import { QrImage } from "./QrImage";
 
@@ -7,14 +7,19 @@ import { getAuthProviders, mintLoginCode } from "@/lib/api";
 import { colors } from "@/lib/colors";
 import { desktopRole, isDesktopShell } from "@/lib/desktopHub";
 import { getServerUrl } from "@/lib/serverUrl";
+import { openSettings } from "@/lib/openSettings";
+import { hostOf, hubWarning, useVersions } from "@/lib/hubVersions";
 import { HubPhoneCode } from "./DesktopSetup.web";
+import { Button, fontDisplay, fontProse, TextButton } from "./Primitives.web";
 
 /**
  * Getting offdesk onto a phone: the hub's address as a QR code, and where to
  * get the app.
  *
  * Shown on the onboarding page — where someone setting up a hub actually is —
- * and in Settings, which is where they will look for it later.
+ * and in Settings, which is where they will look for it later. The desktop
+ * app on a client sends the phone to the hub instead (wireframe U03): only
+ * the hub makes encrypted pairing codes, and the browser code is the fallback.
  */
 export function MobileAppPanel() {
   // The desktop app on the machine that is the hub has the hub's own code,
@@ -97,11 +102,12 @@ export function MobileAppPanel() {
     };
   }, [shareUrl, encoded]);
 
-  if (isSecureConnection() && !isHub) return <p style={{ color: colors.foregroundMuted, fontSize: 13 }}>To pair another encrypted App, create a new pairing code on the Hub’s own screen.</p>;
   if (isHub === null) return null;
   if (isHub) return <HubPhoneCode />;
 
-  return (
+  // A browser on the phone, signed in by scanning: the whole panel in a
+  // browser, the fallback on a client's desktop app.
+  const browserCode = (
     <div>
       <div
         style={{ fontSize: 12, fontFamily: "var(--font-sans)", color: colors.fg3, marginBottom: 12 }}
@@ -219,6 +225,85 @@ export function MobileAppPanel() {
           </div>
         </div>
       </div>
+    </div>
+  );
+
+  if (isDesktopShell()) return <ClientPhonePanel browserCode={isSecureConnection() ? null : browserCode} />;
+  if (isSecureConnection()) return <p style={{ color: colors.foregroundMuted, fontSize: 13 }}>To pair another encrypted App, create a new pairing code on the Hub’s own screen.</p>;
+  return browserCode;
+}
+
+/** The desktop app on a client (wireframe U03): the phone pairs on the hub,
+ *  with a warning when that hub is behind, and the browser code demoted to
+ *  a fallback behind a button. */
+function ClientPhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
+  const versions = useVersions();
+  const [showBrowserCode, setShowBrowserCode] = useState(false);
+  const address = secureConnectionStatus()?.endpoint.hub_url || getServerUrl() || (typeof window === "undefined" ? "" : window.location.origin);
+  // An encrypted hub has the name it was saved under; otherwise its host.
+  const [hubName, setHubName] = useState(() => hostOf(address));
+  useEffect(() => {
+    const key = secureConnectionStatus()?.endpoint.public_key;
+    if (!key) return;
+    let cancelled = false;
+    savedHubs()
+      .then((hubs) => {
+        const name = hubs.find((hub) => hub.status.endpoint.public_key === key)?.name?.trim();
+        if (!cancelled && name) setHubName(name);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const warning = hubWarning(versions.hub, hubName);
+  const shownAddress = address.replace(/^[a-z]+:\/\//i, "").replace(/\/+$/, "");
+
+  return (
+    <div data-testid="client-phone-panel" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      <div style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+        This computer connects to the hub on {hubName}. Only the hub makes pairing codes.
+      </div>
+      <section aria-label="Pair on the hub" style={{ boxSizing: "border-box", padding: 24, display: "flex", flexWrap: "wrap", gap: "20px 32px", alignItems: "center", background: colors.bg1, border: `1px solid ${colors.line}`, borderRadius: 6 }}>
+        <div style={{ flex: "1 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
+          <span style={{ fontFamily: fontDisplay, fontSize: 16, fontWeight: 600, color: colors.fg0 }}>Pair your phone on {hubName}</span>
+          <ol style={{ margin: 0, padding: "0 0 0 20px", listStyle: "decimal", display: "flex", flexDirection: "column", gap: 8, fontFamily: fontProse, fontSize: 14, lineHeight: "21px", color: colors.fg1 }}>
+            <li>On {hubName}, open Offdesk DEV › settings › phone.</li>
+            <li>In the phone app, tap scan and point it at the encrypted code.</li>
+            <li>The app keeps its own interface and stays encrypted at home or away.</li>
+          </ol>
+        </div>
+        <div style={{ width: 220, maxWidth: "100%", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>
+          <div style={{ display: "flex", gap: 12 }}><span style={{ flex: 1 }}>hub</span><span style={{ color: colors.fg0, overflowWrap: "anywhere", textAlign: "right" }}>{hubName}</span></div>
+          <div style={{ display: "flex", gap: 12 }}><span style={{ flex: 1 }}>address</span><span style={{ color: colors.fg0, overflowWrap: "anywhere", textAlign: "right" }}>{shownAddress}</span></div>
+        </div>
+      </section>
+      {warning ? (
+        <div data-testid="client-phone-hub-behind" style={{ boxSizing: "border-box", padding: "14px 16px", display: "flex", gap: 12, alignItems: "center", background: colors.bg1, border: `1px solid ${colors.err}`, borderRadius: 6 }}>
+          <span aria-hidden="true" style={{ color: colors.err, fontFamily: fontDisplay, fontSize: 13, fontWeight: 600 }}>!</span>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+            <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg0 }}>{warning}</span>
+            <span style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+              Update {hubName} first, or the phone's browser code shows the hub's older interface.
+            </span>
+          </div>
+          <TextButton strong onClick={() => openSettings("Versions")}>versions ›</TextButton>
+        </div>
+      ) : null}
+      {browserCode ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px 24px", flexWrap: "wrap", padding: "12px 0", borderBottom: `1px solid ${colors.lineSoft}` }}>
+            <div style={{ flex: "1 1 240px", minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+              <span style={{ fontFamily: fontDisplay, fontSize: 14, color: colors.fg0 }}>phone browser without the app</span>
+              <span style={{ fontFamily: fontProse, fontSize: 12.5, color: colors.fg3 }}>A sign-in code for a browser. It shows the interface built into the hub.</span>
+            </div>
+            <Button size="sm" kind="secondary" onClick={() => setShowBrowserCode((shown) => !shown)}>
+              {showBrowserCode ? "hide browser code" : "show browser code"}
+            </Button>
+          </div>
+          {showBrowserCode ? browserCode : null}
+        </div>
+      ) : null}
     </div>
   );
 }

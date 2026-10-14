@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 const STORE_FILE: &str = "desktop.json";
-const HUB_PORT: u16 = 4317;
+pub(crate) const HUB_PORT: u16 = 4317;
 
 // ── The first-run answer ──────────────────────────────────────────
 
@@ -205,7 +205,7 @@ pub struct SetupStatus {
     pub error: Option<String>,
 }
 
-fn service_files(home: &Path) -> (PathBuf, PathBuf) {
+pub(crate) fn service_files(home: &Path) -> (PathBuf, PathBuf) {
     if cfg!(target_os = "macos") {
         let agents = home.join("Library").join("LaunchAgents");
         (

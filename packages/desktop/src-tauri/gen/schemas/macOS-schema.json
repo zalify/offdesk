@@ -555,6 +555,24 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the app_update_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-update-state",
+          "markdownDescription": "Enables the app_update_state command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the app_update_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-app-update-status",
+          "markdownDescription": "Enables the app_update_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the bundled_services command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-bundled-services",
+          "markdownDescription": "Enables the bundled_services command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_mobile_hub_url command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-mobile-hub-url",
@@ -763,6 +781,24 @@
           "type": "string",
           "const": "allow-ui-status",
           "markdownDescription": "Enables the ui_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_update_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-update-state",
+          "markdownDescription": "Denies the app_update_state command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the app_update_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-app-update-status",
+          "markdownDescription": "Denies the app_update_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the bundled_services command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-bundled-services",
+          "markdownDescription": "Denies the bundled_services command without any pre-configured scope."
         },
         {
           "description": "Denies the clear_mobile_hub_url command without any pre-configured scope.",

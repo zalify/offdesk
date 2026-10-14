@@ -10,11 +10,15 @@ import { useMobileHubSwitch } from "@/lib/useMobileHubSwitch";
 import { FollowSystem, ThemeGrid } from "./ThemePicker";
 import { MobileAppPanel } from "./MobileAppPanel.web";
 import { ThisMachineSection } from "./DesktopSetup.web";
-import { UpdateNotification } from "./UpdateNotification";
+import { VersionsPanel } from "./VersionsPanel";
 import { AndroidUpdateNotification } from "./AndroidUpdateNotification";
 import { useAuth } from "@/lib/auth";
 import { isTauri, isTauriMobile } from "@/lib/platform";
 import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
+import { useDesktopUpdate } from "@/lib/desktopUpdate";
+import { useBundledServices } from "@/lib/bundledServices";
+import { subscribeOpenSettings, takeRequestedSection } from "@/lib/openSettings";
+import { hostOf, partsBehind, useVersions } from "@/lib/hubVersions";
 import {
   getSettings,
   updateSettings,
@@ -197,11 +201,13 @@ export function sectionId(title: string): string {
   return `settings-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
+/** `behind`: parts behind, which the nav shows beside the title ("2 ↑"). */
+function SectionTitle({ children, behind }: { children: React.ReactNode; behind?: number }) {
   const title = typeof children === "string" ? children : "";
   return (
     <h2
       id={title ? sectionId(title) : undefined}
+      data-nav-behind={behind || undefined}
       style={{
         fontFamily: "var(--font-display)",
         fontSize: 20,
@@ -673,20 +679,49 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   }, []);
 
   const wideSettings = useMinWidth(900);
-  // The sections the nav lists, in page order, as their titles read.
-  const [navSections, setNavSections] = useState<string[]>([]);
+  // The sections the nav lists, in page order, as their titles read, with
+  // any count a section shows there.
+  const [navSections, setNavSections] = useState<NavSection[]>([]);
   useEffect(() => {
     const root = contentRef.current;
     if (!root) return;
     const read = () => {
-      const titles = Array.from(root.querySelectorAll<HTMLHeadingElement>("h2[id^='settings-']"), (h) => h.textContent ?? "").filter(Boolean);
-      setNavSections((previous) => (previous.join("|") === titles.join("|") ? previous : titles));
+      const sections = Array.from(root.querySelectorAll<HTMLHeadingElement>("h2[id^='settings-']"), (h) => ({ title: h.textContent ?? "", behind: Number(h.dataset.navBehind) || 0 })).filter((section) => section.title);
+      const key = (list: NavSection[]) => list.map((section) => `${section.title}:${section.behind}`).join("|");
+      setNavSections((previous) => (key(previous) === key(sections) ? previous : sections));
     };
     read();
     const observer = new MutationObserver(read);
-    observer.observe(root, { childList: true, subtree: true });
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-nav-behind"] });
     return () => observer.disconnect();
   }, []);
+
+  // Opened for one section (the update card's "what's new", the phone
+  // panel's "versions ›"): scroll to it once it has rendered.
+  useEffect(() => {
+    const reveal = (section: string | null) => {
+      if (!section) return;
+      let tries = 0;
+      const attempt = () => {
+        const heading = document.getElementById(sectionId(section));
+        if (heading) heading.scrollIntoView({ block: "start" });
+        else if (++tries < 20) setTimeout(attempt, 50);
+      };
+      attempt();
+    };
+    reveal(takeRequestedSection());
+    return subscribeOpenSettings((section) => {
+      takeRequestedSection();
+      reveal(section);
+    });
+  }, []);
+
+  // Settings › versions: how many parts are behind, for the nav.
+  const versions = useVersions();
+  const desktopUpdate = useDesktopUpdate();
+  const services = useBundledServices();
+  const behind = partsBehind(desktopUpdate.available, versions.hub, versions.nodes, services?.bundled ? services : null);
+  const hubAddress = hostOf(secureStatus?.endpoint.hub_url || getServerUrl() || (typeof window === "undefined" ? "" : window.location.origin));
 
   const inputStyle: React.CSSProperties = {
     background: colors.bg1,
@@ -1322,6 +1357,14 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           )}
         </section>
 
+        {/* Versions: the app, the hub, its interface and its nodes */}
+        {!isTauriMobile() && (
+          <section style={{ marginBottom: 32 }}>
+            <SectionTitle behind={behind}>Versions</SectionTitle>
+            <VersionsPanel hubAddress={hubAddress} />
+          </section>
+        )}
+
         {/* About Section */}
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>About</SectionTitle>
@@ -1339,7 +1382,6 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               <div>Shell version: {shellVersion ?? "loading…"}</div>
             )}
           </div>
-          <UpdateNotification inline />
           <AndroidUpdateNotification inline />
           <UiUpdateNotification inline />
         </section>
@@ -1365,19 +1407,25 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 /** D09's left column: ~ $ settings, the title, and the sections as lowercase
  *  links that scroll to them; the one in view is lime. On narrow windows
  *  only the title shows. */
+interface NavSection {
+  title: string;
+  /** Parts behind, shown as "2 ↑" (versions). */
+  behind: number;
+}
+
 function SettingsNav({ wide, sections, scroller }: {
   wide: boolean;
-  sections: string[];
+  sections: NavSection[];
   scroller: React.RefObject<HTMLDivElement | null>;
 }) {
-  const [current, setCurrent] = useState(sections[0] ?? "");
+  const [current, setCurrent] = useState(sections[0]?.title ?? "");
   useEffect(() => {
     const root = scroller.current;
     if (!root || !wide) return;
     const update = () => {
       const top = root.getBoundingClientRect().top + 48;
-      let active = sections[0] ?? "";
-      for (const title of sections) {
+      let active = sections[0]?.title ?? "";
+      for (const { title } of sections) {
         const el = document.getElementById(sectionId(title));
         if (el && el.getBoundingClientRect().top <= top) active = title;
       }
@@ -1398,8 +1446,9 @@ function SettingsNav({ wide, sections, scroller }: {
         <span aria-hidden="true" style={{ color: colors.accent }}>~</span> $ settings
       </div>
       <h1 style={{ margin: "0 12px 16px", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em", color: colors.fg0 }}>Settings</h1>
-      {wide && sections.map((title) => (
+      {wide && sections.map(({ title, behind }) => (
         <button
+          aria-label={behind ? `${title}, ${behind} behind` : undefined}
           key={title}
           type="button"
           aria-current={title === current ? "true" : undefined}
@@ -1419,9 +1468,12 @@ function SettingsNav({ wide, sections, scroller }: {
             fontWeight: title === current ? 600 : 400,
             textTransform: "lowercase",
             cursor: "pointer",
+            display: "flex",
+            gap: 8,
           }}
         >
-          {title}
+          <span style={{ flex: 1 }}>{title}</span>
+          {behind ? <span aria-hidden="true" style={{ color: title === current ? colors.onPrimary : colors.err }}>{behind} ↑</span> : null}
         </button>
       ))}
     </nav>

@@ -3,7 +3,9 @@
 // option and "open" to go to it; workspace messages (a refused split, a
 // saved download) take this slot for a few seconds. Right: machine, how many
 // are connected, round trip, the ⌃B prefix when armed, and who has the
-// keyboard — "in control" on lime, or "take control" while watching.
+// keyboard — "in control" on lime, or "take control" while watching. When
+// the desktop app has an update, `↑ update 0.9.1` sits before the machine and
+// opens the update card.
 
 import { useEffect, useRef, useState } from "react";
 import type { MachineInfo, TerminalInfo } from "@offdesk/shared";
@@ -13,6 +15,7 @@ import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { subscribeWorkspaceMessages, type WorkspaceMessage } from "@/lib/workspaceToast";
 import { subscribePaneSizeNotice, type PaneSizeNotice } from "@/lib/paneSizeNotice";
+import { openUpdateCard, useDesktopUpdate } from "@/lib/desktopUpdate";
 import { StatusBadge, StatusEnd, StatusLine } from "./Primitives.web";
 
 export function WorkspaceStatusLine({
@@ -53,6 +56,7 @@ export function WorkspaceStatusLine({
   browserWaiting?: { label: string; reason: string; open: () => void } | null;
 }) {
   const message = useWorkspaceMessage();
+  const update = useDesktopUpdate();
   const sizeNotice = usePaneSizeNotice();
   const waiting = terminals.filter(
     (t) => t.reachable && t.attention === "confirmation" && machines.some((m) => m.id === t.machine_id),
@@ -169,6 +173,17 @@ export function WorkspaceStatusLine({
         <span data-testid="prefix-armed-indicator" className="odk-status-muted" style={{ color: "rgb(var(--color-accent))" }}>
           ⌃B
         </span>
+      ) : null}
+      {update.available ? (
+        <button
+          type="button"
+          className="odk-status-btn"
+          data-testid="status-update"
+          style={{ color: "rgb(var(--color-accent))" }}
+          onClick={openUpdateCard}
+        >
+          ↑ update {update.available}
+        </button>
       ) : null}
       <span className="odk-status-muted" data-testid="tab-bar-rtt">{where.join(" · ")}</span>
       {viewOnlyLocked ? (
