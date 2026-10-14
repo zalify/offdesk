@@ -183,7 +183,7 @@ impl PtyManager {
         );
         let status = new_session_cmd(&tmux_args)
             .status()
-            .map_err(|e| format!("Failed to run tmux: {}", e))?;
+            .map_err(|e| tmux_run_error("tmux", &e))?;
 
         if !status.success() {
             return Err(format!("tmux new-session failed (exit {})", status));
@@ -303,7 +303,7 @@ impl PtyManager {
                 let status = tmux_cmd()
                     .args(["-L", tmux_socket(), "send-keys", "-l", "-t", &name, first])
                     .status()
-                    .map_err(|e| format!("Failed to run tmux send-keys: {}", e))?;
+                    .map_err(|e| tmux_run_error("tmux send-keys", &e))?;
                 if !status.success() {
                     return Err(format!("tmux send-keys failed (exit {})", status));
                 }
@@ -685,6 +685,18 @@ fn tmux_base_args() -> Vec<String> {
         args.push(config.to_string_lossy().into_owned());
     }
     args
+}
+
+/// Why tmux could not be started. "No such file or directory" alone reads like
+/// a missing working directory; when the binary is what's missing, say so and
+/// show the PATH the node searched — a launchd service has its own, and an
+/// app that moved can take the bundled tmux with it.
+fn tmux_run_error(what: &str, error: &std::io::Error) -> String {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        let path = std::env::var("PATH").unwrap_or_default();
+        return format!("tmux not found on this node's PATH ({path}). Install tmux, or update Offdesk so the node finds the one it ships with");
+    }
+    format!("Failed to run {what}: {error}")
 }
 
 /// Create a tmux Command with TERM set and our config file.
@@ -1584,5 +1596,14 @@ mod tests {
                 ""
             ]
         );
+    }
+
+    #[test]
+    fn a_missing_tmux_names_the_path_it_was_looked_up_on() {
+        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let message = tmux_run_error("tmux", &missing);
+        assert!(message.starts_with("tmux not found on this node's PATH ("), "{message}");
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(tmux_run_error("tmux send-keys", &denied).starts_with("Failed to run tmux send-keys: "));
     }
 }
