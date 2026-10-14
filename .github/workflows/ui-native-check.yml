@@ -159,8 +159,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      FIXTURES: ${{ runner.temp }}/offdesk-ui-fixtures
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -179,8 +177,10 @@ jobs:
       - run: pnpm build
       - name: Prepare ephemeral signed UI fixtures
         run: |
+          FIXTURES="$RUNNER_TEMP/offdesk-ui-fixtures"
           node scripts/stamp-build.mjs packages/app/dist ui-smoke-base
           node scripts/ui-updates/prepare-smoke.mjs packages/app/dist "$FIXTURES"
+          echo "FIXTURES=$FIXTURES" >> "$GITHUB_ENV"
           echo "OFFDESK_UI_PUBLIC_KEY=$(cat "$FIXTURES/public-key.txt")" >> "$GITHUB_ENV"
           echo 'OFFDESK_UI_CHANNEL=rc' >> "$GITHUB_ENV"
       - name: Build isolated Windows test app
