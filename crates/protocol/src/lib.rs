@@ -1013,6 +1013,10 @@ pub enum MachineToHub {
         /// it; old machines omit it and deserialize fine on new hubs.
         #[serde(default)]
         capabilities: Vec<String>,
+        /// The node's own version (`offdesk-node --version`), so the hub can
+        /// show which machines are behind. Absent from nodes before 0.23.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
     },
     #[serde(rename = "terminal_created")]
     TerminalCreated {

@@ -170,6 +170,8 @@ struct MachineConnection {
     pub capabilities: Vec<String>,
     /// Agent browsers (tabs of the node's headless Chromium), by id.
     pub agent_browsers: HashMap<String, AgentBrowserInfo>,
+    /// The node's version from its Register; None for nodes before 0.23.
+    pub version: Option<String>,
 }
 
 pub struct MachineManager {
@@ -320,6 +322,7 @@ impl MachineManager {
             latest_stats: None,
             capabilities,
             agent_browsers: HashMap::new(),
+            version: None,
         };
 
         {
@@ -584,6 +587,24 @@ impl MachineManager {
             .values()
             .filter(|conn| connection_visible_to(conn, user_id))
             .map(|conn| conn.info.clone())
+            .collect()
+    }
+
+    /// Record the version a node reported when it registered.
+    pub async fn set_machine_version(&self, machine_id: &str, version: Option<String>) {
+        if let Some(conn) = self.machines.lock().await.get_mut(machine_id) {
+            conn.version = version;
+        }
+    }
+
+    /// The user's online machines with the version each node reported.
+    pub async fn machine_versions_for_user(&self, user_id: &str) -> Vec<(MachineInfo, Option<String>)> {
+        self.machines
+            .lock()
+            .await
+            .values()
+            .filter(|conn| connection_visible_to(conn, user_id))
+            .map(|conn| (conn.info.clone(), conn.version.clone()))
             .collect()
     }
 
