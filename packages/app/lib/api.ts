@@ -121,24 +121,6 @@ export const listMachines = () =>
   request<MachineInfo[]>("GET", "/api/machines");
 export const deleteMachine = (machineId: string) =>
   request<void>("DELETE", `/api/machines/${machineId}`);
-// Versions (hub 0.23+). Older hubs answer 404/405; see lib/versions.ts.
-export interface HubVersion {
-  /** This hub, and the interface built into it. */
-  hub: string;
-  /** The newest hub/node/CLI release, once the hub has looked it up. */
-  latest: string | null;
-  update_available: boolean;
-}
-export interface MachineVersion {
-  id: string;
-  name: string;
-  /** null: a node from before 0.23, which doesn't say. */
-  version: string | null;
-  update_available: boolean;
-}
-export const getHubVersion = () => request<HubVersion>("GET", "/api/version");
-export const getMachineVersions = () =>
-  request<MachineVersion[]>("GET", "/api/machines/versions");
 export const getBootstrap = () =>
   request<BrowserStateSnapshot>("GET", "/api/bootstrap");
 export const putFocus = (terminalId: string, machineId: string) =>

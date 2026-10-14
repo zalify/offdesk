@@ -5,7 +5,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 
-import { ApiError, getHubVersion, getMachineVersions, type HubVersion, type MachineVersion } from "./api";
+import { ApiError, getHubVersion, getMachineVersions, type HubVersionInfo as HubVersion, type MachineVersionInfo as MachineVersion } from "./api";
 
 /** A hub before 0.23 has no version endpoints: that is an answer — it is
  *  older than 0.23 — never an error that breaks a screen. */
