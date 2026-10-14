@@ -47,6 +47,30 @@ class ReleasePolicyTest {
     }
 
     @Test
+    fun readsTheOneReleasePerVersionAndItsTransitionalCopy() {
+        val unified = { version: String ->
+            val tag = "v$version"
+            release(version, "arm64-v8a").also { json ->
+                json.put("tag_name", tag)
+                val asset = json.getJSONArray("assets").getJSONObject(0)
+                asset.put(
+                    "browser_download_url",
+                    "https://github.com/zalify/offdesk/releases/download/$tag/${asset.getString("name")}",
+                )
+            }
+        }
+        val picked = select(release("0.23.0", "arm64-v8a"), unified("0.23.0"), unified("0.24.0"))
+        assertEquals("0.24.0", picked?.version)
+        assertEquals(
+            "https://github.com/zalify/offdesk/releases/download/v0.24.0/offdesk-0.24.0-arm64-v8a.apk",
+            picked?.url,
+        )
+        // Web UI channels and older platform tags are not Android releases.
+        assertNull(select(unified("0.30.0").put("tag_name", "ui-stable")))
+        assertNull(select(unified("0.30.0").put("tag_name", "ios-v0.30.0")))
+    }
+
+    @Test
     fun skipsDraftPrereleaseCurrentAndDowngrade() {
         assertNull(
             select(

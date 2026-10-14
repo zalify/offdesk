@@ -61,20 +61,24 @@ new features; this updater does not perform Hub or Node upgrades.
 
 The `Publish Web UI` workflow performs checks, runs container Chromium regression,
 builds the frontend, stamps asset references, signs the exact manifest payload,
-uploads immutable `ui-<version>` release assets, then replaces the selected
-channel's `latest.json`. Only the UI workflow needs `OFFDESK_UI_SIGNING_KEY`
+then publishes to the channel's one GitHub release (`ui-stable` or `ui-rc`):
+first `bundle-<version>.json` and `manifest-<version>.json` (that bundle's
+signed manifest, a rollback target), then it replaces `latest.json`, the
+pointer the apps read. It keeps the ten newest bundles and never removes the
+one the pointer names. Bundle names are never reused, and the signed sha256
+pins the bytes. (Before 0.23.0 each bundle had its own `ui-<version>` release.) Only the UI workflow needs `OFFDESK_UI_SIGNING_KEY`
 (Ed25519 PKCS#8 PEM). It verifies that the key matches `OFFDESK_UI_PUBLIC_KEY`
 before publishing. The root private-key backup must remain outside the repo.
 
 The initial native migration build is necessary once. After that, use the UI
 workflow for compatible frontend-only changes. Its workflow is manual; it does
 not publish unreviewed pull requests automatically. RC and stable manifests are
-separate, and clients reject a different channel. GitHub prerelease flags keep
-these assets out of existing stable APK/App update discovery.
+separate, and clients reject a different channel. The channel releases are
+prereleases, so app update checks and download links skip them.
 
 Downloading a channel pointer during replacement may briefly fail; clients keep
-the current UI and can retry. Immutable releases are uploaded first, so a pointer
-never intentionally targets an incomplete upload. No terminal content, pairing
+the current UI and can retry. The bundle is uploaded before the pointer moves,
+so a pointer never intentionally targets an incomplete upload. No terminal content, pairing
 credentials or Hub request goes to the release service.
 
 ## Rollback and key rotation
@@ -83,7 +87,9 @@ Local startup recovery uses a previously verified version and retains the
 highest accepted sequence, so a failed release is not downloaded repeatedly.
 A channel rollback must be a newly signed manifest with a **higher sequence**
 that targets a compatible known-good bundle. Re-uploading an older `latest.json`
-will be ignored. Use the rollback manifest helper; retain immutable old bundles.
+will be ignored. Use the rollback manifest helper with a retained
+`manifest-<version>.json` as the known-good input, and upload its output as the
+channel's `latest.json`.
 
 The first implementation accepts one public key per shell. Rotate it through a
 native shell release and a coordinated new channel manifest; do not replace the

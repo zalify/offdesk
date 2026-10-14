@@ -59,14 +59,32 @@ jobs:
           node scripts/ui-updates/package.mjs packages/app/dist ui-release "$version" "$sequence" "$UI_CHANNEL" > ui-release-meta.json
           node --input-type=module -e 'import fs from "node:fs"; const m=JSON.parse(fs.readFileSync("ui-release-meta.json")); if (!process.env.EXPECTED_KEY || m.publicKey !== process.env.EXPECTED_KEY) throw new Error("UI signing key does not match the shell key");'
           echo "UI_VERSION=$version" >> "$GITHUB_ENV"
-      - name: Publish immutable release then channel pointer
+      # Each channel is one release (ui-stable, ui-rc) that holds its bundles,
+      # each bundle's signed manifest (for rollback), and latest.json, the
+      # pointer the apps read. The bundle goes up before the pointer moves.
+      - name: Publish the bundle, then move the channel pointer
         if: github.event_name == 'workflow_dispatch'
         run: |
-          gh release create "ui-$UI_VERSION" ui-release/bundle.json ui-release/latest.json \
-            --target "$GITHUB_SHA" --prerelease --latest=false --title "Web UI $UI_VERSION" \
-            --notes "Signed Web UI for compatible shells. This release does not replace APKs, desktop apps, Hub or Node binaries."
-          if ! gh release view "ui-$UI_CHANNEL" >/dev/null 2>&1; then
-            gh release create "ui-$UI_CHANNEL" --target "$GITHUB_SHA" --prerelease --latest=false \
-              --title "Web UI $UI_CHANNEL channel" --notes "Signed channel manifest. Immutable UI releases are retained separately."
+          release="ui-$UI_CHANNEL"
+          if ! gh release view "$release" >/dev/null 2>&1; then
+            gh release create "$release" --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "Web UI $UI_CHANNEL channel" \
+              --notes "Signed Web UI bundles for the apps' $UI_CHANNEL channel, and latest.json, the manifest they follow. Not an app release: the apps update their interface from here on their own."
           fi
-          gh release upload "ui-$UI_CHANNEL" ui-release/latest.json --clobber
+          cp ui-release/bundle.json "ui-release/bundle-$UI_VERSION.json"
+          cp ui-release/latest.json "ui-release/manifest-$UI_VERSION.json"
+          gh release upload "$release" "ui-release/bundle-$UI_VERSION.json" "ui-release/manifest-$UI_VERSION.json"
+          gh release upload "$release" ui-release/latest.json --clobber
+      # Keep the ten newest bundles (rollback targets) and never the one the
+      # pointer names; older bundles and their manifests are removed.
+      - name: Prune old bundles
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          release="ui-$UI_CHANNEL"
+          gh release view "$release" --json assets --jq '.assets | map(select(.name | startswith("bundle-"))) | sort_by(.createdAt) | reverse | .[10:] | .[].name' |
+            while read -r bundle; do
+              [ "$bundle" = "bundle-$UI_VERSION.json" ] && continue
+              version="${bundle#bundle-}"; version="${version%.json}"
+              gh release delete-asset "$release" "$bundle" --yes
+              gh release delete-asset "$release" "manifest-$version.json" --yes || true
+            done

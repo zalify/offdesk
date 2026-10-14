@@ -20,6 +20,8 @@ test('signed release matches exact asset bytes and injects runtime version',()=>
     assert(verify(null,Buffer.from(envelope.payload),publicKey,Buffer.from(envelope.signature,'base64')));
     const bytes=fs.readFileSync(path.join(output,'bundle.json')), manifest=JSON.parse(envelope.payload), bundle=JSON.parse(bytes);
     assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));assert.equal(manifest.size,bytes.length);
+    // Every bundle of a channel lives in that channel's one release, under its own name.
+    assert.equal(manifest.url,'https://github.com/zalify/offdesk/releases/download/ui-rc/bundle-rc-1.json');
     assert.match(Buffer.from(bundle.files['index.html'],'base64').toString(),/__OFFDESK_UI_VERSION__="rc-1"/);
     assert.equal(bundle.files['entry.js.map'],undefined);
     const old=path.join(root,'old.json');fs.copyFileSync(path.join(output,'latest.json'),old);

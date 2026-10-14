@@ -25,6 +25,13 @@ describe("iOS update source", () => {
     expect(newestIosVersion({ message: "API rate limit exceeded" }, NOW)).toBeNull();
     expect(newestIosVersion([], NOW)).toBeNull();
   });
+  it("reads the one release per version, but only when it carries the .ipa", () => {
+    const unified = { tag_name: "v0.23.0", draft: false, prerelease: false, published_at: old,
+      assets: [{ name: "offdesk-hub-linux-x64" }, { name: "offdesk-0.23.0.ipa" }] };
+    expect(newestIosVersion([...releases, unified], NOW)).toBe("0.23.0");
+    // v0.22.0 above is a Hub-only release: no .ipa, so not an iOS build.
+    expect(newestIosVersion([{ ...unified, assets: [{ name: "offdesk-hub-linux-x64" }] }], NOW)).toBeNull();
+  });
   it("waits a day after a release, for TestFlight review to catch up", () => {
     const fresh = { tag_name: "ios-v0.9.1", draft: false, prerelease: false, published_at: new Date(NOW - 60_000).toISOString() };
     expect(newestIosVersion([...releases, fresh], NOW)).toBe("0.9.0");

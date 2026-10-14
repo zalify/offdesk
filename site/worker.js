@@ -1,8 +1,9 @@
 // offdesk.dev on Workers: the static site from ./dist, plus a few dynamic
-// paths that follow a tag prefix to its newest release. GitHub's
-// /releases/latest is the newest release of anything — the hub and CLI ship
-// far more often than the apps, so that page is never the APK or the dmg.
-// Nothing static can follow a tag prefix, so these resolve at request time.
+// paths that follow the newest release carrying a file. From 0.23.0 every
+// release is one `vX.Y.Z` with every component; before that the apps had
+// their own `app-v*` and `desktop-v*` releases and `v*` was the Hub alone, so
+// a release only counts when it has the file asked for. Nothing static can
+// follow that, so these resolve at request time.
 //
 //   /apk            the arm64-v8a build, right for every phone made this decade
 //   /apk/universal  every ABI in one file, for the unsure
@@ -14,8 +15,11 @@
 //   /desktop        the desktop release page, every file and the notes
 
 const REPO = "zalify/offdesk";
-const APP_TAG = /^app-v(\d+)\.(\d+)\.(\d+)$/;
-const DESKTOP_TAG = /^desktop-v(\d+)\.(\d+)\.(\d+)$/;
+const APP_TAG = /^(?:app-)?v(\d+)\.(\d+)\.(\d+)$/;
+const DESKTOP_TAG = /^(?:desktop-)?v(\d+)\.(\d+)\.(\d+)$/;
+const hasAsset = (release, test) => (release.assets ?? []).some((asset) => test(asset.name ?? ""));
+const isApk = (name) => name.endsWith(".apk");
+const isDesktop = (name) => Object.values(DESKTOP_FILES).some((wanted) => wanted(name));
 const ABIS = new Set(["arm64-v8a", "universal", "x86_64"]);
 const DESKTOP_FILES = {
   mac: (name) => name.endsWith("_universal.dmg"),
@@ -23,29 +27,32 @@ const DESKTOP_FILES = {
   linux: (name) => name.endsWith(".AppImage"),
 };
 
-/** The newest release whose tag matches, in a GitHub releases listing, or null. */
-function newestRelease(releases, tag) {
+/** The newest release whose tag matches and that carries a wanted file, in a
+ * GitHub releases listing, or null. At the same version the one release
+ * (`vX.Y.Z`) wins over a transitional copy (`app-vX.Y.Z`). */
+function newestRelease(releases, tag, carries) {
   let best = null;
   for (const release of releases) {
     if (release.draft || release.prerelease) continue;
     const match = tag.exec(release.tag_name ?? "");
-    if (!match) continue;
+    if (!match || !hasAsset(release, carries)) continue;
     const version = match.slice(1).map(Number);
-    if (!best || compare(version, best.version) > 0) {
+    const order = best ? compare(version, best.version) : 1;
+    if (order > 0 || (order === 0 && release.tag_name.startsWith("v"))) {
       best = { version, release };
     }
   }
   return best?.release ?? null;
 }
 
-/** The newest app-v* release, or null. */
+/** The newest release with APKs, or null. */
 export function newestAppRelease(releases) {
-  return newestRelease(releases, APP_TAG);
+  return newestRelease(releases, APP_TAG, isApk);
 }
 
-/** The newest desktop-v* release, or null. */
+/** The newest release with the desktop installers, or null. */
 export function newestDesktopRelease(releases) {
-  return newestRelease(releases, DESKTOP_TAG);
+  return newestRelease(releases, DESKTOP_TAG, isDesktop);
 }
 
 function compare(a, b) {

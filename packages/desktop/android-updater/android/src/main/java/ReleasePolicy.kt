@@ -9,7 +9,11 @@ internal data class Release(
     val digest: String,
 )
 
-/** This feed also contains desktop, iOS and Hub releases. Never use /latest. */
+/**
+ * Releases are `vX.Y.Z` (every component, from 0.23.0) or, before that and as a
+ * transitional copy, `app-vX.Y.Z`. The feed also holds older desktop-v/ios-v
+ * releases and Web UI channels. Never use /latest.
+ */
 internal object ReleasePolicy {
     private fun parts(version: String): List<Int>? {
         if (!Regex("[0-9]+\\.[0-9]+\\.[0-9]+").matches(version)) return null
@@ -29,8 +33,12 @@ internal object ReleasePolicy {
             val release = releases.getJSONObject(i)
             if (release.optBoolean("draft") || release.optBoolean("prerelease")) continue
             val tag = release.optString("tag_name")
-            if (!tag.startsWith("app-v")) continue
-            val version = tag.removePrefix("app-v")
+            val version =
+                when {
+                    tag.startsWith("app-v") -> tag.removePrefix("app-v")
+                    tag.startsWith("v") -> tag.removePrefix("v")
+                    else -> continue
+                }
             if (parts(version) == null || compare(version, current) <= 0) continue
             val assets = release.optJSONArray("assets") ?: continue
             val names =
