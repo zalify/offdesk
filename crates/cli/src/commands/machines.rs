@@ -31,6 +31,8 @@ pub async fn run(client: &HubClient, json: bool, all: bool) -> Result<(), CliErr
         machines.iter().map(|machine| machine.id.clone()).collect()
     };
 
+    // Optional: a hub before 0.23 has no versions to give.
+    let versions = client.machine_versions().await.ok().flatten();
     let terminals = client.terminals().await?;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for terminal in &terminals {
@@ -46,8 +48,8 @@ pub async fn run(client: &HubClient, json: bool, all: bool) -> Result<(), CliErr
         return Ok(());
     }
     super::out_line(&format!(
-        "{:<10} {:<24} {:>5} {:<8}",
-        "ID", "NAME", "TERMS", "STATUS"
+        "{:<10} {:<24} {:>5} {:<8} {}",
+        "ID", "NAME", "TERMS", "STATUS", "NODE"
     ));
     for machine in &machines {
         let count = counts.get(machine.id.as_str()).copied().unwrap_or(0);
@@ -57,11 +59,12 @@ pub async fn run(client: &HubClient, json: bool, all: bool) -> Result<(), CliErr
             "offline"
         };
         super::out_line(&format!(
-            "{:<10} {:<24} {:>5} {:<8}",
+            "{:<10} {:<24} {:>5} {:<8} {}",
             short_id(&machine.id),
             machine.name,
             count,
-            status
+            status,
+            super::version::node_label(versions.as_deref(), &machine.id)
         ));
     }
     Ok(())

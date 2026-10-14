@@ -10,6 +10,7 @@ pub mod open;
 pub mod read;
 pub mod read_all;
 pub mod send;
+pub mod version;
 pub mod wait;
 
 use std::collections::{HashMap, HashSet};

@@ -122,6 +122,27 @@ impl HubClient {
         self.get("/machines?include_offline=true").await
     }
 
+    /// GET that treats 404 and 405 as "this hub is too old to have it" (an
+    /// older hub routes `/machines/versions` to `/machines/{id}`, which has
+    /// no GET).
+    async fn get_optional<T: DeserializeOwned>(&self, path: &str) -> Result<Option<T>, CliError> {
+        let response = self.http.get(self.url(path)).send().await.map_err(network_error)?;
+        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) {
+            return Ok(None);
+        }
+        parse_json(response).await.map(Some)
+    }
+
+    /// The hub's version and the newest release; None from hubs before 0.23.
+    pub async fn hub_version(&self) -> Result<Option<crate::commands::version::HubVersion>, CliError> {
+        self.get_optional("/version").await
+    }
+
+    /// Each online node's version; None from hubs before 0.23.
+    pub async fn machine_versions(&self) -> Result<Option<Vec<crate::commands::version::MachineVersion>>, CliError> {
+        self.get_optional("/machines/versions").await
+    }
+
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, CliError> {
         self.get("/terminals").await
     }
