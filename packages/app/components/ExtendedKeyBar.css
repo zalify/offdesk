@@ -1,15 +1,14 @@
 .offdesk-keybar{box-sizing:border-box;padding:4px 6px;background:rgb(var(--color-bg-1));border-top:1px solid rgb(var(--color-line-soft));flex-shrink:0;min-width:0;color:rgb(var(--color-fg-0))}
-.offdesk-keybar-row{display:flex;align-items:center;gap:6px;min-width:0;height:44px}
+.offdesk-keybar-row{display:flex;align-items:center;gap:var(--key-gap);min-width:0;height:44px}
 /* The configurable first-row keys scroll if a narrow phone cannot fit them;
-   the arrows and [enter] never move. */
-.offdesk-keybar-primary{display:flex;gap:6px;min-width:0;overflow-x:auto;scrollbar-width:none;touch-action:pan-x}
+   the arrows and enter never move. */
+.offdesk-keybar-primary{display:flex;flex:1;gap:var(--key-gap);min-width:0;overflow-x:auto;scrollbar-width:none;touch-action:pan-x}
 .offdesk-keybar-primary::-webkit-scrollbar{display:none}
-.offdesk-keybar-spacer{flex:1;min-width:0}
-/* Keys size to their label (wireframe P04): the visible key is 36px tall,
-   padding 0 10px, drawn inside a 44px-tall hit area. Arrows are 36px squares. */
-.offdesk-keybar .offdesk-terminal-key{box-sizing:border-box;display:flex;align-items:center;justify-content:center;flex:0 0 auto;min-width:36px;height:44px;margin:0;padding:0 10px;border:0;border-radius:3px;background:transparent;color:inherit;font-family:var(--font-display);font-size:12px;font-weight:500;white-space:nowrap;user-select:none;-webkit-user-select:none;cursor:pointer;position:relative;isolation:isolate}
+/* Every key is one column of a grid (--key-width, set from the bar's width),
+   so both rows line up. The visible key is 36px tall inside a 44px-tall hit
+   area; on the narrowest phones the label shrinks to fit six characters. */
+.offdesk-keybar .offdesk-terminal-key{box-sizing:border-box;display:flex;align-items:center;justify-content:center;flex:0 0 var(--key-width);width:var(--key-width);min-width:0;height:44px;margin:0;padding:0;border:0;border-radius:3px;background:transparent;color:inherit;font-family:var(--font-display);font-size:min(12px,calc((var(--key-width) - 4px) / 3.8));font-weight:500;white-space:nowrap;user-select:none;-webkit-user-select:none;cursor:pointer;position:relative;isolation:isolate}
 .offdesk-keybar .offdesk-terminal-key::before{content:'';position:absolute;inset:4px 0;z-index:-1;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent}
-.offdesk-keybar .offdesk-terminal-key--square{width:36px;min-width:36px;padding:0}
 .offdesk-keybar .offdesk-terminal-key[data-accent=true]{color:rgb(var(--color-on-primary));font-weight:600}
 .offdesk-keybar .offdesk-terminal-key[data-accent=true]::before{border-color:transparent;background:rgb(var(--color-primary))}
 .offdesk-keybar .offdesk-terminal-key:disabled{opacity:.4;cursor:not-allowed}
@@ -21,8 +20,8 @@
 .offdesk-keybar-scroll-wrap{position:relative;flex:1;min-width:0}
 .offdesk-keybar-scroll{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;overscroll-behavior-x:contain;touch-action:pan-x;-webkit-overflow-scrolling:touch}
 .offdesk-keybar-scroll::-webkit-scrollbar{display:none}
-.offdesk-keybar-track{display:flex;gap:6px;width:max-content;min-width:100%}
-.offdesk-keybar-scroll-wrap::before,.offdesk-keybar-scroll-wrap::after{content:'';position:absolute;top:0;bottom:0;width:20px;z-index:1;pointer-events:none;opacity:0}
+.offdesk-keybar-track{display:flex;gap:var(--key-gap);width:max-content;min-width:100%}
+.offdesk-keybar-scroll-wrap::before,.offdesk-keybar-scroll-wrap::after{content:'';position:absolute;top:0;bottom:0;width:8px;z-index:1;pointer-events:none;opacity:0}
 .offdesk-keybar-scroll-wrap::before{left:0;background:linear-gradient(to right,rgb(var(--color-bg-1)),transparent)}
 .offdesk-keybar-scroll-wrap::after{right:0;background:linear-gradient(to left,rgb(var(--color-bg-1)),transparent)}
 .offdesk-keybar-scroll-wrap[data-left=true]::before,.offdesk-keybar-scroll-wrap[data-right=true]::after{opacity:1}

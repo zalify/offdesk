@@ -36,7 +36,7 @@ test("keyboard viewport pan keeps the key bar and terminal chrome in the visible
   await expect(canvas).toHaveCSS("top", "0px");
 });
 
-test("keys fit their labels and the arrows stay put through scrolling, folding and rotation", async ({ page }, testInfo) => {
+test("keys form an even grid, fit their labels, and the arrows stay put through scrolling, folding and rotation", async ({ page }, testInfo) => {
   await setup(page);
   // Production typography follows the design system and user font override,
   // rather than the wireframe's hard-coded system font.
@@ -54,14 +54,26 @@ test("keys fit their labels and the arrows stay put through scrolling, folding a
     const bar = page.getByTestId("extended-keybar").filter({ visible: true });
     await expect(bar).toBeVisible();
     await expect(page.getByTestId("terminal-input-settings")).toHaveCount(0);
-    // Keys size to their label (wireframe P04): 44px tall hit areas, at
+    // Every key is one grid column: the same width, 44px tall hit areas, at
     // least 36px wide, and no label is ever clipped.
     await expect.poll(async () => {
-      return bar.evaluate(el => Array.from(el.querySelectorAll<HTMLElement>(".offdesk-terminal-key")).every(key => {
-        const box = key.getBoundingClientRect();
-        return box.width >= 36 && box.height === 44 && key.scrollWidth <= key.clientWidth;
-      }));
+      return bar.evaluate(el => {
+        const keys = Array.from(el.querySelectorAll<HTMLElement>(".offdesk-terminal-key"));
+        const width = keys[0].getBoundingClientRect().width;
+        return keys.every(key => {
+          const box = key.getBoundingClientRect();
+          return Math.abs(box.width - width) < 0.5 && box.width >= 36 && box.height === 44 && key.scrollWidth <= key.clientWidth;
+        });
+      });
     }).toBe(true);
+    // The two rows line up: ↑ above ↓, enter above →, ^C above kb.
+    const column = async (top: string, bottom: string) => {
+      const [a, b] = [await bar.getByTestId(top).boundingBox(), await bar.getByTestId(bottom).boundingBox()];
+      expect(Math.abs(a!.x - b!.x)).toBeLessThan(0.5);
+    };
+    await column("extended-keybar-up", "extended-keybar-down");
+    await column("extended-keybar-enter", "extended-keybar-right");
+    await column("extended-keybar-ctrl-c", "extended-keybar-keyboard");
     const up = bar.getByTestId("extended-keybar-up");
     const left = bar.getByTestId("extended-keybar-left"), right = bar.getByTestId("extended-keybar-right");
     const before = await up.boundingBox();
