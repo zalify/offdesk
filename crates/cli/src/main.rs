@@ -610,6 +610,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return link(no_open, url.as_deref());
     }
     let env_token = env_with_legacy("OFFDESK_TOKEN", "WEBMUX_TOKEN");
+    // Prints the CLI's version even without a usable config or hub.
+    if let Commands::Version = cli.command {
+        let client = config::resolve(
+            cli.url.as_deref(),
+            cli.token.as_deref(),
+            env_url.as_deref(),
+            env_token.as_deref(),
+            file.as_ref(),
+        )
+        .and_then(|resolved| client::HubClient::new(&resolved))
+        .ok();
+        return commands::version::version(client.as_ref()).await;
+    }
     // MCP starts even without a usable config: initialize and tools/list
     // work, and tool calls report the problem.
     if let Commands::Mcp = cli.command {
@@ -636,7 +649,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     )?;
     let hub_client = client::HubClient::new(&resolved)?;
 
-    let quiet = matches!(cli.command, Commands::Version | Commands::Update);
+    let quiet = matches!(cli.command, Commands::Update);
     let result = match cli.command {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
@@ -810,7 +823,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             };
             commands::layout::run(&hub_client, op, args.machine, &args.group, args.json).await
         }
-        Commands::Version => commands::version::version(&hub_client).await,
+        Commands::Version => unreachable!("version returns early"),
         Commands::Update => commands::version::update(&hub_client).await,
     };
     if result.is_ok() && !quiet {

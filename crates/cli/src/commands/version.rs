@@ -5,6 +5,7 @@
 //! run: the hub and nodes are often bundled with the desktop app, and only
 //! the person at each machine should replace binaries there.
 
+use std::cmp::Ordering;
 use std::io::IsTerminal;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -18,6 +19,8 @@ pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const INSTALL: &str = "curl -fsSL https://offdesk.dev/install | sh -s --";
 const NOTICE_EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+/// The notice runs after a command finished; it never holds the exit up longer.
+const NOTICE_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct HubVersion {
@@ -55,8 +58,21 @@ pub fn cli_behind(latest: Option<&str>) -> Option<&str> {
     latest.filter(|latest| is_newer(latest, CLI_VERSION))
 }
 
-pub async fn version(client: &HubClient) -> Result<(), CliError> {
-    let hub = client.hub_version().await?;
+/// Prints the CLI's own version even when no hub is configured or it can't
+/// be reached; only the hub lines depend on it.
+pub async fn version(client: Option<&HubClient>) -> Result<(), CliError> {
+    let hub = match client {
+        Some(client) => client.hub_version().await,
+        None => Err(CliError::Config("no hub configured".to_string())),
+    };
+    let hub = match hub {
+        Ok(hub) => hub,
+        Err(error) => {
+            super::out_line(&format!("cli        {CLI_VERSION}"));
+            super::out_line(&format!("hub        unknown ({error})"));
+            return Ok(());
+        }
+    };
     let latest = hub.as_ref().and_then(|hub| hub.latest.as_deref());
     match cli_behind(latest) {
         Some(latest) => super::out_line(&format!("cli        {CLI_VERSION}   {latest} available")),
@@ -83,9 +99,15 @@ pub async fn version(client: &HubClient) -> Result<(), CliError> {
 /// Print what to run for every part that is behind. Changes nothing.
 pub async fn update(client: &HubClient) -> Result<(), CliError> {
     let hub = client.hub_version().await?;
-    let nodes = client.machine_versions().await.ok().flatten();
+    let nodes = client.machine_versions().await;
+    let nodes_known = matches!(nodes, Ok(Some(_)));
+    let nodes = nodes.ok().flatten();
     let latest = hub.as_ref().and_then(|hub| hub.latest.clone());
-    let lines = update_plan(hub.as_ref(), nodes.as_deref(), latest.as_deref());
+    let mut lines = update_plan(hub.as_ref(), nodes.as_deref(), latest.as_deref());
+    if hub.is_some() && latest.is_some() && !nodes_known {
+        lines.retain(|line| !line.starts_with("Everything the hub can see"));
+        lines.push("(couldn't list the nodes' versions; check them with `offdesk machines`)".to_string());
+    }
     for line in lines {
         super::out_line(&line);
     }
@@ -152,14 +174,16 @@ pub async fn notice(client: &HubClient) {
     if !notice_due(&stamp, now) {
         return;
     }
-    let Ok(Some(hub)) = client.hub_version().await else {
+    let Ok(hub) = client.hub_version_within(NOTICE_TIMEOUT).await else {
         return;
     };
-    // Once the hub has an answer, stay quiet for a day either way.
-    if hub.latest.is_some() {
-        let _ = std::fs::write(&stamp, now.as_secs().to_string());
+    // The hub answered (even a hub too old to say, or one that can't reach
+    // GitHub): ask again tomorrow, not after every command.
+    if let Some(dir) = stamp.parent() {
+        let _ = std::fs::create_dir_all(dir);
     }
-    if let Some(line) = notice_line(&hub) {
+    let _ = std::fs::write(&stamp, now.as_secs().to_string());
+    if let Some(line) = hub.as_ref().and_then(notice_line) {
         eprintln!("{line}");
     }
 }
@@ -183,27 +207,56 @@ fn notice_line(hub: &HubVersion) -> Option<String> {
     }
 }
 
-/// Whether `candidate` is a newer release than `current`; a pre-release
-/// sorts before its release, and nothing unparseable is ever newer. Matches
-/// the hub's comparison (crates/hub/src/versions.rs).
+/// Whether `candidate` is a newer release than `current`, by semver
+/// precedence (`rc.10` after `rc.9`, a release after its pre-releases,
+/// `+build` ignored); nothing unparseable is ever newer. Matches the hub's
+/// comparison (crates/hub/src/versions.rs).
 fn is_newer(candidate: &str, current: &str) -> bool {
     match (parse(candidate), parse(current)) {
-        (Some(candidate), Some(current)) => candidate > current,
+        (Some(candidate), Some(current)) => compare(&candidate, &current) == Ordering::Greater,
         _ => false,
     }
 }
 
-fn parse(version: &str) -> Option<(u64, u64, u64, bool, String)> {
+struct Version<'a> {
+    core: (u64, u64, u64),
+    pre: Vec<&'a str>,
+}
+
+fn parse(version: &str) -> Option<Version<'_>> {
+    let version = version.split_once('+').map_or(version, |(version, _build)| version);
     let (core, pre) = match version.split_once('-') {
-        Some((core, pre)) => (core, pre.to_string()),
-        None => (version, String::new()),
+        Some((core, pre)) => (core, pre.split('.').collect()),
+        None => (version, Vec::new()),
     };
     let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
-    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
+    let core = (parts.next()??, parts.next()??, parts.next()??);
     if parts.next().is_some() {
         return None;
     }
-    Some((major, minor, patch, pre.is_empty(), pre))
+    Some(Version { core, pre })
+}
+
+fn compare(a: &Version, b: &Version) -> Ordering {
+    a.core.cmp(&b.core).then_with(|| match (a.pre.is_empty(), b.pre.is_empty()) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Greater,
+        (false, true) => Ordering::Less,
+        (false, false) => {
+            for (x, y) in a.pre.iter().zip(&b.pre) {
+                let order = match (x.parse::<u64>(), y.parse::<u64>()) {
+                    (Ok(x), Ok(y)) => x.cmp(&y),
+                    (Ok(_), Err(_)) => Ordering::Less,
+                    (Err(_), Ok(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => x.cmp(y),
+                };
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            a.pre.len().cmp(&b.pre.len())
+        }
+    })
 }
 
 #[cfg(test)]
@@ -275,5 +328,7 @@ mod tests {
         assert!(is_newer("0.23.0", "0.23.0-rc.1"));
         assert!(!is_newer("0.23.0-rc.1", "0.23.0"));
         assert!(!is_newer("latest", "0.22.0"));
+        assert!(is_newer("0.23.0-rc.10", "0.23.0-rc.9"));
+        assert!(!is_newer("0.23.0+abc", "0.23.0"));
     }
 }
