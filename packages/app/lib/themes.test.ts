@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+// @ts-ignore Vitest runs this in Node; the app tsconfig omits Node types (CI has none, local installs may).
+import { readFileSync } from "node:fs";
 import {
   THEME_IDS, THEMES, contrastRatio, hexToTriplet, parseSystemThemes, parseTheme, resolveThemeId,
   terminalMinimumContrast, themeCssVariables,
@@ -41,7 +42,8 @@ describe("every theme is legible without glare", () => {
 });
 
 describe("global.css paints Paper and Graphite before the app loads", () => {
-  const css = readFileSync(decodeURIComponent(new URL("../global.css", import.meta.url).pathname), "utf8");
+  // ?raw yields no text for CSS under Vitest, so read the file itself.
+  const css: string = readFileSync(decodeURIComponent(new URL("../global.css", import.meta.url).pathname), "utf8");
   const block = (selector: string) => {
     const start = css.indexOf(`${selector} {`);
     return css.slice(start, css.indexOf("\n  }", start));
