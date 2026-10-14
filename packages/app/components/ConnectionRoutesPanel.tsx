@@ -41,22 +41,22 @@ export function ConnectionRoutesPanel({ onSwitched }: { onSwitched?: () => void 
     catch (e) { if (mounted.current) setError(String(e)); }
     finally { busy.current = false; if (mounted.current) setSwitching(false); }
   };
-  return <div data-testid="connection-routes" style={{ display: "flex", flexDirection: "column", gap: 12, color: colors.foreground }}>
+  return <div data-testid="connection-routes" style={{ display: "flex", flexDirection: "column", gap: 10, color: colors.fg0, fontFamily: "var(--font-display)" }}>
     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
       <strong>Connection method</strong>
-      <button type="button" disabled={checking || switching} onClick={() => void refresh()} style={{ color: colors.foreground, background: "none", border: `1px solid ${colors.border}`, borderRadius: 8, padding: "10px 12px" }}>{checking ? "Checking…" : "Check again"}</button>
+      <button type="button" disabled={checking || switching} onClick={() => void refresh()} className="odk-btn odk-btn--secondary odk-btn--sm">{checking ? "Checking…" : "Check again"}</button>
     </div>
     {(["local", "remote"] as const).map(kind => {
       const candidates = routes.filter(route => route.kind === kind);
       const label = kind === "local" ? "Local network" : "Remote connection";
-      return <div key={kind} style={{ border: `1px solid ${colors.border}`, borderRadius: 10, padding: 12 }}>
-        <strong>{label}</strong>
-        <p style={{ color: colors.foregroundMuted, fontSize: 13, margin: "6px 0 10px" }}>{kind === "local" ? "Use when your phone and computer are on the same network." : "Use with mobile data or another Wi-Fi network."}</p>
+      return <div key={kind} style={{ background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 4, padding: "12px 14px" }}>
+        <strong style={{ fontSize: 13, fontWeight: 600, textTransform: "lowercase" }}>{label}</strong>
+        <p style={{ color: colors.fg3, fontFamily: "var(--font-sans)", fontSize: 12, margin: "6px 0 10px" }}>{kind === "local" ? "Use when your phone and computer are on the same network." : "Use with mobile data or another Wi-Fi network."}</p>
         {candidates.length === 0 ? <span style={{ color: colors.foregroundMuted, fontSize: 13 }}>{checking ? "Checking…" : report?.discovery_available ? "Not configured" : "No saved address"}</span> : candidates.map(route => {
           const active = route.hub_url.replace(/\/$/, "") === current?.replace(/\/$/, "");
           return <button key={route.hub_url} type="button" disabled={checking || switching || !route.available || (active && !onSwitched)} onClick={() => void choose(route.hub_url)} aria-label={`${label}: ${route.hub_url}`} aria-current={active ? "true" : undefined} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", width: "100%", minHeight: 44, textAlign: "left", background: "none", border: 0, color: route.available ? colors.foreground : colors.foregroundMuted, padding: "8px 0", cursor: "pointer" }}>
             <span style={{ overflowWrap: "anywhere", minWidth: 0, fontSize: 13 }}>{route.hub_url}</span>
-            <span style={{ flexShrink: 0, fontSize: 13 }}>{checking ? "Checking…" : !route.available ? active ? "Selected · Unreachable" : "Unreachable" : active ? "Current" : "Available"}</span>
+            <span style={{ flexShrink: 0, fontSize: 11.5, fontWeight: active ? 600 : 500, padding: "2px 8px", borderRadius: 3, textTransform: "lowercase", ...(active && route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg2 }) }}>{checking ? "Checking…" : !route.available ? active ? "Selected · Unreachable" : "Unreachable" : active ? "Current" : "Available"}</span>
           </button>;
         })}
       </div>;

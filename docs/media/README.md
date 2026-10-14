@@ -86,7 +86,7 @@ second or two; that pause is the point of the command.
 
 ### `tokens.png`
 
-Settings → API Tokens, with several tokens that have distinct names
+Settings → API tokens, with several tokens that have distinct names
 (`claude-nas`, `ci-runner`, `phone`) and visibly different "last used" values.
 This is the security story: per-agent tokens, individually revocable.
 

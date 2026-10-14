@@ -21,7 +21,7 @@ export function KeyBarSettings() {
     save({ ...layout, [row]: layout[row].filter(key => key !== id), [other]: [...layout[other], id] });
   };
   return <section className="offdesk-keybar-settings" data-testid="keybar-settings">
-    <h2>Terminal keys</h2>
+    <h2 id="settings-terminal-keys">Terminal keys</h2>
     <p>Arrow keys, Enter and the keyboard button stay in place. Choose the other keys to match how you work. Saved on this device.</p>
     <details>
       <summary>Customize terminal keys</summary>

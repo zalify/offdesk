@@ -3,7 +3,7 @@ import { desktopRole, hubStatus, isDesktopShell, type HubStatus } from "@/lib/de
 import { getServerUrl } from "@/lib/serverUrl";
 import { isSecureConnection } from "@/lib/secureTransport";
 import { isLocalHubAddress } from "@/lib/onboardingFlow";
-import { Body, Button, Card, Display, Wordmark } from "./Primitives.web";
+import { Body, Button, Card, Display, Eyebrow, Wordmark } from "./Primitives.web";
 import { colors } from "@/lib/colors";
 import { HubSetup } from "./DesktopSetup.web";
 import { OnboardingView } from "./OnboardingView.web";
@@ -40,7 +40,7 @@ export function EmptyMachinesView({ onOpenSettings }: { onOpenSettings: () => vo
   }, [localHub]);
   if (localHub && !manual && status) return <div style={{ flex: 1, overflowY: "auto" }}>
     <HubSetup status={status} onReady={() => window.location.reload()} onGiveUp={onOpenSettings} />
-    <details style={{ padding: 24 }}><summary>Advanced setup</summary>
+    <details style={{ padding: "0 24px 24px", maxWidth: 600, margin: "0 auto", fontFamily: "var(--font-display)", fontSize: 13 }}><summary style={{ cursor: "pointer", padding: "8px 0", color: colors.fg2 }}>advanced setup</summary>
       <Button kind="secondary" onClick={() => setManual(true)}>Connect a machine manually</Button>
     </details>
   </div>;
@@ -48,15 +48,18 @@ export function EmptyMachinesView({ onOpenSettings }: { onOpenSettings: () => vo
   return (
     <div data-testid="empty-machines" style={{ flex: 1, overflowY: "auto", padding: "40px 24px", background: colors.bg0 }}>
       <div style={{ maxWidth: 600, margin: "0 auto", display: "flex", flexDirection: "column", gap: 24 }}>
-        <Wordmark size={26} />
-        {checking || localHub ? <><Body>{error ?? "Checking this Mac’s setup…"}</Body><Button kind="secondary" onClick={onOpenSettings}>Connection settings</Button></> : <>
-          <Display size={30}>{mobile ? "Connected to your Hub" : "Finish setting up this Mac"}</Display>
+        <Wordmark size={18} />
+        {checking || localHub ? <><Body>{error ?? "Checking this Mac’s setup…"}</Body><div><Button kind="secondary" onClick={onOpenSettings}>Connection settings</Button></div></> : <>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <Eyebrow prompt>no machines yet</Eyebrow>
+            <Display size={30} cursor>{mobile ? "Connected to your Hub" : "Finish setting up this Mac"}</Display>
+          </div>
           <Body>{mobile
             ? "You’re signed in, but this Hub has no machines yet. Finish setup in Offdesk on the computer that runs your Hub. This screen will update when a machine connects."
             : "The Hub is running, but this Mac has not appeared in its machine list. Retry setup to register this Mac and start its node service."}</Body>
-          <Card style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <Body>No need to scan again or generate a token on your phone.</Body>
-            <Button kind="secondary" onClick={onOpenSettings}>Connection settings</Button>
+          <Card style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, padding: 20 }}>
+            <Body size={14}>No need to scan again or generate a token on your phone.</Body>
+            <Button kind="secondary" size="sm" onClick={onOpenSettings}>Connection settings</Button>
           </Card>
         </>}
       </div>

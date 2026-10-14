@@ -2082,7 +2082,9 @@ function TerminalCanvasInner() {
               </main>
             </KeyBarSlotProvider>
           )}
-          {showHandoffBanner && !isCompact && (
+          {/* The resume notice is about terminals; settings, files and the
+              agent browser cover them, so it waits for the terminals. */}
+          {showHandoffBanner && !isCompact && !showSettings && !filesState && !browserOverlayOpen && (
             <HandoffBanner
               isMobile={false}
               onDone={hideHandoffBanner}
