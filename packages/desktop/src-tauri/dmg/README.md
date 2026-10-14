@@ -1,11 +1,13 @@
 # macOS installer window
 
-The DMG uses the app's cream, purple and terracotta colors. Finder supplies the
-real draggable icons: app at (150, 180), Applications at (450, 180), in a 600×400
+The DMG background is the brand's light ground (Finder draws the icon labels
+in black over it) with the offdesk/dev lockup. Finder supplies the real
+draggable icons: app at (150, 180), Applications at (450, 180), in a 600×400
 window. The arrow and installation instructions are the background image.
 
-`background.svg` is the editable source; `background.png` is the 600×400 raster
-export Tauri accepts. Keep the export and `bundle.macOS.dmg` configuration in
+`site/scripts/brand/dmg.html` is the editable source; `background.png` is the
+600×400 raster `node site/scripts/brand/render.mjs` exports, which Tauri
+accepts. Keep the export and `bundle.macOS.dmg` configuration in
 `tauri.conf.json` synchronized when changing dimensions or positions.
 
 Tauri normally skips Finder styling when `CI=true`. Both release and local RC

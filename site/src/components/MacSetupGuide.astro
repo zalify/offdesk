@@ -58,46 +58,91 @@ const c = zh ? {
   next:"Keep going",nextText:"Get comfortable on the local network first, then read about encrypted connections and remote access.",encryption:"Encrypted connections",lan:"Local-network troubleshooting",allDocs:"All technical docs"
 };
 const figures: Record<string, {width:number;height:number}> = {install:{width:616,height:291},terminal:{width:802,height:534},"phone-pairing":{width:428,height:489}};
+// "1. Install the Mac app" -> number "1", heading "Install the Mac app".
+const split = (title: string) => {
+  const m = title.match(/^(\d+)\.\s*(.*)$/);
+  return m ? { n: m[1], text: m[2] } : { n: "", text: title };
+};
+const stepLabel = (n: string) => (zh ? `第 ${n} 步` : `step ${n}`);
 ---
 <Site title={`${c.title} · Offdesk`} description={c.description} path={path} lang={lang}>
-  <article class="doc guide mx-auto max-w-4xl px-6 pt-10 pb-20">
-    <div class="guide-meta"><span class="eyebrow">{c.eyebrow}</span><a href={zh ? "/docs/mac" : "/zh/docs/mac"} lang={zh ? "en" : "zh-CN"}>{zh ? "English" : "简体中文"}</a></div>
-    <h1 class="display mt-4 text-4xl md:text-6xl">{c.title}</h1>
-    <p class="prose-lead">{c.lead}</p>
-    <div class="guide-actions"><a href="/mac" class="btn-coral">{c.download}</a><a href="/#download" class="btn-sky">{c.phone}</a></div>
-    <aside class="version-note"><strong>{c.preview}</strong><p>{c.previewText}</p></aside>
-    <nav aria-label={c.contents} class="contents"><strong>{c.contents}</strong><ol>{c.steps.map(s=><li><a href={`#${s.id}`}>{s.title}</a></li>)}</ol></nav>
-    <h2>{c.before}</h2><ul>{c.needs.map(n=><li>{n}</li>)}</ul><p>{c.terms}</p>
-    {c.steps.map(s=><section aria-labelledby={s.id}>
-      <h2 id={s.id}>{s.title}</h2><p set:html={s.body}/>
-      {"checks" in s && <ul class="checks">{s.checks?.map(check=><li>{check}</li>)}</ul>}
-      <p set:html={s.extra}/>
-      {"command" in s && <pre><code>{s.command}</code></pre>}
-      {"image" in s && s.image && <figure class:list={["screenshot", {portrait:s.image === "phone-pairing"}]}>
-        <a href={`/media/first-install/${s.image}.webp`} aria-label={zh ? "打开完整截图" : "Open full screenshot"}>
-          <img src={`/media/first-install/${s.image}.webp`} {...figures[s.image]} alt={s.alt} loading="lazy" decoding="async"/>
-        </a><figcaption>{s.caption}</figcaption>
-      </figure>}
-      {"after" in s && <p>{s.after}</p>}
-    </section>)}
-    <h2 id="troubleshooting">{c.trouble}</h2>
-    {c.faqs.map(([question,answer])=><details class="faq"><summary>{question}</summary><p>{answer}</p></details>)}
-    <details class="acceptance"><summary>{c.tested}</summary><p>{c.testedIntro}</p><ul>{c.passed.map(x=><li>{x}</li>)}</ul><p>{c.pending}</p><p>{c.known}</p></details>
-    <h2>{c.next}</h2><p>{c.nextText}</p><ul>
-      <li><a href="https://github.com/zalify/offdesk/blob/main/docs/encrypted-connections.md">{c.encryption}</a></li>
-      <li><a href="https://github.com/zalify/offdesk/blob/main/docs/setup-lan.md">{c.lan}</a></li>
-      <li><a href="https://github.com/zalify/offdesk#readme">{c.allDocs}</a></li>
-    </ul>
-  </article>
+  <div class="wrap guide-layout pt-10 pb-20 md:pt-12">
+    <aside class="guide-toc">
+      <nav aria-label={c.contents}>
+        <p class="toc-title">{c.contents}</p>
+        <ol>{c.steps.map(s=>{ const t = split(s.title); return <li><a href={`#${s.id}`}><span class="toc-n">{t.n}</span>{t.text}</a></li>; })}</ol>
+      </nav>
+    </aside>
+    <article class="doc guide min-w-0">
+      <div class="guide-meta">
+        <span class="label">{c.eyebrow}</span>
+        <div class="lang" role="group" aria-label={zh ? "语言" : "Language"}>
+          {zh ? <a href="/docs/mac" lang="en">en</a> : <span aria-current="true">en</span>}
+          {zh ? <span aria-current="true">中文</span> : <a href="/zh/docs/mac" lang="zh-CN">中文</a>}
+        </div>
+      </div>
+      <div class="prompt mt-5">docs/getting-started --mac</div>
+      <h1 class="display mt-3 text-[34px] leading-[40px] md:text-[44px] md:leading-[50px]">{c.title}</h1>
+      <p class="prose-lead mt-4">{c.lead}</p>
+      <div class="guide-actions"><a href="/mac" class="btn-primary">{c.download}</a><a href="/#download" class="btn">{c.phone}</a></div>
+      <aside class="version-note"><strong>{c.preview}</strong><p>{c.previewText}</p></aside>
+      <h2>{c.before}</h2><ul>{c.needs.map(n=><li>{n}</li>)}</ul><p>{c.terms}</p>
+      {c.steps.map(s=>{ const t = split(s.title); return <section aria-labelledby={s.id}>
+        {t.n && <p class="step-label">{stepLabel(t.n)}</p>}
+        <h2 id={s.id}>{t.n ? <span class="sr-only">{t.n}. </span> : null}{t.text}</h2><p set:html={s.body}/>
+        {"checks" in s && <ul class="checks">{s.checks?.map(check=><li>{check}</li>)}</ul>}
+        <p set:html={s.extra}/>
+        {"command" in s && <pre><code>{s.command}</code></pre>}
+        {"image" in s && s.image && <figure class:list={["screenshot", {portrait:s.image === "phone-pairing"}]}>
+          <a href={`/media/first-install/${s.image}.webp`} aria-label={zh ? "打开完整截图" : "Open full screenshot"}>
+            <img src={`/media/first-install/${s.image}.webp`} {...figures[s.image]} alt={s.alt} loading="lazy" decoding="async"/>
+          </a><figcaption>{s.caption}</figcaption>
+        </figure>}
+        {"after" in s && <p>{s.after}</p>}
+      </section>; })}
+      <h2 id="troubleshooting">{c.trouble}</h2>
+      <div class="faqs">{c.faqs.map(([question,answer])=><details class="faq"><summary>{question}</summary><p>{answer}</p></details>)}</div>
+      <details class="acceptance"><summary>{c.tested}</summary><p>{c.testedIntro}</p><ul>{c.passed.map(x=><li>{x}</li>)}</ul><p>{c.pending}</p><p>{c.known}</p></details>
+      <h2>{c.next}</h2><p>{c.nextText}</p><ul>
+        <li><a href="https://github.com/zalify/offdesk/blob/main/docs/encrypted-connections.md">{c.encryption}</a></li>
+        <li><a href="https://github.com/zalify/offdesk/blob/main/docs/setup-lan.md">{c.lan}</a></li>
+        <li><a href="https://github.com/zalify/offdesk#readme">{c.allDocs}</a></li>
+      </ul>
+    </article>
+  </div>
 </Site>
 <style>
-  .guide-meta,.guide-actions{display:flex;align-items:center;flex-wrap:wrap;gap:16px}.guide-meta{justify-content:space-between}.guide-actions{margin:26px 0 32px}
-  .guide-actions a{font-weight:600;text-decoration:none}.guide-actions .btn-coral{color:var(--color-cream)}.guide-actions .btn-sky{color:var(--color-ink)}
-  .guide :global(h2[id]){scroll-margin-top:28px}.guide :global(a:focus-visible),summary:focus-visible{outline:3px solid var(--color-sea);outline-offset:5px}
-  .version-note,.contents,.acceptance{padding:22px 24px;border:1px solid var(--color-line);border-radius:20px;background:var(--color-cream);margin-top:24px}.version-note{border-left:5px solid var(--color-sun)}.version-note p{margin-top:6px;font-size:14px}
-  .contents ol{padding:0;list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:20px}.contents li{font-size:15px;margin-top:10px}
-  .checks{padding-top:8px;padding-bottom:16px;border-left:3px solid var(--color-lagoon);background:var(--color-cream);border-radius:0 14px 14px 0}
-  .screenshot{margin:26px 0 0}.screenshot img{display:block;width:100%;height:auto;border:1px solid var(--color-line-2);border-radius:16px;background:var(--color-cream)}.screenshot.portrait{max-width:460px;margin-left:auto;margin-right:auto}figcaption{color:var(--color-muted);font-size:14px;line-height:1.6;margin-top:12px}
-  .faq{border-bottom:1px solid var(--color-line);padding:20px 0}.faq p{margin-bottom:4px}summary{font-weight:700;cursor:pointer;color:var(--color-ink);line-height:1.6}.acceptance{margin-top:36px}.guide code{overflow-wrap:anywhere}
-  @media(max-width:600px){.contents ol{grid-template-columns:1fr}.version-note,.contents,.acceptance{padding:18px}.guide-actions{align-items:stretch}.guide-actions a{flex:1 1 180px}.screenshot img{border-radius:10px}}
+  .guide-layout{display:flex;flex-wrap:wrap;gap:48px}
+  .guide-toc{flex:1 1 220px;font-family:var(--font-mono);font-size:13px}
+  .guide-toc nav{position:sticky;top:24px}
+  .guide{flex:999 1 560px;max-width:760px}
+  .toc-title{font-size:12px;font-weight:500;color:var(--color-subtle);margin-bottom:8px}
+  .guide-toc ol{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:8px}
+  .guide-toc a{display:flex;gap:10px;color:var(--color-muted);text-decoration:none;line-height:20px}
+  .guide-toc a:hover{color:var(--color-accent)}
+  .toc-n{color:var(--color-subtle);min-width:1ch}
+  .guide-toc a:hover .toc-n{color:var(--color-accent)}
+  .guide-meta,.guide-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px}.guide-meta{justify-content:space-between}.guide-actions{margin:24px 0 28px}
+  .lang{display:flex;border:1px solid var(--color-control);border-radius:4px;overflow:hidden;font-family:var(--font-mono);font-size:12px;font-weight:500}
+  .lang>*{padding:5px 10px}.lang span{background:var(--color-accent);color:var(--color-on-accent);font-weight:600}.lang a{color:var(--color-muted);text-decoration:none}.lang a:hover{color:var(--color-accent)}
+  .guide :global(a.btn-primary),.guide :global(a.btn){text-decoration:none}.guide :global(a.btn-primary){color:var(--color-on-accent)}.guide :global(a.btn){color:var(--color-text)}
+  .step-label{margin-top:48px;padding-top:24px;border-top:1px solid var(--color-line);font-family:var(--font-mono);font-size:12px;font-weight:500;color:var(--color-accent)}
+  .step-label + h2{margin-top:8px;padding-top:0;border-top:0}
+  .guide :global(h2[id]){scroll-margin-top:24px}
+  .version-note{padding:14px 16px;border:1px solid var(--color-line);border-radius:4px;background:var(--color-surface);margin-top:8px}
+  .version-note strong{font-family:var(--font-mono);font-size:13px;font-weight:600}
+  .version-note p{margin-top:6px;font-size:15px;line-height:23px}
+  .checks{padding:4px 16px 14px 36px;border:1px solid var(--color-line);border-left:2px solid var(--color-accent);background:var(--color-surface);border-radius:0 4px 4px 0;margin-top:16px}
+  .screenshot{margin:24px 0 0}.screenshot img{display:block;width:100%;height:auto;border:1px solid var(--color-line);border-radius:6px;background:var(--color-surface)}.screenshot.portrait{max-width:460px;margin-left:auto;margin-right:auto}
+  figcaption{color:var(--color-subtle);font-family:var(--font-sans);font-size:14px;line-height:1.6;margin-top:12px}
+  .faqs{margin-top:16px;border:1px solid var(--color-line);border-radius:6px;overflow:hidden}
+  .faq{padding:0 16px}.faq + .faq{border-top:1px solid var(--color-line)}.faq p{margin:0 0 16px}
+  summary{display:flex;gap:12px;padding:14px 0;cursor:pointer;color:var(--color-text);font-family:var(--font-mono);font-size:14px;line-height:1.6;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"[+]";margin-left:auto;color:var(--color-subtle);flex-shrink:0}
+  details[open]>summary::after{content:"[−]"}
+  .acceptance{margin-top:24px;padding:0 16px 4px;border:1px solid var(--color-line);border-radius:6px;background:var(--color-surface)}
+  .guide code{overflow-wrap:anywhere}
+  @media(max-width:860px){.guide-toc nav{position:static}.guide-toc{padding:14px 16px;border:1px solid var(--color-line);border-radius:6px;background:var(--color-surface);order:0}}
+  @media(max-width:600px){.guide-actions{align-items:stretch}.guide-actions a{flex:1 1 180px}.screenshot img{border-radius:4px}}
 </style>

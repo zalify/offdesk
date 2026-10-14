@@ -1,0 +1,19 @@
+<!doctype html><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@500;600&display=swap" rel="stylesheet">
+<!-- The DMG window's background, 600×400. It stays light: Finder draws the
+     icon labels in black over it. The app sits at (150, 180), Applications
+     at (450, 180) — see bundle.macOS.dmg in tauri.conf.json. -->
+<style>
+  html,body{margin:0}
+  .d{position:relative;width:600px;height:400px;overflow:hidden;background:#f5f5f3;color:#111;font-family:"Geist",sans-serif}
+  .logo{position:absolute;left:50%;top:34px;height:30px;transform:translateX(-50%)}
+  svg{position:absolute;left:266px;top:164px}
+  .t{position:absolute;left:0;right:0;top:292px;text-align:center;font-size:16px;color:#3a3936}
+  .s{position:absolute;left:0;right:0;top:322px;text-align:center;font-size:13px;color:#6b6964}
+</style>
+<div class="d">
+  <img class="logo" src="logo.svg">
+  <svg width="68" height="32" viewBox="0 0 68 32" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16h58M48 4l14 12-14 12"/></svg>
+  <div class="t">Drag Offdesk DEV into Applications to install.</div>
+  <div class="s">Then open it from Applications.</div>
+</div>

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk" height="56">
+    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
   </picture>
 </p>
 

@@ -1,27 +1,41 @@
 <!doctype html><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Nunito:wght@500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   html,body{margin:0}
-  .banner{position:relative;width:1600px;height:900px;overflow:hidden;background:#fff4e3;font-family:"Nunito",sans-serif;color:#2b2340}
-  .sun{position:absolute;right:-140px;top:-220px;width:720px;height:720px;border-radius:50%;background:rgba(255,200,87,.55);filter:blur(70px)}
-  .lagoon{position:absolute;left:-220px;bottom:-260px;width:620px;height:620px;border-radius:50%;background:rgba(94,211,193,.35);filter:blur(70px)}
-  .pink{position:absolute;left:1005px;top:118px;width:130px;height:130px;border-radius:50%;background:rgba(255,143,177,.65)}
-  .ring{position:absolute;left:1440px;top:640px;width:110px;height:110px;border-radius:50%;border:16px solid #ffc857}
-  .ring2{position:absolute;left:760px;top:780px;width:64px;height:64px;border-radius:50%;border:11px solid rgba(255,107,87,.75)}
-  .logo{position:absolute;left:96px;top:84px;height:56px}
-  h1{position:absolute;left:96px;top:250px;margin:0;width:760px;font-family:"Fredoka",sans-serif;font-weight:700;font-size:84px;line-height:1.02;letter-spacing:-.01em}
-  p{position:absolute;left:96px;top:560px;margin:0;width:800px;font-size:27px;line-height:1.5;color:#4a4160;font-weight:500}
-  .cmd{position:absolute;left:96px;top:706px;display:flex;align-items:center;gap:14px;background:#1e1b2e;color:#f3eee6;font-family:"Geist Mono",monospace;font-size:22px;padding:20px 26px;border-radius:18px;box-shadow:10px 10px 0 0 #ffc857}
-  .cmd b{color:#5ed3c1;font-weight:500}
-  .phone{position:absolute;left:1060px;top:150px;width:340px;border:7px solid #2b2340;border-radius:44px;overflow:hidden;background:#1e1b2e;box-shadow:16px 16px 0 0 #ffc857}
-  .phone img{display:block;width:100%}
-  .wave{position:absolute;left:0;bottom:0;width:100%;height:70px}
+  .banner{position:relative;width:1600px;height:900px;overflow:hidden;background:#0c0c0b;color:#ecebe6;font-family:"Geist Mono",monospace}
+  .logo{position:absolute;left:96px;top:84px;height:52px}
+  h1{position:absolute;left:96px;top:200px;margin:0;width:700px;font-weight:600;font-size:70px;line-height:1.06;letter-spacing:-.035em}
+  h1 i{display:inline-block;width:.55em;height:.9em;margin-left:.12em;vertical-align:-.1em;background:#d4ff3a}
+  p{position:absolute;left:96px;top:470px;margin:0;width:640px;font-family:"Geist",sans-serif;font-size:26px;line-height:1.5;color:#aeaca6}
+  .cmd{position:absolute;left:96px;top:716px;padding:18px 24px;border:1px solid #3a3936;border-radius:4px;background:#111110;font-size:22px}
+  .cmd b{color:#d4ff3a;font-weight:500}
+  .term{position:absolute;left:840px;top:150px;width:690px;border:1px solid #2a2927;border-radius:6px;background:#111110;overflow:hidden}
+  .tabs{display:flex;height:40px;align-items:stretch;border-bottom:1px solid #2a2927;font-size:16px;color:#8f8d87}
+  .tabs span{display:flex;align-items:center;padding:0 16px;border-right:1px solid #2a2927}
+  .tabs .on{color:#ecebe6;box-shadow:inset 0 -2px 0 #d4ff3a}
+  pre{margin:0;padding:22px 22px 26px;font:400 15.5px/1.7 "Geist Mono",monospace;color:#aeaca6;white-space:pre}
+  pre b{color:#d4ff3a;font-weight:500}
+  pre em{font-style:normal;color:#ecebe6}
+  pre s{text-decoration:none;color:#8f8d87}
+  .status{display:flex;gap:16px;height:34px;align-items:center;padding:0 16px;border-top:1px solid #2a2927;background:#141413;font-size:14px;color:#8f8d87}
+  .status .on{color:#0c0c0b;background:#d4ff3a;padding:1px 6px}
+  .status .r{margin-left:auto}
 </style>
 <div class="banner">
-  <div class="sun"></div><div class="lagoon"></div><div class="pink"></div><div class="ring"></div><div class="ring2"></div>
-  <img class="logo" src="logo.svg">
-  <h1>Your terminal stays home. You don't have to.</h1>
-  <p>Vibe code from your phone, on the Mac you left at home. One line to set up, one scan to get in. Claude Code and all.</p>
+  <img class="logo" src="logo-dark.svg">
+  <h1>One terminal, shared by you and your <span style="white-space:nowrap">agents.<i></i></span></h1>
+  <p>Any program in tmux, on all your machines, behind one hub you run. Open it from a browser, your phone or the desktop app. Agents drive the same terminals from the CLI.</p>
   <div class="cmd"><b>$</b> curl -fsSL https://offdesk.dev/install | sh</div>
-  <div class="phone"><img src="phone-terminal.png"></div>
+  <div class="term">
+    <div class="tabs"><span class="on">0:agent</span><span>1:app</span><span>2:nas</span></div>
+<pre><b>$</b> <em>T=$(offdesk open nas --cwd ~/app --cmd claude --json | jq -r .id)</em>
+<b>$</b> <em>offdesk send $T "fix the failing tests"</em>
+<b>$</b> <em>offdesk wait $T --silence 5000 --timeout 600</em>
+<s>quiet for 5s</s>
+<b>$</b> <em>offdesk read $T --lines 80</em>
+  ⏺ Ran pnpm test: 214 passed
+  ⏺ Fixed the date parsing in src/report.ts
+<b>$</b> <span style="background:#d4ff3a"> </span></pre>
+    <div class="status"><span>[offdesk]</span><span class="on">0:agent*</span><span>opened by agent</span><span class="r">nas · ~/app</span></div>
+  </div>
 </div>

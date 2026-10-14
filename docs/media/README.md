@@ -2,35 +2,43 @@
 
 ## Brand assets
 
-A coral donut with sprinkles, and "offdesk" set in Fredoka Bold. They are
-drawn by code, not kept by hand:
+A desk, and a terminal window flying off it with a lime `>_` prompt inside;
+"offdesk/dev" set in Geist Mono SemiBold. Dark ground `#0c0c0b`, ink
+`#ecebe6`, lime `#d4ff3a` only for the prompt. They are drawn by code, not
+kept by hand, from the one mark in `site/scripts/brand.mjs`:
 
 | File | What it is | Made by |
 |---|---|---|
-| `mark.svg` | the donut alone | `site/scripts/brand.mjs` |
-| `logo.svg` | donut + wordmark in ink, for light grounds — the README | `site/scripts/brand.mjs` |
-| `logo-dark.svg` | the same in cream, for dark grounds — the web app's setup page | `site/scripts/brand.mjs` |
-| `favicon.svg` + `favicon-16/32.png` | the donut on a rounded sand square | `brand.mjs`, then `rsvg-convert` |
-| `hero-banner.png` | the README's banner: headline, the one line, the phone | `site/scripts/brand/render.mjs` |
+| `mark.svg` | the mark alone, for dark grounds (also `site/public/brand/`, `packages/app/public/brand/`) | `site/scripts/brand.mjs` |
+| `mark-light.svg` | the mark in ink, for light grounds | `site/scripts/brand.mjs` |
+| `logo.svg` | mark + "offdesk/dev" for light grounds, "/dev" on a lime block — the README | `site/scripts/brand.mjs` |
+| `logo-dark.svg` | the same for dark grounds, "/dev" in lime — the web app's wordmark | `site/scripts/brand.mjs` |
+| `favicon.svg` + `favicon-16/32.png` | the mark on the dark rounded tile, drawn for 16 and 32 | `brand.mjs`, then `scripts/app-icons.sh` |
+| `hero-banner.png` | banner: the headline, the line, the install command, the CLI driving a terminal | `site/scripts/brand/render.mjs` |
 | `og-1200x630.png` | share card (also `site/public/brand/og-square.png`) | `site/scripts/brand/render.mjs` |
-| `avatar-400.png` | the donut on sand, for profiles | `site/scripts/brand/render.mjs` |
-| `fonts/Fredoka-Bold.ttf` | the outlines the wordmark is traced from (OFL, see `fonts/README.md`) | — |
+| `avatar-400.png` | the mark on the dark ground, for profiles | `site/scripts/brand/render.mjs` |
 
-The wordmark is real glyph outlines, so it renders anywhere without the font.
-The site draws the same mark inline in its nav; the Android launcher icons are
-`packages/desktop/icon/*.svg` (the donut on sand), rasterised by
-`scripts/app-icons.sh`; the desktop icons come from `tauri icon` on a 1024px
-render of `icon.svg`.
+The lockup is real glyph outlines (from `@fontsource/geist-mono`, a site
+dependency, under the OFL), so it renders anywhere without the font.
 
-To change the brand, edit `brand.mjs` (the donut, the colours) or the HTML in
-`site/scripts/brand/` (the banner, the card), then, from the repo root:
+Below 64px the mark drops its speed lines and the `_`, and its strokes get
+heavier; the 16 and 32 sources (`packages/desktop/icon/*-16.svg`,
+`*-32.svg`) are drawn for those sizes instead of scaled down. The app icons
+all come from `packages/desktop/icon/`: `icon.svg` is the full-bleed master
+(iOS, Android legacy, apple-touch), `icon-tile*.svg` the rounded tile
+(Windows, Linux, favicons), `icon-macos*.svg` the tile on macOS's grid
+(`icon.icns`), `icon-round.svg` and `icon-foreground.svg` Android, `tray.svg`
+the macOS menu bar template and `tray-color.svg` the Windows/Linux tray. The
+DMG background is `site/scripts/brand/dmg.html`.
+
+To change the brand, edit `brand.mjs` (the mark, the colours, the sizes) or
+the HTML in `site/scripts/brand/` (the banner, the card, the DMG), then, from
+the repo root, with `pnpm install` run in `site/` and `packages/desktop/`:
 
 ```bash
-node site/scripts/brand.mjs && node site/scripts/brand/render.mjs
-rsvg-convert -w 32 -h 32 docs/media/favicon.svg -o docs/media/favicon-32.png
-rsvg-convert -w 16 -h 16 docs/media/favicon.svg -o docs/media/favicon-16.png
-cp docs/media/favicon-*.png site/public/brand/
-scripts/app-icons.sh
+node site/scripts/brand.mjs        # every SVG
+scripts/app-icons.sh               # every PNG, ICO and ICNS, incl. Android and iOS
+node site/scripts/brand/render.mjs # banner, share card, avatar, DMG background
 ```
 
 # Screenshots and GIFs to record
