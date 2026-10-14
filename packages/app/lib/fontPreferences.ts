@@ -43,3 +43,22 @@ export function subscribeFontPreferences(listener: () => void) {
     window.removeEventListener("storage", onStorage);
   };
 }
+
+// The terminal font as saved: a family name ("" = the default) and a size
+// in px (null = the default). Writes notify open terminals, which re-render
+// in place.
+export function readTerminalFontSetting(): { family: string; size: number | null } {
+  const size = Number(localStorage.getItem("offdesk:terminal-font-size"));
+  return {
+    family: localStorage.getItem("offdesk:terminal-font-family") ?? "",
+    size: Number.isFinite(size) && size >= 10 && size <= 24 ? size : null,
+  };
+}
+
+export function writeTerminalFontSetting({ family, size }: { family: string; size: number | null }) {
+  if (family) localStorage.setItem("offdesk:terminal-font-family", family);
+  else localStorage.removeItem("offdesk:terminal-font-family");
+  if (size !== null) localStorage.setItem("offdesk:terminal-font-size", String(size));
+  else localStorage.removeItem("offdesk:terminal-font-size");
+  notifyFontPreferencesChanged();
+}

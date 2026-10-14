@@ -1,143 +1,67 @@
-// Concrete colors for React Native styles; keep CSS tokens in global.css aligned.
-export const lightColors = {
-  // New design tokens — the same values as global.css.
-  bg0: "#f5f5f3",
-  bg1: "#fbfbfa",
-  bg2: "#ffffff",
-  bg3: "#ebebe7",
-  line: "#c4c2bb",
-  lineSoft: "#e2e1dc",
-  fg0: "#111111",
-  fg1: "#2b2a27",
-  fg2: "#4f4d48",
-  fg3: "#65635d",
-  ok: "#4a6000",
-  warn: "#b4381f",
-  err: "#b4381f",
-  info: "#4a6000",
-  violet: "#4f4d48",
-  termBg: "#0c0c0b",
-  onAccent: "#ffffff",
-  primary: "#d4ff3a",
-  onPrimary: "#0c0c0b",
-  onErr: "#ffffff",
-  focus: "#4a6000",
+// Concrete colors for React Native styles, from the theme registry
+// (lib/themes.ts). On the web the same values arrive as CSS variables.
+import { THEMES, DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, type ThemeDefinition } from "./themes";
 
-  // Legacy keys.
-  background: "#f5f5f3",
-  backgroundSecondary: "#fbfbfa",
-  surface: "#ffffff",
-  surfaceHover: "#ebebe7",
-  foreground: "#111111",
-  foregroundSecondary: "#2b2a27",
-  foregroundMuted: "#4f4d48",
-  accent: "#4a6000",
-  accentDim: "#4a6000",
-  danger: "#b4381f",
-  warning: "#b4381f",
-  success: "#4a6000",
-  border: "#c4c2bb",
-  borderActive: "#4a6000",
-} as const;
+export function paletteColors(theme: ThemeDefinition) {
+  const u = theme.ui;
+  return {
+    bg0: u.bg0, bg1: u.bg1, bg2: u.bg2, bg3: u.bg3,
+    line: u.line, lineSoft: u.lineSoft,
+    fg0: u.fg0, fg1: u.fg1, fg2: u.fg2, fg3: u.fg3,
+    ok: u.accent, warn: u.warn, err: u.warn, info: u.accent, violet: u.fg2,
+    termBg: theme.terminal.background, termFg: theme.terminal.foreground, termAccent: theme.terminal.cursor,
+    onAccent: u.onAccent, primary: u.primary, onPrimary: u.onPrimary, onErr: u.onErr, focus: u.accent,
 
-export const lightAlpha = {
-  accentSoft: "rgba(74, 96, 0, 0.1)",
-  accentLine: "rgba(74, 96, 0, 0.4)",
-  dangerSoft: "rgba(180, 56, 31, 0.12)",
-  dangerLine: "rgba(180, 56, 31, 0.5)",
-  overlay: "rgba(12, 12, 11, 0.4)",
+    // Legacy keys.
+    background: u.bg0, backgroundSecondary: u.bg1, surface: u.bg2, surfaceHover: u.bg3,
+    foreground: u.fg0, foregroundSecondary: u.fg1, foregroundMuted: u.fg2,
+    accent: u.accent, accentDim: u.accent,
+    danger: u.warn, warning: u.warn, success: u.accent,
+    border: u.line, borderActive: u.accent,
+  };
+}
 
-  accentSubtle: "rgba(74, 96, 0, 0.06)",
-  accentLight: "rgba(74, 96, 0, 0.08)",
-  accentLight12: "rgba(74, 96, 0, 0.1)",
-  accentMedium15: "rgba(74, 96, 0, 0.12)",
-  accentMedium: "rgba(74, 96, 0, 0.16)",
-  accentBorder: "rgba(74, 96, 0, 0.3)",
-  backgroundDim: "rgba(245, 245, 243, 0.15)",
-  backgroundOverlay: "rgba(245, 245, 243, 0.2)",
-  backgroundShadow: "rgba(12, 12, 11, 0.2)",
-  backgroundOpaque96: "rgba(245, 245, 243, 0.96)",
-  backgroundOpaque98: "rgba(245, 245, 243, 0.98)",
-  backgroundSecondaryOpaque96: "rgba(251, 251, 250, 0.96)",
-  surfaceOpaque94: "rgba(255, 255, 255, 0.94)",
-  foregroundOverlay: "rgba(17, 17, 17, 0.12)",
-  foregroundSubtle: "rgba(17, 17, 17, 0.35)",
-  warningSubtle: "rgba(180, 56, 31, 0.06)",
-  warningLight12: "rgba(180, 56, 31, 0.1)",
-  warningBorder: "rgba(180, 56, 31, 0.3)",
-  warningBorder22: "rgba(180, 56, 31, 0.3)",
-  mutedLight: "rgba(79, 77, 72, 0.12)",
-  mutedMedium: "rgba(79, 77, 72, 0.25)",
-} as const;
+const rgba = (hex: string, alpha: number) => {
+  const v = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(v.slice(i, i + 2), 16));
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
 
+export function paletteAlpha(theme: ThemeDefinition) {
+  const u = theme.ui;
+  const dark = theme.scheme === "dark";
+  return {
+    accentSoft: rgba(u.accent, 0.1),
+    accentLine: rgba(u.accent, dark ? 0.35 : 0.4),
+    dangerSoft: rgba(u.warn, dark ? 0.14 : 0.12),
+    dangerLine: rgba(u.warn, 0.5),
+    overlay: rgba(dark ? u.bg0 : "#0c0c0b", dark ? 0.72 : 0.4),
 
-export const darkColors = {
-  // New design tokens — the same values as global.css.
-  bg0: "#0c0c0b",
-  bg1: "#111110",
-  bg2: "#141413",
-  bg3: "#1c1c1a",
-  line: "#3a3936",
-  lineSoft: "#2a2927",
-  fg0: "#ecebe6",
-  fg1: "#cfcdc7",
-  fg2: "#aeaca6",
-  fg3: "#8f8d87",
-  ok: "#d4ff3a",
-  warn: "#ff8a75",
-  err: "#ff8a75",
-  info: "#d4ff3a",
-  violet: "#aeaca6",
-  termBg: "#0c0c0b",
-  onAccent: "#0c0c0b",
-  primary: "#d4ff3a",
-  onPrimary: "#0c0c0b",
-  onErr: "#0c0c0b",
-  focus: "#d4ff3a",
+    accentSubtle: rgba(u.accent, 0.06),
+    accentLight: rgba(u.accent, 0.08),
+    accentLight12: rgba(u.accent, 0.1),
+    accentMedium15: rgba(u.accent, 0.12),
+    accentMedium: rgba(u.accent, 0.16),
+    accentBorder: rgba(u.accent, dark ? 0.25 : 0.3),
+    backgroundDim: rgba(u.bg0, 0.15),
+    backgroundOverlay: rgba(u.bg0, 0.2),
+    backgroundShadow: dark ? "rgba(0, 0, 0, 0.3)" : rgba("#0c0c0b", 0.2),
+    backgroundOpaque96: rgba(u.bg0, 0.96),
+    backgroundOpaque98: rgba(u.bg0, 0.98),
+    backgroundSecondaryOpaque96: rgba(u.bg1, 0.96),
+    surfaceOpaque94: rgba(u.bg2, 0.94),
+    foregroundOverlay: rgba(u.fg0, 0.12),
+    foregroundSubtle: rgba(u.fg0, 0.35),
+    warningSubtle: rgba(u.warn, 0.06),
+    warningLight12: rgba(u.warn, 0.1),
+    warningBorder: rgba(u.warn, 0.3),
+    warningBorder22: rgba(u.warn, 0.3),
+    mutedLight: rgba(u.fg2, 0.12),
+    mutedMedium: rgba(u.fg2, 0.25),
+  };
+}
 
-  // Legacy keys.
-  background: "#0c0c0b",
-  backgroundSecondary: "#111110",
-  surface: "#141413",
-  surfaceHover: "#1c1c1a",
-  foreground: "#ecebe6",
-  foregroundSecondary: "#cfcdc7",
-  foregroundMuted: "#aeaca6",
-  accent: "#d4ff3a",
-  accentDim: "#d4ff3a",
-  danger: "#ff8a75",
-  warning: "#ff8a75",
-  success: "#d4ff3a",
-  border: "#3a3936",
-  borderActive: "#d4ff3a",
-} as const;
-
-export const darkAlpha = {
-  accentSoft: "rgba(212, 255, 58, 0.1)",
-  accentLine: "rgba(212, 255, 58, 0.35)",
-  dangerSoft: "rgba(255, 138, 117, 0.14)",
-  dangerLine: "rgba(255, 138, 117, 0.5)",
-  overlay: "rgba(12, 12, 11, 0.72)",
-
-  accentSubtle: "rgba(212, 255, 58, 0.06)",
-  accentLight: "rgba(212, 255, 58, 0.08)",
-  accentLight12: "rgba(212, 255, 58, 0.1)",
-  accentMedium15: "rgba(212, 255, 58, 0.12)",
-  accentMedium: "rgba(212, 255, 58, 0.16)",
-  accentBorder: "rgba(212, 255, 58, 0.25)",
-  backgroundDim: "rgba(12, 12, 11, 0.15)",
-  backgroundOverlay: "rgba(12, 12, 11, 0.2)",
-  backgroundShadow: "rgba(0, 0, 0, 0.3)",
-  backgroundOpaque96: "rgba(12, 12, 11, 0.96)",
-  backgroundOpaque98: "rgba(12, 12, 11, 0.98)",
-  backgroundSecondaryOpaque96: "rgba(17, 17, 16, 0.96)",
-  surfaceOpaque94: "rgba(20, 20, 19, 0.94)",
-  foregroundOverlay: "rgba(236, 235, 230, 0.12)",
-  foregroundSubtle: "rgba(236, 235, 230, 0.35)",
-  warningSubtle: "rgba(255, 138, 117, 0.06)",
-  warningLight12: "rgba(255, 138, 117, 0.1)",
-  warningBorder: "rgba(255, 138, 117, 0.3)",
-  warningBorder22: "rgba(255, 138, 117, 0.3)",
-  mutedLight: "rgba(174, 172, 166, 0.12)",
-  mutedMedium: "rgba(174, 172, 166, 0.25)",
-} as const;
+export const lightColors = paletteColors(THEMES[DEFAULT_LIGHT_THEME]);
+export const lightAlpha = paletteAlpha(THEMES[DEFAULT_LIGHT_THEME]);
+export const darkColors = paletteColors(THEMES[DEFAULT_DARK_THEME]);
+export const darkAlpha = paletteAlpha(THEMES[DEFAULT_DARK_THEME]);

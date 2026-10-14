@@ -7,7 +7,7 @@ import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTran
 import { useState, useCallback, useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useMobileHubSwitch } from "@/lib/useMobileHubSwitch";
-import { useTheme, type Theme } from "@/lib/theme";
+import { FollowSystem, ThemeGrid } from "./ThemePicker";
 import { MobileAppPanel } from "./MobileAppPanel.web";
 import { ThisMachineSection } from "./DesktopSetup.web";
 import { UpdateNotification } from "./UpdateNotification";
@@ -327,7 +327,6 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   }, []);
   const secureStatus = useSecureConnectionStatus();
   const { logout } = useAuth();
-  const { theme, setTheme } = useTheme();
   // Terminal font settings
   const [terminalFont, setTerminalFont] = useState(
     () => localStorage.getItem("offdesk:terminal-font-family") || "",
@@ -757,35 +756,11 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Appearance</SectionTitle>
 
-          <SettingRow label="Theme" description="Saved on this device. Terminal colors stay the same.">
-            <div role="group" aria-label="Theme" style={{ display: "inline-flex", border: `1px solid ${colors.line}`, borderRadius: 4, overflow: "hidden" }}>
-              {([
-                ["light", "Light"],
-                ["dark", "Dark"],
-                ["system", "System"],
-              ] as const).map(([value, label]: readonly [Theme, string]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={theme === value}
-                  onClick={() => setTheme(value)}
-                  style={{
-                    minHeight: 30,
-                    padding: "0 14px",
-                    border: 0,
-                    background: theme === value ? colors.primary : "transparent",
-                    color: theme === value ? colors.onPrimary : colors.fg2,
-                    fontFamily: "var(--font-display)",
-                    fontSize: 12.5,
-                    fontWeight: theme === value ? 600 : 500,
-                    textTransform: "lowercase",
-                    cursor: "pointer",
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+          <SettingRow label="Theme" description="Saved on this device. The terminal follows the theme." stacked>
+            <ThemeGrid columns={wideSettings ? 4 : 2} />
+          </SettingRow>
+          <SettingRow label="Follow the system" description="Switch between two themes when your device switches between light and dark." stacked>
+            <FollowSystem />
           </SettingRow>
 
           <SettingRow

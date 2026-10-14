@@ -28,7 +28,9 @@ module.exports = ({ config }) => ({
     headTags: [
       {
         tag: "script",
-        innerHTML: `(function(){try{var t=localStorage.getItem('offdesk:theme');var d=t==='dark'||((t==='system'||!t)&&window.matchMedia('(prefers-color-scheme:dark)').matches);document.documentElement.classList.toggle('dark',d);document.documentElement.style.colorScheme=d?'dark':'light'}catch(e){}})();`,
+        // The theme lib/theme.tsx last applied (offdesk:theme-css), painted
+        // before the bundle loads; without it, light or dark as before.
+        innerHTML: `(function(){try{var r=document.documentElement,m=window.matchMedia('(prefers-color-scheme:dark)').matches,c=JSON.parse(localStorage.getItem('offdesk:theme-css')||'null'),e=c&&(c.fixed||(c.system&&c.system[m?'dark':'light']));if(e&&e.vars){for(var k in e.vars)r.style.setProperty(k,e.vars[k]);r.dataset.theme=e.id;r.classList.toggle('dark',e.scheme==='dark');r.style.colorScheme=e.scheme;return}var t=localStorage.getItem('offdesk:theme');var d=t==='dark'||((t==='system'||!t)&&m);r.classList.toggle('dark',d);r.style.colorScheme=d?'dark':'light'}catch(x){}})();`,
       },
     ],
   },

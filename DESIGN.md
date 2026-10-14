@@ -1,11 +1,12 @@
 # Offdesk DEV design system
 
 This documents the system the app actually ships: direction B, "terminal".
-A dark desk, monospace chrome, sans-serif prose, one lime accent. Canonical
-tokens live in `packages/app/global.css` (CSS custom properties, sRGB
-triplets) and are consumed via Tailwind (`tailwind.config.ts`),
-`packages/app/lib/colors.web.ts`, and the literal copies in
-`packages/app/lib/themePalette.ts` for React Native inline styles. The
+A dark desk, monospace chrome, sans-serif prose, one accent. Every theme is
+in `packages/app/lib/themes.ts` (interface tokens and terminal colours);
+`lib/theme.tsx` writes the chosen one onto `<html>` as CSS custom properties
+(sRGB triplets), consumed via Tailwind (`tailwind.config.ts`) and
+`packages/app/lib/colors.web.ts`. `global.css` carries Paper and Graphite for
+the first paint, and `lib/themePalette.ts` derives the React Native values. The
 primitives are `packages/app/components/Primitives.web.tsx` (+ `.css`).
 
 The wireframes in the Offdesk DEV design canvas (desktop D01–D13 and Main,
@@ -27,48 +28,72 @@ changes, compare it with its board at the same viewport (1280×800 desktop,
    bottom of the workspace is a status line, buttons read like commands
    (`take control`, `[enter]`). Dark is the design; the light theme prints the
    same system on paper.
-3. **One accent.** Lime is only for the cursor, the primary action, the
-   active tab and focus. Never decoration.
-4. **Red means waiting.** `#ff8a75` is only for a terminal waiting on you,
-   errors and destructive actions, and always comes with a word.
+3. **One accent.** The theme's accent (lime in Graphite) is only for the
+   cursor, the primary action, the active tab and focus. Never decoration.
+4. **Red means waiting.** The theme's warn colour (coral in Graphite) is only
+   for a terminal waiting on you, errors and destructive actions, and always
+   comes with a word.
 5. **Mono for machines, sans for people.** Terminals, labels, buttons and
    headings are Geist Mono; explanations, settings descriptions and docs are
    Geist.
 6. **Real data or no data.** Meters and stats render only live values; no
    placeholder/mock series.
 
+## Themes
+
+Seven themes, chosen in Settings › Appearance or, on a phone, from
+[m] › appearance (tried on the live terminal; cancel puts it back):
+
+| Theme | Kind | Look |
+|---|---|---|
+| Graphite | dark, default | lifted black `#191917`, quieter lime `#b9d35f` |
+| Midnight | dark | direction B as it first shipped: `#0c0c0b`, lime `#d4ff3a` |
+| Slate | dark | blue-grey, low contrast (Nord-like), sage accent |
+| Ember | dark | warm brown-black, amber accent, little blue light |
+| Paper | light, default | ink on white; its terminal is Graphite's (dark) |
+| Sepia | light, eye care | warm paper, brown ink, light terminal |
+| Sage | light, eye care | pale green page, light terminal |
+
+"Follow the system" switches between a light and a dark theme (Paper and
+Graphite unless changed) with the device. An old Light / Dark choice opens in
+Paper / Graphite. The terminal follows the theme: each has its own xterm
+palette, and light terminals set xterm's `minimumContrastRatio` to 3 so
+programs that assume a dark background stay readable.
+
+`lib/themes.test.ts` holds every theme to: body text 7–18:1 on `bg-0` (no
+white-on-black glare), `fg-1`/`fg-2`, accent and warn ≥ 4.5:1, `fg-3` ≥ 3.5:1,
+text on the primary/accent/warn fills ≥ 4.5:1, terminal text ≥ 7:1 and ANSI
+colours ≥ 3:1 on the terminal body. It also checks `global.css` against the
+registry. A new theme is an entry in `THEMES` that passes those tests.
+
 ## Colour tokens
 
-| Token | Dark | Light | Role |
+| Token | Graphite (dark) | Paper (light) | Role |
 |---|---|---|---|
-| `--color-bg-0` | `#0c0c0b` | `#f5f5f3` | page |
-| `--color-bg-1` | `#111110` | `#fbfbfa` | bars, panels, inputs |
-| `--color-bg-2` | `#141413` | `#ffffff` | surfaces: menus, sheets, status line |
-| `--color-bg-3` | `#1c1c1a` | `#ebebe7` | hover / pressed |
-| `--color-line` | `#3a3936` | `#c4c2bb` | control edges (buttons, inputs, keys) |
-| `--color-line-soft` | `#2a2927` | `#e2e1dc` | hairlines — never a control's only edge |
-| `--color-fg-0` | `#ecebe6` | `#111111` | primary text |
-| `--color-fg-1` | `#cfcdc7` | `#2b2a27` | body text |
-| `--color-fg-2` | `#aeaca6` | `#4f4d48` | secondary text, prose |
-| `--color-fg-3` | `#8f8d87` | `#65635d` | the darkest grey allowed for small text |
-| `--color-primary` / `--color-on-primary` | `#d4ff3a` / `#0c0c0b` | same | the lime fill: primary button, "in control" |
-| `--color-accent` | `#d4ff3a` | `#4a6000` | lime's ink: active text, icons, the active tab's underline |
-| `--color-focus` | `#d4ff3a` | `#4a6000` | focus ring |
-| `--color-err` = `--color-warn` | `#ff8a75` | `#b4381f` | waiting, danger, errors |
-| `--color-on-err` | `#0c0c0b` | `#ffffff` | text on a waiting fill |
-| `--color-ok` | `#d4ff3a` | `#4a6000` | online, running |
-| `--color-term-bg` | `#0c0c0b` | `#0c0c0b` | terminal body — dark in both themes |
+| `--color-bg-0` | `#191917` | `#f5f5f3` | page |
+| `--color-bg-1` | `#1d1d1b` | `#fbfbfa` | bars, panels, inputs |
+| `--color-bg-2` | `#21211f` | `#ffffff` | surfaces: menus, sheets, status line |
+| `--color-bg-3` | `#2a2a27` | `#ebebe7` | hover / pressed |
+| `--color-line` | `#474641` | `#c4c2bb` | control edges (buttons, inputs, keys) |
+| `--color-line-soft` | `#31302d` | `#e2e1dc` | hairlines — never a control's only edge |
+| `--color-fg-0` | `#dcdad3` | `#111111` | primary text |
+| `--color-fg-1` | `#c3c1ba` | `#2b2a27` | body text |
+| `--color-fg-2` | `#a29f98` | `#4f4d48` | secondary text, prose |
+| `--color-fg-3` | `#87857e` | `#65635d` | the darkest grey allowed for small text |
+| `--color-primary` / `--color-on-primary` | `#a9c64b` / `#191917` | `#c6e26a` / `#111111` | the accent fill: primary button, "in control" |
+| `--color-accent` | `#b9d35f` | `#4a6000` | the accent's ink: active text, icons, the active tab's underline |
+| `--color-focus` = `--color-ok` | accent | accent | focus ring; online, running |
+| `--color-err` = `--color-warn` | `#e3907d` | `#b4381f` | waiting, danger, errors |
+| `--color-on-err` | `#191917` | `#ffffff` | text on a waiting fill |
+| `--color-term-bg` / `-fg` / `-accent` | terminal body, text, cursor | same (dark) | for chrome drawn on the terminal |
 
-On paper lime cannot carry text (1.06:1), so in light it is only ever a fill
-behind dark text; anything that has to be read in the accent colour uses
-`--color-accent`, which darkens to olive. Every text pairing above is at least
-4.5:1 on `bg-0`…`bg-3`. Alpha composition uses `rgb(var(--x) / a)`.
+On paper lime cannot carry text, so in light themes the accent fill only ever
+sits behind dark text; anything read in the accent colour uses
+`--color-accent`, which darkens (olive, brown, green). Alpha composition uses
+`rgb(var(--x) / a)`.
 
 Focus-visible = 2px `focus` ring, 2px offset. Text selection = primary at
-35%. The xterm theme (`lib/colors.shared.ts`) is `#0c0c0b` body, `#ecebe6`
-text, lime block cursor; ANSI colours are tuned to read on the body.
-
-The theme setting is Light / Dark / System, default System.
+35%.
 
 ## Typography
 

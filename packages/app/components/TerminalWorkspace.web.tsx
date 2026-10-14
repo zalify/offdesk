@@ -22,7 +22,7 @@ import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { AgentMarker, Button } from "./Primitives.web";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { TerminalCard, type TerminalCardRef } from "./TerminalCard.web";
-import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
+import { colors, colorAlpha } from "@/lib/colors";
 import {
   type WorkspaceGroup,
   type WorkspacePaneFocusDirection,
@@ -928,7 +928,7 @@ function TerminalWorkspaceComponent({
         style={{
           flex: 1,
           minHeight: 0,
-          background: terminalTheme.background,
+          background: colors.termBg,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
@@ -1080,7 +1080,7 @@ function TerminalWorkspaceComponent({
       style={{
         flex: 1,
         minHeight: 0,
-        background: terminalTheme.background,
+        background: colors.termBg,
         display: "flex",
         flexDirection: "column",
         overflow: "hidden",
@@ -1305,7 +1305,7 @@ function WorkspacePaneTree({
                     position: "absolute",
                     inset: 0,
                     zIndex: 1,
-                    background: terminalTheme.background,
+                    background: colors.termBg,
                   }
                 : {
                     position: "absolute",
@@ -1488,7 +1488,7 @@ export function WorkspacePaneLeaf({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        background: terminalTheme.background,
+        background: colors.termBg,
         // Split panes sit 1px apart on the hairline colour (the frame
         // behind them); the focused one of a split gets a faint accent
         // edge as well as the lit ● in its header.

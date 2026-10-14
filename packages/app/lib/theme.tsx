@@ -3,36 +3,55 @@ import React, {
   useContext,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useState,
 } from "react";
 import { Platform, useColorScheme } from "react-native";
-import { lightColors, darkColors, lightAlpha, darkAlpha } from "./themePalette";
+import { paletteAlpha, paletteColors } from "./themePalette";
+import {
+  DEFAULT_DARK_THEME,
+  DEFAULT_SYSTEM_THEMES,
+  THEMES,
+  parseSystemThemes,
+  parseTheme,
+  resolveThemeId,
+  terminalMinimumContrast,
+  themeCssVariables,
+  type SystemThemes,
+  type Theme,
+  type ThemeDefinition,
+  type ThemeId,
+  type ThemeScheme,
+} from "./themes";
 
-export type Theme = "light" | "dark" | "system";
-type ResolvedTheme = "light" | "dark";
+export type { SystemThemes, Theme } from "./themes";
+type ResolvedTheme = ThemeScheme;
+
 const STORAGE_KEY = "offdesk:theme";
+const SYSTEM_KEY = "offdesk:theme-system";
+// What app.config.js's head script paints before this bundle loads.
+const CSS_CACHE_KEY = "offdesk:theme-css";
 const DARK_MEDIA = "(prefers-color-scheme: dark)";
-function isTheme(value: unknown): value is Theme {
-  return value === "light" || value === "dark" || value === "system";
-}
 
-function readTheme(): Theme {
+function read(key: string): string | null {
   try {
-    const value = localStorage.getItem(STORAGE_KEY);
-    if (isTheme(value)) return value;
+    return localStorage.getItem(key);
   } catch {
     // Storage can be unavailable in private browsing or server rendering.
+    return null;
   }
-  // Follow the system until the user chooses; dark is the design.
-  return "system";
 }
 
-function applyTheme(theme: ResolvedTheme) {
-  if (Platform.OS !== "web" || typeof document === "undefined") return;
-  const root = document.documentElement;
-  root.classList.toggle("dark", theme === "dark");
-  root.style.colorScheme = theme;
+function write(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Keep the in-memory choice when storage is unavailable.
+  }
 }
+
+const readTheme = () => parseTheme(read(STORAGE_KEY));
+const readSystemThemes = () => parseSystemThemes(read(SYSTEM_KEY));
 
 function readSystemTheme(): ResolvedTheme {
   return typeof window !== "undefined" && window.matchMedia(DARK_MEDIA).matches
@@ -40,39 +59,62 @@ function readSystemTheme(): ResolvedTheme {
     : "light";
 }
 
+function applyTheme(theme: ThemeDefinition) {
+  if (Platform.OS !== "web" || typeof document === "undefined") return;
+  const root = document.documentElement;
+  root.classList.toggle("dark", theme.scheme === "dark");
+  root.dataset.theme = theme.id;
+  root.style.colorScheme = theme.scheme;
+  for (const [name, value] of Object.entries(themeCssVariables(theme))) root.style.setProperty(name, value);
+}
+
+// The head script repaints from this on the next launch, before the bundle.
+function cacheThemeCss(theme: Theme, pair: SystemThemes) {
+  const entry = (id: ThemeId) => ({ id, scheme: THEMES[id].scheme, vars: themeCssVariables(THEMES[id]) });
+  write(CSS_CACHE_KEY, JSON.stringify(theme === "system"
+    ? { system: { light: entry(pair.light), dark: entry(pair.dark) } }
+    : { fixed: entry(theme) }));
+}
+
 // Apply the saved choice as the app loads, before React mounts its screens.
 if (Platform.OS === "web" && typeof window !== "undefined") {
-  const theme = readTheme();
-  applyTheme(
-    theme === "system"
-      ? readSystemTheme()
-      : theme,
-  );
+  applyTheme(THEMES[resolveThemeId(readTheme(), readSystemTheme(), readSystemThemes())]);
 }
 
 interface ThemeContextValue {
   theme: Theme;
+  // The theme in use (the system's pick when theme is "system").
+  themeId: ThemeId;
+  definition: ThemeDefinition;
+  // Whether the theme in use is light or dark.
   resolvedTheme: ResolvedTheme;
+  systemThemes: SystemThemes;
   setTheme: (theme: Theme) => void;
+  setSystemThemes: (pair: SystemThemes) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
   theme: "system",
+  themeId: DEFAULT_DARK_THEME,
+  definition: THEMES[DEFAULT_DARK_THEME],
   resolvedTheme: "dark",
+  systemThemes: DEFAULT_SYSTEM_THEMES,
   setTheme: () => {},
+  setSystemThemes: () => {},
 });
 const useBrowserLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [theme, updateTheme] = useState<Theme>(readTheme);
+  const [systemThemes, updateSystemThemes] = useState<SystemThemes>(readSystemThemes);
   const nativeSystemTheme = useColorScheme();
   const [webSystemTheme, setWebSystemTheme] = useState(readSystemTheme);
   const systemTheme = Platform.OS === "web" ? webSystemTheme : nativeSystemTheme;
-  const resolvedTheme: ResolvedTheme = theme === "system"
-    ? (systemTheme === "dark" ? "dark" : "light")
-    : theme;
+  const themeId = resolveThemeId(theme, systemTheme === "dark" ? "dark" : "light", systemThemes);
+  const definition = THEMES[themeId];
 
-  useBrowserLayoutEffect(() => applyTheme(resolvedTheme), [resolvedTheme]);
+  useBrowserLayoutEffect(() => applyTheme(definition), [definition]);
+  useEffect(() => cacheThemeCss(theme, systemThemes), [theme, systemThemes]);
 
   useEffect(() => {
     if (Platform.OS !== "web") return;
@@ -89,25 +131,29 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (Platform.OS !== "web") return;
     const sync = (event: StorageEvent) => {
       if (event.key === STORAGE_KEY || event.key === null) updateTheme(readTheme());
+      if (event.key === SYSTEM_KEY || event.key === null) updateSystemThemes(readSystemThemes());
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
   }, []);
 
-  const setTheme = (value: Theme) => {
-    updateTheme(value);
-    try {
-      localStorage.setItem(STORAGE_KEY, value);
-    } catch {
-      // Keep the in-memory choice when storage is unavailable.
-    }
-  };
+  const value = useMemo<ThemeContextValue>(() => ({
+    theme,
+    themeId,
+    definition,
+    resolvedTheme: definition.scheme,
+    systemThemes,
+    setTheme: (next: Theme) => {
+      updateTheme(next);
+      write(STORAGE_KEY, next);
+    },
+    setSystemThemes: (pair: SystemThemes) => {
+      updateSystemThemes(pair);
+      write(SYSTEM_KEY, JSON.stringify(pair));
+    },
+  }), [theme, themeId, definition, systemThemes]);
 
-  return (
-    <ThemeContext.Provider value={{ theme, resolvedTheme, setTheme }}>
-      {children}
-    </ThemeContext.Provider>
-  );
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {
@@ -115,9 +161,21 @@ export function useTheme() {
 }
 
 export function useColors() {
-  return useTheme().resolvedTheme === "dark" ? darkColors : lightColors;
+  const { definition } = useTheme();
+  return useMemo(() => paletteColors(definition), [definition]);
 }
 
 export function useColorAlpha() {
-  return useTheme().resolvedTheme === "dark" ? darkAlpha : lightAlpha;
+  const { definition } = useTheme();
+  return useMemo(() => paletteAlpha(definition), [definition]);
+}
+
+// The terminal's colours for the theme in use, and how hard xterm should
+// lift pale text on a light terminal.
+export function useTerminalTheme() {
+  const { definition } = useTheme();
+  return useMemo(() => ({
+    theme: definition.terminal,
+    minimumContrastRatio: terminalMinimumContrast(definition),
+  }), [definition]);
 }

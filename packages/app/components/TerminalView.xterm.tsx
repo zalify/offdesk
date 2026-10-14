@@ -19,7 +19,8 @@ import type { TerminalViewRef, TerminalViewProps } from "./TerminalView.types";
 import { measureTerminalSurface, readXtermCellMetrics } from "./terminalXtermMetrics";
 import { useTerminalFitController } from "./useTerminalFitController";
 import { useTerminalLiveSocket } from "./useTerminalLiveSocket";
-import { terminalTheme, colors, colorAlpha } from "@/lib/colors";
+import { colors, colorAlpha } from "@/lib/colors";
+import { useTerminalTheme } from "@/lib/theme";
 import {
   shouldSendClipboardImagePaste,
   type ImagePasteDedupeRecord,
@@ -537,6 +538,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const viewportRef = useRef<HTMLDivElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
+    // The chosen theme's colours: read when the terminal is created, and
+    // applied in place when the theme changes (below).
+    const terminalColors = useTerminalTheme();
+    const terminalColorsRef = useRef(terminalColors);
+    terminalColorsRef.current = terminalColors;
     const wsRef = useRef<WebSocket | null>(null);
     const fitRef = useRef<FitAddon | null>(null);
     const isControllerRef = useRef(isController ?? true);
@@ -853,7 +859,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         fontFamily,
         allowTransparency: false,
         rescaleOverlappingGlyphs: true,
-        theme: terminalTheme,
+        theme: terminalColorsRef.current.theme,
+        minimumContrastRatio: terminalColorsRef.current.minimumContrastRatio,
         cursorBlink: true,
         scrollback: 0,
         // 6.1 defaults showScrollbar to true and draws `.xterm-scrollbar`.
@@ -1453,6 +1460,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Terminal created once on mount
     }, []);
+
+    // A theme change recolours the live terminal; nothing reconnects.
+    useEffect(() => {
+      const term = termRef.current;
+      if (!term) return;
+      term.options.theme = terminalColors.theme;
+      term.options.minimumContrastRatio = terminalColors.minimumContrastRatio;
+    }, [terminalColors]);
 
     // Keep the live terminal and its buffer/socket while preferences change.
     useEffect(() => {
