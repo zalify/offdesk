@@ -1,14 +1,19 @@
 name: Build Android APK (Tauri)
 
+# release.yml calls this for every vX.Y.Z release: arm64 and x86_64 APKs plus a
+# universal one, signed with the release key, started on an emulator, then
+# uploaded into the release's draft. Dispatched by hand it builds an arm64 APK
+# on the rc Web UI channel as a run artifact only.
+
 on:
-  push:
-    tags:
-      - "app-v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "The vX.Y.Z release tag to build and upload into (its draft release must exist)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Rebuild an existing app-vX.Y.Z tag with this workflow's verification; leaves the source tag unchanged."
-        required: false
       hub_url:
         description: "Optional: preset this hub instead of asking on first launch. Leave empty for a public build."
         required: false
@@ -23,12 +28,14 @@ jobs:
       # Empty on purpose for released builds: the app asks for a hub on first
       # launch, so one APK works for everyone. A dispatch can preset a hub for
       # a private build.
-      OFFDESK_MOBILE_HUB_URL: ${{ github.event.inputs.hub_url }}
+      OFFDESK_MOBILE_HUB_URL: ${{ inputs.hub_url }}
       # Baked in at compile time so the shell only loads Web UI bundles signed
       # with this key. The channel is chosen after the release source is known.
       OFFDESK_UI_PUBLIC_KEY: ${{ vars.OFFDESK_UI_PUBLIC_KEY }}
 
     steps:
+      # The workflow's own commit first, for the smoke test below; the
+      # release's tag is checked out after it.
       - uses: actions/checkout@v4
 
       - name: Preserve workflow smoke test
@@ -37,18 +44,15 @@ jobs:
       - name: Validate release source
         id: source
         env:
-          REQUESTED_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ inputs.tag }}
           PRESET_HUB: ${{ inputs.hub_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="${REQUESTED_TAG:-}"
-          if [[ "$GITHUB_REF" == refs/tags/app-v* ]]; then tag="$GITHUB_REF_NAME"; fi
+          tag="${RELEASE_TAG:-}"
           if [ -n "$tag" ]; then
-            [[ "$tag" =~ ^app-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag" >&2; exit 1; }
+            [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid release tag" >&2; exit 1; }
             [ -z "$PRESET_HUB" ] || { echo "Public releases cannot preset a Hub" >&2; exit 1; }
-            if [ -n "$REQUESTED_TAG" ]; then
-              [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ] || { echo "Rebuilds require an unpublished draft release" >&2; exit 1; }
-            fi
+            [ "$(gh release view "$tag" --json isDraft --jq .isDraft)" = true ] || { echo "Release builds upload into an unpublished draft release" >&2; exit 1; }
             git fetch origin "refs/tags/$tag:refs/tags/$tag"
             git checkout --detach "refs/tags/$tag"
           fi
@@ -68,18 +72,22 @@ jobs:
       - name: Decide which ABIs to build
         id: abi
         run: |
-          # A tag ships arm64 for phones and x86_64 for emulators. armeabi-v7a
-          # and x86 are 32-bit, each costs a quarter of the Rust build, and
-          # ad-hoc builds need only arm64. Rebuilding a release tag keeps both
-          # release ABIs and the emulator verification.
+          # A release ships arm64 for phones and x86_64 for emulators.
+          # armeabi-v7a and x86 are 32-bit, each costs a quarter of the Rust
+          # build, and ad-hoc builds need only arm64. Releases also get the
+          # emulator verification.
           if [ -n "${{ steps.source.outputs.tag }}" ]; then
-            echo 'rust=aarch64-linux-android,x86_64-linux-android' >> "$GITHUB_OUTPUT"
-            echo 'tauri=-t aarch64 -t x86_64' >> "$GITHUB_OUTPUT"
-            echo 'gradle="arm64-v8a", "x86_64"' >> "$GITHUB_OUTPUT"
+            {
+              echo 'rust=aarch64-linux-android,x86_64-linux-android'
+              echo 'tauri=-t aarch64 -t x86_64'
+              echo 'gradle="arm64-v8a", "x86_64"'
+            } >> "$GITHUB_OUTPUT"
           else
-            echo 'rust=aarch64-linux-android' >> "$GITHUB_OUTPUT"
-            echo 'tauri=-t aarch64' >> "$GITHUB_OUTPUT"
-            echo 'gradle="arm64-v8a"' >> "$GITHUB_OUTPUT"
+            {
+              echo 'rust=aarch64-linux-android'
+              echo 'tauri=-t aarch64'
+              echo 'gradle="arm64-v8a"'
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - uses: pnpm/action-setup@v4
@@ -145,12 +153,10 @@ jobs:
         run: |
           tag="${{ steps.source.outputs.tag }}"
           if [ -n "$tag" ]; then
-            version="${tag#app-v}"
+            version="${tag#v}"
           else
-            tag="app-vlocal"
             version="0.1.0"
           fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Decode release keystore
@@ -260,10 +266,9 @@ jobs:
       - name: Collect APKs
         id: apks
         run: |
-          tag="${{ steps.version.outputs.tag }}"
           version="${{ steps.version.outputs.version }}"
           mkdir -p artifacts
-          for src in $(find packages/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*-release*.apk"); do
+          while IFS= read -r src; do
             base=$(basename "$src" .apk)
             # Gradle names these app-<flavor>-<abi>-release.apk, and the
             # flavor is itself called "universal", so the raw strip leaves
@@ -272,7 +277,7 @@ jobs:
             abi=$(echo "$base" | sed -E 's/^app-//; s/-release.*$//; s/^universal-(.+)$/\1/')
             [ -z "$abi" ] && abi="universal"
             cp "$src" "artifacts/offdesk-${version}-${abi}.apk"
-          done
+          done < <(find packages/desktop/src-tauri/gen/android/app/build/outputs/apk -name "*-release*.apk")
           ls -lh artifacts/
           {
             echo "files<<EOF"
@@ -308,20 +313,9 @@ jobs:
           name: android-release-startup-evidence
           path: /tmp/offdesk-android-startup
 
-      - name: Create or update release
+      - name: Upload to the release
         if: steps.source.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            # Never Latest: the repository's global Latest belongs to the
-            # standalone Hub release, which install.sh downloads from.
-            gh release create "$tag" \
-              --latest=false \
-              --title "Mobile ${tag}" \
-              --notes "Tauri-based Android client. Sideload via 'install from unknown sources'. Pick the **arm64-v8a** APK on modern phones; the **universal** APK works on any architecture but is larger. On first launch the app asks for your hub's address; legacy connections load their UI from the Hub; encrypted pairing retains the trusted App bundle and requires an App update for UI changes."
-          fi
-          for apk in artifacts/*.apk; do
-            gh release upload "$tag" "$apk" --clobber
-          done
+          TAG: ${{ steps.source.outputs.tag }}
+        run: gh release upload "$TAG" artifacts/*.apk --clobber

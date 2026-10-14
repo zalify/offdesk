@@ -370,7 +370,7 @@ También hay tres clientes empaquetados:
   misma compilación sirve para cualquier hub. Dos ajustes del teléfono pueden
   bloquear un hub en la LAN, y la app los nombra cuando ocurre: Red local y,
   en teléfonos vendidos en China, Datos inalámbricos. Se compila a partir de
-  las etiquetas `ios-v*`.
+  las etiquetas `v*` y se publica junto con el hub.
 - **Android** — un APK desde [offdesk.dev/apk](https://offdesk.dev/apk), que
   siempre apunta a la compilación más reciente de la app (`/apk/universal`
   para la universal); elige `arm64-v8a` en un teléfono moderno y `universal`
@@ -388,7 +388,8 @@ También hay tres clientes empaquetados:
   terminal y una línea de estado que muestra el terminal que te está
   esperando. En un Mac puede hacer de hub (consulta
   [Instalación](#instalación)); en Windows y Linux es un cliente y te pide el
-  enlace del hub. Se compila a partir de las etiquetas `desktop-v*`.
+  enlace del hub. Se compila a partir de las etiquetas `v*` y se publica
+  junto con el hub.
 
 Para compilar cualquiera de ellos tú mismo: [docs/building.md](docs/building.md).
 

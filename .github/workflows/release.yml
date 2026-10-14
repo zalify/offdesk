@@ -1,0 +1,324 @@
+name: Release
+
+# One release per version. Pushing a vX.Y.Z tag builds every component from
+# that commit — the Hub, node and CLI, the desktop app, the Android APKs and
+# the iOS app — into one draft release, and publishes it as Latest once all
+# of them are there. docs/releasing.md is the process around it.
+#
+# Dispatch it with an existing tag to rebuild that tag's draft: everything,
+# or one component whose build failed (the others keep the assets already
+# on the draft). A tag whose release is already published is refused.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag whose draft release to build"
+        required: true
+        type: string
+      components:
+        description: "What to build; the rest keep the assets already on the draft"
+        type: choice
+        options: [all, hub, desktop, android, ios]
+        default: all
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare the draft release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - name: Read the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-$GITHUB_REF_NAME}"
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$tag' is not a vX.Y.Z release tag"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      # The tag's own commit, also on a dispatch from a branch. Fails here
+      # when the tag does not exist.
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+
+      - name: Check the tag matches the app and the Cargo workspace
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          app=$(jq -r .version packages/desktop/src-tauri/tauri.conf.json)
+          workspace=$(awk '
+            /^\[workspace\.package\]/ { inside = 1; next }
+            /^\[/ { inside = 0 }
+            inside && /^version *=/ { gsub(/^version *= *"|".*$/, ""); print; exit }
+          ' Cargo.toml)
+          echo "tag $TAG, tauri.conf.json $app, Cargo workspace $workspace"
+          ok=1
+          if [ "$app" != "$VERSION" ]; then
+            echo "::error file=packages/desktop/src-tauri/tauri.conf.json::version is $app; the tag $TAG needs $VERSION"
+            ok=0
+          fi
+          if [ "$workspace" != "$VERSION" ]; then
+            echo "::error file=Cargo.toml::[workspace.package] version is $workspace; the tag $TAG needs $VERSION"
+            ok=0
+          fi
+          [ "$ok" = 1 ]
+
+      - name: Create the draft release if missing
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          # The listing includes drafts, which /releases/tags/<tag> does not.
+          found=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\") | {id, draft}]")
+          case "$(jq length <<<"$found")" in
+            0)
+              notes_doc=""
+              for doc in docs/releases/*-"$VERSION".md; do
+                if [ -e "$doc" ]; then notes_doc="$doc"; break; fi
+              done
+              notes="$RUNNER_TEMP/notes.md"
+              cat > "$notes" <<'EOF'
+          Offdesk DEV __TAG__: every component at __VERSION__, built from the same commit.
+
+          | Component | Assets |
+          |---|---|
+          | Hub, node and CLI — Linux and macOS, x64 and arm64 | `offdesk-<os>-<arch>`, `offdesk-node-<os>-<arch>`, `offdesk-hub-<os>-<arch>` (`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`) |
+          | Desktop app — macOS (universal) | `Offdesk.DEV___VERSION___universal.dmg`; updater: `Offdesk.DEV_universal.app.tar.gz` |
+          | Desktop app — Windows | `Offdesk.DEV___VERSION___x64_en-US.msi`, `Offdesk.DEV___VERSION___x64-setup.exe` |
+          | Desktop app — Linux | `Offdesk.DEV___VERSION___amd64.AppImage`, `Offdesk.DEV___VERSION___amd64.deb`, `Offdesk.DEV-__VERSION__-1.x86_64.rpm` |
+          | Desktop updater | `latest.json` and the `.sig` beside each updater bundle |
+          | Android | `offdesk-__VERSION__-arm64-v8a.apk` (modern phones), `offdesk-__VERSION__-x86_64.apk`, `offdesk-__VERSION__-universal.apk` (any phone, larger) |
+          | iOS | `offdesk-__VERSION__.ipa` — install from TestFlight; the .ipa is the same build, for the record |
+
+          Install the Hub, node and CLI:
+
+          ```sh
+          curl -fsSL https://offdesk.dev/install | sh
+          ```
+          EOF
+              sed -i "s/__TAG__/$TAG/g; s/__VERSION__/$VERSION/g" "$notes"
+              if [ -n "$notes_doc" ]; then
+                printf '\nWhat changed: [%s](https://github.com/%s/blob/%s/%s)\n' \
+                  "$notes_doc" "$GITHUB_REPOSITORY" "$TAG" "$notes_doc" >> "$notes"
+              fi
+              id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+                -f tag_name="$TAG" \
+                -f name="Offdesk DEV $TAG" \
+                -F body=@"$notes" \
+                -F draft=true \
+                --jq .id)
+              echo "Created the draft release $TAG ($id)."
+              ;;
+            1)
+              if [ "$(jq -r '.[0].draft' <<<"$found")" != true ]; then
+                echo "::error::$TAG is already published. Release a new version instead of rebuilding a published one."
+                exit 1
+              fi
+              id=$(jq -r '.[0].id' <<<"$found")
+              echo "Building into the existing draft release $TAG ($id)."
+              ;;
+            *)
+              echo "::error::More than one release is tagged $TAG; delete the extra drafts first."
+              exit 1
+              ;;
+          esac
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  # The four builds run in parallel, each uploading its assets into the draft.
+  hub:
+    name: Hub, node and CLI
+    needs: prepare
+    if: ${{ !inputs.components || inputs.components == 'all' || inputs.components == 'hub' }}
+    uses: ./.github/workflows/build.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+    secrets: inherit
+
+  desktop:
+    name: Desktop
+    needs: prepare
+    if: ${{ !inputs.components || inputs.components == 'all' || inputs.components == 'desktop' }}
+    uses: ./.github/workflows/desktop.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      release_id: ${{ needs.prepare.outputs.release_id }}
+    permissions:
+      contents: write
+    secrets: inherit
+
+  android:
+    name: Android
+    needs: prepare
+    if: ${{ !inputs.components || inputs.components == 'all' || inputs.components == 'android' }}
+    uses: ./.github/workflows/mobile-android.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+    secrets: inherit
+
+  ios:
+    name: iOS
+    needs: prepare
+    if: ${{ !inputs.components || inputs.components == 'all' || inputs.components == 'ios' }}
+    uses: ./.github/workflows/mobile-ios.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+    secrets: inherit
+
+  publish:
+    name: Publish the release
+    needs: [prepare, hub, desktop, android, ios]
+    # Builds left out of a dispatch are skipped; any that failed or were
+    # cancelled leave the release a draft.
+    if: >-
+      ${{ !cancelled()
+      && needs.prepare.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_ID: ${{ needs.prepare.outputs.release_id }}
+    steps:
+      # The draft must hold every component before anyone can download it:
+      # a dispatch that rebuilt one component relies on the rest being
+      # there, and the desktop matrix jobs each rewrite latest.json.
+      - name: Check every component is on the draft
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" > "$RUNNER_TEMP/assets.json"
+          mapfile -t assets < <(jq -r '.[].name' "$RUNNER_TEMP/assets.json")
+          printf '%s\n' "${assets[@]}"
+          missing=0
+          has() {
+            for asset in "${assets[@]}"; do [ "$asset" = "$1" ] && return 0; done
+            echo "::error::$TAG has no $1"
+            missing=1
+          }
+          has_suffix() {
+            for asset in "${assets[@]}"; do [[ "$asset" == *"$1" ]] && return 0; done
+            echo "::error::$TAG has no asset ending in $1"
+            missing=1
+          }
+          for binary in offdesk offdesk-node offdesk-hub; do
+            for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+              has "$binary-$platform"
+            done
+          done
+          for suffix in _universal.dmg _universal.app.tar.gz _universal.app.tar.gz.sig \
+            _x64_en-US.msi _x64_en-US.msi.sig _x64-setup.exe _x64-setup.exe.sig \
+            _amd64.AppImage _amd64.AppImage.sig _amd64.deb _amd64.deb.sig \
+            .x86_64.rpm .x86_64.rpm.sig; do
+            has_suffix "$suffix"
+          done
+          has latest.json
+          for abi in arm64-v8a x86_64 universal; do
+            has "offdesk-$VERSION-$abi.apk"
+          done
+          has "offdesk-$VERSION.ipa"
+
+          # latest.json is what installed desktop apps update from: this
+          # version, every desktop platform, and links into this release
+          # by its tag (a draft's own links say untagged-… and die when it
+          # is published).
+          asset_id=$(jq -r '.[] | select(.name == "latest.json") | .id' "$RUNNER_TEMP/assets.json")
+          if [ -n "$asset_id" ]; then
+            gh api -H "Accept: application/octet-stream" \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" > "$RUNNER_TEMP/latest.json"
+            prefix="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/"
+            if ! jq -e --arg version "$VERSION" --arg prefix "$prefix" '
+              .version == $version
+              and ((["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"] - (.platforms | keys)) | length == 0)
+              and ([.platforms[].url | startswith($prefix)] | all)
+            ' "$RUNNER_TEMP/latest.json" > /dev/null; then
+              echo "::error::latest.json does not name $VERSION, every desktop platform and links under $prefix"
+              jq '{version, platforms: (.platforms | map_values(.url))}' "$RUNNER_TEMP/latest.json"
+              missing=1
+            fi
+            while read -r url; do
+              has "${url##*/}"
+            done < <(jq -r '.platforms[].url' "$RUNNER_TEMP/latest.json" | sort -u)
+          fi
+          [ "$missing" = 0 ]
+
+      - name: Publish as Latest
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+  updater-channel:
+    name: Point desktop-latest at this release
+    needs: [prepare, publish]
+    uses: ./.github/workflows/desktop-updater-channel.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+    permissions:
+      contents: write
+
+  # TRANSITIONAL — delete this job once Android installs are on an app whose
+  # updater reads vX.Y.Z releases (docs/releasing.md says when). Android apps
+  # up to 0.9.x only look for app-vX.Y.Z releases, so they get a copy of this
+  # release's APKs under that tag: published, never Latest.
+  android-legacy-release:
+    name: Copy the APKs to app-vX.Y.Z for Android apps up to 0.9.x
+    needs: [prepare, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+
+      - name: Publish app-v${{ needs.prepare.outputs.version }} with the same APKs
+        run: |
+          legacy="app-v$VERSION"
+          dir="$RUNNER_TEMP/apks"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "offdesk-$VERSION-*.apk" --dir "$dir"
+          ls -l "$dir"
+          if gh release view "$legacy" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$legacy" "$dir"/*.apk --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$legacy" "$dir"/*.apk \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$(git rev-parse HEAD)" \
+              --latest=false \
+              --title "Offdesk DEV Android $VERSION (for Android apps up to 0.9.x)" \
+              --notes "This release exists only so Android apps up to 0.9.x, whose updater looks for app-v* releases, can find this update. The full release, with every platform, is [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)."
+          fi

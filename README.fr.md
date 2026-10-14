@@ -372,7 +372,7 @@ Trois clients empaquetés sont aussi disponibles :
   Un même build fonctionne avec n'importe quel hub. Deux réglages du téléphone
   peuvent bloquer l'accès à un hub sur le réseau local, et l'app les nomme le
   cas échéant : Réseau local et, sur les téléphones vendus en Chine, Données
-  sans fil. Compilée à partir des tags `ios-v*`.
+  sans fil. Compilée à partir des tags `v*` et publiée avec le hub.
 - **Android** — un APK sur [offdesk.dev/apk](https://offdesk.dev/apk), qui
   pointe toujours vers le build le plus récent (`/apk/universal` pour la
   version universelle) ; prenez `arm64-v8a` sur un téléphone récent,
@@ -390,7 +390,7 @@ Trois clients empaquetés sont aussi disponibles :
   terminal, et une ligne d'état qui signale un terminal qui vous attend. Sur un
   Mac, elle peut servir de hub — voir [Installation](#installation) ; sous
   Windows et Linux, c'est un client, qui demande le lien du hub. Compilée à
-  partir des tags `desktop-v*`.
+  partir des tags `v*` et publiée avec le hub.
 
 Pour compiler l'un d'eux vous-même : [docs/building.md](docs/building.md).
 

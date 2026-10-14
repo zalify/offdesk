@@ -341,7 +341,7 @@ Three packaged clients also ship:
   updates through TestFlight. One build works with any hub. Two switches on the
   phone can stand in the way of a hub on the LAN, and the app names them when
   they do: Local Network, and on phones sold in China, Wireless Data. Built
-  from `ios-v*` tags.
+  from `v*` tags and released together with the hub.
 - **Android** — an APK from [offdesk.dev/apk](https://offdesk.dev/apk), which always
   points at the newest app build (`/apk/universal` for the universal one);
   take `arm64-v8a` on a modern phone, `universal` if unsure. Sideload it; it
@@ -356,7 +356,7 @@ Three packaged clients also ship:
   pane headers that show who opened a terminal, and a status line that shows
   a terminal waiting on you. On a Mac it can be the hub — see
   [Install](#install); on Windows and Linux it is a client, and asks for the
-  hub's link. Built from `desktop-v*` tags.
+  hub's link. Built from `v*` tags and released together with the hub.
 
 To build any of them yourself: [docs/building.md](docs/building.md).
 
