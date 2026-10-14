@@ -386,6 +386,23 @@ export function releaseControlKeepalive(
 export const getMachineStats = (machineId: string) =>
   request<ResourceStats>("GET", `/api/machines/${machineId}/stats`);
 
+// Versions (hub 0.23+; older hubs answer 404/405)
+/** This hub's version — also its built-in interface's — and the newest release. */
+export interface HubVersionInfo {
+  hub: string;
+  latest: string | null;
+  update_available: boolean;
+}
+/** An online node; `version` is null for a node from before 0.23. */
+export interface MachineVersionInfo {
+  id: string;
+  name: string;
+  version: string | null;
+  update_available: boolean;
+}
+export const getHubVersion = () => request<HubVersionInfo>("GET", "/api/version");
+export const getMachineVersions = () => request<MachineVersionInfo[]>("GET", "/api/machines/versions");
+
 // Settings
 export const getSettings = () =>
   request<{ settings: Record<string, string> }>("GET", "/api/settings");

@@ -14,6 +14,7 @@ import { colors } from "../lib/colors";
 import LoginScreen from "./login";
 import { DesktopGate } from "../components/DesktopSetup.web";
 import { AndroidUpdateNotification } from "../components/AndroidUpdateNotification";
+import { IosUpdateNotification } from "../components/IosUpdateNotification";
 
 // Decided once: the shell a page runs in does not change while it is open,
 // and Tauri's bridge is there before any script runs. Reading it per render
@@ -123,6 +124,7 @@ export default function RootLayout() {
           <AuthProvider>
             <AuthGate />
             <AndroidUpdateNotification />
+            <IosUpdateNotification />
             <UiUpdateLifecycle />
           </AuthProvider>
         </ThemeProvider>

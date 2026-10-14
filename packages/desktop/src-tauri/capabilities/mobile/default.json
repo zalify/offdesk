@@ -14,6 +14,7 @@
     "allow-mobile-hub-url",
     "allow-set-mobile-hub-url",
     "allow-clear-mobile-hub-url",
+    "allow-probe-hub-version",
     "barcode-scanner:allow-scan",
     "barcode-scanner:allow-cancel",
     "barcode-scanner:allow-request-permissions",
