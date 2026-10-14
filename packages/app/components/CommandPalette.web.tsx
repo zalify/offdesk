@@ -3,9 +3,10 @@
 // by TerminalCanvas; `switchHost` / `sessionSwitcher` prefix actions open it
 // pre-filtered to the hosts / tabs sections.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { colors } from "@/lib/colors";
+import { colors, colorAlpha } from "@/lib/colors";
+import { AgentMarker } from "./Primitives.web";
 
 export type PaletteSection = "actions" | "tabs" | "hosts";
 export type PaletteFilter = "all" | "tabs" | "hosts";
@@ -18,6 +19,13 @@ export interface PaletteRow {
   hint?: string;
   // Extra text the fuzzy filter matches on (e.g. machine name, cwd).
   keywords?: string;
+  // Muted text after the label: a tab's programs, a machine's os.
+  meta?: string;
+  // Set when an agent opened a terminal in this tab: the opener's label
+  // ("" when it gave none) — rendered as the `⌁ opened by agent` chip.
+  opener?: string;
+  // Machines only: the status dot.
+  online?: boolean;
   disabled?: boolean;
   action: () => void;
 }
@@ -55,8 +63,13 @@ export function CommandPalette({
   }, []);
 
   const visibleRows = useMemo(() => {
-    const sectioned =
-      filter === "all" ? rows : rows.filter((row) => row.section === filter);
+    const sectioned = (
+      filter === "all" ? rows : rows.filter((row) => row.section === filter)
+    )
+      // Grouped under their section titles: actions, tabs, machines.
+      .map((row, order) => ({ row, order }))
+      .sort((a, b) => SECTION_ORDER[a.row.section] - SECTION_ORDER[b.row.section] || a.order - b.order)
+      .map(({ row }) => row);
     const trimmed = query.trim();
     if (!trimmed) return sectioned;
     return sectioned.filter((row) =>
@@ -112,110 +125,172 @@ export function CommandPalette({
         position: "fixed",
         inset: 0,
         zIndex: 70,
-        background: "rgba(0, 0, 0, 0.5)",
+        background: colorAlpha.overlay,
         display: "flex",
         alignItems: "flex-start",
         justifyContent: "center",
-        paddingTop: "14vh",
+        paddingTop: 120,
       }}
     >
       <div
+        className="odk-float"
+        role="dialog"
+        aria-label="Command palette"
         style={{
           width: "calc(100% - 48px)",
-          maxWidth: 480,
-          background: colors.bg1,
-          border: `1px solid ${colors.line}`,
-          borderRadius: 10,
-          boxShadow: "0 24px 64px -16px rgba(0,0,0,0.6)",
+          maxWidth: 600,
+          display: "flex",
+          flexDirection: "column",
           overflow: "hidden",
         }}
       >
-        <input
-          ref={inputRef}
-          data-testid="command-palette-input"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Type a command or search…"
-          spellCheck={false}
+        <div
           style={{
-            width: "100%",
-            boxSizing: "border-box",
-            background: "transparent",
-            border: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "0 18px",
             borderBottom: `1px solid ${colors.lineSoft}`,
-            outline: "none",
-            color: colors.fg0,
-            fontSize: 14,
-            padding: "12px 14px",
           }}
-        />
+        >
+          <span aria-hidden="true" style={{ color: colors.accent, fontSize: 15, fontWeight: 500 }}>:</span>
+          <input
+            ref={inputRef}
+            data-testid="command-palette-input"
+            aria-label="Command"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="type a command or search…"
+            spellCheck={false}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              height: 52,
+              boxSizing: "border-box",
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              color: colors.fg0,
+              fontFamily: "var(--font-display)",
+              fontSize: 15,
+              padding: 0,
+            }}
+          />
+          <span style={{ fontSize: 11, color: colors.fg3 }}>esc</span>
+        </div>
         <div
           ref={listRef}
           style={{
             maxHeight: "50vh",
             overflowY: "auto",
-            padding: "6px 0",
+            padding: 8,
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
           }}
         >
           {visibleRows.length === 0 && (
-            <div
-              style={{
-                padding: "14px",
-                color: colors.fg3,
-                fontSize: 12,
-                textAlign: "center",
-              }}
-            >
-              No matching commands
+            <div style={{ padding: "14px", color: colors.fg3, fontSize: 12, textAlign: "center" }}>
+              no matching commands
             </div>
           )}
-          {visibleRows.map((row, index) => (
-            <button
-              key={row.id}
-              type="button"
-              data-testid={`command-palette-row-${row.id}`}
-              data-palette-index={index}
-              disabled={row.disabled}
-              onClick={() => runRow(row)}
-              onMouseEnter={() => setSelectedIndex(index)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 12,
-                width: "100%",
-                border: "none",
-                background:
-                  index === selectedIndex ? colors.bg2 : "transparent",
-                color: row.disabled ? colors.fg3 : colors.fg1,
-                fontSize: 13,
-                textAlign: "left",
-                padding: "8px 14px",
-                cursor: row.disabled ? "default" : "pointer",
-              }}
-            >
-              <span style={truncateStyle}>{row.label}</span>
-              {row.hint && (
-                <span
+          {visibleRows.map((row, index) => {
+            const selected = index === selectedIndex;
+            const header = index === 0 || visibleRows[index - 1].section !== row.section;
+            return (
+              <Fragment key={row.id}>
+                {header && (
+                  <div
+                    style={{
+                      padding: index === 0 ? "8px 12px 4px" : "10px 12px 4px",
+                      fontSize: 11.5,
+                      fontWeight: 500,
+                      color: colors.fg3,
+                    }}
+                  >
+                    {SECTION_TITLES[row.section]}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  data-testid={`command-palette-row-${row.id}`}
+                  data-palette-index={index}
+                  disabled={row.disabled}
+                  onClick={() => runRow(row)}
+                  onMouseEnter={() => setSelectedIndex(index)}
                   style={{
-                    color: colors.fg3,
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                    whiteSpace: "nowrap",
-                    flexShrink: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    width: "100%",
+                    border: "none",
+                    borderRadius: 3,
+                    background: selected ? colors.primary : "transparent",
+                    color: selected ? colors.onPrimary : row.disabled ? colors.fg3 : colors.fg0,
+                    fontFamily: "var(--font-display)",
+                    fontSize: 13.5,
+                    fontWeight: selected ? 600 : 400,
+                    textAlign: "left",
+                    padding: "8px 12px",
+                    minHeight: 36,
+                    cursor: row.disabled ? "default" : "pointer",
+                    opacity: row.disabled && !selected ? 0.6 : 1,
                   }}
                 >
-                  {row.hint}
-                </span>
-              )}
-            </button>
-          ))}
+                  {row.online !== undefined ? (
+                    <span
+                      role="img"
+                      aria-label={row.online ? "Online" : "Offline"}
+                      style={{ width: 9, flexShrink: 0, color: selected ? colors.onPrimary : row.online ? colors.ok : colors.fg3 }}
+                    >
+                      ●
+                    </span>
+                  ) : (
+                    <span aria-hidden="true" style={{ width: 9, flexShrink: 0 }}>{selected ? "❯" : ""}</span>
+                  )}
+                  <span style={{ ...truncateStyle, flex: 1 }}>{row.label}</span>
+                  {row.opener !== undefined && (
+                    <AgentMarker
+                      label={row.opener}
+                      style={selected ? { borderColor: colors.onPrimary, color: colors.onPrimary } : undefined}
+                    />
+                  )}
+                  {row.meta && (
+                    <span style={{ fontSize: 12, color: selected ? colors.onPrimary : colors.fg3, whiteSpace: "nowrap", flexShrink: 0 }}>
+                      {row.meta}
+                    </span>
+                  )}
+                  {row.hint && (
+                    <span
+                      style={{
+                        color: selected ? colors.onPrimary : colors.fg3,
+                        fontWeight: 400,
+                        fontSize: 12,
+                        whiteSpace: "nowrap",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {row.hint}
+                    </span>
+                  )}
+                </button>
+              </Fragment>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
+
+const SECTION_TITLES: Record<PaletteSection, string> = {
+  actions: "actions",
+  tabs: "tabs",
+  hosts: "machines",
+};
+
+const SECTION_ORDER: Record<PaletteSection, number> = { actions: 0, tabs: 1, hosts: 2 };
 
 const truncateStyle: CSSProperties = {
   overflow: "hidden",

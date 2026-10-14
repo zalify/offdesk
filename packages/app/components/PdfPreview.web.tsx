@@ -107,7 +107,7 @@ export function PdfPreview({
         console.debug("pdf preview failed", err);
         setLoad({
           status: "error",
-          message: isPasswordError(err) ? "PDF 有密码保护，无法预览" : "无法解析这个 PDF",
+          message: isPasswordError(err) ? "This PDF is password-protected and cannot be previewed" : "Could not read this PDF",
         });
       }
     })();
@@ -152,7 +152,7 @@ export function PdfPreview({
         }}
       >
         <Loader2 size={16} aria-hidden style={{ animation: "offdeskSpin 800ms linear infinite" }} />
-        正在解析 PDF…
+        Reading PDF…
       </div>
     );
   }
@@ -192,13 +192,13 @@ export function PdfPreview({
           data-testid="file-browser-preview-pdf-count"
           style={{ flex: 1, fontSize: 12, color: colors.fg3 }}
         >
-          {load.pages} 页
+          {load.pages} {load.pages === 1 ? "page" : "pages"}
         </span>
         <button
           type="button"
           data-testid="file-browser-preview-pdf-zoom-out"
-          aria-label="缩小"
-          title="缩小"
+          aria-label="Zoom out"
+          title="Zoom out"
           disabled={zoom <= MIN_ZOOM}
           onClick={() => setZoom((z) => stepZoom(z, -1))}
           style={btn(zoom <= MIN_ZOOM)}
@@ -208,8 +208,8 @@ export function PdfPreview({
         <button
           type="button"
           data-testid="file-browser-preview-pdf-zoom-fit"
-          aria-label="适合宽度"
-          title="适合宽度"
+          aria-label="Fit width"
+          title="Fit width"
           onClick={() => setZoom(1)}
           style={btn(false)}
         >
@@ -219,8 +219,8 @@ export function PdfPreview({
         <button
           type="button"
           data-testid="file-browser-preview-pdf-zoom-in"
-          aria-label="放大"
-          title="放大"
+          aria-label="Zoom in"
+          title="Zoom in"
           disabled={zoom >= MAX_ZOOM}
           onClick={() => setZoom((z) => stepZoom(z, 1))}
           style={btn(zoom >= MAX_ZOOM)}

@@ -126,7 +126,7 @@ export function AgentBrowserDialogOverlay({
           flexDirection: "column",
           gap: 10,
           padding: compact ? 16 : 14,
-          borderRadius: 10,
+          borderRadius: 6,
           border: `1px solid ${colors.line}`,
           background: colors.bg1,
           color: colors.fg0,

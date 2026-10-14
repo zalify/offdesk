@@ -2,7 +2,7 @@ import { memo } from "react";
 import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile, detectOS } from "@/lib/platform";
 import { WindowControls } from "./WindowControls";
-import { Settings } from "lucide-react";
+import "./Primitives.css";
 
 function AppTitleBarComponent({ isMobile, onOpenSettings }: { isMobile: boolean; onOpenSettings?: () => void }) {
   // The bar only hosts desktop window chrome (drag region + min/max/close).
@@ -17,10 +17,10 @@ function AppTitleBarComponent({ isMobile, onOpenSettings }: { isMobile: boolean;
       style={{
         display: "flex",
         alignItems: "stretch",
-        borderBottom: `1px solid ${colors.border}`,
-        background: colors.surface,
+        borderBottom: `1px solid ${colors.lineSoft}`,
+        background: colors.bg1,
         flexShrink: 0,
-        minHeight: isMobile ? 40 : 36,
+        minHeight: isMobile ? 44 : 36,
         userSelect: "none",
         WebkitAppRegion: "drag",
       } as React.CSSProperties}
@@ -32,8 +32,8 @@ function AppTitleBarComponent({ isMobile, onOpenSettings }: { isMobile: boolean;
       <div data-tauri-drag-region style={{ flex: 1 }} />
       {onOpenSettings && (
         <button type="button" aria-label="Settings" title="Settings" onClick={onOpenSettings}
-          style={{ border: "none", background: "transparent", color: colors.fg2, padding: "0 12px", cursor: "pointer" }}>
-          <Settings size={15} />
+          className="odk-text-btn" style={{ alignSelf: "center", marginRight: 8, WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+          settings
         </button>
       )}
       <WindowControls position="right" />

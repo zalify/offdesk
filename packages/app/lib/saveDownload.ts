@@ -53,7 +53,7 @@ function saveViaBrowser({ filename, mime, dataBase64 }: SaveDownloadInput): Save
   link.remove();
   // The download starts asynchronously; keep the URL alive long enough.
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
-  return { location: "浏览器下载" };
+  return { location: "your browser's downloads" };
 }
 
 async function saveViaTauri({ filename, mime, dataBase64 }: SaveDownloadInput): Promise<SavedDownload> {
@@ -70,7 +70,7 @@ async function saveViaTauri({ filename, mime, dataBase64 }: SaveDownloadInput): 
     // "Command save_download not found".
     const text = error instanceof Error ? error.message : String(error);
     if (/save_download/.test(text) && /not found|not allowed|unknown/i.test(text)) {
-      throw new Error("需要更新 Offdesk App 才能保存文件");
+      throw new Error("Update the Offdesk DEV app to save files");
     }
     throw error;
   }

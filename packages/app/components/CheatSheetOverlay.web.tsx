@@ -43,10 +43,10 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
     >
       <div
         style={{
-          background: colors.bg1,
+          background: colors.bg2,
           border: `1px solid ${colors.line}`,
-          borderRadius: 10,
-          padding: "18px 20px",
+          borderRadius: 6,
+          padding: "20px 24px",
           width: "calc(100% - 48px)",
           maxWidth: 660,
           maxHeight: "80vh",
@@ -56,10 +56,10 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
       >
         <div
           style={{
-            fontSize: 13,
-            fontWeight: 700,
+            fontSize: 15,
+            fontWeight: 600,
             color: colors.fg0,
-            marginBottom: 12,
+            marginBottom: 14,
           }}
         >
           Keyboard shortcuts
@@ -79,14 +79,15 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 8,
-                fontSize: 12,
+                fontSize: 12.5,
+                textTransform: "lowercase",
               }}
             >
               <span style={{ color: colors.fg2 }}>{definition.label}</span>
               <span
                 style={{
                   color: colors.fg0,
-                  fontFamily: "var(--font-mono)",
+                  fontFamily: "var(--font-display)",
                   whiteSpace: "nowrap",
                 }}
               >
@@ -100,7 +101,8 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
             marginTop: 14,
             paddingTop: 10,
             borderTop: `1px solid ${colors.lineSoft}`,
-            fontSize: 11,
+            fontFamily: "var(--font-sans)",
+            fontSize: 12,
             color: colors.fg3,
           }}
         >

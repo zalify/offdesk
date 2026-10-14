@@ -104,7 +104,7 @@ export function MobileAppPanel() {
   return (
     <div>
       <div
-        style={{ fontSize: 11, color: colors.foregroundMuted, marginBottom: 12 }}
+        style={{ fontSize: 12, fontFamily: "var(--font-sans)", color: colors.fg3, marginBottom: 12 }}
       >
         Browser sign-in · No app needed. Scan with your phone’s camera to
         open this Hub in a browser. For end-to-end encrypted App pairing,
@@ -125,7 +125,7 @@ export function MobileAppPanel() {
             width: 168,
             height: 168,
             padding: 12,
-            borderRadius: 8,
+            borderRadius: 4,
             background: "#ffffff",
             border: `1px solid ${colors.border}`,
             display: "flex",
@@ -141,14 +141,15 @@ export function MobileAppPanel() {
 
         <div style={{ flex: 1, minWidth: 240 }}>
           <div
-            style={{ fontSize: 13, color: colors.foreground, marginBottom: 4 }}
+            style={{ fontSize: 12, fontWeight: 500, color: colors.fg0, marginBottom: 4 }}
           >
-            Address the phone should open
+            address the phone should open
           </div>
           <div
             style={{
-              fontSize: 11,
-              color: colors.foregroundMuted,
+              fontSize: 12,
+              fontFamily: "var(--font-sans)",
+              color: colors.fg3,
               marginBottom: 8,
             }}
           >
@@ -160,23 +161,16 @@ export function MobileAppPanel() {
             value={shareUrl}
             onChange={(event) => setShareUrl(event.target.value)}
             placeholder="http://192.168.1.10:4317"
-            style={{
-              width: "100%",
-              background: colors.background,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 6,
-              color: colors.foreground,
-              padding: "8px 10px",
-              fontSize: 13,
-            }}
+            aria-label="Address the phone should open"
+            className="odk-input"
           />
 
           {sessionToken && (
             <div
               style={{
-                fontSize: 11,
-                color: colors.foreground,
-                opacity: 0.8,
+                fontSize: 12,
+                fontFamily: "var(--font-sans)",
+                color: colors.fg2,
                 marginTop: 8,
               }}
             >
@@ -189,9 +183,9 @@ export function MobileAppPanel() {
           {isLoopback && (
             <div
               style={{
-                fontSize: 11,
-                color: colors.foreground,
-                opacity: 0.8,
+                fontSize: 12,
+                fontFamily: "var(--font-sans)",
+                color: colors.fg2,
                 marginTop: 8,
               }}
             >
@@ -206,16 +200,16 @@ export function MobileAppPanel() {
               { label: "Android APK", href: "https://offdesk.dev/apk" },
             ].map(({ label, href }) => (
               <a key={href} href={href} target="_blank" rel="noreferrer"
-                style={{ display: "inline-block", background: colors.accent, borderRadius: 6,
-                  color: colors.onAccent, padding: "8px 16px", fontSize: 13, fontWeight: 600, textDecoration: "none" }}>
+                className="odk-btn odk-btn--secondary odk-btn--sm">
                 {label}
               </a>
             ))}
           </div>
           <div
             style={{
-              fontSize: 11,
-              color: colors.foregroundMuted,
+              fontSize: 12,
+              fontFamily: "var(--font-sans)",
+              color: colors.fg3,
               marginTop: 8,
             }}
           >

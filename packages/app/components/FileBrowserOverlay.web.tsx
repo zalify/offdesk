@@ -50,7 +50,7 @@ export function FileBrowserOverlay({
         position: "fixed",
         inset: 0,
         zIndex: 900,
-        background: colorAlpha.backgroundShadow,
+        background: colorAlpha.overlay,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -58,19 +58,19 @@ export function FileBrowserOverlay({
     >
       <div
         role="dialog"
-        aria-label={`${machineName} 上的文件`}
+        aria-label={`Files on ${machineName}`}
         data-testid="file-browser-overlay"
         tabIndex={-1}
         style={{
-          width: "min(92vw, 760px)",
-          height: "min(80vh, 640px)",
+          width: "min(92vw, 1120px)",
+          height: "min(84vh, 640px)",
           display: "flex",
           flexDirection: "column",
-          background: colors.bg0,
+          background: colors.bg1,
           color: colors.fg0,
           border: `1px solid ${colors.line}`,
-          borderRadius: 12,
-          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+          borderRadius: 6,
+          boxShadow: "0 24px 64px rgb(0 0 0 / 0.45)",
           overflow: "hidden",
           outline: "none",
         }}
@@ -79,44 +79,24 @@ export function FileBrowserOverlay({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "8px 8px 8px 14px",
-            background: colors.bg1,
-            borderBottom: `1px solid ${colors.border}`,
+            gap: 12,
+            padding: "14px 20px",
+            borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
           }}
         >
-          <span style={{ fontSize: 13, fontWeight: 600 }}>文件</span>
-          <span
-            style={{
-              flex: 1,
-              minWidth: 0,
-              fontSize: 12,
-              color: colors.fg3,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {machineName}
-          </span>
+          <h2 style={{ margin: 0, flex: 1, minWidth: 0, fontSize: 18, lineHeight: "24px", fontWeight: 600, letterSpacing: "-0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            files on {machineName}
+          </h2>
           <button
             type="button"
             data-testid="file-browser-overlay-close"
-            aria-label="关闭"
-            title="关闭"
+            aria-label="Close"
+            title="Close (Esc)"
             onClick={onClose}
-            style={{
-              background: "none",
-              border: "none",
-              color: colors.fg2,
-              cursor: "pointer",
-              padding: 4,
-              display: "flex",
-              borderRadius: 4,
-            }}
+            className="odk-text-btn"
           >
-            <X size={16} aria-hidden />
+            [esc]
           </button>
         </div>
         <FileBrowser

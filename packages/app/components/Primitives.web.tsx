@@ -77,6 +77,7 @@ export function TextButton({
   strong = false,
   square = false,
   alert,
+  open,
   testId,
   style,
 }: {
@@ -93,12 +94,15 @@ export function TextButton({
   square?: boolean;
   /** A red `!` after the text: something needs you there. */
   alert?: { label: string; testId?: string };
+  /** Mirrors an open panel as data-open="true|false" for tests and styling. */
+  open?: boolean;
   testId?: string;
   style?: CSSProperties;
 }) {
   return (
     <button
       type="button"
+      data-open={open === undefined ? undefined : open ? "true" : "false"}
       className={`odk-text-btn${strong ? " odk-text-btn--strong" : ""}${square ? " odk-text-btn--square" : ""}`}
       aria-label={label}
       title={title ?? label}
@@ -161,8 +165,8 @@ export function Badge({ children, testId }: { children: ReactNode; testId?: stri
 }
 
 /** A transient message, square-cornered: "Picked up where you left off". */
-export function Toast({ children, style, testId, role = "status" }: { children: ReactNode; style?: CSSProperties; testId?: string; role?: string }) {
-  return <div className="odk-toast" role={role} style={style} data-testid={testId}>{children}</div>;
+export function Toast({ children, style, testId, role }: { children: ReactNode; style?: CSSProperties; testId?: string; role?: string }) {
+  return <div className="odk-toast" role={role} aria-live="polite" style={style} data-testid={testId}>{children}</div>;
 }
 
 /** A floating card above the workspace: the updater, small dialogs. */
@@ -261,7 +265,7 @@ export function WaitingCard({
   testId?: string;
 }) {
   return (
-    <div className="odk-waiting" role="status" style={style} data-testid={testId}>
+    <div className="odk-waiting" aria-live="polite" style={style} data-testid={testId}>
       <div className="odk-waiting-title">{title}</div>
       {children ? <div className="odk-waiting-actions">{children}</div> : null}
     </div>
@@ -486,7 +490,7 @@ export function Tab({
 /** The workspace's bottom line: what needs you on the left, where you are on the right. */
 export function StatusLine({ children, style, testId }: { children: ReactNode; style?: CSSProperties; testId?: string }) {
   return (
-    <div className="odk-status" role="status" style={style} data-testid={testId}>
+    <div className="odk-status" style={style} data-testid={testId}>
       {children}
     </div>
   );

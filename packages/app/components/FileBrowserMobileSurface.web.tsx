@@ -48,8 +48,8 @@ export function FileBrowserMobileSurface({
         <button
           type="button"
           data-testid="mobile-file-browser-surface-back"
-          aria-label="返回终端"
-          title="返回终端"
+          aria-label="Back to terminal"
+          title="Back to terminal"
           onClick={onClose}
           style={{
             width: 44,
@@ -66,7 +66,7 @@ export function FileBrowserMobileSurface({
         >
           <ArrowLeft size={18} aria-hidden />
         </button>
-        <span style={{ fontSize: 14, fontWeight: 600 }}>文件</span>
+        <span style={{ fontSize: 14, fontWeight: 600 }}>Files</span>
         <span
           style={{
             flex: 1,

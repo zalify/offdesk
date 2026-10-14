@@ -40,16 +40,24 @@ import {
 
 const IS_MAC = typeof navigator !== "undefined" && detectOS() === "macos";
 
+// Chrome text is lowercase on screen; the DOM keeps the sentence-case
+// words ("Take over") that screen readers and tests read.
+const lower = { textTransform: "lowercase" } as const;
+
 const bannerButton = {
-  fontSize: 10,
-  padding: "1px 8px",
+  fontFamily: "var(--font-display)",
+  fontSize: 12,
+  fontWeight: 600,
+  minHeight: 28,
+  padding: "0 12px",
   borderRadius: 4,
-  border: `1px solid ${colorAlpha.accentLine}`,
-  background: "transparent",
-  color: colors.accent,
+  border: "none",
+  background: colors.primary,
+  color: colors.onPrimary,
   cursor: "pointer",
   flexShrink: 0,
   whiteSpace: "nowrap",
+  ...lower,
 } as const;
 
 /** `host + path` of a page URL, without scheme, query or fragment. */
@@ -68,17 +76,19 @@ type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
 type NavAction = Extract<AgentBrowserInputEvent, { kind: "navigate" }>["action"];
 
 const toolbarButton = {
-  width: 24,
-  height: 24,
+  width: 32,
+  height: 32,
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   padding: 0,
   borderRadius: 4,
-  border: "none",
+  border: `1px solid ${colors.line}`,
   background: "transparent",
-  color: colors.fg2,
+  color: colors.fg0,
+  fontFamily: "var(--font-display)",
+  fontSize: 13,
 } as const;
 
 /**
@@ -156,8 +166,8 @@ function AddressBar({
         fontSize: 11,
         color: draft === null ? colors.foregroundMuted : colors.foreground,
         background: colors.bg0,
-        border: `1px solid ${invalid ? colors.danger : colors.border}`,
-        borderRadius: 999,
+        border: `1px solid ${invalid ? colors.err : colors.line}`,
+        borderRadius: 4,
         outline: "none",
         textOverflow: "ellipsis",
       }}
@@ -423,18 +433,18 @@ export function AgentBrowserPane({
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "4px 8px",
-          borderBottom: `1px solid ${colors.border}`,
+          padding: "8px 12px",
+          borderBottom: `1px solid ${colors.lineSoft}`,
           background: colors.bg1,
           flexShrink: 0,
-          gap: 6,
+          gap: 8,
         }}
       >
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 2,
+            gap: 8,
             overflow: "hidden",
             minWidth: 0,
             flex: 1,
@@ -456,7 +466,7 @@ export function AgentBrowserPane({
                   opacity: canNavigate && nav.can_go_back ? 1 : 0.35,
                 }}
               >
-                <ArrowLeft size={14} aria-hidden />
+                ←
               </button>
               <button
                 type="button"
@@ -472,7 +482,7 @@ export function AgentBrowserPane({
                   opacity: canNavigate && nav.can_go_forward ? 1 : 0.35,
                 }}
               >
-                <ArrowRight size={14} aria-hidden />
+                →
               </button>
               <button
                 type="button"
@@ -493,7 +503,7 @@ export function AgentBrowserPane({
                   opacity: canNavigate ? 1 : 0.35,
                 }}
               >
-                {nav.loading ? <X size={14} aria-hidden /> : <RotateCw size={13} aria-hidden />}
+                {nav.loading ? "x" : "↻"}
               </button>
             </>
           )}
@@ -509,14 +519,21 @@ export function AgentBrowserPane({
           data-testid="agent-browser-control-state"
           data-controller={mine ? "me" : otherDevice ? "other" : "agent"}
           style={{
-            fontSize: 10,
-            padding: "1px 6px",
-            borderRadius: 999,
-            border: `1px solid ${mine ? colorAlpha.accentLine : colors.border}`,
-            background: mine ? colorAlpha.accentSoft : "transparent",
-            color: mine ? colors.accent : colors.foregroundMuted,
+            display: "flex",
+            alignItems: "center",
+            height: 24,
+            boxSizing: "border-box",
+            fontFamily: "var(--font-display)",
+            fontSize: 12,
+            fontWeight: mine ? 600 : 500,
+            padding: "0 10px",
+            borderRadius: 3,
+            border: mine ? "1px solid transparent" : `1px solid ${colors.line}`,
+            background: mine ? colors.primary : "transparent",
+            color: mine ? colors.onPrimary : colors.fg2,
             flexShrink: 0,
             whiteSpace: "nowrap",
+            ...lower,
           }}
         >
           {mine
@@ -533,27 +550,19 @@ export function AgentBrowserPane({
             e.stopPropagation();
             void changeControl(mine ? "release" : "take");
           }}
-          style={{
-            fontSize: 10,
-            padding: "1px 8px",
-            borderRadius: 4,
-            border: `1px solid ${colorAlpha.accentLine}`,
-            background: mine ? "transparent" : colors.accent,
-            color: mine ? colors.accent : colors.onAccent,
-            cursor: controlBusy ? "default" : "pointer",
-            opacity: controlBusy ? 0.5 : 1,
-            flexShrink: 0,
-            whiteSpace: "nowrap",
-          }}
+          className={`odk-btn odk-btn--sm ${mine ? "odk-btn--secondary" : "odk-btn--primary"}`}
+          style={{ flexShrink: 0, ...lower }}
         >
           {mine ? "Hand back" : "Take over"}
         </button>
         <span
           data-testid="agent-browser-state"
           style={{
-            fontSize: 10,
-            color: state === "live" ? colors.accent : colors.foregroundMuted,
+            fontFamily: "var(--font-display)",
+            fontSize: 11,
+            color: state === "live" ? colors.accent : colors.fg3,
             flexShrink: 0,
+            ...lower,
           }}
         >
           {STREAM_STATE_LABEL[state]}
@@ -564,10 +573,10 @@ export function AgentBrowserPane({
           role="alert"
           data-testid="agent-browser-error"
           style={{
-            padding: "4px 8px",
-            fontSize: 11,
-            color: colors.danger,
-            borderBottom: `1px solid ${colors.border}`,
+            padding: "6px 12px",
+            fontSize: 12,
+            color: colors.err,
+            borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
           }}
         >
@@ -581,16 +590,17 @@ export function AgentBrowserPane({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "5px 8px",
-            fontSize: 11,
-            color: colors.fg0,
-            background: colorAlpha.warningLight12,
-            borderBottom: `1px solid ${colorAlpha.warningBorder}`,
+            gap: 10,
+            padding: "8px 16px",
+            fontFamily: "var(--font-sans)",
+            fontSize: 13,
+            color: colors.err,
+            background: "transparent",
+            borderBottom: `1px solid ${colors.err}`,
             flexShrink: 0,
           }}
         >
-          <Bot size={12} aria-hidden style={{ flexShrink: 0, color: colors.warning }} />
+          <span aria-hidden style={{ fontFamily: "var(--font-display)", flexShrink: 0 }}>!</span>
           <span
             data-testid="agent-browser-reclaimed-reason"
             style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}
@@ -606,9 +616,10 @@ export function AgentBrowserPane({
               e.stopPropagation();
               reclaimNotice.dismiss();
             }}
-            style={{ ...bannerButton, display: "flex", alignItems: "center", padding: 2 }}
+            className="odk-text-btn"
+            style={{ minHeight: 24, padding: "0 4px", color: colors.err }}
           >
-            <X size={12} aria-hidden />
+            [x]
           </button>
         </div>
       )}
@@ -619,16 +630,17 @@ export function AgentBrowserPane({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "5px 8px",
-            fontSize: 11,
-            color: colors.fg0,
-            background: colorAlpha.warningLight12,
-            borderBottom: `1px solid ${colorAlpha.warningBorder}`,
+            gap: 10,
+            padding: "8px 16px",
+            fontFamily: "var(--font-sans)",
+            fontSize: 13,
+            color: colors.err,
+            background: "transparent",
+            borderBottom: `1px solid ${colors.err}`,
             flexShrink: 0,
           }}
         >
-          <Hand size={12} aria-hidden style={{ flexShrink: 0, color: colors.warning }} />
+          <span aria-hidden style={{ fontFamily: "var(--font-display)", flexShrink: 0 }}>!</span>
           <span
             data-testid="agent-browser-handoff-reason"
             style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}

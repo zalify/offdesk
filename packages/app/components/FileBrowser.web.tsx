@@ -186,7 +186,7 @@ export function FileBrowser({
     if (previewPath !== null) {
       // Handled (and prevented) here so the overlay's window-level Escape
       // listener sees defaultPrevented and leaves the overlay open.
-      if (event.key === "Escape" || event.key === "Backspace") {
+      if (event.key === "Escape" || (event.key === "Backspace" && target !== filterRef.current)) {
         event.preventDefault();
         closePreview();
       } else if (event.key === "ArrowLeft") {
@@ -237,21 +237,76 @@ export function FileBrowser({
     }
   };
 
+  // Square text buttons: ↑ ~ ↻ (wireframes D08, P08).
   const toolButton = (active = false) =>
     ({
-      width: touch ? 40 : 28,
-      height: touch ? 40 : 28,
+      width: touch ? 40 : 32,
+      height: touch ? 40 : 32,
       display: "inline-flex",
       alignItems: "center",
       justifyContent: "center",
       padding: 0,
-      border: "none",
-      borderRadius: 6,
-      background: active ? colorAlpha.accentSoft : "transparent",
-      color: active ? colors.accent : colors.fg2,
+      border: `1px solid ${colors.line}`,
+      borderRadius: 4,
+      background: active ? colors.bg3 : "transparent",
+      color: colors.fg0,
+      fontFamily: "var(--font-display)",
+      fontSize: 13,
       cursor: "pointer",
       flexShrink: 0,
     }) as const;
+
+  // Filter and hidden files: in the toolbar on the desktop (D08), on a row
+  // of their own on the phone (P08).
+  const filterControls = (
+    <>
+          <input
+            ref={filterRef}
+            data-testid="file-browser-filter"
+            aria-label="Filter by name"
+            value={filter}
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="filter by name"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{
+              flex: touch ? 1 : "0 0 220px",
+              minWidth: 0,
+              minHeight: touch ? 40 : 32,
+              padding: "0 12px",
+              fontFamily: "var(--font-display)",
+              fontSize: touch ? 16 : 13,
+              color: colors.fg0,
+              background: colors.bg0,
+              border: `1px solid ${colors.line}`,
+              borderRadius: 4,
+              outline: "none",
+            }}
+          />
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 12.5,
+              color: colors.fg2,
+              cursor: "pointer",
+              flexShrink: 0,
+              minHeight: touch ? 38 : undefined,
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="file-browser-hidden"
+              checked={showHidden}
+              onChange={(event) => setShowHidden(event.target.checked)}
+              style={{ accentColor: "rgb(var(--color-primary))" }}
+            />
+            show hidden files
+          </label>
+    </>
+  );
 
   return (
     <div
@@ -268,16 +323,16 @@ export function FileBrowser({
         flexDirection: "column",
         outline: "none",
         color: colors.fg0,
-        background: colors.bg0,
+        background: colors.bg1,
+        fontFamily: "var(--font-display)",
       }}
     >
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 2,
-          padding: touch ? "4px 6px" : "4px 8px",
-          background: colors.bg1,
+          gap: 6,
+          padding: touch ? "8px 12px" : "10px 20px",
           borderBottom: `1px solid ${colors.lineSoft}`,
           flexShrink: 0,
         }}
@@ -285,36 +340,36 @@ export function FileBrowser({
         <button
           type="button"
           data-testid="file-browser-up"
-          aria-label="上一级"
-          title="上一级"
+          aria-label="Up one folder"
+          title="Up one folder"
           disabled={!up}
           onClick={() => up && go(up)}
           style={{ ...toolButton(), opacity: up ? 1 : 0.4 }}
         >
-          <ArrowUp size={16} aria-hidden />
+          ↑
         </button>
         <button
           type="button"
           data-testid="file-browser-home"
-          aria-label="主目录"
-          title="主目录"
+          aria-label="Home folder"
+          title="Home folder"
           onClick={() => go("~")}
           style={toolButton()}
         >
-          <Home size={16} aria-hidden />
+          ~
         </button>
         <button
           type="button"
           data-testid="file-browser-refresh"
-          aria-label="刷新"
-          title="刷新"
+          aria-label="Refresh"
+          title="Refresh"
           onClick={() => setReloadTick((n) => n + 1)}
           style={toolButton()}
         >
-          <RefreshCw size={15} aria-hidden style={listing.status === "loading" ? SPIN : undefined} />
+          <span aria-hidden style={{ display: "inline-block", ...(listing.status === "loading" ? SPIN : {}) }}>↻</span>
         </button>
         <nav
-          aria-label="路径"
+          aria-label="Path"
           data-testid="file-browser-breadcrumb"
           style={{
             flex: 1,
@@ -324,7 +379,7 @@ export function FileBrowser({
             overflowX: "auto",
             whiteSpace: "nowrap",
             padding: "0 6px",
-            fontSize: 12,
+            fontSize: 13,
             scrollbarWidth: "none",
           }}
         >
@@ -333,7 +388,7 @@ export function FileBrowser({
             return (
               <span key={crumb.path} style={{ display: "inline-flex", alignItems: "center" }}>
                 {index > 0 && (
-                  <ChevronRight size={12} aria-hidden style={{ color: colors.fg3, flexShrink: 0 }} />
+                  <span aria-hidden style={{ color: colors.fg3 }}>/</span>
                 )}
                 <button
                   type="button"
@@ -344,12 +399,13 @@ export function FileBrowser({
                   style={{
                     border: "none",
                     background: "transparent",
-                    padding: touch ? "10px 6px" : "3px 4px",
-                    borderRadius: 4,
+                    padding: touch ? "10px 2px" : "3px 2px",
+                    borderRadius: 3,
                     cursor: "pointer",
-                    fontSize: 12,
-                    fontWeight: last ? 600 : 400,
-                    color: last ? colors.fg0 : colors.fg2,
+                    fontFamily: "var(--font-display)",
+                    fontSize: 13,
+                    fontWeight: 400,
+                    color: last ? colors.fg0 : colors.fg3,
                   }}
                 >
                   {crumb.label}
@@ -358,80 +414,39 @@ export function FileBrowser({
             );
           })}
         </nav>
+        {!touch && filterControls}
       </div>
 
-      {previewPath !== null && (
-        <FilePreview
-          key={previewPath}
-          machineId={machineId}
-          path={previewPath}
-          name={previewEntry?.name ?? previewPath.split("/").pop() ?? previewPath}
-          size={previewEntry?.size}
-          touch={touch}
-          onBack={closePreview}
-          onPrev={onPrev}
-          onNext={onNext}
-        />
-      )}
-
-      {previewPath === null && (
+      {/* The list and the open file side by side on the desktop (D08); on
+          the phone the preview takes the whole surface (P08). */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+      {(previewPath === null || !touch) && (
+        <div
+          style={{
+            flex: previewPath !== null ? "0 0 380px" : 1,
+            minWidth: 0,
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+            borderRight: previewPath !== null ? `1px solid ${colors.lineSoft}` : "none",
+          }}
+        >
+      {touch && (
         <div
           style={{
             display: "flex",
             alignItems: "center",
             gap: 10,
-            padding: touch ? "6px 10px" : "6px 10px",
+            padding: "8px 12px",
             borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
           }}
         >
-          <input
-            ref={filterRef}
-            data-testid="file-browser-filter"
-            aria-label="按名称过滤"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="按名称过滤"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            style={{
-              flex: 1,
-              minWidth: 0,
-              minHeight: touch ? 38 : 28,
-              padding: "0 10px",
-              fontSize: touch ? 16 : 13,
-              color: colors.foreground,
-              background: colors.bg1,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 6,
-              outline: "none",
-            }}
-          />
-          <label
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              fontSize: 12,
-              color: colors.fg2,
-              cursor: "pointer",
-              flexShrink: 0,
-              minHeight: touch ? 38 : undefined,
-            }}
-          >
-            <input
-              type="checkbox"
-              data-testid="file-browser-hidden"
-              checked={showHidden}
-              onChange={(event) => setShowHidden(event.target.checked)}
-            />
-            显示隐藏文件
-          </label>
+          {filterControls}
         </div>
       )}
 
-      {previewPath === null && (
+      {(
         <div
           ref={listRef}
           data-testid="file-browser-list"
@@ -439,7 +454,7 @@ export function FileBrowser({
         >
           {listing.status === "loading" && (
             <Centered testId="file-browser-loading">
-              <Loader2 size={16} aria-hidden style={SPIN} /> 正在读取…
+              <span aria-hidden style={{ display: "inline-block", ...SPIN }}>↻</span> reading…
             </Centered>
           )}
           {listing.status === "error" && (
@@ -451,24 +466,15 @@ export function FileBrowser({
                 type="button"
                 data-testid="file-browser-retry"
                 onClick={() => setReloadTick((n) => n + 1)}
-                style={{
-                  minHeight: touch ? 44 : 30,
-                  padding: "0 16px",
-                  borderRadius: 6,
-                  border: "none",
-                  background: colors.accent,
-                  color: colors.onAccent,
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
+                className="odk-btn odk-btn--secondary odk-btn--sm"
               >
-                重试
+                try again
               </button>
             </Centered>
           )}
           {listing.status === "ready" && visible.length === 0 && (
             <Centered testId="file-browser-empty">
-              {filter ? "没有匹配的文件" : "这个目录是空的"}
+              {filter ? "No files match" : "This folder is empty"}
             </Centered>
           )}
           {listing.status === "ready" &&
@@ -486,7 +492,7 @@ export function FileBrowser({
                   data-kind={entry.is_dir ? "dir" : "file"}
                   data-selected={isSelected ? "true" : "false"}
                   disabled={tooLarge}
-                  title={tooLarge ? "超过 20 MB" : entry.path}
+                  title={tooLarge ? "Over 20 MB" : entry.path}
                   onClick={() => {
                     setSelected(index);
                     activate(entry);
@@ -495,23 +501,27 @@ export function FileBrowser({
                     width: "100%",
                     display: "flex",
                     alignItems: "center",
-                    gap: 10,
-                    minHeight: touch ? 48 : 30,
-                    padding: touch ? "0 14px" : "0 12px",
+                    gap: 12,
+                    minHeight: touch ? 52 : 34,
+                    padding: touch ? "0 16px" : "0 20px",
                     border: "none",
+                    borderRadius: touch ? 0 : 3,
                     borderBottom: touch ? `1px solid ${colors.lineSoft}` : "none",
-                    background: isSelected ? colorAlpha.accentSoft : "transparent",
-                    color: tooLarge ? colors.fg3 : colors.fg0,
+                    background: isSelected ? colors.primary : "transparent",
+                    color: isSelected ? colors.onPrimary : tooLarge ? colors.fg3 : colors.fg0,
+                    fontWeight: isSelected ? 600 : 400,
                     cursor: tooLarge ? "not-allowed" : "pointer",
                     textAlign: "left",
-                    fontSize: touch ? 15 : 13,
+                    fontFamily: "var(--font-display)",
+                    fontSize: touch ? 14 : 13.5,
                   }}
                 >
-                  {entry.is_dir ? (
-                    <Folder size={16} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
-                  ) : (
-                    <FileIcon size={16} aria-hidden style={{ flexShrink: 0, color: colors.fg3 }} />
-                  )}
+                  <span
+                    aria-hidden
+                    style={{ width: 32, flexShrink: 0, fontSize: 11, fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3 }}
+                  >
+                    {entryType(entry)}
+                  </span>
                   <span
                     style={{
                       flex: 1,
@@ -521,17 +531,17 @@ export function FileBrowser({
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {entry.name}
+                    {entry.is_dir ? `${entry.name}/` : entry.name}
                   </span>
                   {tooLarge && (
-                    <span style={{ fontSize: 11, color: colors.warn, flexShrink: 0 }}>
-                      {size} · 超过 20 MB
+                    <span style={{ fontSize: 12, fontWeight: 400, color: colors.fg3, flexShrink: 0 }}>
+                      {size} · over 20 MB
                     </span>
                   )}
                   {!tooLarge && size && (
                     <span
                       data-testid="file-browser-size"
-                      style={{ fontSize: 11, color: colors.fg3, flexShrink: 0 }}
+                      style={{ fontSize: 12, fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3, flexShrink: 0 }}
                     >
                       {size}
                     </span>
@@ -542,7 +552,8 @@ export function FileBrowser({
                         width: 84,
                         textAlign: "right",
                         fontSize: 11,
-                        color: colors.fg3,
+                        fontWeight: 400,
+                        color: isSelected ? colors.onPrimary : colors.fg3,
                         flexShrink: 0,
                       }}
                     >
@@ -554,8 +565,32 @@ export function FileBrowser({
             })}
         </div>
       )}
+        </div>
+      )}
+      {previewPath !== null && (
+        <FilePreview
+          key={previewPath}
+          machineId={machineId}
+          path={previewPath}
+          name={previewEntry?.name ?? previewPath.split("/").pop() ?? previewPath}
+          size={previewEntry?.size}
+          touch={touch}
+          onBack={closePreview}
+          onPrev={onPrev}
+          onNext={onNext}
+        />
+      )}
+      </div>
     </div>
   );
+}
+
+// The 32px type column: `dir`, or the extension (`md`, `pdf`), else `file`.
+function entryType(entry: { name: string; is_dir: boolean }): string {
+  if (entry.is_dir) return "dir";
+  const dot = entry.name.lastIndexOf(".");
+  const ext = dot > 0 ? entry.name.slice(dot + 1).toLowerCase() : "";
+  return ext && ext.length <= 4 ? ext : "file";
 }
 
 function Centered({

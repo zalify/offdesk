@@ -561,9 +561,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               type="button"
               data-testid="mobile-title-bar-files"
               data-open={filesButton.open ? "true" : "false"}
-              aria-label="文件"
+              aria-label="Files"
               aria-pressed={filesButton.open}
-              title="文件"
+              title="Files"
               onClick={onToggleFiles}
               style={{
                 width: 34,
@@ -1149,7 +1149,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           {filesButton && onToggleFiles && (
             <MenuRow
               icon={<FolderOpen size={17} />}
-              label="浏览文件"
+              label="Browse files"
               testid="mobile-menu-files"
               onClick={() => {
                 setHostSheetOpen(false);

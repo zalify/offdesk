@@ -50,7 +50,7 @@ export const colorAlpha = {
   accentLine: 'rgb(var(--color-accent) / 0.35)',   // chip/border stroke
   dangerSoft: 'rgb(var(--color-err) / 0.25)',
   dangerLine: 'rgb(var(--color-err) / 0.5)',
-  overlay: 'rgb(0 0 0 / 0.55)',
+  overlay: 'rgb(12 12 11 / 0.72)',
 
   // Legacy.
   accentSubtle: 'rgb(var(--color-accent) / 0.08)',

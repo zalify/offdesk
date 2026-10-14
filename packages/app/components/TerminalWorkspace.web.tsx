@@ -19,6 +19,8 @@ import type {
 } from "@offdesk/shared";
 import { Plus } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
+import { AgentMarker, Button } from "./Primitives.web";
+import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { TerminalCard, type TerminalCardRef } from "./TerminalCard.web";
 import { colors, colorAlpha, terminalTheme } from "@/lib/colors";
 import {
@@ -979,38 +981,38 @@ function TerminalWorkspaceComponent({
     : null;
   const paneMenuItems: ContextMenuEntry[] = paneMenuTerminal
     ? [
-        { label: "Open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
+        { label: "open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
         {
-          label: "Split right",
+          label: "split right",
           shortcut: formatPrefixBinding("splitRight"),
           disabled: !isController || activeGroupFull,
           onClick: () => void handleSplit("right"),
         },
         {
-          label: "Split down",
+          label: "split down",
           shortcut: formatPrefixBinding("splitDown"),
           disabled: !isController || activeGroupFull,
           onClick: () => void handleSplit("down"),
         },
         {
-          label: "Rotate layout",
+          label: "rotate layout",
           shortcut: formatPrefixBinding("rotateLayout"),
           disabled: !isController || activeGroupPaneCount < 2,
           onClick: handleRotateLayout,
         },
         {
-          label: "Tile panes",
+          label: "tile panes",
           shortcut: formatPrefixBinding("tilePanes"),
           disabled: !isController || activeGroupPaneCount < 2,
           onClick: handleTileLayout,
         },
         {
-          label: "Zoom",
+          label: "zoom",
           shortcut: formatPrefixBinding("zoomPane"),
           onClick: toggleMaximizeActivePane,
         },
         {
-          label: "Fit to window",
+          label: "fit to window",
           disabled: !isController,
           // Same behaviour as the deleted toolbar Fit button: the pane is
           // already active (right-click focused it), and the fit always
@@ -1019,7 +1021,7 @@ function TerminalWorkspaceComponent({
         },
         { type: "separator" },
         {
-          label: "Move pane to tab",
+          label: "move pane to tab",
           disabled: !isController,
           onClick: () => {},
           children: [
@@ -1064,7 +1066,7 @@ function TerminalWorkspaceComponent({
         },
         { type: "separator" },
         {
-          label: "Close pane",
+          label: "close pane",
           shortcut: formatPrefixBinding("closePane"),
           disabled: !isController,
           onClick: () => handleDestroy(paneMenuTerminal),
@@ -1088,8 +1090,7 @@ function TerminalWorkspaceComponent({
         style={{
           flex: 1,
           minHeight: 0,
-          padding: 8,
-          background: terminalTheme.background,
+          background: colors.lineSoft,
         }}
       >
         {activeGroup?.root ? (
@@ -1487,19 +1488,20 @@ export function WorkspacePaneLeaf({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        background: colors.bg0,
-        // Focused pane: subtle 1px accent inner border; unfocused (or lone
-        // pane in a single-pane group): plain line.
-        border: `1px solid ${
-          isActive && focusRing ? colorAlpha.accentLine : colors.line
-        }`,
+        background: terminalTheme.background,
+        // Split panes sit 1px apart on the hairline colour (the frame
+        // behind them); the focused one of a split gets a faint accent
+        // edge as well as the lit ● in its header.
+        boxSizing: "border-box",
+        border: `0.5px solid ${colors.lineSoft}`,
         boxShadow:
           isActive && focusRing
-            ? `0 0 0 1px ${colorAlpha.accentLine}`
+            ? `inset 0 0 0 1px ${colorAlpha.accentLine}`
             : "none",
         overflow: "hidden",
       }}
     >
+      {!isCompact && <PaneHeader terminal={terminal} active={isActive && focusRing} />}
       <TerminalCard
         ref={cardRef}
         terminal={terminal}
@@ -1517,6 +1519,52 @@ export function WorkspacePaneLeaf({
         onRequestControl={onRequestControl}
         onReleaseControl={onReleaseControl}
       />
+    </div>
+  );
+}
+
+// The line above each desktop pane: ● when it has the keyboard, the program,
+// where it runs, and — for terminals an agent opened through the CLI — the
+// `⌁ opened by agent · cli` marker.
+function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: boolean }) {
+  const opener = terminal.opened_by;
+  return (
+    <div
+      data-testid={`pane-header-${terminal.id}`}
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        minHeight: 30,
+        padding: "0 12px 0 16px",
+        borderBottom: `1px solid ${colors.bg3}`,
+        // The page colour: the same as the terminal in the dark theme, a
+        // paper title strip over the (always dark) terminal in the light one.
+        background: colors.bg0,
+        fontFamily: "var(--font-display)",
+        fontSize: 11.5,
+        color: colors.fg3,
+        minWidth: 0,
+      }}
+    >
+      <span aria-hidden="true" style={{ color: active ? colors.accent : colors.fg3 }}>
+        {active ? "●" : "○"}
+      </span>
+      <span style={{ color: colors.fg0, whiteSpace: "nowrap" }}>{displayTerminalTitle(terminal)}</span>
+      <span
+        title={terminal.cwd}
+        style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}
+      >
+        {"\u200e" + terminal.cwd}
+      </span>
+      {opener && (
+        <AgentMarker
+          label={opener.label}
+          testId={`pane-opener-${terminal.id}`}
+          style={{ marginLeft: "auto", flexShrink: 0 }}
+        />
+      )}
     </div>
   );
 }
@@ -1543,19 +1591,13 @@ function EmptyWorkspaceGroup({
         border: `1px solid ${colors.lineSoft}`,
       }}
     >
-      <button
-        type="button"
+      <Button
+        kind="secondary"
         disabled={!isController || !group}
         onClick={onNewPane}
-        style={{
-          ...drawerNewButtonStyle,
-          opacity: isController && group ? 1 : 0.5,
-          cursor: isController && group ? "pointer" : "not-allowed",
-        }}
       >
-        <Plus size={14} />
-        New pane
-      </button>
+        new pane
+      </Button>
     </div>
   );
 }

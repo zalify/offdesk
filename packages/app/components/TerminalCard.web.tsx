@@ -15,6 +15,7 @@ import { useTerminalKeyboard } from "@/lib/useTerminalKeyboard";
 import { useKeyBarSlot } from "@/lib/keyBarSlot";
 import { getMobileViewportTerminalAction } from "@/lib/mobileViewportTerminal";
 import { isSizedElsewhere } from "@/lib/terminalViewModel";
+import { clearPaneSizeNotice, publishPaneSizeNotice } from "@/lib/paneSizeNotice";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 
@@ -180,6 +181,27 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
     onRequestControl(terminal.machine_id);
   }, [fitToContainer, isController, onRequestControl, terminal.machine_id]);
 
+  // The focused pane's "sized by another device" goes to the status line,
+  // with the action that fits it here (WorkspaceStatusLine).
+  const handleFitHereRef = useRef(handleFitHere);
+  handleFitHereRef.current = handleFitHere;
+  const canFitHere = isController || Boolean(onRequestControl);
+  useEffect(() => {
+    if (!sizedElsewhere || !isActive) {
+      clearPaneSizeNotice(terminal.id);
+      return;
+    }
+    publishPaneSizeNotice({
+      terminalId: terminal.id,
+      cols: terminal.cols,
+      rows: terminal.rows,
+      isController,
+      canFit: canFitHere,
+      fit: () => handleFitHereRef.current(),
+    });
+    return () => clearPaneSizeNotice(terminal.id);
+  }, [sizedElsewhere, isActive, terminal.id, terminal.cols, terminal.rows, isController, canFitHere]);
+
   useImperativeHandle(ref, () => ({
     fitToContainer: (opts) => {
       fitToContainer(opts);
@@ -306,7 +328,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
           : {
               position: "relative" as const,
               background: colors.surface,
-              borderRadius: 8,
+              borderRadius: 6,
               border: `1px solid ${colors.border}`,
               overflow: "hidden",
               display: "flex",
@@ -345,8 +367,8 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             pointerEvents: "all",
           }}
         >
-          <span style={{ color: terminalTheme.foreground, fontSize: 14 }}>
-            Waiting for reconnection…
+          <span style={{ color: terminalTheme.foreground, fontFamily: "var(--font-display)", fontSize: 13 }}>
+            waiting for the machine to reconnect…
           </span>
         </div>
       )}
@@ -385,15 +407,16 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                 right: 10,
                 zIndex: 20,
                 pointerEvents: "none",
-                padding: "3px 7px",
-                borderRadius: 999,
-                background: "rgba(20, 20, 24, 0.88)",
-                border: `1px solid ${colors.border}`,
-                color: terminalTheme.foreground,
-                fontSize: 10,
+                padding: "3px 8px",
+                borderRadius: 3,
+                background: colors.bg2,
+                border: `1px solid ${colors.line}`,
+                color: colors.fg1,
+                fontFamily: "var(--font-display)",
+                fontSize: 11,
               }}
             >
-              Reconnecting…
+              reconnecting…
             </div>
           </>
         )}
@@ -523,47 +546,6 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
           } : {
             width: "100%", height: "100%",
           }}>
-            {sizedElsewhere && (
-              <div
-                data-testid="terminal-size-banner"
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 10,
-                  zIndex: 6,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  padding: "6px 8px 6px 12px",
-                  borderRadius: 8,
-                  background: colors.surface,
-                  border: `1px solid ${colors.border}`,
-                  color: colors.foregroundSecondary,
-                  fontSize: 12,
-                }}
-              >
-                <span>
-                  Sized by another device · {terminal.cols}×{terminal.rows}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleFitHere}
-                  disabled={!isController && !onRequestControl}
-                  style={{
-                    background: colors.accent,
-                    border: "none",
-                    borderRadius: 6,
-                    color: colors.onAccent,
-                    cursor: "pointer",
-                    fontSize: 12,
-                    fontWeight: 600,
-                    padding: "4px 10px",
-                  }}
-                >
-                  {isController ? "Fit to this window" : "Take control and fit"}
-                </button>
-              </div>
-            )}
             {terminal.reachable && isTab ? (
               <Suspense
                 fallback={<LazyLoadingFallback />}

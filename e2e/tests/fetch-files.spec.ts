@@ -70,7 +70,7 @@ test("a missing file shows an error notice instead of downloading", async ({ pag
   await page.mouse.move(x - 4, y);
   await page.mouse.move(x, y);
   await page.mouse.click(x, y);
-  await expect(page.getByTestId("offdesk-notice")).toContainText("找不到 such-file.txt");
+  await expect(page.getByTestId("offdesk-notice")).toContainText("such-file.txt not found");
 });
 
 test("clicking an OSC 8 file link downloads the file", async ({ page }) => {

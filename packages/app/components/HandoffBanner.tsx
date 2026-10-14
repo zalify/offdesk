@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 
-import { colors, colorAlpha } from "@/lib/colors";
+import { colors } from "@/lib/colors";
 
 export function HandoffBanner({
   isMobile,
@@ -29,12 +29,14 @@ export function HandoffBanner({
         left: "50%",
         transform: "translateX(-50%)",
         zIndex: 45,
-        padding: "5px 10px",
-        borderRadius: 999,
-        background: colorAlpha.surfaceOpaque94,
-        border: `1px solid ${colors.border}`,
-        color: colors.foregroundSecondary,
-        fontSize: 11,
+        padding: "6px 12px",
+        borderRadius: 4,
+        background: colors.bg2,
+        border: `1px solid ${colors.line}`,
+        color: colors.fg1,
+        fontFamily: "var(--font-display)",
+        fontSize: 12,
+        whiteSpace: "nowrap",
         pointerEvents: "none",
         opacity: visible ? 1 : 0,
         transition: "opacity 400ms ease",

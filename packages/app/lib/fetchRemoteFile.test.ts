@@ -7,7 +7,7 @@ const file = { name: "report.pdf", path: "/tmp/report.pdf", mime: "application/p
 function deps(over: Record<string, unknown> = {}) {
   return {
     read: vi.fn().mockResolvedValue(file),
-    save: vi.fn().mockResolvedValue({ location: "下载", open: vi.fn().mockResolvedValue(undefined) }),
+    save: vi.fn().mockResolvedValue({ location: "Downloads", open: vi.fn().mockResolvedValue(undefined) }),
     notify: vi.fn(),
     ...over,
   };
@@ -19,13 +19,13 @@ describe("fetchRemoteFile", () => {
     await fetchRemoteFile({ machineId: "m", path: "/tmp/report.pdf", cwd: "/tmp" }, d as never);
     expect(d.read).toHaveBeenCalledWith("m", "/tmp/report.pdf", "/tmp");
     expect(d.save).toHaveBeenCalledWith({ filename: "report.pdf", mime: "application/pdf", dataBase64: "YWJj" });
-    expect(d.notify.mock.calls[0][0]).toBe("正在取 report.pdf…");
-    expect(d.notify.mock.calls[1][0]).toBe("已保存 report.pdf → 下载");
-    expect(d.notify.mock.calls[1][1].action.label).toBe("打开");
+    expect(d.notify.mock.calls[0][0]).toBe("Fetching report.pdf…");
+    expect(d.notify.mock.calls[1][0]).toBe("Saved report.pdf → Downloads");
+    expect(d.notify.mock.calls[1][1].action.label).toBe("open");
   });
 
   it("omits the open action when unavailable", async () => {
-    const d = deps({ save: vi.fn().mockResolvedValue({ location: "下载" }) });
+    const d = deps({ save: vi.fn().mockResolvedValue({ location: "Downloads" }) });
     await fetchRemoteFile({ machineId: "m", path: "/tmp/report.pdf" }, d as never);
     expect(d.notify.mock.calls[1][1]).toBeUndefined();
   });
@@ -33,14 +33,14 @@ describe("fetchRemoteFile", () => {
   it("explains too_large", async () => {
     const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(413, "too_large", "x", 34 * 1024 * 1024)) });
     await fetchRemoteFile({ machineId: "m", path: "/tmp/report.pdf" }, d as never);
-    expect(d.notify.mock.calls[1][0]).toBe("report.pdf 有 34 MB，超过 20 MB 上限");
+    expect(d.notify.mock.calls[1][0]).toBe("report.pdf is 34 MB, over the 20 MB limit");
     expect(d.save).not.toHaveBeenCalled();
   });
 
   it("explains machine_outdated", async () => {
     const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(409, "machine_outdated", "x")) });
     await fetchRemoteFile({ machineId: "m", path: "/a/b" }, d as never);
-    expect(d.notify.mock.calls[1][0]).toBe("这台机器的 node 版本太旧，升级后才能取文件");
+    expect(d.notify.mock.calls[1][0]).toBe("This machine's node is too old to fetch files. Update it first.");
   });
 
   it("hands directories to onDirectory", async () => {
@@ -53,7 +53,7 @@ describe("fetchRemoteFile", () => {
   it("notices a directory when there is no hook", async () => {
     const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(400, "is_directory", "x", undefined, "/tmp/dir")) });
     await fetchRemoteFile({ machineId: "m", path: "/tmp/dir" }, d as never);
-    expect(d.notify.mock.calls[1][0]).toContain("是目录");
+    expect(d.notify.mock.calls[1][0]).toContain("is a folder");
   });
 
   it("tries the fallback when the path does not exist", async () => {
@@ -63,21 +63,21 @@ describe("fetchRemoteFile", () => {
     const d = deps({ read });
     await fetchRemoteFile({ machineId: "m", path: "/tmp/report.pdfand", fallbackPath: "/tmp/report.pdf" }, d as never);
     expect(read.mock.calls.map((call) => call[1])).toEqual(["/tmp/report.pdfand", "/tmp/report.pdf"]);
-    expect(d.notify.mock.calls[1][0]).toBe("已保存 report.pdf → 下载");
+    expect(d.notify.mock.calls[1][0]).toBe("Saved report.pdf → Downloads");
   });
 
   it("names the path as shown when the fallback is missing too", async () => {
     const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(404, "not_found", "x")) });
     await fetchRemoteFile({ machineId: "m", path: "/tmp/a/joined.txt", fallbackPath: "/tmp/a/join" }, d as never);
     expect(d.read).toHaveBeenCalledTimes(2);
-    expect(d.notify.mock.calls[1][0]).toBe("找不到 joined.txt");
+    expect(d.notify.mock.calls[1][0]).toBe("joined.txt not found");
   });
 
   it("only falls back when the path does not exist", async () => {
     const d = deps({ read: vi.fn().mockRejectedValue(new RemoteFileError(403, "permission_denied", "x")) });
     await fetchRemoteFile({ machineId: "m", path: "/tmp/a/b.txt", fallbackPath: "/tmp/a/b" }, d as never);
     expect(d.read).toHaveBeenCalledTimes(1);
-    expect(d.notify.mock.calls[1][0]).toBe("没有权限读取 b.txt");
+    expect(d.notify.mock.calls[1][0]).toBe("No permission to read b.txt");
   });
 
   it("ignores a concurrent fetch of the same path", async () => {
@@ -99,13 +99,13 @@ describe("saveFetchedFile", () => {
     await saveFetchedFile(file, d as never);
     expect(d.save).toHaveBeenCalledWith({ filename: "report.pdf", mime: "application/pdf", dataBase64: "YWJj" });
     expect(d.read).not.toHaveBeenCalled();
-    expect(d.notify.mock.calls[0][0]).toBe("已保存 report.pdf → 下载");
-    expect(d.notify.mock.calls[0][1].action.label).toBe("打开");
+    expect(d.notify.mock.calls[0][0]).toBe("Saved report.pdf → Downloads");
+    expect(d.notify.mock.calls[0][1].action.label).toBe("open");
   });
 
   it("reports save failures without throwing", async () => {
     const d = deps({ save: vi.fn().mockRejectedValue(new Error("disk full")) });
     await saveFetchedFile(file, d as never);
-    expect(d.notify).toHaveBeenCalledWith("保存 report.pdf 失败：disk full", { tone: "error", timeoutMs: 8000 });
+    expect(d.notify).toHaveBeenCalledWith("Could not save report.pdf: disk full", { tone: "error", timeoutMs: 8000 });
   });
 });

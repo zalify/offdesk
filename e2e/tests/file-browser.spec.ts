@@ -65,7 +65,7 @@ test.describe("file browser on desktop", () => {
 
     // Files over 20 MB are disabled.
     await expect(row(page, "big.bin")).toBeDisabled();
-    await expect(row(page, "big.bin")).toContainText("超过 20 MB");
+    await expect(row(page, "big.bin")).toContainText("over 20 MB");
 
     // Filter.
     await page.getByTestId("file-browser-filter").fill("REPO");
@@ -163,7 +163,7 @@ test.describe("file browser on desktop", () => {
     await expect(page.getByTestId("file-browser-empty")).toBeVisible();
     await expect(async () => {
       await page.getByTestId("file-browser-refresh").click();
-      await expect(page.getByTestId("file-browser-error")).toContainText("找不到目录", {
+      await expect(page.getByTestId("file-browser-error")).toContainText("Folder not found", {
         timeout: 1_000,
       });
     }).toPass({ timeout: 20_000 });
