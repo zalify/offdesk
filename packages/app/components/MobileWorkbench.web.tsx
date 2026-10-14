@@ -2,7 +2,7 @@ import { HubPickerPanel } from "./HubPickerPanel";
 import { isSecureConnection } from "../lib/secureTransport";
 import { isTauriMobile } from "../lib/platform";
 import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
-import { MobileTerminalAttention } from "./MobileTerminalAttention.web";
+import { MobileTerminalAttention, MobileWaitingCard } from "./MobileTerminalAttention.web";
 import { AgentBrowserMobileSurface } from "./AgentBrowserMobileSurface.web";
 // Mobile workbench shell (P1). Rendered when the viewport is below 768px.
 // Permanent chrome is exactly two elements: the session title bar on top and
@@ -59,7 +59,11 @@ import {
 } from "@/lib/mobileSessionSwitcher";
 import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { WorkspaceManager } from "./WorkspaceManager.web";
-import { Button, fontDisplay } from "./Primitives.web";
+import { Button, TextButton, fontDisplay } from "./Primitives.web";
+
+// The title bar's [f] [b] [m]: 40px squares, so five fit beside the
+// session title on a 320px phone.
+const titleBarButton = { width: 40, height: 40, minWidth: 40, minHeight: 40, fontSize: 13 } as const;
 
 interface MobileWorkbenchProps {
   machines: MachineInfo[];
@@ -92,6 +96,8 @@ interface MobileWorkbenchProps {
   filesSurface?: React.ReactNode;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
+  /** "Picked up where you left off": shown in the subtitle line for a moment. */
+  resumeNotice?: React.ReactNode;
   onPickTerminal: (id: string) => void;
   onSelectGroup: (groupId: string) => void;
   // null group = machine home directory (empty state / no active group).
@@ -158,6 +164,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     filesSurface,
     canCreateTerminal,
     canSendAttention,
+    resumeNotice,
     onPickTerminal,
     onSelectGroup,
     onNewTerminal,
@@ -241,6 +248,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const activeChip =
     chips.find((chip) => chip.terminal.id === activeTerminalId) ?? null;
   const activeGroup = activeChip?.group ?? null;
+  const activeGroupIndex = activeGroup ? sessionGroups.findIndex(({ group }) => group.id === activeGroup.id) : -1;
   const activePosition = activeChip
     ? chips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
     : 0;
@@ -434,13 +442,13 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         style={{
           // 44px, the compact strip's height in DESIGN.md: taller than that and
           // a desktop-sized terminal no longer fits a phone at scale 1.
-          height: 44,
+          minHeight: 44,
           flexShrink: 0,
           display: "flex",
           alignItems: "center",
-          gap: 8,
-          padding: "0 8px 0 12px",
-          background: colors.bg1,
+          gap: 4,
+          padding: "0 4px 0 16px",
+          background: colors.bg0,
           borderBottom: `1px solid ${colors.lineSoft}`,
           cursor: "pointer",
           userSelect: "none",
@@ -461,55 +469,80 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             setSessionSwitcherOpen(true);
           }}
           style={{
-            background: "none", border: 0, padding: 0, textAlign: "left", cursor: "pointer", height: "100%",
+            background: "none", border: 0, padding: "5px 0", textAlign: "left", cursor: "pointer", alignSelf: "stretch",
             flex: 1,
             minWidth: 0,
             display: "flex",
             flexDirection: "column",
             justifyContent: "center",
-            gap: 1,
+            gap: 2,
             overflow: "hidden",
             whiteSpace: "nowrap",
+            color: colors.fg0,
+            fontFamily: fontDisplay,
           }}
         >
           {activeChip ? (
             <>
-              <span
-                style={{
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  color: colors.fg0,
-                  fontFamily: fontDisplay,
-                  fontSize: 14,
-                  fontWeight: 700,
-                  lineHeight: 1.1,
-                }}
-              >
-                {displayTerminalTitle(activeChip.terminal)}
+              <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.1 }}>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                  {displayTerminalTitle(activeChip.terminal)}
+                </span>
+                <span aria-hidden="true" style={{ flexShrink: 0, fontSize: 12 }}>▾</span>
               </span>
               <span
                 style={{
+                  display: "flex",
+                  alignItems: "center",
+                  minWidth: 0,
                   overflow: "hidden",
-                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
                   color: colors.fg3,
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 10.5,
+                  fontSize: 11,
                   lineHeight: 1.15,
                 }}
               >
-                {activeChip.group.label} · {activeMachine?.name ?? ""}
-                {terminalOpenerText(activeChip.terminal) && (
-                  <span data-testid="mobile-title-bar-opener">
-                    {" · "}{terminalOpenerText(activeChip.terminal)}
+                {resumeNotice ?? (
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                    {activeGroupIndex >= 0 ? `${activeGroupIndex}:` : ""}{activeChip.group.label} ·{" "}
+                    <span
+                      data-testid="mobile-title-bar-dot"
+                      role="img"
+                      aria-label={activeMachine && machineOnline(activeMachine) ? "Online" : "Offline"}
+                      style={{ color: activeMachine && machineOnline(activeMachine) ? colors.ok : colors.fg3 }}
+                    >
+                      {activeMachine && machineOnline(activeMachine) ? "●" : "○"}
+                    </span>{" "}
+                    {activeMachine?.name ?? ""}
                   </span>
                 )}
               </span>
+              {terminalOpenerText(activeChip.terminal) && (
+                // P04: the opener chip on a line of its own.
+                <span
+                  data-testid="mobile-title-bar-opener"
+                  title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
+                  style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: 10, letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
+                >
+                  <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
+                  opened by {terminalOpenerText(activeChip.terminal)}
+                </span>
+              )}
             </>
           ) : (
-            <span
-              style={{ color: colors.fg2, fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, overflow: "hidden" }}
-            >
-              No terminal
+            <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <span style={{ color: colors.fg2, fontSize: 15, fontWeight: 600, textTransform: "lowercase" }}>No terminal</span>
+              <span style={{ color: colors.fg3, fontSize: 11 }}>
+                <span
+                  data-testid="mobile-title-bar-dot"
+                  role="img"
+                  aria-label={activeMachine && machineOnline(activeMachine) ? "Online" : "Offline"}
+                  style={{ color: activeMachine && machineOnline(activeMachine) ? colors.ok : colors.fg3 }}
+                >
+                  {activeMachine && machineOnline(activeMachine) ? "●" : "○"}
+                </span>{" "}
+                {activeMachine?.name ?? ""}
+              </span>
             </span>
           )}
         </button>
@@ -521,31 +554,23 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               flexShrink: 0,
               display: "inline-flex",
               alignItems: "center",
-              gap: 5,
-              height: 26,
-              padding: "0 9px",
-              borderRadius: 999,
-              background: colors.bg0,
-              border: `1px solid ${colors.lineSoft}`,
-              color: colors.fg2,
+              height: 24,
+              padding: "0 8px",
+              borderRadius: 3,
+              boxSizing: "border-box",
+              ...(deviceId !== null && controlLeases[activeMachine.id] === deviceId && !viewOnlyLocked
+                ? { background: colors.primary, color: colors.onPrimary, fontWeight: 600, border: "1px solid transparent" }
+                : { background: "transparent", color: colors.fg2, fontWeight: 500, border: `1px solid ${colors.line}` }),
               fontFamily: fontDisplay,
-              fontSize: 12,
-              fontWeight: 600,
+              fontSize: 11,
+              whiteSpace: "nowrap",
             }}
           >
-            {viewOnlyLocked ? (
-              <>
-                <Lock size={13} /> View only
-              </>
-            ) : deviceId !== null && controlLeases[activeMachine.id] === deviceId ? (
-              <>
-                <KeyboardIcon size={13} /> In control
-              </>
-            ) : (
-              <>
-                <Eye size={13} /> Watching
-              </>
-            )}
+            {viewOnlyLocked
+              ? "view only"
+              : deviceId !== null && controlLeases[activeMachine.id] === deviceId
+                ? "in control"
+                : "watching"}
           </span>
         ) : null}
 
@@ -555,32 +580,19 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             onTouchStart={(event) => event.stopPropagation()}
             onTouchMove={(event) => event.stopPropagation()}
             onTouchEnd={(event) => event.stopPropagation()}
-            style={{ width: 34, height: 34, flexShrink: 0 }}
+            style={{ display: "flex", flexShrink: 0 }}
           >
-            <button
-              type="button"
-              data-testid="mobile-title-bar-files"
-              data-open={filesButton.open ? "true" : "false"}
-              aria-label="Files"
-              aria-pressed={filesButton.open}
-              title="Files"
+            <TextButton
+              square
+              testId="mobile-title-bar-files"
+              open={filesButton.open}
+              label="Files"
+              pressed={filesButton.open}
               onClick={onToggleFiles}
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: 999,
-                border: `1.5px solid ${filesButton.open ? colorAlpha.accentLine : colors.line}`,
-                background: filesButton.open ? colorAlpha.accentSoft : colors.bg1,
-                color: filesButton.open ? colors.accent : colors.fg0,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 0,
-                cursor: "pointer",
-              }}
+              style={titleBarButton}
             >
-              <FolderOpen size={16} aria-hidden />
-            </button>
+              [f]
+            </TextButton>
           </span>
         )}
 
@@ -590,110 +602,39 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             onTouchStart={(event) => event.stopPropagation()}
             onTouchMove={(event) => event.stopPropagation()}
             onTouchEnd={(event) => event.stopPropagation()}
-            style={{ position: "relative", width: 34, height: 34, flexShrink: 0 }}
+            style={{ display: "flex", flexShrink: 0 }}
           >
             <button
               type="button"
+              className="odk-text-btn odk-text-btn--square"
               data-testid="mobile-title-bar-browser"
               data-open={browserButton.open ? "true" : "false"}
               aria-label="Browser"
               aria-pressed={browserButton.open}
               title={browserButton.needsPerson ? "The agent needs you" : "Browser"}
               onClick={onToggleBrowser}
-              style={{
-                width: 34,
-                height: 34,
-                borderRadius: 999,
-                border: `1.5px solid ${browserButton.open ? colorAlpha.accentLine : colors.line}`,
-                background: browserButton.open ? colorAlpha.accentSoft : colors.bg1,
-                color: browserButton.open ? colors.accent : colors.fg0,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 0,
-                cursor: "pointer",
-              }}
+              style={titleBarButton}
             >
-              <Globe size={16} aria-hidden />
+              [b
+              {browserButton.count > 0 && (
+                <span data-testid="mobile-title-bar-browser-count" aria-hidden="true" style={{ fontSize: 10, color: colors.fg2 }}>
+                  {browserButton.count}
+                </span>
+              )}
+              {browserButton.needsPerson && (
+                <span
+                  role="img"
+                  aria-label="The agent needs you"
+                  data-testid="mobile-title-bar-browser-attention"
+                  style={{ color: colors.err }}
+                >
+                  !
+                </span>
+              )}
+              ]
             </button>
-            {browserButton.count > 0 && (
-              <span
-                data-testid="mobile-title-bar-browser-count"
-                aria-hidden="true"
-                style={{
-                  position: "absolute",
-                  top: -4,
-                  right: -4,
-                  minWidth: 16,
-                  height: 16,
-                  padding: "0 4px",
-                  boxSizing: "border-box",
-                  borderRadius: 8,
-                  background: colors.accent,
-                  color: colors.onAccent,
-                  fontSize: 10,
-                  fontWeight: 700,
-                  lineHeight: "16px",
-                  textAlign: "center",
-                  pointerEvents: "none",
-                }}
-              >
-                {browserButton.count}
-              </span>
-            )}
-            {browserButton.needsPerson && (
-              <span
-                role="img"
-                aria-label="The agent needs you"
-                data-testid="mobile-title-bar-browser-attention"
-                style={{
-                  position: "absolute",
-                  bottom: 0,
-                  right: 0,
-                  width: 9,
-                  height: 9,
-                  borderRadius: "50%",
-                  background: colors.warn,
-                  border: `1.5px solid ${colors.bg1}`,
-                  pointerEvents: "none",
-                }}
-              />
-            )}
           </span>
         )}
-
-        <span
-          onClick={(event) => event.stopPropagation()}
-          onTouchStart={(event) => event.stopPropagation()}
-          onTouchMove={(event) => event.stopPropagation()}
-          onTouchEnd={(event) => event.stopPropagation()}
-          style={{ width: 34, height: 34, flexShrink: 0 }}
-        >
-          <button
-            type="button"
-            data-testid="mobile-bar-new-terminal"
-            disabled={!canCreateTerminal}
-            onClick={() => onNewTerminal(activeGroup)}
-            title="New terminal"
-            aria-label="New terminal"
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 999,
-              border: `1.5px solid ${colors.line}`,
-              background: colors.bg1,
-              color: colors.fg0,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: 0,
-              cursor: canCreateTerminal ? "pointer" : "not-allowed",
-              opacity: canCreateTerminal ? 1 : 0.45,
-            }}
-          >
-            <Plus size={16} />
-          </button>
-        </span>
 
         <button
           type="button"
@@ -702,33 +643,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           aria-expanded={hostSheetOpen}
           data-testid="mobile-title-bar-machines"
           data-title-bar-swipe="ignore"
+          className="odk-text-btn odk-text-btn--square"
           onClick={(event) => { event.stopPropagation(); setHostSheetOpen(true); }}
           onTouchStart={event => event.stopPropagation()}
           onTouchEnd={event => event.stopPropagation()}
-          style={{
-            border: 0, cursor: "pointer", height: 34,
-            flexShrink: 0,
-            width: 37,
-            padding: 0,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            borderRadius: 999,
-            background: colors.bg2,
-            color: colors.fg2,
-            fontFamily: "var(--font-mono)",
-            fontSize: 10,
-            textAlign: "center",
-          }}
+          style={titleBarButton}
         >
-          <Monitor size={18} aria-hidden="true" />
+          [m]
         </button>
-        <span data-testid="mobile-title-bar-dot" style={{ display: "flex" }}>
-          <HostDot
-            online={activeMachine ? machineOnline(activeMachine) : false}
-            isController={false}
-          />
-        </span>
       </div>
 
       {/* Terminal area (edge swipes switch terminals in strip order) */}
@@ -771,32 +693,31 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               fontSize: 14,
             }}
           >
-            <div style={{ textAlign: "center" }}>
-              <TerminalIcon size={40} style={{ opacity: 0.35 }} />
-              <div style={{ marginTop: 12 }}>No terminals yet</div>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center", fontFamily: fontDisplay }}>
+              <div style={{ fontSize: 13 }}>
+                <span aria-hidden="true" style={{ color: colors.accent }}>~</span>
+                <span aria-hidden="true"> $ </span>
+                <span style={{ textTransform: "lowercase" }}>No terminals yet</span>
+                <span aria-hidden="true" className="odk-cursor" />
+              </div>
               {canCreateTerminal && (
-                <button
-                  type="button"
-                  data-testid="empty-new-terminal"
-                  onClick={() => onNewTerminal(null)}
-                  style={{
-                    marginTop: 14,
-                    background: colors.accent,
-                    color: colors.onAccent,
-                    border: "none",
-                    borderRadius: 999,
-                    padding: "8px 14px",
-                    fontSize: 12,
-                    fontWeight: 700,
-                    cursor: "pointer",
-                  }}
-                >
-                  Start terminal
-                </button>
+                <Button testId="empty-new-terminal" onClick={() => onNewTerminal(null)} ariaLabel="Start terminal" style={{ height: 44 }}>
+                  start terminal
+                </Button>
               )}
             </div>
           </div>
         ) : children}
+        {activeChip && activeMachine && activeChip.terminal.reachable && activeChip.terminal.attention === "confirmation"
+          && !browserSurfaceOpen && !(filesButton?.open) && (
+          <MobileWaitingCard
+            terminal={activeChip.terminal}
+            deviceId={deviceId}
+            canSend={canSendAttention(activeChip.terminal.machine_id)}
+            isController={deviceId !== null && controlLeases[activeMachine.id] === deviceId}
+            onTakeControl={() => onRequestControl(activeMachine.id)}
+          />
+        )}
         {filesSurface}
         {browserSurfaceOpen && activeMachine && (
           // Over the terminal workspace, which stays mounted underneath so
@@ -835,14 +756,12 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               <div style={{
                 display: "flex",
                 alignItems: "center",
-                justifyContent: "space-between",
-                padding: "4px 22px 10px",
-                color: colors.fg2,
+                gap: 8,
+                padding: "4px 16px 12px",
                 fontFamily: fontDisplay,
-                fontSize: 13,
               }}>
-                <span>Sessions</span>
-                <span data-testid="mobile-session-position" style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                <span style={{ flex: 1, fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Sessions</span>
+                <span data-testid="mobile-session-position" style={{ fontSize: 11.5, color: colors.fg3 }}>
                   {activePosition}/{chips.length}
                 </span>
               </div>
@@ -852,50 +771,51 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           scrollRef={sessionSwitcherScrollRef}
           onClose={() => setSessionSwitcherOpen(false)}
         >
-          <div style={{ display: "flex", gap: 10, padding: "4px 16px 10px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, padding: "0 16px 10px" }}>
             <Button
               kind="primary"
               testId="mobile-session-switcher-new-terminal"
+              ariaLabel="New terminal"
               disabled={!canCreateTerminal}
               onClick={() => {
                 setSessionSwitcherOpen(false);
                 onNewTerminal(activeGroup);
               }}
-              style={{ flex: 1, height: 44 }}
+              style={{ height: 44 }}
             >
-              <Plus size={16} /> New terminal
+              new terminal
             </Button>
             <Button
               kind="secondary"
               testId="mobile-workspace-manager-button"
+              ariaLabel="Tabs"
               onClick={() => {
                 setSessionSwitcherOpen(false);
                 setWorkspaceManagerOpen(true);
               }}
               style={{ height: 44 }}
             >
-              <FolderTree size={16} /> Tabs
+              tabs
             </Button>
           </div>
-          {sessionGroups.map(({ group, panes }) => (
-            <section key={group.id} style={{ padding: "0 16px 6px" }}>
+          {sessionGroups.map(({ group, panes }, groupIndex) => (
+            <section key={group.id} style={{ padding: "0 16px 4px" }}>
               <div
                 data-testid={`mobile-session-group-${group.id}`}
                 style={{
                   display: "flex",
                   alignItems: "baseline",
-                  gap: 8,
-                  padding: "12px 6px 6px",
+                  gap: 0,
+                  padding: "8px 4px 4px",
                   fontFamily: fontDisplay,
-                  color: colors.fg2,
-                  fontSize: 13,
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
+                  color: colors.fg3,
+                  fontSize: 12,
+                  fontWeight: 500,
                 }}
               >
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{group.label}</span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: colors.fg3, whiteSpace: "nowrap" }}>
-                  {" · "}
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{groupIndex}:{group.label}</span>
+                <span style={{ whiteSpace: "nowrap" }}>
+                  {"\u00a0·\u00a0"}
                   {panes.length} {panes.length === 1 ? "pane" : "panes"}
                 </span>
               </div>
@@ -911,10 +831,10 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                       display: "flex",
                       alignItems: "stretch",
                       minHeight: 52,
-                      marginBottom: 6,
-                      borderRadius: 14,
-                      background: active ? colors.bg3 : colors.bg1,
-                      border: `1px solid ${active ? colors.line : colors.lineSoft}`,
+                      marginBottom: 2,
+                      borderRadius: 4,
+                      background: active ? colors.bg3 : "transparent",
+                      borderLeft: `2px solid ${active ? colors.accent : "transparent"}`,
                       overflow: "hidden",
                     }}
                   >
@@ -930,8 +850,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                         display: "block",
                         flex: 1,
                         minWidth: 0,
-                        padding: "10px 8px 10px 14px",
+                        padding: "10px 4px 10px 12px",
                         color: colors.fg1,
+                        fontFamily: fontDisplay,
                         textAlign: "left",
                         background: "transparent",
                         border: "none",
@@ -943,15 +864,15 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                           display: "block",
                           color: colors.fg0,
                           fontFamily: fontDisplay,
-                          fontSize: 15.5,
-                          fontWeight: active ? 700 : 600,
+                          fontSize: 14,
+                          fontWeight: active ? 600 : 400,
                           whiteSpace: "normal",
                           overflowWrap: "anywhere",
                         }}
                       >
                         {displayTerminalTitle(terminal)}
                         {terminal.reachable && terminal.attention === "confirmation" && (
-                          <span style={{ display: "block", fontFamily: "inherit", color: colors.accent, fontSize: 11 }}>Confirmation requested</span>
+                          <span style={{ display: "block", marginTop: 3, fontFamily: "inherit", color: colors.err, fontSize: 12, fontWeight: 500 }}>? confirmation requested</span>
                         )}
                       </span>
                       <span
@@ -959,7 +880,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                           display: "block",
                           marginTop: 3,
                           color: colors.fg3,
-                          fontFamily: "var(--font-mono)",
                           fontSize: 11,
                           whiteSpace: "normal",
                           overflowWrap: "anywhere",
@@ -972,13 +892,18 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                           data-testid={`mobile-session-opener-${terminal.id}`}
                           title={terminalOpenerDescription(terminal) ?? undefined}
                           style={{
-                            display: "block",
-                            marginTop: 3,
-                            color: colors.fg3,
-                            fontFamily: "var(--font-mono)",
-                            fontSize: 11,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
+                            marginTop: 4,
+                            padding: "1px 6px",
+                            border: `1px solid ${colors.line}`,
+                            borderRadius: 3,
+                            color: colors.fg2,
+                            fontSize: 10.5,
                           }}
                         >
+                          <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
                           opened by {terminalOpenerText(terminal)}
                         </span>
                       )}
@@ -992,18 +917,20 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                       onClick={() => onCloseTerminal(terminal)}
                       style={{
                         flexShrink: 0,
-                        width: 48,
+                        width: 44,
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
                         background: "transparent",
                         border: "none",
                         color: colors.fg3,
+                        fontFamily: fontDisplay,
+                        fontSize: 12,
                         cursor: canCreateTerminal ? "pointer" : "not-allowed",
                         opacity: canCreateTerminal ? 1 : 0.4,
                       }}
                     >
-                      <X size={16} />
+                      [x]
                     </button>
                   </div>
                 );
@@ -1048,10 +975,15 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             }}
           />}
           {switchHubError && <p role="alert" style={{ color: colors.err, padding: 16 }}>{switchHubError}</p>}
-          {machines.map((m) => {
+          {/* The machines as one bordered list (wireframe P06): ● name,
+              os · terminals, `current` on the one you are on, [x] to remove. */}
+          <div style={{ margin: "0 16px 12px", border: `1px solid ${colors.lineSoft}`, borderRadius: 6, overflow: "hidden" }}>
+          {machines.map((m, index) => {
             const isActive = m.id === activeMachine?.id;
+            const online = machineOnline(m);
             const controlling =
               deviceId !== null && controlLeases[m.id] === deviceId;
+            const count = terminals.filter((t) => t.machine_id === m.id).length;
             return (
               <div
                 key={m.id}
@@ -1059,10 +991,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   display: "grid",
                   gridTemplateColumns: "1fr auto",
                   alignItems: "center",
-                  background: isActive ? colors.bg2 : "transparent",
-                  borderLeft: isActive
-                    ? `3px solid ${colors.accent}`
-                    : "3px solid transparent",
+                  background: isActive ? colors.bg3 : "transparent",
+                  borderLeft: `2px solid ${isActive ? colors.accent : "transparent"}`,
+                  borderTop: index === 0 ? "none" : `1px solid ${colors.lineSoft}`,
                 }}
               >
               <button
@@ -1074,78 +1005,54 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 style={{
                   display: "grid",
                   gridTemplateColumns: "auto 1fr auto",
-                  gap: 12,
+                  gap: 10,
                   alignItems: "center",
                   width: "100%",
+                  minHeight: 56,
                   textAlign: "left",
-                  padding: "12px 16px",
+                  padding: "10px 12px",
                   background: "transparent",
                   border: "none",
                   cursor: "pointer",
-                  color: colors.fg1,
+                  color: colors.fg0,
+                  fontFamily: fontDisplay,
                 }}
               >
-                <HostDot online={machineOnline(m)} isController={controlling} />
-                <div style={{ minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontSize: 14,
-                      fontWeight: 600,
-                      color: colors.fg0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {m.name}
-                  </div>
-                  <div
-                    style={{
-                      fontFamily: "var(--font-mono)",
-                      fontSize: 11,
-                      color: colors.fg3,
-                    }}
-                  >
-                    {m.os}
-                  </div>
-                </div>
-                <div
-                  style={{
-                    textAlign: "right",
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                    color: colors.fg3,
-                  }}
+                <span
+                  role="img"
+                  aria-label={online ? (controlling ? "Online, you are in control" : "Online") : "Offline"}
+                  style={{ color: online ? colors.ok : colors.fg3 }}
                 >
-                  {terminals.filter((t) => t.machine_id === m.id).length} term
-                </div>
+                  {online ? "●" : "○"}
+                </span>
+                <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
+                  <span style={{ fontSize: 14, fontWeight: isActive ? 600 : 400, color: online ? colors.fg0 : colors.fg2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {m.name}
+                  </span>
+                  <span style={{ fontSize: 12, color: online ? colors.fg2 : colors.fg3 }}>
+                    {online ? `${m.os} · ${count} ${count === 1 ? "terminal" : "terminals"}` : "offline"}
+                  </span>
+                </span>
+                {isActive ? <span style={{ fontSize: 11.5, fontWeight: 500, color: colors.accent }}>current</span> : <span />}
               </button>
               <button
                 type="button"
                 data-testid={`mobile-host-remove-${m.id}`}
                 title={`Remove ${m.name}`}
                 aria-label={`Remove ${m.name}`}
+                className="odk-text-btn"
                 onClick={() => {
                   setHostSheetOpen(false);
                   onRemoveHost(m.id);
                 }}
-                style={{
-                  width: 48,
-                  height: 48,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  background: "transparent",
-                  border: "none",
-                  color: colors.fg3,
-                  cursor: "pointer",
-                }}
+                style={{ width: 44, height: 44, fontSize: 12 }}
               >
-                <X size={16} />
+                [x]
               </button>
               </div>
             );
           })}
+          </div>
           {filesButton && onToggleFiles && (
             <MenuRow
               icon={<FolderOpen size={17} />}
@@ -1319,9 +1226,9 @@ function SessionSwitcherHeader({
           flexDirection: "column",
           gap: 4,
           padding: "10px 14px",
-          borderRadius: 16,
+          borderRadius: 4,
           border: `1px solid ${colors.line}`,
-          background: colors.bg0,
+          background: colors.bg1,
           color: colors.fg0,
           cursor: machine ? "pointer" : "default",
           textAlign: "left",
@@ -1344,7 +1251,7 @@ function SessionSwitcherHeader({
           >
             {machine?.name ?? "No machine"}
           </span>
-          <ChevronRight size={14} style={{ flexShrink: 0, color: colors.fg3 }} />
+          <span aria-hidden="true" style={{ flexShrink: 0, color: colors.fg3 }}>›</span>
         </span>
         <span data-testid="mobile-session-header-metrics" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 8px", fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: 1.5 }}>
           <span data-testid="mobile-session-header-rtt" style={{ color: colors.fg1 }}>
@@ -1369,7 +1276,7 @@ function SessionSwitcherHeader({
               alignItems: "center",
               gap: 7,
               padding: "0 14px",
-              borderRadius: 16,
+              borderRadius: 4,
               border: `1px ${up ? "solid" : "dashed"} ${colors.line}`,
               background: "transparent",
               color: up ? colors.fg0 : colors.fg3,
@@ -1499,7 +1406,7 @@ function Sheet({
         position: "absolute",
         inset: 0,
         zIndex: 30,
-        background: "rgb(43 35 64 / 0.45)",
+        background: "rgb(0 0 0 / 0.6)",
         display: "flex",
         alignItems: "flex-end",
         animation: "offdeskFadeIn 120ms ease-out",
@@ -1509,9 +1416,11 @@ function Sheet({
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
-          background: colors.bg1,
-          borderTopLeftRadius: 28,
-          borderTopRightRadius: 28,
+          background: colors.bg2,
+          borderTop: `1px solid ${colors.line}`,
+          borderTopLeftRadius: 16,
+          borderTopRightRadius: 16,
+          fontFamily: fontDisplay,
           maxHeight: "85%",
           display: "flex",
           flexDirection: "column",
@@ -1524,14 +1433,14 @@ function Sheet({
             display: "flex",
             justifyContent: "center",
             flexShrink: 0,
-            padding: "8px 0 4px",
+            padding: "10px 0 6px",
           }}
         >
           <span
             style={{
-              width: 36,
+              width: 40,
               height: 4,
-              borderRadius: 999,
+              borderRadius: 2,
               background: colors.line,
             }}
           />
@@ -1540,17 +1449,18 @@ function Sheet({
           <div
             style={{
               flexShrink: 0,
-              padding: "4px 20px 10px",
+              padding: "4px 16px 10px",
               fontFamily: fontDisplay,
-              fontSize: 18,
-              fontWeight: 700,
+              fontSize: 20,
+              fontWeight: 600,
+              letterSpacing: "-0.02em",
               color: colors.fg0,
               display: "flex",
               alignItems: "center",
               gap: 8,
             }}
           >
-            {backLabel && <button type="button" aria-label={backLabel} onClick={onBack} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer" }}><ArrowLeft size={20} /></button>}
+            {backLabel && <button type="button" aria-label={backLabel} onClick={onBack} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer", font: "inherit", fontSize: 15 }}>←</button>}
             {title}
           </div>
         ))}
@@ -1561,45 +1471,51 @@ function Sheet({
 }
 
 function MenuRow({
-  icon,
+  icon: _icon,
   label,
   disabled,
   danger,
   testid,
   onClick,
 }: {
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   label: string;
   disabled?: boolean;
   danger?: boolean;
   testid?: string;
   onClick: () => void;
 }) {
+  // `› browse files` (wireframe P06): the chevron is drawn by CSS and the
+  // label lowercased on screen, so the text stays the action's name.
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       data-testid={testid}
+      aria-label={label}
+      className="odk-menu-row"
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 12,
-        width: "100%",
-        minHeight: 52,
-        padding: "12px 20px",
+        gap: 8,
+        width: "calc(100% - 16px)",
+        margin: "0 8px",
+        minHeight: 48,
+        padding: "0 12px",
+        borderRadius: 4,
         color: danger ? colors.err : disabled ? colors.fg3 : colors.fg0,
         textAlign: "left",
-        borderBottom: `1px solid ${colors.lineSoft}`,
         background: "none",
         border: "none",
+        fontFamily: fontDisplay,
+        fontSize: 14,
+        textTransform: "lowercase",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.5 : 1,
       }}
     >
-      {icon}
-      <span style={{ fontFamily: fontDisplay, fontSize: 15, fontWeight: 600 }}>{label}</span>
-      <span style={{ flex: 1 }} />
+      {label}
     </button>
   );
 }

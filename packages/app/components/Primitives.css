@@ -6,6 +6,9 @@
 
 /* ── Buttons ─────────────────────────────────────────────────────── */
 .odk-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border:1px solid rgb(var(--color-line));border-radius:4px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color 120ms ease,border-color 120ms ease,opacity 120ms ease}
+/* Chrome is lowercase on screen. Callers may pass sentence-case labels: the
+   DOM keeps them for screen readers, tests and translators. */
+.odk-btn{text-transform:lowercase}
 .odk-btn:disabled,.odk-btn[aria-disabled=true]{opacity:.45;cursor:default}
 .odk-btn--sm{height:32px;padding:0 12px;font-size:12px}
 .odk-btn--xs{height:28px;padding:0 12px;font-size:12px}
@@ -32,6 +35,14 @@
 /* Square 44px targets for the phone title bar's [f] [b] [m]. */
 .odk-text-btn--square{width:44px;height:44px;padding:0;font-size:13px;color:rgb(var(--color-fg-0))}
 @media(pointer:coarse){.odk-text-btn{min-height:44px;min-width:44px}}
+
+/* Brackets drawn by CSS, for buttons whose text other code reads ("Sent"). */
+.odk-bracketed::before{content:"["}
+.odk-bracketed::after{content:"]"}
+
+/* `› browse files`: phone menu rows. */
+.odk-menu-row::before{content:"›";color:rgb(var(--color-fg-3));text-transform:none}
+@media(hover:hover){.odk-menu-row:not(:disabled):hover{background:rgb(var(--color-bg-3))!important}}
 
 /* ── Chips and badges ────────────────────────────────────────────── */
 .odk-chip{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:1px solid rgb(var(--color-line));border-radius:3px;font-family:var(--font-display);font-size:11px;font-weight:500;line-height:1;color:rgb(var(--color-fg-2));white-space:nowrap}

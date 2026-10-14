@@ -1,6 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { AgentBrowserInfo } from "@offdesk/shared";
-import { ArrowLeft, Globe, Plus, X } from "lucide-react";
 import { AgentBrowserMobileView } from "./AgentBrowserMobileView.web";
 import {
   browserControlledBy,
@@ -11,8 +10,8 @@ import { colors, colorAlpha } from "@/lib/colors";
 import { useAgentBrowserTabs } from "@/lib/useAgentBrowserTabs";
 
 const iconButton = {
-  width: 36,
-  height: 36,
+  width: 40,
+  height: 40,
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
@@ -21,6 +20,7 @@ const iconButton = {
   border: "none",
   background: "transparent",
   color: colors.fg2,
+  fontFamily: "var(--font-display)",
   cursor: "pointer",
 } as const;
 
@@ -95,11 +95,12 @@ export function AgentBrowserMobileSurface({
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 2,
-          padding: "2px 4px",
-          background: colors.bg1,
+          gap: 4,
+          padding: "6px 8px",
+          background: colors.bg0,
           borderBottom: `1px solid ${colors.lineSoft}`,
           flexShrink: 0,
+          fontFamily: "var(--font-display)",
         }}
       >
         <button
@@ -108,9 +109,9 @@ export function AgentBrowserMobileSurface({
           aria-label="Back to terminals"
           title="Back to terminals"
           onClick={onClose}
-          style={iconButton}
+          style={{ ...iconButton, fontSize: 15 }}
         >
-          <ArrowLeft size={18} aria-hidden />
+          ←
         </button>
         <div
           role="tablist"
@@ -125,7 +126,7 @@ export function AgentBrowserMobileSurface({
             overscrollBehaviorX: "contain",
           }}
         >
-          {browsers.map((browser) => {
+          {browsers.map((browser, index) => {
             const active = browser.id === selectedBrowserId;
             const label = browserLabel(browser);
             const closing = closingIds.has(browser.id);
@@ -143,37 +144,20 @@ export function AgentBrowserMobileSurface({
                   alignItems: "center",
                   gap: 6,
                   flexShrink: 0,
-                  maxWidth: 190,
-                  minHeight: 36,
+                  maxWidth: 200,
+                  minHeight: 32,
                   padding: "0 2px 0 10px",
-                  borderRadius: 8,
-                  border: `1px solid ${active ? colorAlpha.accentLine : "transparent"}`,
-                  background: active ? colors.bg0 : "transparent",
-                  color: active ? colors.fg0 : colors.fg2,
+                  borderRadius: 3,
+                  border: `1px solid ${active ? "transparent" : colors.line}`,
+                  background: active ? colors.primary : "transparent",
+                  color: active ? colors.onPrimary : colors.fg2,
+                  fontWeight: active ? 600 : 500,
                   fontSize: 12,
                   opacity: closing ? 0.5 : 1,
                   cursor: "pointer",
                 }}
               >
-                <Globe
-                  size={12}
-                  aria-hidden
-                  style={{ flexShrink: 0, color: active ? colors.accent : colors.fg3 }}
-                />
-                {browserNeedsPerson(browser) && (
-                  <span
-                    role="img"
-                    aria-label="The agent needs you"
-                    data-testid={`mobile-browser-tab-attention-${browser.id}`}
-                    style={{
-                      width: 7,
-                      height: 7,
-                      borderRadius: "50%",
-                      background: colors.warn,
-                      flexShrink: 0,
-                    }}
-                  />
-                )}
+                <span aria-hidden style={{ flexShrink: 0 }}>{index}:</span>
                 <span
                   style={{
                     minWidth: 0,
@@ -184,14 +168,24 @@ export function AgentBrowserMobileSurface({
                 >
                   {label}
                 </span>
+                {browserNeedsPerson(browser) && (
+                  <span
+                    role="img"
+                    aria-label="The agent needs you"
+                    data-testid={`mobile-browser-tab-attention-${browser.id}`}
+                    style={{ color: active ? colors.onPrimary : colors.err, flexShrink: 0 }}
+                  >
+                    !
+                  </span>
+                )}
                 {browserControlledBy(browser, deviceId) && (
                   <span
                     style={{
-                      fontSize: 9,
+                      fontSize: 10.5,
                       padding: "0 5px",
-                      borderRadius: 999,
-                      background: colorAlpha.accentSoft,
-                      color: colors.accent,
+                      border: `1px solid ${active ? colors.onPrimary : colors.line}`,
+                      borderRadius: 3,
+                      color: active ? colors.onPrimary : colors.accent,
                       flexShrink: 0,
                     }}
                   >
@@ -208,9 +202,9 @@ export function AgentBrowserMobileSurface({
                     event.stopPropagation();
                     void closeTab(browser);
                   }}
-                  style={{ ...iconButton, width: 32, height: 32, color: colors.fg3 }}
+                  style={{ ...iconButton, width: 32, height: 32, fontSize: 11, color: active ? colors.onPrimary : colors.fg3 }}
                 >
-                  <X size={13} aria-hidden />
+                  [x]
                 </button>
               </div>
             );
@@ -225,9 +219,9 @@ export function AgentBrowserMobileSurface({
             setAdding((value) => !value);
             setError(null);
           }}
-          style={iconButton}
+          style={{ ...iconButton, fontSize: 13, color: colors.fg0 }}
         >
-          <Plus size={18} aria-hidden />
+          [+]
         </button>
       </div>
 
@@ -256,7 +250,7 @@ export function AgentBrowserMobileSurface({
             value={address}
             onChange={(event) => setAddress(event.target.value)}
             onKeyDown={onAddressKeyDown}
-            placeholder="Enter a web address, e.g. example.com"
+            placeholder="a web address, e.g. example.com"
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
@@ -264,13 +258,14 @@ export function AgentBrowserMobileSurface({
             style={{
               flex: 1,
               minWidth: 0,
-              minHeight: 38,
+              minHeight: 40,
               padding: "0 12px",
+              fontFamily: "var(--font-display)",
               fontSize: 16,
-              color: colors.foreground,
+              color: colors.fg0,
               background: colors.bg0,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 8,
+              border: `1px solid ${colors.line}`,
+              borderRadius: 4,
               outline: "none",
             }}
           />
@@ -279,20 +274,21 @@ export function AgentBrowserMobileSurface({
             data-testid="mobile-browser-url-submit"
             disabled={opening}
             style={{
-              minHeight: 38,
+              minHeight: 40,
+              fontFamily: "var(--font-display)",
               fontSize: 13,
               fontWeight: 600,
               padding: "0 14px",
-              borderRadius: 8,
+              borderRadius: 4,
               border: "none",
-              background: colors.accent,
-              color: colors.onAccent,
+              background: colors.primary,
+              color: colors.onPrimary,
               cursor: opening ? "default" : "pointer",
               opacity: opening ? 0.6 : 1,
               flexShrink: 0,
             }}
           >
-            {opening ? "Opening…" : "Open"}
+            {opening ? "opening…" : "open"}
           </button>
         </form>
       )}

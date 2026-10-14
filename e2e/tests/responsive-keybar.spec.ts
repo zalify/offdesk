@@ -36,7 +36,7 @@ test("keyboard viewport pan keeps the key bar and terminal chrome in the visible
   await expect(canvas).toHaveCSS("top", "0px");
 });
 
-test("equal keys and fixed inverted-T survive scrolling, folding and rotation", async ({ page }, testInfo) => {
+test("keys form an even grid, fit their labels, and the arrows stay put through scrolling, folding and rotation", async ({ page }, testInfo) => {
   await setup(page);
   // Production typography follows the design system and user font override,
   // rather than the wireframe's hard-coded system font.
@@ -54,25 +54,32 @@ test("equal keys and fixed inverted-T survive scrolling, folding and rotation", 
     const bar = page.getByTestId("extended-keybar").filter({ visible: true });
     await expect(bar).toBeVisible();
     await expect(page.getByTestId("terminal-input-settings")).toHaveCount(0);
+    // Every key is one grid column: the same width, 44px tall hit areas, at
+    // least 36px wide, and no label is ever clipped.
     await expect.poll(async () => {
       return bar.evaluate(el => {
-        const width = el.clientWidth - 8;
-        const expected = width / Math.max(7, Math.floor(width / 52));
-        const boxes = Array.from(el.querySelectorAll(".offdesk-terminal-key"), key => key.getBoundingClientRect());
-        return boxes.every(box => box.width >= 44 && box.height === 44 && Math.abs(box.width - expected) < 1);
+        const keys = Array.from(el.querySelectorAll<HTMLElement>(".offdesk-terminal-key"));
+        const width = keys[0].getBoundingClientRect().width;
+        return keys.every(key => {
+          const box = key.getBoundingClientRect();
+          return Math.abs(box.width - width) < 0.5 && box.width >= 36 && box.height === 44 && key.scrollWidth <= key.clientWidth;
+        });
       });
     }).toBe(true);
+    // The two rows line up: ↑ above ↓, enter above →, ^C above kb.
+    const column = async (top: string, bottom: string) => {
+      const [a, b] = [await bar.getByTestId(top).boundingBox(), await bar.getByTestId(bottom).boundingBox()];
+      expect(Math.abs(a!.x - b!.x)).toBeLessThan(0.5);
+    };
+    await column("extended-keybar-up", "extended-keybar-down");
+    await column("extended-keybar-enter", "extended-keybar-right");
+    await column("extended-keybar-ctrl-c", "extended-keybar-keyboard");
     const up = bar.getByTestId("extended-keybar-up");
     const left = bar.getByTestId("extended-keybar-left"), right = bar.getByTestId("extended-keybar-right");
     const before = await up.boundingBox();
-    // Read both rows in one frame: separate protocol round trips can straddle
-    // the ResizeObserver update immediately after a viewport change.
-    await expect.poll(() => bar.evaluate(el => Math.abs(
-      el.querySelector('[data-testid="extended-keybar-up"]')!.getBoundingClientRect().x -
-      el.querySelector('[data-testid="extended-keybar-down"]')!.getBoundingClientRect().x,
-    ))).toBeLessThan(1);
-    expect((await left.boundingBox())!.x).toBeLessThan(before!.x);
-    expect((await right.boundingBox())!.x).toBeGreaterThan(before!.x);
+    expect((await left.boundingBox())!.x).toBeLessThan((await right.boundingBox())!.x);
+    await expect(left).toBeInViewport();
+    await expect(right).toBeInViewport();
     const scroll = bar.getByTestId("keybar-scroll");
     if (width === 320) {
       // Exercise Chromium's actual touch scrolling, starting over a tool key.
@@ -186,7 +193,7 @@ test("custom terminal keys persist while fixed navigation stays aligned", async 
   const settings = page.getByTestId("keybar-settings");
   await settings.getByRole("button", { name: "Hide /", exact: true }).click();
   await settings.getByRole("button", { name: "Move Backspace to first row", exact: true }).click();
-  await expect(settings.getByRole("button", { name: "Move Shift earlier", exact: true })).toBeDisabled();
+  await expect(settings.getByRole("button", { name: "Move Paste earlier", exact: true })).toBeDisabled();
   await settings.getByRole("combobox", { name: "Add key to second row" }).selectOption("home");
   await page.reload();
   await expandTerminalById(page, id);
@@ -194,9 +201,8 @@ test("custom terminal keys persist while fixed navigation stays aligned", async 
   await expect(bar.getByTestId("extended-keybar-slash")).toHaveCount(0);
   await expect(bar.getByTestId("keybar-fixed-row").getByTestId("extended-keybar-backspace")).toBeVisible();
   await expect(bar.getByTestId("extended-keybar-home")).toHaveCount(1);
-  await expect.poll(() => bar.evaluate(el => Math.abs(
-    el.querySelector('[data-testid="extended-keybar-up"]')!.getBoundingClientRect().x -
-    el.querySelector('[data-testid="extended-keybar-down"]')!.getBoundingClientRect().x))).toBeLessThan(1);
+  await expect(bar.getByTestId("extended-keybar-up")).toBeInViewport();
+  await expect(bar.getByTestId("extended-keybar-down")).toBeInViewport();
   await mobileOpenHostSheet(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByText("Customize terminal keys", { exact: true }).click();

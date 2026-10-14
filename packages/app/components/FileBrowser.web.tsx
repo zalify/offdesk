@@ -323,7 +323,7 @@ export function FileBrowser({
         flexDirection: "column",
         outline: "none",
         color: colors.fg0,
-        background: colors.bg1,
+        background: "transparent",
         fontFamily: "var(--font-display)",
       }}
     >
@@ -545,6 +545,9 @@ export function FileBrowser({
                     >
                       {size}
                     </span>
+                  )}
+                  {touch && entry.is_dir && (
+                    <span aria-hidden style={{ color: colors.fg3, flexShrink: 0 }}>›</span>
                   )}
                   {!touch && (
                     <span

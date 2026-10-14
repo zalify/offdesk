@@ -13,7 +13,9 @@ export type KeyBarKey = keyof typeof KEYBAR_KEYS;
 export type KeyBarLayout = { primary: KeyBarKey[]; secondary: KeyBarKey[] };
 export const DEFAULT_KEYBAR_LAYOUT: KeyBarLayout = {
   primary: ["ctrl-c", "esc", "tab", "shift-tab", "slash"],
-  secondary: ["backspace", "shift", "paste", "attach", "select-toggle", "ctrl-latch", "space", "at", "tilde", "pipe", "dash", "underscore"],
+  // Row 2 reads like the wireframes: kb paste attach select ctrl, then the
+  // rest, scrolling.
+  secondary: ["paste", "attach", "select-toggle", "ctrl-latch", "backspace", "shift", "space", "at", "tilde", "pipe", "dash", "underscore"],
 };
 
 export function sanitizeKeyBarLayout(value: unknown): KeyBarLayout {

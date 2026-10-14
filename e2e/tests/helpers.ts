@@ -583,6 +583,20 @@ export async function mobileOpenHostSheet(page: Page): Promise<void> {
   await expect(page.getByTestId("mobile-control-toggle")).toBeVisible();
 }
 
+/** New terminal lives in the Sessions sheet (the title bar is [f] [b] [m]). */
+export async function mobileNewTerminalButton(page: Page): Promise<Locator> {
+  const button = page.getByTestId("mobile-session-switcher-new-terminal");
+  if (!(await button.isVisible().catch(() => false))) {
+    await page.getByTestId("mobile-title-bar-label").click();
+    await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
+  }
+  return button;
+}
+
+export async function mobileCloseSheet(page: Page): Promise<void> {
+  await page.keyboard.press("Escape");
+}
+
 export async function mobileTakeControl(page: Page): Promise<void> {
   await mobileOpenHostSheet(page);
   await page.getByTestId("mobile-control-toggle").click();

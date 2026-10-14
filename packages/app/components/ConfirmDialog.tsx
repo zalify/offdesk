@@ -117,17 +117,18 @@ export function ConfirmDialog({
             marginTop: 8,
           }}
         >
-          <button ref={cancelRef} type="button" onClick={onCancel} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
+          <button ref={cancelRef} type="button" onClick={onCancel} aria-label={cancelLabel} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
             {cancelLabel}
           </button>
           {secondaryLabel && onSecondary ? (
-            <button type="button" onClick={onSecondary} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
+            <button type="button" onClick={onSecondary} aria-label={secondaryLabel} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
               {secondaryLabel}
             </button>
           ) : null}
           <button
             type="button"
             onClick={onConfirm}
+            aria-label={confirmLabel}
             className={`odk-btn odk-btn--sm ${variant === "danger" ? "odk-btn--danger" : "odk-btn--primary"}`}
             style={variant === "danger" ? { ...label, borderColor: colors.err } : label}
           >

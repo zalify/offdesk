@@ -1,6 +1,6 @@
 import { test, expect, devices, type WebSocketRoute } from "@playwright/test";
 import type { TerminalInfo, BrowserEvent } from "@offdesk/shared";
-import { openApp } from "./helpers";
+import { mobileCloseSheet, mobileNewTerminalButton, openApp } from "./helpers";
 
 test.use({ ...devices["iPhone 14"], browserName: "chromium" });
 
@@ -72,7 +72,8 @@ test("mobile attention shortcuts switch tabs and machines and track live resolut
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Review deployment");
   await expect(page.getByTestId("mobile-attention-other")).toBeVisible();
   // No terminal input / control takeover is required to inspect the request.
-  await expect(page.getByTestId("mobile-bar-new-terminal")).toBeDisabled();
+  await expect(await mobileNewTerminalButton(page)).toBeDisabled();
+  await mobileCloseSheet(page);
   emit({ type: "terminal_updated", terminal: { ...other, attention: null } });
   await expect(strip).toHaveCount(0);
   emit({ type: "terminal_updated", terminal: other });

@@ -16,6 +16,8 @@ import {
   requestMachineControl,
   resetMachineState,
   swipeTitleBar,
+  mobileNewTerminalButton,
+  mobileCloseSheet,
 } from "./helpers";
 
 test.use({
@@ -33,13 +35,14 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
   await expect(page.getByTestId("mobile-workbench")).toBeVisible();
   await expect(page.getByTestId("mobile-title-bar")).toBeVisible();
   await expect(page.getByTestId("mobile-title-bar-dot")).toBeVisible();
-  await expect(page.getByTestId("mobile-bar-new-terminal")).toHaveCSS(
+  // [f] [b] [m] are 40px text squares (wireframe P04).
+  await expect(page.getByTestId("mobile-title-bar-machines")).toHaveCSS(
     "width",
-    "34px",
+    "40px",
   );
-  await expect(page.getByTestId("mobile-bar-new-terminal")).toHaveCSS(
+  await expect(page.getByTestId("mobile-title-bar-machines")).toHaveCSS(
     "height",
-    "34px",
+    "40px",
   );
   await expect(page.getByText(/No terminals yet/)).toBeVisible();
   await expect(page.getByTestId("empty-new-terminal")).toHaveCount(0);
@@ -69,7 +72,8 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
   );
   await page.getByTestId("mobile-control-toggle").click();
   await expect(page.getByTitle("Show keyboard")).toBeDisabled();
-  await expect(page.getByTestId("mobile-bar-new-terminal")).toBeDisabled();
+  await expect(await mobileNewTerminalButton(page)).toBeDisabled();
+  await mobileCloseSheet(page);
 
   // Unlock without claiming; the existing Take control flow remains explicit.
   await mobileOpenHostSheet(page);
@@ -80,7 +84,8 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
 
   // Take control back.
   await mobileTakeControl(page);
-  await expect(page.getByTestId("mobile-bar-new-terminal")).toBeEnabled();
+  await expect(await mobileNewTerminalButton(page)).toBeEnabled();
+  await mobileCloseSheet(page);
 
   // Destroy via API → the shell returns to the empty state.
   const deviceId = await page.evaluate(() => sessionStorage.getItem("tc-device-id"));
@@ -480,7 +485,7 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
 
   await page.getByTestId(`mobile-session-row-${firstTerminalId}`).click();
   const beforeIds = (await listTerminals(page)).map((terminal) => terminal.id);
-  await page.getByTestId("mobile-bar-new-terminal").click();
+  await (await mobileNewTerminalButton(page)).click();
   await expect.poll(async () => (await listTerminals(page)).length).toBe(3);
   const created = (await listTerminals(page)).find(
     (terminal) => !beforeIds.includes(terminal.id),
@@ -596,7 +601,7 @@ test("mobile + overflows a full tab into a new tab instead of a fifth pane", asy
   );
 
   const beforeIds = (await listTerminals(page)).map((terminal) => terminal.id);
-  await page.getByTestId("mobile-bar-new-terminal").click();
+  await (await mobileNewTerminalButton(page)).click();
 
   // Creating still succeeds — the terminal just lands in a fresh tab.
   await expect.poll(async () => (await listTerminals(page)).length).toBe(5);
@@ -993,13 +998,13 @@ for (const colorScheme of ["light", "dark"] as const) {
         await page.setViewportSize(size);
         await expect(page.getByTestId("mobile-workbench")).toBeVisible();
         await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
-        await expect(machines).toHaveText("");
+        await expect(machines).toHaveText("[m]");
         await expect(bar).toHaveCSS("height", "44px");
-        // All header elements (title, control state, Files (only >= 360px, below
-        // that it lives in the Machines sheet), Browser, new terminal,
-        // machines, status dot) must be contained, non-overlapping and in
-        // one row; a clipped title is intentional, clipped controls are not.
-        const expectedChildren = size.width >= 360 ? 7 : 6;
+        // All header elements — title, control state, [f] (only >= 360px,
+        // below that it lives in the Machines sheet), [b], [m] — must be
+        // contained, non-overlapping and in one row; a clipped title is
+        // intentional, clipped controls are not.
+        const expectedChildren = size.width >= 360 ? 5 : 4;
         await expect.poll(() => bar.evaluate((element, expected) => {
           const outer = element.getBoundingClientRect();
           const children = Array.from(element.children).map(child => child.getBoundingClientRect());

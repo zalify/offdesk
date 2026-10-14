@@ -84,7 +84,7 @@ describe("ExtendedKeyBar", () => {
   it("keeps Space in the scrolling tools for TUI toggles", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).toContain('data-testid="extended-keybar-space"');
-    expect(html).toContain(">Space<");
+    expect(html).toContain(">space<");
   });
 
   it("renders Enter in the pinned row so commands can be submitted without the soft keyboard", () => {
@@ -97,7 +97,7 @@ describe("ExtendedKeyBar", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).toContain('data-testid="extended-keybar-tab"');
     expect(html).toContain('data-testid="extended-keybar-shift-tab"');
-    expect(html).toContain(">Tab<");
+    expect(html).toContain(">tab<");
   });
 
   it("renders the Ctrl latch key only when onToggleCtrl is provided", () => {

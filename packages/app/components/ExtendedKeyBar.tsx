@@ -2,7 +2,7 @@ import { useKeyBarLayout, type KeyBarKey, type KeyBarLayout } from "@/lib/keyBar
 import { readClipboardText } from "@/lib/readClipboardText";
 import { AttachmentPicker, AttachmentReview, formatAttachmentSize } from "./AttachmentPicker";
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Keyboard, Paperclip, ClipboardPaste, Copy, SquareDashed, LoaderCircle, ArrowBigUp as Shift, Delete } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import "./ExtendedKeyBar.css";
 
 export interface ExtendedKeyBarProps {
@@ -24,6 +24,9 @@ export interface ExtendedKeyBarProps {
   onShiftPress?: () => void;
   onShiftRelease?: (cancelled: boolean) => void;
 }
+
+const KEY_GAP = 6;
+const MIN_KEY_WIDTH = 48;
 
 export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
@@ -77,7 +80,15 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   };
   useEffect(() => {
     const update = () => {
-      if (bar.current) { const width = bar.current.clientWidth - 8; setKeyWidth(width / Math.max(7, Math.floor(width / 52))); }
+      // Every key is one grid column wide, so the two rows line up and ↑
+      // sits above ↓. Phones get seven columns; wider screens fit more.
+      const el = bar.current;
+      if (el) {
+        const style = getComputedStyle(el);
+        const width = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const columns = Math.max(7, Math.floor((width + KEY_GAP) / (MIN_KEY_WIDTH + KEY_GAP)));
+        setKeyWidth((width - (columns - 1) * KEY_GAP) / columns);
+      }
       updateEdges();
     };
     const observer = new ResizeObserver(update);
@@ -133,29 +144,35 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       "ctrl-z": ["Ctrl+Z", "\x1a"], "ctrl-l": ["Ctrl+L", "\x0c"],
     };
     const data = simple[id];
-    if (data) return key(data[0], data[1], `extended-keybar-${id}`);
+    // What the key shows: lowercase, short (wireframes P04/B-Phone); the
+    // spelled-out name stays the accessible name.
+    const shown: Partial<Record<KeyBarKey, string>> = {
+      esc: "esc", tab: "tab", space: "space", home: "home", end: "end",
+      "ctrl-d": "^D", "ctrl-z": "^Z", "ctrl-l": "^L",
+    };
+    if (data) return key(data[0], data[1], `extended-keybar-${id}`, shown[id]);
     switch (id) {
-      case "ctrl-c": return <KeyButton key={id} label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")} />;
-      case "shift-tab": return key("Shift+Tab", "\x1b[Z", "extended-keybar-shift-tab", <><Shift size={13} aria-hidden /><span>Tab</span></>);
-      case "backspace": return key("Backspace", "\x7f", "extended-keybar-backspace", <Delete size={18} aria-hidden />, "hold");
+      case "ctrl-c": return <KeyButton key={id} label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")}>^C</KeyButton>;
+      case "shift-tab": return key("Shift+Tab", "\x1b[Z", "extended-keybar-shift-tab", "⇧tab");
+      case "backspace": return key("Backspace", "\x7f", "extended-keybar-backspace", "bksp", "hold");
       case "shift": return onToggleShift && onShiftPress && onShiftRelease && <ShiftButton key={id} disabled={!isController} pressed={shiftArmed}
         onToggle={onToggleShift} onStart={onShiftPress} onEnd={onShiftRelease} />;
-      case "paste": return onPasteText && <KeyButton key={id} label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}><ClipboardPaste size={18} aria-hidden /></KeyButton>;
+      case "paste": return onPasteText && <KeyButton key={id} label="Paste" testid="extended-keybar-paste" disabled={!isController || pasting} onPress={() => void paste()}>paste</KeyButton>;
       case "attach": return onAttachFile && <KeyButton key={id} label={uploading ? "Uploading attachment" : "Attach photo or file"} testid="extended-keybar-attach"
         disabled={!isController || uploading} onPress={() => setChoosingAttachment(true)}>
-        {uploading ? <LoaderCircle size={18} aria-hidden className="offdesk-keybar-spinner" data-testid="extended-keybar-attach-spinner" /> : <Paperclip size={18} aria-hidden />}
+        {uploading ? <LoaderCircle size={16} aria-hidden className="offdesk-keybar-spinner" data-testid="extended-keybar-attach-spinner" /> : "attach"}
       </KeyButton>;
-      case "select-toggle": return selectionAvailable && <KeyButton key={id} label="Select text to copy" testid="extended-keybar-select-toggle" disabled={!isController} onPress={() => onEnterSelectMode?.()}><SquareDashed size={18} aria-hidden /></KeyButton>;
-      case "ctrl-latch": return onToggleCtrl && <KeyButton key={id} label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl} />;
+      case "select-toggle": return selectionAvailable && <KeyButton key={id} label="Select text to copy" testid="extended-keybar-select-toggle" disabled={!isController} onPress={() => onEnterSelectMode?.()}>select</KeyButton>;
+      case "ctrl-latch": return onToggleCtrl && <KeyButton key={id} label="Ctrl" testid="extended-keybar-ctrl-latch" disabled={!isController} pressed={ctrlArmed} onPress={onToggleCtrl}>ctrl</KeyButton>;
     }
   };
-  return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar" style={{ "--key-width": `${keyWidth}px` } as CSSProperties}>
+  return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar" style={{ "--key-width": `${keyWidth}px`, "--key-gap": `${KEY_GAP}px` } as CSSProperties}>
     {selection ? <div className="offdesk-selection-bar" data-testid="extended-keybar-select-mode">
       <button onClick={onExitSelectMode} disabled={copying} data-testid="extended-keybar-select-done">Done</button>
       <span>Drag on the terminal to select text</span>
       <button disabled={copying} data-testid="extended-keybar-copy" onClick={async () => {
         setCopying(true); try { await onCopySelection?.(); } finally { setCopying(false); }
-      }}><Copy size={18} aria-hidden />{copying ? "Copying…" : "Copy"}</button>
+      }}>{copying ? "Copying…" : "Copy"}</button>
     </div> : <>
       {pasteError && <div role="alert" className="offdesk-attachment-status">
         <span>{pasteError}</span><button aria-label="Dismiss paste error" onClick={() => setPasteError(null)}>Dismiss</button>
@@ -164,14 +181,13 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
         <span>{attachmentStatus.message}</span><button aria-label="Dismiss attachment status" onClick={() => setAttachmentStatus(null)}>Dismiss</button>
       </div>}
       <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
-        {layout.primary.map(renderKey)}
-        <span className="offdesk-keybar-spacer" />
-        {key("Arrow up", "\x1b[A", "extended-keybar-up", <ArrowUp size={18} aria-hidden />, true)}
-        {key("Enter", "\r", "extended-keybar-enter")}
+        <div className="offdesk-keybar-primary">{layout.primary.map(renderKey)}</div>
+        {key("Arrow up", "\x1b[A", "extended-keybar-up", "↑", true)}
+        {key("Enter", "\r", "extended-keybar-enter", "enter")}
       </div>
       <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
         <KeyButton label={keyboardVisible ? "Hide keyboard" : "Show keyboard"} disabled={!isController} pressed={keyboardVisible}
-          testid="extended-keybar-keyboard" onPress={onToggleKeyboard}><Keyboard size={18} aria-hidden /></KeyButton>
+          testid="extended-keybar-keyboard" onPress={onToggleKeyboard}>kb</KeyButton>
         <div className="offdesk-keybar-scroll-wrap" data-left={edges.left} data-right={edges.right}>
           <div ref={scroller} className="offdesk-keybar-scroll" onScroll={updateEdges} data-testid="keybar-scroll" role="group" aria-label="Input tools and symbols, scroll horizontally">
             <div ref={track} className="offdesk-keybar-track">
@@ -179,9 +195,9 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
             </div>
           </div>
         </div>
-        {key("Arrow left", "\x1b[D", "extended-keybar-left", <ArrowLeft size={18} aria-hidden />, true)}
-        {key("Arrow down", "\x1b[B", "extended-keybar-down", <ArrowDown size={18} aria-hidden />, true)}
-        {key("Arrow right", "\x1b[C", "extended-keybar-right", <ArrowRight size={18} aria-hidden />, true)}
+        {key("Arrow left", "\x1b[D", "extended-keybar-left", "←", true)}
+        {key("Arrow down", "\x1b[B", "extended-keybar-down", "↓", true)}
+        {key("Arrow right", "\x1b[C", "extended-keybar-right", "→", true)}
       </div>
     </>}
     <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
@@ -294,5 +310,5 @@ function ShiftButton({ disabled, pressed, onStart, onEnd, onToggle }: {
     onPointerCancel={() => { pointer.current = null; onEnd(true); }}
     onLostPointerCapture={() => { if (pointer.current !== null) { pointer.current = null; onEnd(true); } }}
     onMouseDown={event => event.preventDefault()} onContextMenu={event => event.preventDefault()}
-    onClick={event => { if (event.detail === 0) onToggle(); }}><Shift size={18} aria-hidden /></button>;
+    onClick={event => { if (event.detail === 0) onToggle(); }}>shift</button>;
 }

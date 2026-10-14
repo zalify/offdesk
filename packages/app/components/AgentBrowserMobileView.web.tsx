@@ -59,26 +59,30 @@ type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
 type NavAction = Extract<AgentBrowserInputEvent, { kind: "navigate" }>["action"];
 
 const SOFT_KEYS: { name: SoftKeyName; label: string; text: string }[] = [
-  { name: "Escape", label: "Escape", text: "Esc" },
-  { name: "Tab", label: "Tab", text: "Tab" },
+  { name: "Escape", label: "Escape", text: "esc" },
+  { name: "Tab", label: "Tab", text: "tab" },
   { name: "ArrowLeft", label: "Arrow left", text: "←" },
   { name: "ArrowUp", label: "Arrow up", text: "↑" },
   { name: "ArrowDown", label: "Arrow down", text: "↓" },
   { name: "ArrowRight", label: "Arrow right", text: "→" },
   { name: "Backspace", label: "Backspace", text: "⌫" },
-  { name: "Enter", label: "Enter", text: "Enter" },
+  { name: "Enter", label: "Enter", text: "[enter]" },
 ];
 
+// Chrome text lowercases on screen; the DOM keeps "Take over" for screen
+// readers and the tests that read it.
 const headerButton = {
-  fontSize: 12,
+  fontFamily: "var(--font-display)",
+  fontSize: 13,
   fontWeight: 600,
-  minHeight: 30,
-  padding: "0 10px",
-  borderRadius: 999,
-  border: `1px solid ${colorAlpha.accentLine}`,
+  minHeight: 36,
+  padding: "0 14px",
+  borderRadius: 4,
+  border: "none",
   cursor: "pointer",
   flexShrink: 0,
   whiteSpace: "nowrap",
+  textTransform: "lowercase",
 } as const;
 
 // Full-width, phone-sized view of one agent browser: live frames, local
@@ -523,10 +527,13 @@ export function AgentBrowserMobileView({
     alignItems: "center",
     justifyContent: "center",
     padding: 0,
-    borderRadius: 10,
+    borderRadius: 3,
     border: `1px solid ${colors.line}`,
-    background: colors.bg0,
+    background: "transparent",
     color: colors.fg0,
+    fontFamily: "var(--font-display)",
+    fontSize: 12,
+    fontWeight: 500,
     cursor: "pointer",
   } as const;
   const stateText = mine
@@ -557,14 +564,14 @@ export function AgentBrowserMobileView({
           display: "flex",
           alignItems: "center",
           gap: 8,
-          padding: "4px 8px",
-          minHeight: 42,
+          padding: "6px 16px",
+          minHeight: 48,
           borderBottom: `1px solid ${colors.lineSoft}`,
-          background: colors.bg1,
+          background: colors.bg0,
           flexShrink: 0,
+          fontFamily: "var(--font-display)",
         }}
       >
-        <Globe size={14} aria-hidden style={{ flexShrink: 0, color: colors.accent }} />
         <span
           data-testid="mobile-agent-browser-title"
           style={{
@@ -573,8 +580,9 @@ export function AgentBrowserMobileView({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            fontSize: 13,
-            fontWeight: 600,
+            fontSize: 12,
+            fontWeight: 400,
+            color: colors.fg2,
           }}
         >
           {label}
@@ -584,13 +592,15 @@ export function AgentBrowserMobileView({
           data-controller={mine ? "me" : otherDevice ? "other" : "agent"}
           style={{
             fontSize: 11,
-            padding: "2px 8px",
-            borderRadius: 999,
-            border: `1px solid ${mine ? colorAlpha.accentLine : colors.border}`,
-            background: mine ? colorAlpha.accentSoft : "transparent",
-            color: mine ? colors.accent : colors.foregroundMuted,
+            fontWeight: mine ? 600 : 500,
+            padding: "3px 8px",
+            borderRadius: 3,
+            border: mine ? "1px solid transparent" : `1px solid ${colors.line}`,
+            background: mine ? colors.primary : "transparent",
+            color: mine ? colors.onPrimary : colors.fg2,
             flexShrink: 0,
             whiteSpace: "nowrap",
+            textTransform: "lowercase",
           }}
         >
           {stateText}
@@ -602,8 +612,9 @@ export function AgentBrowserMobileView({
           onClick={() => void changeControl(mine ? "release" : "take")}
           style={{
             ...headerButton,
-            background: mine ? "transparent" : colors.accent,
-            color: mine ? colors.accent : colors.onAccent,
+            background: mine ? "transparent" : colors.primary,
+            border: mine ? `1px solid ${colors.line}` : "none",
+            color: mine ? colors.fg0 : colors.onPrimary,
             opacity: controlBusy ? 0.5 : 1,
           }}
         >
@@ -619,7 +630,7 @@ export function AgentBrowserMobileView({
             height: 8,
             borderRadius: 999,
             flexShrink: 0,
-            background: state === "live" ? colors.accent : colors.foregroundMuted,
+            background: state === "live" ? colors.ok : colors.fg3,
           }}
         />
       </div>
@@ -628,10 +639,10 @@ export function AgentBrowserMobileView({
           role="alert"
           data-testid="mobile-agent-browser-error"
           style={{
-            padding: "4px 10px",
+            padding: "6px 16px",
             fontSize: 12,
-            color: colors.danger,
-            borderBottom: `1px solid ${colors.border}`,
+            color: colors.err,
+            borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
           }}
         >
@@ -645,16 +656,18 @@ export function AgentBrowserMobileView({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "6px 10px",
-            fontSize: 12,
-            color: colors.fg0,
-            background: colorAlpha.warningLight12,
-            borderBottom: `1px solid ${colorAlpha.warningBorder}`,
+            gap: 10,
+            padding: "12px 16px",
+            fontFamily: "var(--font-display)",
+            fontSize: 13,
+            fontWeight: 600,
+            color: colors.err,
+            background: "transparent",
+            borderBottom: `1px solid ${colors.err}`,
             flexShrink: 0,
           }}
         >
-          <Bot size={14} aria-hidden style={{ flexShrink: 0, color: colors.warning }} />
+          <span aria-hidden style={{ flexShrink: 0 }}>!</span>
           <span
             data-testid="mobile-agent-browser-reclaimed-reason"
             style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}
@@ -668,17 +681,18 @@ export function AgentBrowserMobileView({
             onClick={reclaimNotice.dismiss}
             style={{
               ...headerButton,
-              minHeight: 30,
-              minWidth: 30,
+              minHeight: 32,
+              minWidth: 32,
               padding: 0,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               background: "transparent",
-              color: colors.accent,
+              color: colors.err,
+              fontWeight: 400,
             }}
           >
-            <X size={14} aria-hidden />
+            [x]
           </button>
         </div>
       )}
@@ -689,16 +703,18 @@ export function AgentBrowserMobileView({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 8,
-            padding: "6px 10px",
-            fontSize: 12,
-            color: colors.fg0,
-            background: colorAlpha.warningLight12,
-            borderBottom: `1px solid ${colorAlpha.warningBorder}`,
+            gap: 10,
+            padding: "12px 16px",
+            fontFamily: "var(--font-display)",
+            fontSize: 13,
+            fontWeight: 600,
+            color: colors.err,
+            background: "transparent",
+            borderBottom: `1px solid ${colors.err}`,
             flexShrink: 0,
           }}
         >
-          <Hand size={14} aria-hidden style={{ flexShrink: 0, color: colors.warning }} />
+          <span aria-hidden style={{ flexShrink: 0 }}>!</span>
           <span
             data-testid="mobile-agent-browser-handoff-reason"
             style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}
@@ -716,8 +732,9 @@ export function AgentBrowserMobileView({
             onClick={() => void changeControl(mine ? "release" : "take")}
             style={{
               ...headerButton,
-              background: "transparent",
-              color: colors.accent,
+              background: mine ? "transparent" : colors.primary,
+              border: mine ? `1px solid ${colors.line}` : "none",
+              color: mine ? colors.fg0 : colors.onPrimary,
             }}
           >
             {mine ? "Hand back" : "Take over"}
@@ -837,9 +854,9 @@ export function AgentBrowserMobileView({
                 right: 8,
                 minHeight: 32,
                 padding: "0 12px",
-                borderRadius: 999,
+                borderRadius: 4,
                 border: `1px solid ${colors.line}`,
-                background: colorAlpha.accentSoft,
+                background: colors.bg2,
                 color: colors.fg0,
                 fontSize: 12,
                 cursor: "pointer",
@@ -879,6 +896,7 @@ export function AgentBrowserMobileView({
             borderTop: `1px solid ${colors.lineSoft}`,
             background: colors.bg1,
             flexShrink: 0,
+            fontFamily: "var(--font-display)",
           }}
         >
           {nav && (
@@ -893,7 +911,7 @@ export function AgentBrowserMobileView({
                 onClick={() => navigate("back")}
                 style={{ ...keyBarButton, opacity: nav.can_go_back ? 1 : 0.35 }}
               >
-                <ArrowLeft size={18} aria-hidden />
+                ‹
               </button>
               <button
                 type="button"
@@ -905,7 +923,7 @@ export function AgentBrowserMobileView({
                 onClick={() => navigate("forward")}
                 style={{ ...keyBarButton, opacity: nav.can_go_forward ? 1 : 0.35 }}
               >
-                <ArrowRight size={18} aria-hidden />
+                ›
               </button>
               <button
                 type="button"
@@ -918,7 +936,7 @@ export function AgentBrowserMobileView({
                 onClick={() => navigate(nav.loading ? "stop" : "reload")}
                 style={keyBarButton}
               >
-                {nav.loading ? <X size={18} aria-hidden /> : <RotateCw size={16} aria-hidden />}
+                {nav.loading ? "x" : "↻"}
               </button>
               <span
                 aria-hidden
@@ -941,14 +959,17 @@ export function AgentBrowserMobileView({
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              borderRadius: 10,
-              border: `1px solid ${keyboardOn ? colorAlpha.accentLine : colors.line}`,
-              background: keyboardOn ? colorAlpha.accentSoft : colors.bg0,
+              borderRadius: 3,
+              border: `1px solid ${keyboardOn ? colors.accent : colors.line}`,
+              background: "transparent",
               color: keyboardOn ? colors.accent : colors.fg0,
+              fontFamily: "var(--font-display)",
+              fontSize: 12,
+              fontWeight: 500,
               cursor: "pointer",
             }}
           >
-            <KeyboardIcon size={18} aria-hidden />
+            kb
           </button>
           <div
             style={{
@@ -976,11 +997,13 @@ export function AgentBrowserMobileView({
                   height: 40,
                   padding: "0 10px",
                   flexShrink: 0,
-                  borderRadius: 10,
+                  borderRadius: 3,
                   border: `1px solid ${colors.line}`,
-                  background: colors.bg0,
+                  background: "transparent",
                   color: colors.fg0,
-                  fontSize: 13,
+                  fontFamily: "var(--font-display)",
+                  fontSize: 12,
+                  fontWeight: 500,
                   cursor: "pointer",
                 }}
               >
