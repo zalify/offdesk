@@ -27,6 +27,26 @@ rename mapping is at the bottom.
 - Hub time limits: `open` five minutes, `wait` its timeout plus fifteen
   seconds, other commands sixty seconds (`crates/hub/src/routes/agent_browser.rs`).
 
+## Agent runs (implementation added 2026-10-15)
+
+- The node reports the coding agent in each terminal's foreground with
+  `MachineToHub::TerminalAgent` on change, from the 5-second metadata poll:
+  `claude` / `claude.exe` is Claude, `codex` is Codex, and `node` counts only
+  with a process named `claude` or `codex` under the pane
+  (`crates/machine/src/agent_detect.rs`, `crates/machine/src/hub_conn.rs`).
+- The hub keeps one run per agent process per terminal in `agent_runs`
+  (`crates/hub/src/db/agent_runs.rs`): `working`, `waiting` while the screen shows
+  a confirmation (an `approval` request from `screen`, no text), `done` when the
+  agent leaves the foreground (no exit code), and `gone` when its terminal closes or
+  its machine disconnects. The same agent still in the terminal when the machine
+  comes back carries the run on (`crates/hub/src/machine_manager/agent_runs.rs`).
+- Runs are visible to the machine's owner: `GET /api/agent-runs`
+  (`?active=true`, `?machine=`), `GET /api/agent-runs/{id}`, the
+  `agent_run_updated` event and the bootstrap's `agent_runs` (open runs and those
+  ended in the last day) (`crates/hub/src/routes/agent_runs.rs`).
+- `offdesk runs` lists open runs; `--all` adds those ended in the last day and
+  `--waiting` keeps only waiting ones (`crates/cli/src/commands/runs.rs`).
+
 ## Terminals opened by an agent (implementation added 2026-10-13)
 
 - A terminal created with an API token (the `offdesk` CLI) records

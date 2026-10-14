@@ -119,6 +119,22 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// List agent runs: the coding agents (Claude Code, Codex) in your terminals and
+    /// what they're doing. Open runs unless --all
+    Runs {
+        /// Filter to one machine (id, unique prefix or name)
+        #[arg(long)]
+        machine: Option<String>,
+        /// Also runs that ended in the last day
+        #[arg(long)]
+        all: bool,
+        /// Only runs waiting on a person (e.g. a confirmation on screen)
+        #[arg(long)]
+        waiting: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a new terminal on a machine
     Open {
         /// Machine id or unique prefix
@@ -758,6 +774,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             None => commands::machines::run(&hub_client, json, all).await,
         },
         Commands::Ls { machine, json } => commands::ls::run(&hub_client, machine, json).await,
+        Commands::Runs { machine, all, waiting, json } => {
+            commands::runs::run(&hub_client, machine, all, waiting, json).await
+        }
         Commands::Open {
             machine,
             cwd,

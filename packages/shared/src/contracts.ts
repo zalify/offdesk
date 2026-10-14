@@ -197,6 +197,42 @@ export interface BrowserStateSnapshot {
   agent_session_seen?: Record<string, number>
   /** Live agent browsers on online machines; absent from older Hubs. */
   agent_browsers?: AgentBrowserInfo[]
+  /** Agent runs: open ones and those ended in the last day; absent from older Hubs. */
+  agent_runs?: AgentRunInfo[]
+}
+
+// ── Agent runs — mirrors crates/protocol/src/lib.rs (docs/plans/2026-10-14-agent-runs.md) ──
+
+/** A coding agent CLI in a terminal; "other" is one a newer Hub knows. */
+export type RunAgent = 'claude' | 'codex' | 'other'
+
+export type AgentRunStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'done' | 'error' | 'gone' | 'other'
+
+/** Something a run waits on a person for. */
+export interface AgentRunRequest {
+  id: string
+  kind: 'approval' | 'question' | 'input' | 'other'
+  /** The question or command, when its source gives one (screen recognition never does). */
+  prompt?: string
+  options?: AgentQuestionOption[]
+  /** "screen"; later "hooks", "acp", "report". */
+  source: string
+  created_at_ms: number
+}
+
+/** One agent process's life in one terminal. */
+export interface AgentRunInfo {
+  id: string
+  machine_id: string
+  terminal_id?: string
+  agent: RunAgent
+  cwd: string
+  status: AgentRunStatus
+  /** The open request, while the run is waiting. */
+  request?: AgentRunRequest
+  started_at_ms: number
+  updated_at_ms: number
+  ended_at_ms?: number
 }
 
 // ── Agent sessions (ACP) — mirrors crates/protocol/src/lib.rs ──
@@ -436,6 +472,7 @@ export type BrowserEvent =
   | BrowserEvent.AgentBrowserCreated
   | BrowserEvent.AgentBrowserUpdated
   | BrowserEvent.AgentBrowserDestroyed
+  | BrowserEvent.AgentRunUpdated
 
 export namespace BrowserEvent {
   export interface MachineOnline {
@@ -556,6 +593,12 @@ export namespace BrowserEvent {
     type: 'agent_browser_destroyed'
     machine_id: string
     browser_id: string
+  }
+
+  /** An agent run started, changed status, or ended. */
+  export interface AgentRunUpdated {
+    type: 'agent_run_updated'
+    run: AgentRunInfo
   }
 }
 

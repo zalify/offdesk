@@ -343,6 +343,155 @@ pub enum AgentEvent {
     },
 }
 
+/// The coding agent of an agent run: a CLI in a terminal (docs/plans/2026-10-14-agent-runs.md).
+/// Distinct from `AgentKind`, which names ACP adapters.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum RunAgent {
+    Claude,
+    Codex,
+    /// An agent added by a newer hub or node, so older peers still read the run.
+    #[serde(other)]
+    Other,
+}
+
+impl RunAgent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunAgent::Claude => "claude",
+            RunAgent::Codex => "codex",
+            RunAgent::Other => "other",
+        }
+    }
+
+    pub fn from_name(name: &str) -> RunAgent {
+        match name {
+            "claude" => RunAgent::Claude,
+            "codex" => RunAgent::Codex,
+            _ => RunAgent::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRunStatus {
+    Starting,
+    Working,
+    /// A request (approval, question, input) waits on a person.
+    Waiting,
+    /// A turn ended; the agent waits for its next instruction. Not finished.
+    Idle,
+    /// The agent process exited (or reported it finished).
+    Done,
+    Error,
+    /// Its terminal closed or its machine went away; state unknown.
+    Gone,
+    #[serde(other)]
+    Other,
+}
+
+impl AgentRunStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentRunStatus::Starting => "starting",
+            AgentRunStatus::Working => "working",
+            AgentRunStatus::Waiting => "waiting",
+            AgentRunStatus::Idle => "idle",
+            AgentRunStatus::Done => "done",
+            AgentRunStatus::Error => "error",
+            AgentRunStatus::Gone => "gone",
+            AgentRunStatus::Other => "other",
+        }
+    }
+
+    pub fn from_name(name: &str) -> AgentRunStatus {
+        match name {
+            "starting" => AgentRunStatus::Starting,
+            "working" => AgentRunStatus::Working,
+            "waiting" => AgentRunStatus::Waiting,
+            "idle" => AgentRunStatus::Idle,
+            "done" => AgentRunStatus::Done,
+            "error" => AgentRunStatus::Error,
+            "gone" => AgentRunStatus::Gone,
+            _ => AgentRunStatus::Other,
+        }
+    }
+
+    /// Done, Error and Gone end a run.
+    pub fn ends_run(self) -> bool {
+        matches!(self, AgentRunStatus::Done | AgentRunStatus::Error | AgentRunStatus::Gone)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRequestKind {
+    /// Whether to run a tool or command.
+    Approval,
+    /// A question the agent asked, usually with options.
+    Question,
+    /// The agent stopped for free-form input.
+    Input,
+    #[serde(other)]
+    Other,
+}
+
+impl AgentRequestKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentRequestKind::Approval => "approval",
+            AgentRequestKind::Question => "question",
+            AgentRequestKind::Input => "input",
+            AgentRequestKind::Other => "other",
+        }
+    }
+
+    pub fn from_name(name: &str) -> AgentRequestKind {
+        match name {
+            "approval" => AgentRequestKind::Approval,
+            "question" => AgentRequestKind::Question,
+            "input" => AgentRequestKind::Input,
+            _ => AgentRequestKind::Other,
+        }
+    }
+}
+
+/// Something a run waits on a person for.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRunRequest {
+    pub id: String,
+    pub kind: AgentRequestKind,
+    /// The question or command, when its source gives one. Screen recognition never
+    /// does (terminal text stays out of the status protocol).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<AgentQuestionOption>,
+    /// Where it was recognized: "screen"; later "hooks", "acp", "report".
+    pub source: String,
+    pub created_at_ms: i64,
+}
+
+/// One agent process's life in one terminal: a run (docs/plans/2026-10-14-agent-runs.md).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRunInfo {
+    pub id: String,
+    pub machine_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
+    pub agent: RunAgent,
+    pub cwd: String,
+    pub status: AgentRunStatus,
+    /// The open request, while the run is Waiting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request: Option<AgentRunRequest>,
+    pub started_at_ms: i64,
+    pub updated_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ended_at_ms: Option<i64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct BrowserStateSnapshot {
     pub snapshot_seq: u64,
@@ -361,6 +510,9 @@ pub struct BrowserStateSnapshot {
     /// Live agent browsers on the user's online machines.
     #[serde(default)]
     pub agent_browsers: Vec<AgentBrowserInfo>,
+    /// Agent runs on the user's machines: open ones and those ended in the last day.
+    #[serde(default)]
+    pub agent_runs: Vec<AgentRunInfo>,
 }
 
 // ── Hub → Machine messages ──
@@ -1111,6 +1263,13 @@ pub enum MachineToHub {
         terminal_id: String,
         attention: Option<TerminalAttention>,
     },
+    /// The coding agent in a terminal's foreground, sent on change (and for every
+    /// terminal after a reconnect); `None` when there's none. The hub makes runs of it.
+    #[serde(rename = "terminal_agent")]
+    TerminalAgent {
+        terminal_id: String,
+        agent: Option<RunAgent>,
+    },
     #[serde(rename = "pong")]
     Pong,
     /// Agent session state changes. Fields left `None` are unchanged.
@@ -1214,6 +1373,9 @@ pub enum BrowserEvent {
         session_id: String,
         last_seen_seq: u64,
     },
+    /// An agent run started, changed status, or ended.
+    #[serde(rename = "agent_run_updated")]
+    AgentRunUpdated { run: AgentRunInfo },
     #[serde(rename = "agent_browser_created")]
     AgentBrowserCreated { browser: AgentBrowserInfo },
     #[serde(rename = "agent_browser_updated")]
@@ -1917,6 +2079,40 @@ mod tests {
         .unwrap();
         assert!(snapshot.agent_sessions.is_empty());
         assert!(snapshot.agent_session_seen.is_empty());
+    }
+
+    #[test]
+    fn agent_runs_are_additive_and_tolerate_newer_peers() {
+        use super::{AgentRunInfo, AgentRunStatus, BrowserEvent, BrowserStateSnapshot, MachineToHub, RunAgent};
+        // An older hub's snapshot has no runs
+        let snapshot = serde_json::from_str::<BrowserStateSnapshot>(
+            r#"{"snapshot_seq":1,"last_focused_terminal_id":null,"machines":[],"terminals":[],
+               "workspace_groups":[],"workspace_layouts":[],"machine_stats":[],"control_leases":[]}"#,
+        )
+        .unwrap();
+        assert!(snapshot.agent_runs.is_empty());
+
+        // The node's report, with no agent and with one; a newer node's agent reads as Other
+        let message = MachineToHub::TerminalAgent { terminal_id: "t1".into(), agent: Some(RunAgent::Codex) };
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            serde_json::json!({"type": "terminal_agent", "terminal_id": "t1", "agent": "codex"})
+        );
+        let none = serde_json::from_str::<MachineToHub>(r#"{"type":"terminal_agent","terminal_id":"t1","agent":null}"#).unwrap();
+        assert!(matches!(none, MachineToHub::TerminalAgent { agent: None, .. }));
+        let newer = serde_json::from_str::<MachineToHub>(r#"{"type":"terminal_agent","terminal_id":"t1","agent":"gemini"}"#).unwrap();
+        assert!(matches!(newer, MachineToHub::TerminalAgent { agent: Some(RunAgent::Other), .. }));
+
+        // A run: optional parts are left out, and a newer status reads as Other
+        let run: AgentRunInfo = serde_json::from_str(
+            r#"{"id":"r1","machine_id":"m1","agent":"claude","cwd":"/w","status":"paused","started_at_ms":1,"updated_at_ms":2}"#,
+        )
+        .unwrap();
+        assert_eq!((run.status, run.terminal_id.clone(), run.request.clone(), run.ended_at_ms), (AgentRunStatus::Other, None, None, None));
+        let event = serde_json::to_value(BrowserEvent::AgentRunUpdated { run }).unwrap();
+        assert_eq!(event["type"], "agent_run_updated");
+        assert!(event["run"].get("request").is_none());
+        assert!(event["run"].get("ended_at_ms").is_none());
     }
 
     // ── deflate-raw-v1 negotiation: old-peer compatibility ──

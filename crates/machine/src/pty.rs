@@ -402,6 +402,31 @@ impl PtyManager {
             .collect()
     }
 
+    /// The coding agent in each terminal's foreground (agent runs); a process
+    /// snapshot is taken only when some pane's foreground is `node`.
+    pub fn terminal_agents(
+        &self,
+        panes: &HashMap<String, PaneInfo>,
+    ) -> HashMap<String, Option<offdesk_protocol::RunAgent>> {
+        let processes = if panes
+            .values()
+            .any(|pane| crate::agent_detect::needs_processes(pane.current_command.as_deref()))
+        {
+            crate::codex_title::snapshot_processes()
+        } else {
+            Vec::new()
+        };
+        self.list_terminal_ids()
+            .into_iter()
+            .map(|id| {
+                let agent = panes.get(&id).and_then(|pane| {
+                    crate::agent_detect::agent_for_pane(pane.current_command.as_deref(), pane.pid, &processes)
+                });
+                (id, agent)
+            })
+            .collect()
+    }
+
     pub fn list_terminals(&self) -> Vec<SessionInfo> {
         self.sessions.lock().unwrap().values().cloned().collect()
     }

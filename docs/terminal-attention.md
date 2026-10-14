@@ -43,6 +43,11 @@ excluded. For the Enter button, update the Hub's web UI for browser/ordinary
 connections, or update the App for encrypted connections that use its bundled
 UI. This feature is an in-app cue, not a background push notification.
 
+Agent runs (`docs/plans/2026-10-14-agent-runs.md`) use the same signal: while a
+terminal with a coding agent run shows a confirmation, that run is `waiting` with
+an `approval` request whose source is `screen` and which carries no text, and it
+goes back to `working` once the confirmation is gone.
+
 中文：手机顶部显示其他终端的确认请求。点终端名称查看请求；点旁边的
 Enter 可确认那个终端当前选项，保持当前视图和键盘焦点。Enter 不等于
 “总是同意”，不确定时请先查看。重复点击会被阻止，发送不确定时不会自动重试。

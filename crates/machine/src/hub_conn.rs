@@ -403,13 +403,15 @@ impl HubConnection {
                 (String, TerminalTitleSource),
             > = std::collections::HashMap::new();
             let mut last_sent_attention = std::collections::HashMap::new();
+            let mut last_sent_agent = std::collections::HashMap::new();
             loop {
                 interval.tick().await;
                 let poll_pty = pty_for_titles.clone();
-                let (pane_infos, attentions) = match tokio::task::spawn_blocking(move || {
+                let (pane_infos, attentions, agents) = match tokio::task::spawn_blocking(move || {
                     let panes = poll_pty.pane_infos();
                     let attention = poll_pty.terminal_attentions(&panes);
-                    (panes, attention)
+                    let agents = poll_pty.terminal_agents(&panes);
+                    (panes, attention, agents)
                 })
                 .await
                 {
@@ -425,7 +427,24 @@ impl HubConnection {
                 last_sent_cwd.retain(|id, _| terminal_ids.contains(id));
                 last_sent_title.retain(|id, _| terminal_ids.contains(id));
                 last_sent_attention.retain(|id, _| terminal_ids.contains(id));
+                last_sent_agent.retain(|id, _| terminal_ids.contains(id));
                 for terminal_id in terminal_ids {
+                    // The agent first: the hub opens a run for it, then attention
+                    // can make that run wait on a person
+                    let agent = agents.get(&terminal_id).copied().flatten();
+                    if last_sent_agent.get(&terminal_id) != Some(&agent) {
+                        if send_tx_for_titles
+                            .send(OutboundHubMessage::Json(MachineToHub::TerminalAgent {
+                                terminal_id: terminal_id.clone(),
+                                agent,
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        last_sent_agent.insert(terminal_id.clone(), agent);
+                    }
                     let attention = attentions.get(&terminal_id).copied().flatten();
                     if last_sent_attention.get(&terminal_id) != Some(&attention) {
                         if send_tx_for_titles

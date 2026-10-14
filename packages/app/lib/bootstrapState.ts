@@ -1,5 +1,6 @@
 import type {
   AgentBrowserInfo,
+  AgentRunInfo,
   BrowserEvent,
   BrowserEventEnvelope,
   BrowserStateSnapshot,
@@ -20,6 +21,8 @@ export interface BrowserSessionState {
   machineStats: Record<string, ResourceStats>;
   controlLeases: Record<string, string>;
   agentBrowsers: AgentBrowserInfo[];
+  /** Agent runs, newest first: open ones and those ended in the last day. */
+  agentRuns: AgentRunInfo[];
 }
 
 export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
@@ -32,6 +35,7 @@ export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
   machineStats: {},
   controlLeases: {},
   agentBrowsers: [],
+  agentRuns: [],
 };
 
 export function applyBootstrapSnapshot(
@@ -53,7 +57,17 @@ export function applyBootstrapSnapshot(
       ),
     ),
     agentBrowsers: snapshot.agent_browsers ?? [],
+    agentRuns: snapshot.agent_runs ?? [],
   };
+}
+
+/** Replace a run (same id) or add it first, keeping newest first. */
+export function upsertAgentRun(runs: AgentRunInfo[], run: AgentRunInfo): AgentRunInfo[] {
+  const index = runs.findIndex((item) => item.id === run.id);
+  if (index === -1) return [run, ...runs];
+  const next = runs.slice();
+  next[index] = run;
+  return next;
 }
 
 /** Replace or add one agent browser (same machine + id), keeping order. */
@@ -243,6 +257,8 @@ function applyBrowserEvent(
             !(browser.id === event.browser_id && browser.machine_id === event.machine_id),
         ),
       };
+    case "agent_run_updated":
+      return { ...state, agentRuns: upsertAgentRun(state.agentRuns, event.run) };
     default:
       return state;
   }
