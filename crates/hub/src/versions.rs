@@ -1,12 +1,14 @@
 //! What this hub runs and the newest release, so every client can say which
 //! parts are behind without asking GitHub itself.
 //!
-//! The newest release is the repository's "Latest" GitHub release (the hub,
-//! node and CLI `v*` tags; app and UI releases are never marked Latest). It
-//! is fetched at most every 12 hours, in the background: a request never
+//! The newest release is the highest published `v*` tag among the repo's
+//! recent GitHub releases (the hub, node and CLI share those tags). The
+//! "Latest" marker isn't trusted: publishing a desktop draft by hand ticks it
+//! by default. It is fetched at most every 12 hours, in the background: a request never
 //! waits on GitHub, it gets the last answer (or none yet). Set
 //! `OFFDESK_NO_UPDATE_CHECK` to turn the lookup off.
 
+use std::cmp::Ordering as Order;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -14,7 +16,7 @@ use std::time::{Duration, Instant};
 /// This hub's version, the same one `offdesk-hub --version` prints.
 pub const HUB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const LATEST_URL: &str = "https://api.github.com/repos/zalify/offdesk/releases/latest";
+const RELEASES_URL: &str = "https://api.github.com/repos/zalify/offdesk/releases?per_page=30";
 const REFRESH_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
 /// After a failed lookup, try again sooner than a successful one.
 const RETRY_AFTER: Duration = Duration::from_secs(30 * 60);
@@ -70,7 +72,7 @@ async fn fetch_latest() -> Result<String, String> {
         .as_ref()
         .ok_or("no HTTP client")?;
     let response = client
-        .get(LATEST_URL)
+        .get(RELEASES_URL)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
@@ -79,10 +81,21 @@ async fn fetch_latest() -> Result<String, String> {
         return Err(format!("GitHub answered {}", response.status()));
     }
     let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    body.get("tag_name")
-        .and_then(|tag| tag.as_str())
-        .and_then(release_version)
-        .ok_or_else(|| "no v* tag on the latest release".to_string())
+    newest_release(&body).ok_or_else(|| "no published v* release".to_string())
+}
+
+/// The highest published, non-pre-release `v*` version in a GitHub releases
+/// listing.
+pub fn newest_release(releases: &serde_json::Value) -> Option<String> {
+    releases
+        .as_array()?
+        .iter()
+        .filter(|release| {
+            !release.get("draft").and_then(|v| v.as_bool()).unwrap_or(false)
+                && !release.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false)
+        })
+        .filter_map(|release| release.get("tag_name")?.as_str().and_then(release_version))
+        .reduce(|best, version| if is_newer(&version, &best) { version } else { best })
 }
 
 /// `v0.22.0` → `0.22.0`. Other tags (`desktop-v…`, `app-v…`, `ui-…`) are
@@ -92,28 +105,56 @@ pub fn release_version(tag: &str) -> Option<String> {
     parse(version).map(|_| version.to_string())
 }
 
-/// Whether `candidate` is a newer release than `current`. A pre-release
-/// (`0.23.0-rc.1`) sorts before its release; anything unparseable is never
-/// newer, so a strange tag can't nag anyone.
+/// Whether `candidate` is a newer release than `current`, by semver
+/// precedence: a pre-release (`0.23.0-rc.1`) sorts before its release,
+/// `rc.10` after `rc.9`, and `+build` metadata is ignored. Anything
+/// unparseable is never newer, so a strange tag can't nag anyone.
 pub fn is_newer(candidate: &str, current: &str) -> bool {
     match (parse(candidate), parse(current)) {
-        (Some(candidate), Some(current)) => candidate > current,
+        (Some(candidate), Some(current)) => compare(&candidate, &current) == Order::Greater,
         _ => false,
     }
 }
 
-/// (major, minor, patch, is_release, pre-release text).
-fn parse(version: &str) -> Option<(u64, u64, u64, bool, String)> {
+struct Version<'a> {
+    core: (u64, u64, u64),
+    pre: Vec<&'a str>,
+}
+
+fn parse(version: &str) -> Option<Version<'_>> {
+    let version = version.split_once('+').map_or(version, |(version, _build)| version);
     let (core, pre) = match version.split_once('-') {
-        Some((core, pre)) => (core, pre.to_string()),
-        None => (version, String::new()),
+        Some((core, pre)) => (core, pre.split('.').collect()),
+        None => (version, Vec::new()),
     };
     let mut parts = core.split('.').map(|part| part.parse::<u64>().ok());
-    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
+    let core = (parts.next()??, parts.next()??, parts.next()??);
     if parts.next().is_some() {
         return None;
     }
-    Some((major, minor, patch, pre.is_empty(), pre))
+    Some(Version { core, pre })
+}
+
+fn compare(a: &Version, b: &Version) -> Order {
+    a.core.cmp(&b.core).then_with(|| match (a.pre.is_empty(), b.pre.is_empty()) {
+        (true, true) => Order::Equal,
+        (true, false) => Order::Greater,
+        (false, true) => Order::Less,
+        (false, false) => {
+            for (x, y) in a.pre.iter().zip(&b.pre) {
+                let order = match (x.parse::<u64>(), y.parse::<u64>()) {
+                    (Ok(x), Ok(y)) => x.cmp(&y),
+                    (Ok(_), Err(_)) => Order::Less,
+                    (Err(_), Ok(_)) => Order::Greater,
+                    (Err(_), Err(_)) => x.cmp(y),
+                };
+                if order != Order::Equal {
+                    return order;
+                }
+            }
+            a.pre.len().cmp(&b.pre.len())
+        }
+    })
 }
 
 #[cfg(test)]
@@ -143,6 +184,30 @@ mod tests {
         assert!(is_newer("0.23.0", "0.23.0-rc.1"));
         assert!(!is_newer("0.23.0-rc.1", "0.23.0"));
         assert!(is_newer("0.23.0-rc.1", "0.22.0"));
+    }
+
+    #[test]
+    fn pre_release_numbers_compare_as_numbers_and_build_metadata_is_ignored() {
+        assert!(is_newer("0.23.0-rc.10", "0.23.0-rc.9"));
+        assert!(!is_newer("0.23.0-rc.9", "0.23.0-rc.10"));
+        assert!(is_newer("0.23.0-rc.1.1", "0.23.0-rc.1"));
+        assert!(!is_newer("0.23.0+abc", "0.23.0"));
+        assert!(is_newer("0.23.1+abc", "0.23.0"));
+    }
+
+    #[test]
+    fn the_newest_release_ignores_drafts_pre_releases_and_other_tags() {
+        let releases = serde_json::json!([
+            {"tag_name": "desktop-v0.9.0", "draft": false, "prerelease": false},
+            {"tag_name": "v0.24.0", "draft": true, "prerelease": false},
+            {"tag_name": "v0.23.1-rc.1", "draft": false, "prerelease": true},
+            {"tag_name": "v0.22.0", "draft": false, "prerelease": false},
+            {"tag_name": "v0.23.0", "draft": false, "prerelease": false},
+            {"tag_name": "ui-stable-1-1", "draft": false, "prerelease": true}
+        ]);
+        assert_eq!(newest_release(&releases).as_deref(), Some("0.23.0"));
+        assert_eq!(newest_release(&serde_json::json!([])), None);
+        assert_eq!(newest_release(&serde_json::json!({"message": "rate limited"})), None);
     }
 
     #[test]
