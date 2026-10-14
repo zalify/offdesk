@@ -5,9 +5,11 @@
 //! On macOS the in-app updater replaces a bundle where it already is, so an
 //! updated copy keeps its old folder name, `/Applications/Offdesk.app`. At
 //! launch the app renames that folder to `Offdesk DEV.app` and starts again
-//! from there. A Mac that is a hub runs `offdesk-hub` and `offdesk-node` from
-//! inside the bundle as launchd services, so the services are pointed at the
-//! renamed bundle before the old path stops existing. The same repair runs on
+//! from there. A Mac that is a hub runs `offdesk-hub`, `offdesk-node` and the
+//! Cloud connector from inside the bundle as launchd services, so the services
+//! are pointed at the renamed bundle before the old path stops existing. A
+//! service whose program lives elsewhere can still lead its PATH with the
+//! bundle, which is where it finds the bundled tmux; that entry is moved too. The same repair runs on
 //! every launch, so a bundle someone renamed or moved by hand is fixed too.
 
 use std::path::{Path, PathBuf};
@@ -16,9 +18,10 @@ pub const OLD_BUNDLE: &str = "Offdesk.app";
 pub const NEW_BUNDLE: &str = "Offdesk DEV.app";
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 const IDENTIFIER: &str = "dev.offdesk.desktop";
-/// The launchd agents `offdesk-hub service install` writes (role.rs).
+/// The launchd agents `offdesk-hub service install` (role.rs) and
+/// `offdesk-hub cloud install` (crates/hub/src/cloud.rs) write.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-const SERVICE_LABELS: [&str; 2] = ["dev.offdesk.hub", "dev.offdesk.node"];
+const SERVICE_LABELS: [&str; 3] = ["dev.offdesk.hub", "dev.offdesk.node", "dev.offdesk.cloud"];
 
 /// The `.app` bundle an executable at `…/X.app/Contents/MacOS/exe` belongs to.
 pub fn bundle_of(exe: &Path) -> Option<PathBuf> {
@@ -51,6 +54,18 @@ pub fn stale_program_dir(program: &Path, macos_dir: &Path, exists: impl Fn(&Path
     }
     let binary = program.file_name()?;
     exists(&macos_dir.join(binary)).then(|| old_dir.to_path_buf())
+}
+
+/// A PATH entry that leads into an Offdesk bundle that is gone, to be swapped
+/// for `macos_dir`. Only this app's own bundle names count: a PATH can name
+/// other apps' folders that are none of our business.
+pub fn stale_path_dir(path: &str, macos_dir: &Path, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    path.split(':').map(Path::new).find_map(|dir| {
+        let bundle = bundle_of(&dir.join("x"))?;
+        let name = bundle.file_name()?.to_str()?;
+        let ours = name.eq_ignore_ascii_case(OLD_BUNDLE) || name.eq_ignore_ascii_case(NEW_BUNDLE);
+        (ours && dir != macos_dir && !exists(dir)).then(|| dir.to_path_buf())
+    })
 }
 
 /// A launchd plist with every mention of `old_dir` pointed at `new_dir`: the
@@ -122,8 +137,9 @@ fn identifier(bundle: &Path) -> Option<String> {
     output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Point the hub and node services at `macos_dir` when they run a program
-/// from a bundle that is gone, and restart them so launchd uses the new path.
+/// Point the hub, node and Cloud services at `macos_dir` when they run a
+/// program from a bundle that is gone, or lead their PATH with one, and restart
+/// them so launchd uses the new path.
 #[cfg(target_os = "macos")]
 fn repair_services(macos_dir: &Path) {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
@@ -131,10 +147,16 @@ fn repair_services(macos_dir: &Path) {
     };
     for label in SERVICE_LABELS {
         let plist = home.join("Library/LaunchAgents").join(format!("{label}.plist"));
-        let Some(program) = program_of(&plist) else {
+        if !plist.is_file() {
             continue;
-        };
-        let Some(old_dir) = stale_program_dir(&program, macos_dir, |path| path.exists()) else {
+        }
+        let exists = |path: &Path| path.exists();
+        let old_dir = plist_value(&plist, "ProgramArguments.0")
+            .and_then(|program| stale_program_dir(Path::new(&program), macos_dir, exists))
+            .or_else(|| {
+                plist_value(&plist, "EnvironmentVariables.PATH").and_then(|path| stale_path_dir(&path, macos_dir, exists))
+            });
+        let Some(old_dir) = old_dir else {
             continue;
         };
         let Some(updated) = std::fs::read_to_string(&plist)
@@ -155,16 +177,13 @@ fn repair_services(macos_dir: &Path) {
 }
 
 #[cfg(target_os = "macos")]
-fn program_of(plist: &Path) -> Option<PathBuf> {
-    if !plist.is_file() {
-        return None;
-    }
+fn plist_value(plist: &Path, key: &str) -> Option<String> {
     let output = std::process::Command::new("/usr/bin/plutil")
-        .args(["-extract", "ProgramArguments.0", "raw", "-o", "-"])
+        .args(["-extract", key, "raw", "-o", "-"])
         .arg(plist)
         .output()
         .ok()?;
-    output.status.success().then(|| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 /// Start the renamed bundle once this process has exited. `open` right away
@@ -226,6 +245,24 @@ mod tests {
         assert_eq!(stale_program_dir(Path::new("/Users/a/.local/bin/offdesk-hub"), new_dir, ours), None);
         // This bundle doesn't ship that binary.
         assert_eq!(stale_program_dir(old, new_dir, |_| false), None);
+    }
+
+    #[test]
+    fn a_path_into_a_bundle_that_is_gone_is_repaired_even_when_the_program_is_elsewhere() {
+        // A node installed outside the bundle that found tmux through it.
+        let new_dir = Path::new("/Applications/Offdesk DEV.app/Contents/MacOS");
+        let path = "/Applications/Offdesk.app/Contents/MacOS:/usr/bin:/bin";
+        let ours = |p: &Path| p.starts_with(new_dir);
+        assert_eq!(
+            stale_path_dir(path, new_dir, ours),
+            Some(PathBuf::from("/Applications/Offdesk.app/Contents/MacOS"))
+        );
+        // Already pointing at this bundle, or the old one still exists.
+        assert_eq!(stale_path_dir("/Applications/Offdesk DEV.app/Contents/MacOS:/usr/bin", new_dir, ours), None);
+        assert_eq!(stale_path_dir(path, new_dir, |_| true), None);
+        // Another app's bundle on the PATH is left alone.
+        assert_eq!(stale_path_dir("/Applications/Other.app/Contents/MacOS:/usr/bin", new_dir, ours), None);
+        assert_eq!(stale_path_dir("/usr/bin:/bin", new_dir, ours), None);
     }
 
     #[test]
