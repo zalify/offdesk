@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { BUNDLED_TERMINAL_FONTS, isFontInstalled } from "./terminalFonts";
+import { BUNDLED_TERMINAL_FONTS, DEFAULT_TERMINAL_FONT_FAMILY, isFontInstalled, resolveTerminalFontFamily } from "./terminalFonts";
+
+describe("terminalFonts", () => {
+  it("uses a fixed bundled default regardless of locally installed fonts", () => {
+    expect(DEFAULT_TERMINAL_FONT_FAMILY).toBe("'JetBrains Mono', 'Offdesk Terminal Symbols', monospace");
+    for (const value of [null, undefined, "", "  ", "JetBrains Mono"]) {
+      expect(resolveTerminalFontFamily(value)).toBe(DEFAULT_TERMINAL_FONT_FAMILY);
+    }
+  });
+  it("preserves a custom preference with the bundled default as fallback", () => {
+    expect(resolveTerminalFontFamily("Custom Mono")).toBe("'Custom Mono', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace");
+    expect(resolveTerminalFontFamily("Not Installed")).toBe("'Not Installed', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace");
+  });
+});
 
 // A fake device: each installed font has its own width; anything else falls
 // back to the generic family named after it.
