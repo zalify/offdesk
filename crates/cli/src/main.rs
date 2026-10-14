@@ -264,6 +264,10 @@ A tool result with isError says a person is controlling the browser (wait with
 browser_wait_control) or the call failed. browser_wait, browser_handoff and
 browser_wait_control that time out are not errors; their text says so.")]
     Mcp,
+    /// Versions of this CLI and the hub, and whether a newer release is out
+    Version,
+    /// Print how to update each part that is behind (changes nothing)
+    Update,
     /// Open the hub in a browser. On the machine that runs the hub this is
     /// `offdesk-hub link`: the sign-in link, with the code for a phone;
     /// elsewhere it opens the hub's address
@@ -606,6 +610,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return link(no_open, url.as_deref());
     }
     let env_token = env_with_legacy("OFFDESK_TOKEN", "WEBMUX_TOKEN");
+    // Prints the CLI's version even without a usable config or hub.
+    if let Commands::Version = cli.command {
+        let client = config::resolve(
+            cli.url.as_deref(),
+            cli.token.as_deref(),
+            env_url.as_deref(),
+            env_token.as_deref(),
+            file.as_ref(),
+        )
+        .and_then(|resolved| client::HubClient::new(&resolved))
+        .ok();
+        return commands::version::version(client.as_ref()).await;
+    }
     // MCP starts even without a usable config: initialize and tools/list
     // work, and tool calls report the problem.
     if let Commands::Mcp = cli.command {
@@ -632,7 +649,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     )?;
     let hub_client = client::HubClient::new(&resolved)?;
 
-    match cli.command {
+    let quiet = matches!(cli.command, Commands::Update);
+    let result = match cli.command {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
         Commands::Fetch { .. } => unreachable!("fetch returns early"),
@@ -805,7 +823,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             };
             commands::layout::run(&hub_client, op, args.machine, &args.group, args.json).await
         }
+        Commands::Version => unreachable!("version returns early"),
+        Commands::Update => commands::version::update(&hub_client).await,
+    };
+    if result.is_ok() && !quiet {
+        commands::version::notice(&hub_client).await;
     }
+    result
 }
 
 #[cfg(test)]
