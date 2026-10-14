@@ -5,7 +5,7 @@ import type {
   TerminalInfo,
 } from "@offdesk/shared";
 import { ChevronRight, Plus, X } from "lucide-react";
-import { fontDisplay } from "./Warm.web";
+import { fontDisplay } from "./Primitives.web";
 import { colors } from "@/lib/colors";
 import { diskPercent } from "@/lib/resourceStats";
 

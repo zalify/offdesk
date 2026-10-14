@@ -10,7 +10,7 @@ import { codeFromLink, tokenFromLink } from "../lib/desktopHub";
 import { isBundledOrigin, isTauri, isTauriMobile } from "../lib/platform";
 import { getServerUrl, setServerUrl } from "../lib/serverUrl";
 import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
-import { Body, Button, Card, Display, Eyebrow, Wordmark, fontDisplay, inputStyle } from "../components/Warm.web";
+import { Body, Button, Card, Display, Eyebrow, Wordmark, fontDisplay, inputStyle } from "../components/Primitives.web";
 import { colors } from "../lib/colors";
 
 type OAuthProvider = "github" | "google";
@@ -336,7 +336,7 @@ export default function LoginScreen({
         if (url) void loginWithToken(url, "secure-session").catch(error => setHubError(String(error)));
       }} />
       <Button onClick={() => window.location.reload()}>Try again</Button>
-      <Button kind="sky" onClick={() => setShowSavedHubs(true)}>Choose another Hub</Button>
+      <Button kind="secondary" onClick={() => setShowSavedHubs(true)}>Choose another Hub</Button>
       <Button kind="ghost" disabled={connecting} onClick={() => {
         setConnecting(true);
         void forgetSecureConnection().then(async () => {
@@ -401,7 +401,7 @@ export default function LoginScreen({
           {permissionBlocked ? (
             <Button onClick={() => void openSettings()}>Open Settings</Button>
           ) : null}
-          <Button kind={permissionBlocked ? "sky" : "coral"} onClick={handleRetry} disabled={connecting}>
+          <Button kind={permissionBlocked ? "secondary" : "primary"} onClick={handleRetry} disabled={connecting}>
             {connecting ? "Trying…" : "Try again"}
           </Button>
           <Button kind="ghost" onClick={() => setRetyping(true)} style={{ alignSelf: "center", height: 40, fontSize: 14 }}>
@@ -424,7 +424,7 @@ export default function LoginScreen({
             code. That's the sign-in, nothing to type.
           </Body>
         </div>
-        <Button kind="sky" onClick={() => setShowSavedHubs(true)}>Saved Hubs</Button>
+        <Button kind="secondary" onClick={() => setShowSavedHubs(true)}>Saved Hubs</Button>
         <Button onClick={() => void handleScanForHub()} disabled={connecting}>
           Scan the code
         </Button>
@@ -449,7 +449,7 @@ export default function LoginScreen({
           inputMode="url"
           style={inputStyle}
         />
-        <Button kind="sky" onClick={handleHubConnect} disabled={connecting || !serverUrlInput.trim()}>
+        <Button kind="secondary" onClick={handleHubConnect} disabled={connecting || !serverUrlInput.trim()}>
           {connecting ? "Connecting…" : "Connect"}
         </Button>
       </>,
@@ -482,14 +482,14 @@ export default function LoginScreen({
       >
         <Card style={{ width: "100%", maxWidth: 560, flexShrink: 0, margin: "auto", display: "flex", flexDirection: "column", gap: 22, padding: 40 }}>
           {onBackToSetup ? (
-            <Button kind="sky" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start" }} testId="login-back-to-setup">
+            <Button kind="secondary" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start" }} testId="login-back-to-setup">
               ← Back to setup
             </Button>
           ) : null}
           {onBecomeHub ? (
             <div style={{ padding: 16, border: `1px solid ${colors.line}`, borderRadius: 12, display: "flex", flexDirection: "column", gap: 10 }}>
               <Body size={14}>Want to access this Mac from your phone?</Body>
-              <Button kind="sky" onClick={onBecomeHub} disabled={connecting} testId="login-become-hub">
+              <Button kind="secondary" onClick={onBecomeHub} disabled={connecting} testId="login-become-hub">
                 Set up a Hub on this Mac
               </Button>
             </div>
@@ -542,7 +542,7 @@ export default function LoginScreen({
             data-testid="desktop-server-url"
             style={inputStyle}
           />
-          <Button kind="sky" onClick={handleDesktopConnect} disabled={connecting || !serverUrlInput.trim()}>
+          <Button kind="secondary" onClick={handleDesktopConnect} disabled={connecting || !serverUrlInput.trim()}>
             Sign in in the browser
           </Button>
           <div style={{ fontFamily: fontDisplay, fontSize: 12.5, fontWeight: 600, color: colors.fg3 }}>
@@ -581,7 +581,7 @@ export default function LoginScreen({
       </Button>
       <Body size={13}>For an end-to-end encrypted connection, use Scan QR Code on the Offdesk app’s connection screen. The encrypted pairing code cannot sign in to a browser.</Body>
       {inMobileApp ? (
-        <Button kind="sky" onClick={() => void handleScanForLink()}>
+        <Button kind="secondary" onClick={() => void handleScanForLink()}>
           Scan the code instead
         </Button>
       ) : null}
@@ -613,7 +613,7 @@ export default function LoginScreen({
         ) : null}
       </div>
       {providersError ? (
-        <Button kind="sky" onClick={() => setProvidersAttempt((n) => n + 1)}>
+        <Button kind="secondary" onClick={() => setProvidersAttempt((n) => n + 1)}>
           Try again
         </Button>
       ) : null}
@@ -625,7 +625,7 @@ export default function LoginScreen({
             return (
               <Button
                 key={provider.value}
-                kind={index === 0 ? "coral" : "sky"}
+                kind={index === 0 ? "primary" : "secondary"}
                 onClick={() => handleWebLogin(provider.value)}
                 disabled={activeProvider !== null}
               >

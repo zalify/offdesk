@@ -1,25 +1,26 @@
 // Static hex terminal theme for xterm.js — always dark, platform-independent.
-// The night-dark the site draws terminals in (site/src/styles/global.css:
-// --color-term, --color-term-fg), with the coral cursor.
+// Direction B's terminal: the page's near-black, warm off-white text, the
+// lime block cursor. ANSI colours are tuned to read on #0c0c0b.
 export const terminalTheme = {
-  background: '#1e1b2e',
-  foreground: '#f3eee6',
-  cursor: '#ff6b57',                       // coral
-  selectionBackground: 'rgba(255, 200, 87, 0.35)',   // sun
-  black: '#1e1b2e',
-  red: '#fa6863',
-  green: '#63d18f',
-  yellow: '#eabf3a',
-  blue: '#69c1fc',
-  magenta: '#bb9af4',
-  cyan: '#5ccab3',
-  white: '#d8d2ea',
-  brightBlack: '#5a5478',
-  brightRed: '#fa6863',
-  brightGreen: '#63d18f',
-  brightYellow: '#ffc857',
-  brightBlue: '#69c1fc',
-  brightMagenta: '#bb9af4',
-  brightCyan: '#7ad8c6',
-  brightWhite: '#f3eee6',
+  background: '#0c0c0b',
+  foreground: '#ecebe6',
+  cursor: '#d4ff3a',                       // lime
+  cursorAccent: '#0c0c0b',
+  selectionBackground: 'rgba(212, 255, 58, 0.28)',
+  black: '#1c1c1a',
+  red: '#ff8a75',
+  green: '#a6e36a',
+  yellow: '#f2cc60',
+  blue: '#7cb7ff',
+  magenta: '#d39bf5',
+  cyan: '#6fd6c6',
+  white: '#cfcdc7',
+  brightBlack: '#8f8d87',
+  brightRed: '#ffa392',
+  brightGreen: '#d4ff3a',
+  brightYellow: '#ffe08a',
+  brightBlue: '#a3cdff',
+  brightMagenta: '#e4b8ff',
+  brightCyan: '#93e6d8',
+  brightWhite: '#ffffff',
 };

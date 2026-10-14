@@ -10,6 +10,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { isDesktopShell } from "../lib/desktopHub";
 import { ThemeProvider } from "../lib/theme";
+import { colors } from "../lib/colors";
 import LoginScreen from "./login";
 import { DesktopGate } from "../components/DesktopSetup.web";
 import { AndroidUpdateNotification } from "../components/AndroidUpdateNotification";
@@ -95,7 +96,7 @@ function AuthGate() {
   if (isLoading) {
     return (
       <View className="flex-1 bg-background items-center justify-center">
-        <ActivityIndicator size="large" color="#ff6b57" />
+        <ActivityIndicator size="large" color={colors.accent} />
       </View>
     );
   }

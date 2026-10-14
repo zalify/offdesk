@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as QRCode from "qrcode";
 import { QrImage } from "./QrImage";
-import { Body, Button } from "./Warm.web";
+import { Body, Button } from "./Primitives.web";
 import { colors } from "../lib/colors";
 async function copyText(text: string) {
   try { const { writeText } = await import("@tauri-apps/plugin-clipboard-manager"); await writeText(text); }
@@ -59,11 +59,11 @@ export function SecurePairingPanel({ baseUrl, managed = false }: { baseUrl?: str
       <Body size={12} style={{ overflowWrap: "anywhere", maxWidth: "100%", textAlign: "center" }}>{pairing.hub_url}</Body>
       <details style={{ maxWidth: "100%", textAlign: "center" }}><summary style={{ cursor: "pointer", minHeight: 44, padding: 10 }}>Compare Hub identity</summary><code style={{ display: "block", overflowWrap: "anywhere", fontSize: 12 }}>{new URL(pairing.pairing_uri).searchParams.get("key")}</code><Body size={12}>Check this identity on your phone before confirming the pairing.</Body></details>
       <Body size={12}>Expires in {Math.ceil((pairing.expires_at - now) / 1000)} seconds. Keep this code private.</Body>
-      <Button kind="sky" onClick={() => void copyText(pairing.pairing_uri).catch(() => setError("Could not copy the pairing link"))}>Copy pairing link</Button>
+      <Button kind="secondary" onClick={() => void copyText(pairing.pairing_uri).catch(() => setError("Could not copy the pairing link"))}>Copy pairing link</Button>
     </> : null}
     {expired ? <Body size={13}>This code has expired.</Body> : null}
     {error ? <Body size={13} style={{ color: colors.err }}><span role="alert">{error}</span></Body> : null}
-    <Button kind="sky" disabled={busy} onClick={() => void generate()}>{busy ? "Checking connection…" : pairing ? "Create a new pairing code" : "Pair an encrypted device"}</Button>
+    <Button kind="secondary" disabled={busy} onClick={() => void generate()}>{busy ? "Checking connection…" : pairing ? "Create a new pairing code" : "Pair an encrypted device"}</Button>
   </div>;
 }
 

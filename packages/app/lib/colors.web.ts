@@ -1,5 +1,5 @@
 // CSS-variable-based color constants for inline styles.
-// The site's palette — see global.css for source tokens.
+// Direction B — see global.css for source tokens and DESIGN.md for the rules.
 export const colors = {
   // New design tokens — preferred for new components.
   bg0: 'rgb(var(--color-bg-0))',
@@ -19,6 +19,12 @@ export const colors = {
   violet: 'rgb(var(--color-violet))',
   termBg: 'rgb(var(--color-term-bg))',
   onAccent: 'rgb(var(--color-on-accent))',
+  // The lime fill (primary buttons, "in control") and what sits on it.
+  primary: 'rgb(var(--color-primary))',
+  onPrimary: 'rgb(var(--color-on-primary))',
+  // Text on a waiting/danger fill.
+  onErr: 'rgb(var(--color-on-err))',
+  focus: 'rgb(var(--color-focus))',
 
   // Legacy keys — kept so untouched components keep working.
   background: 'rgb(var(--color-background))',
@@ -44,7 +50,7 @@ export const colorAlpha = {
   accentLine: 'rgb(var(--color-accent) / 0.35)',   // chip/border stroke
   dangerSoft: 'rgb(var(--color-err) / 0.25)',
   dangerLine: 'rgb(var(--color-err) / 0.5)',
-  overlay: 'rgb(43 35 64 / 0.45)',
+  overlay: 'rgb(0 0 0 / 0.55)',
 
   // Legacy.
   accentSubtle: 'rgb(var(--color-accent) / 0.08)',
@@ -55,7 +61,7 @@ export const colorAlpha = {
   accentBorder: 'rgb(var(--color-accent) / 0.25)',
   backgroundDim: 'rgb(var(--color-background) / 0.15)',
   backgroundOverlay: 'rgb(var(--color-background) / 0.2)',
-  backgroundShadow: 'rgb(43 35 64 / 0.25)',
+  backgroundShadow: 'rgb(0 0 0 / 0.3)',
   backgroundOpaque96: 'rgb(var(--color-background) / 0.96)',
   backgroundOpaque98: 'rgb(var(--color-background) / 0.98)',
   backgroundSecondaryOpaque96: 'rgb(var(--color-background-secondary) / 0.96)',

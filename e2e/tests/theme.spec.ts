@@ -31,11 +31,15 @@ async function chooseTheme(page: Page, name: "Light" | "Dark" | "System") {
 test("theme choice persists and follows system changes only when selected", async ({ page, context }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await openApp(page);
+  // With no choice saved the app follows the system.
+  await expect(page.locator("html")).toHaveClass(/dark/);
+  await page.emulateMedia({ colorScheme: "light" });
   await expect(page.locator("html")).not.toHaveClass(/dark/);
+  await page.emulateMedia({ colorScheme: "dark" });
   await openSettings(page);
   await chooseTheme(page, "Dark");
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
-  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(23, 20, 32)");
+  await expect(page.locator("body")).toHaveCSS("background-color", "rgb(12, 12, 11)");
   await page.reload();
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
   await openSettings(page);

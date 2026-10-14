@@ -59,9 +59,9 @@ for (const width of [390, 1280]) {
     await mockTerminal(preferences);
     await openApp(preferences);
     await settings(preferences);
-    await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("Fredoka Variable");
-    await expect(preferences.locator("body")).toHaveCSS("font-family", /Fredoka Variable/);
-    await expect(page.locator("body")).toHaveCSS("font-family", /Fredoka Variable/);
+    await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("Geist");
+    await expect(preferences.locator("body")).toHaveCSS("font-family", /^'?"?Geist'?"?, system-ui/);
+    await expect(page.locator("body")).toHaveCSS("font-family", /^'?"?Geist'?"?, system-ui/);
     await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("Courier New");
     await preferences.getByRole("spinbutton", { name: "Terminal Font Size", exact: true }).fill("20");
     await expect.poll(() => options(page)).toEqual({ family: "'Courier New', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
@@ -73,13 +73,13 @@ for (const width of [390, 1280]) {
     await preferences.getByTitle("Back", { exact: true }).click();
     await expect.poll(() => options(preferences)).toEqual({ family: "'Courier New', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
     await page.reload();
-    await expect(page.locator("body")).toHaveCSS("font-family", /Fredoka Variable/);
+    await expect(page.locator("body")).toHaveCSS("font-family", /^'?"?Geist'?"?, system-ui/);
     await expect.poll(() => options(page)).toEqual({ family: "'Courier New', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
     await settings(preferences);
     await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("System UI");
     await expect(preferences.locator("body")).toHaveCSS("font-family", /system-ui/);
     await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("App Default");
-    await expect(page.locator("body")).toHaveCSS("font-family", /Nunito Variable/);
+    await expect(page.locator("body")).toHaveCSS("font-family", /Geist Mono/);
     await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("App Default");
     await preferences.getByRole("spinbutton", { name: "Terminal Font Size", exact: true }).fill("");
     await expect.poll(async () => (await options(page))?.size).toBe(14);

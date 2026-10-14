@@ -4,7 +4,7 @@ import { colors } from "../lib/colors";
 import { isTauriMobile } from "../lib/platform";
 import { scanWithCleanup } from "../lib/scanLifecycle";
 import { checkSavedHub, openSavedHub, pairAndOpenHub, pairingIdentity, removeSavedHub, renameSavedHub, savedHubs, secureConnectionStatus, type RouteReport, type SavedHub, type SecureStatus } from "../lib/secureTransport";
-import { Body, Button } from "./Warm.web";
+import { Body, Button } from "./Primitives.web";
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === "string" ? error : "Could not complete this action. Try again.";
 const card = { border: `1px solid ${colors.line}`, borderRadius: 16, padding: 16, minWidth: 0 };
@@ -71,7 +71,7 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
         <span style={{ minWidth: 0 }}><strong style={{ display: "block", overflowWrap: "anywhere" }}>{hub.name === hub.status.endpoint.hub_url ? address(hub.name) : hub.name}</strong><span style={{ fontSize: 13, color: colors.fg3 }}>{hub.status.endpoint.public_key === active ? "Current Hub · " : "Saved · "}Encrypted pairing</span></span><ChevronRight size={18} />
       </button>)}
       {!hubs.length && !busy && <Body size={13}>No saved Hubs yet. Open Mobile app on your Hub’s computer to get its encrypted pairing code.</Body>}
-      <Button kind="sky" disabled={busy !== null} onClick={() => setAdding(true)}><Plus size={18} /> Add a Hub</Button>
+      <Button kind="secondary" disabled={busy !== null} onClick={() => setAdding(true)}><Plus size={18} /> Add a Hub</Button>
     </>}
     {selected && <>
       <div><strong style={{ fontSize: 18, overflowWrap: "anywhere" }}>{selected.name === selected.status.endpoint.hub_url ? address(selected.name) : selected.name}</strong><Body size={13}>Select a reachable connection. We verify the saved Hub identity before switching.</Body></div>
@@ -87,10 +87,10 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
         </div>;
       })}
       {report?.machines?.length ? <div style={card}><strong>Machines in this Hub</strong>{report.machines.map((machine, i) => <Body key={i} size={13}>{machine.name} · {machine.os}</Body>)}<Body size={12}>After connecting, choose a machine in the title menu.</Body></div> : null}
-      <Button kind="sky" disabled={busy !== null} onClick={() => void check(selected)}><RefreshCw size={16} /> Check again</Button>
+      <Button kind="secondary" disabled={busy !== null} onClick={() => void check(selected)}><RefreshCw size={16} /> Check again</Button>
       <details><summary style={{ cursor: "pointer", padding: "12px 0" }}>Hub name and saved pairing</summary><div style={{ display: "grid", gap: 12 }}>
         <label>Hub name<input value={name} maxLength={60} onChange={e => setName(e.target.value)} style={field} /></label>
-        <Button kind="sky" disabled={busy !== null || !name.trim()} onClick={() => void run("Saving name…", async () => { await renameSavedHub(selected.status.endpoint.public_key, name); const result = await savedHubs(); if (mounted.current) { setHubs(result); setSelected(result.find(h => h.status.endpoint.public_key === selected.status.endpoint.public_key) ?? null); } })}>Save name</Button>
+        <Button kind="secondary" disabled={busy !== null || !name.trim()} onClick={() => void run("Saving name…", async () => { await renameSavedHub(selected.status.endpoint.public_key, name); const result = await savedHubs(); if (mounted.current) { setHubs(result); setSelected(result.find(h => h.status.endpoint.public_key === selected.status.endpoint.public_key) ?? null); } })}>Save name</Button>
         <Body size={12}>Hub identity: <span style={{ overflowWrap: "anywhere", fontFamily: "var(--font-mono)" }}>{selected.status.endpoint.public_key}</span></Body>
         {selected.status.endpoint.public_key !== active && <Button kind="ghost" disabled={busy !== null} onClick={() => setConfirmRemove(true)}>Remove saved Hub</Button>}
         {confirmRemove && <><Body size={13}>Remove this pairing from this device? You’ll need to pair again to return. Running terminals and other devices stay connected.</Body><Button disabled={busy !== null} onClick={() => void run("Removing saved Hub…", async () => { await removeSavedHub(selected.status.endpoint.public_key); const result = await savedHubs(); if (mounted.current) { setHubs(result); back(); } })}>Remove from this device</Button><Button kind="ghost" disabled={busy !== null} onClick={() => setConfirmRemove(false)}>Keep Hub</Button></>}
@@ -108,7 +108,7 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
         <Body size={13}>On the Hub computer, open Settings → Mobile app. Use the encrypted App code. Your existing Hubs stay saved.</Body>
         {isTauriMobile() && <Button disabled={busy !== null} onClick={() => void scan()}><QrCode size={18} /> Scan QR Code</Button>}
         <label>Or paste the pairing link<input type="text" autoCapitalize="none" autoCorrect="off" spellCheck={false} value={uri} onChange={e => setUri(e.target.value)} placeholder="offdesk://pair?…" style={{ ...field, marginTop: 8 }} /></label>
-        <Button kind="sky" disabled={busy !== null || !uri.trim()} onClick={() => void run("Reading pairing code…", async () => { const result = await pairingIdentity(uri.trim()); if (mounted.current) { setUri(uri.trim()); setIdentity(result); } })}>Continue</Button>
+        <Button kind="secondary" disabled={busy !== null || !uri.trim()} onClick={() => void run("Reading pairing code…", async () => { const result = await pairingIdentity(uri.trim()); if (mounted.current) { setUri(uri.trim()); setIdentity(result); } })}>Continue</Button>
       </>}
     </>}
     {busy && <Body size={13}><span role="status">{busy}</span></Body>}
