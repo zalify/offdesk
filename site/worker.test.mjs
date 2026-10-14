@@ -82,6 +82,30 @@ test("the worker redirects /apk and leaves every other path to the static assets
   }
 });
 
+test("the translated pages, the sitemap and robots.txt are static files, not redirects", async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify(releases), { status: 200 });
+  try {
+    const env = { ASSETS: { fetch: async (request) => new Response(`static ${new URL(request.url).pathname}`) } };
+    for (const path of [
+      "/zh/", "/de/", "/fr/", "/ja/", "/ko/", "/es/",
+      "/zh/docs/mac/", "/zh/docs/mac", "/de/tunnel/", "/es/docs/mac/",
+      "/sitemap.xml", "/robots.txt",
+    ]) {
+      const response = await worker.fetch(new Request(`https://offdesk.dev${path}`), env);
+      assert.equal(response.status, 200, path);
+      assert.equal(await response.text(), `static ${path}`, path);
+    }
+    // The download redirects live at the root only, in every language.
+    const mac = await worker.fetch(new Request("https://offdesk.dev/mac"), env);
+    assert.equal(mac.status, 302);
+    const apk = await worker.fetch(new Request("https://offdesk.dev/apk/universal"), env);
+    assert.equal(apk.status, 302);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("GitHub being down still lands on the releases list, not an error page", async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("rate limited", { status: 403 });

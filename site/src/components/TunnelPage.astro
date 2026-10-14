@@ -1,0 +1,66 @@
+---
+// The Cloudflare Tunnel guide, in any language. Words in src/i18n/<lang>.ts.
+import Site from "../layouts/Site.astro";
+import { t, type Locale } from "../i18n";
+
+interface Props {
+  locale: Locale;
+}
+const { locale } = Astro.props;
+const { tunnel: c } = t(locale);
+
+const env = `JWT_SECRET=<${c.hub.secretPlaceholder}>
+OFFDESK_BASE_URL=https://offdesk.example.com
+TUNNEL_TOKEN=<${c.hub.tokenPlaceholder}>
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=`;
+const check = `docker compose --profile tunnel ps
+curl -sf -o /dev/null -w "%{http_code}\\n" https://offdesk.example.com/`;
+---
+
+<Site title={c.title} description={c.description} page="tunnel" locale={locale}>
+  <article class="doc mx-auto max-w-3xl px-4 pt-12 pb-20 sm:px-6">
+    <div class="prompt">remote-access --cloudflare-tunnel</div>
+    <h1 class="display mt-3 text-[34px] leading-[40px] md:text-[44px] md:leading-[50px]" set:html={c.heading} />
+    <p class="prose-lead mt-6" set:html={c.lead} />
+    <p set:html={c.intro} />
+    <p set:html={c.needDomain} />
+
+    <h2 set:html={c.create.title} />
+    <p set:html={c.create.body} />
+    <p set:html={c.create.hostname} />
+    <table>
+      <thead><tr><th set:html={c.create.field} /><th set:html={c.create.value} /></tr></thead>
+      <tbody>
+        <tr><td set:html={c.create.subdomain} /><td><code>Offdesk</code> / <code>example.com</code></td></tr>
+        <tr><td set:html={c.create.serviceType} /><td><code>HTTP</code></td></tr>
+        <tr><td set:html={c.create.url} /><td><code>server:4317</code></td></tr>
+      </tbody>
+    </table>
+    <p set:html={c.create.after} />
+
+    <h2 set:html={c.hub.title} />
+    <pre><code>git clone https://github.com/zalify/offdesk && cd offdesk</code></pre>
+    <p set:html={c.hub.envIntro} />
+    <pre><code>{env}</code></pre>
+    <pre><code>chmod 600 .env</code></pre>
+    <p set:html={c.hub.oauth} />
+    <pre><code>docker compose --profile tunnel up -d --build</code></pre>
+    <p set:html={c.hub.profile} />
+    <pre><code>{check}</code></pre>
+
+    <h2 set:html={c.machines.title} />
+    <p set:html={c.machines.body} />
+    <pre><code>curl -fsSL https://offdesk.dev/install | sh -s -- --hub-url wss://offdesk.example.com/ws/machine --token &lt;token&gt;</code></pre>
+    <p set:html={c.machines.after} />
+
+    <h2 set:html={c.notes.title} />
+    <ul>
+      {c.notes.items.map((item) => <li set:html={item} />)}
+    </ul>
+
+    <p class="mt-10" set:html={c.others} />
+  </article>
+</Site>

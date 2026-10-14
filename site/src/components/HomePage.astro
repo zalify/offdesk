@@ -1,0 +1,410 @@
+---
+// The homepage, in any language. The words are in src/i18n/<lang>.ts; the
+// pages under src/pages/ only pick the language.
+import { existsSync } from "node:fs";
+import Site from "../layouts/Site.astro";
+import Icon from "./Icon.astro";
+import { t, around, localize, type Locale } from "../i18n";
+import en from "../i18n/en";
+
+interface Props {
+  locale: Locale;
+}
+const { locale } = Astro.props;
+const { chrome, home: c } = t(locale);
+
+// The hero GIF is not committed yet (see docs/media/README.md). Until it is,
+// a real phone screenshot stands in; the GIF wins when it appears.
+const hasHero = existsSync(new URL("../../public/media/hero.gif", import.meta.url));
+const hasStill = existsSync(new URL("../../public/media/phone-terminal.png", import.meta.url));
+// The iPhone app, once its screenshot is in: same terminal, native frame.
+const hasIphone = existsSync(new URL("../../public/media/phone-ios.jpg", import.meta.url));
+
+const repo = "https://github.com/zalify/offdesk";
+const discord = "https://discord.gg/aFUu6VMzc";
+const docs = localize("/docs/mac/", locale);
+// /apk redirects to the newest app-v* release — see site/worker.js.
+const apk = "https://offdesk.dev/apk";
+const ios = "https://testflight.apple.com/join/rV4ktaGv";
+const install = "curl -fsSL https://offdesk.dev/install | sh";
+
+const tunnel = [
+  "git clone https://github.com/zalify/offdesk && cd offdesk",
+  "$EDITOR .env   # OFFDESK_BASE_URL, TUNNEL_TOKEN, OAuth",
+  "docker compose --profile tunnel up -d --build",
+].join("\n");
+
+const join = [
+  "curl -fsSL https://offdesk.dev/install \\",
+  "  | sh -s -- --hub-url ws://192.168.1.10:4317/ws/machine \\",
+  "  --token <token>",
+].join("\n");
+
+const orchestration = `T=$(offdesk open nas --cwd ~/app --cmd claude --json | jq -r .id)
+offdesk send $T \\
+  "fix the type errors in src/auth.ts; stop when tests pass"
+offdesk wait $T --silence 5000 --timeout 600
+offdesk read $T --lines 80`;
+
+const agents = ["Claude Code", "Codex", "OpenCode", "Gemini CLI", "Aider", "vim", "htop", "pnpm dev", c.more.agents.anyCli];
+
+// Every cell is from the vendor's own documentation, checked 2026-09-01.
+// Sources are in README.md, under the same table. The first row is Offdesk.
+const projects = ["Offdesk", "Claude Code Remote Control", "VibeTunnel", "Happy Coder", "Omnara", "Orca"];
+const rows = projects.map((name, i) => ({
+  name,
+  self: i === 0,
+  cells: c.compare.rows[i].map((html, j) => ({ html, dim: /not documented/i.test(en.home.compare.rows[i][j]) })),
+}));
+
+const how = [
+  { label: "01", code: "offdesk-hub" },
+  { label: "02", code: "offdesk-node · tmux" },
+  { label: "03", code: "browser · phone · desktop · offdesk" },
+].map((item, i) => ({ ...item, ...c.how.items[i] }));
+
+const [releaseBefore, releaseAfter] = around(c.download.linux.meta, "release");
+---
+
+<Site title={c.title} description={c.description} page="home" locale={locale}>
+  <!-- Hero: the claim, the two ways in, and the picture of the claim. -->
+  <section class="wrap flex flex-wrap items-center gap-12 pt-12 pb-14 md:pt-[72px]">
+    <div class="flex min-w-0 flex-[999_1_480px] flex-col gap-6">
+      <p class="prompt">offdesk --about <span class="text-subtle"># open source · tmux · websocket</span></p>
+      <h1 class="display text-[36px] leading-[42px] sm:text-[46px] sm:leading-[52px] lg:text-[56px] lg:leading-[62px]">
+        <Fragment set:html={c.hero.title} /><span class="cursor" aria-hidden="true"></span>
+      </h1>
+      <p class="prose-lead max-w-[560px]" set:html={c.hero.lead} />
+      <div class="flex flex-wrap gap-2.5">
+        <a href="/mac" class="btn-primary btn-lg">{c.hero.downloadMac}</a>
+        <a href="#download" class="btn btn-lg">{c.hero.allDownloads}</a>
+      </div>
+      <div class="flex flex-col gap-2">
+        <div class="cmd self-start">
+          <pre><code><span class="cmd-prompt">$ </span>{install}</code></pre>
+          <button type="button" class="cmd-copy" data-copy={install} aria-label={c.hero.copyInstallLabel}>{chrome.copy}</button>
+        </div>
+        <p class="font-sans text-[13px] text-subtle" set:html={c.hero.note} />
+      </div>
+    </div>
+
+    <figure class="flex min-w-0 flex-[1_1_520px] flex-col gap-3">
+      <!-- A terminal, so it stays in English like the product it shows. -->
+      <div class="term overflow-hidden" lang="en">
+        <div class="grid grid-cols-1 sm:grid-cols-2">
+          <div class="flex flex-col border-b border-line sm:border-r">
+            <div class="border-b border-line px-3 py-2 text-[11px] font-medium text-subtle">agent@laptop</div>
+            <div class="flex flex-col gap-0.5 px-3 py-3.5 text-[11.5px] leading-[19px]">
+              <div><span class="text-accent">$</span> T=$(offdesk open nas \</div>
+              <div class="pl-3.5">--cwd ~/app --cmd claude \</div>
+              <div class="pl-3.5">--json | jq -r .id)</div>
+              <div><span class="text-accent">$</span> offdesk send $T \</div>
+              <div class="pl-3.5 text-muted">"fix the type errors in</div>
+              <div class="pl-3.5 text-muted">&nbsp;src/auth.ts; stop when</div>
+              <div class="pl-3.5 text-muted">&nbsp;tests pass"</div>
+              <div><span class="text-accent">$</span> offdesk wait $T --silence 5000</div>
+              <div class="text-subtle">waiting…</div>
+            </div>
+          </div>
+          <div class="flex flex-col border-b border-line sm:border-b-0">
+            <div class="flex justify-between gap-2 border-b border-line px-3 py-2 text-[11px] font-medium text-subtle">
+              <span>you@phone</span><span class="text-accent">● same terminal</span>
+            </div>
+            <div class="flex min-h-[300px] flex-1 flex-col gap-0.5 px-3 py-3.5 text-[11.5px] leading-[19px] sm:min-h-[340px]">
+              <div class="text-subtle">┌ claude · ~/app · nas</div>
+              <div class="my-1 inline-flex items-center gap-1.5 self-start rounded-[3px] border border-control px-1.5 text-[10.5px] text-muted">
+                <span class="text-accent" aria-hidden="true">⌁</span>opened by agent · cli
+              </div>
+              <div class="text-subtle">&gt; fix the type errors…</div>
+              <div>● Edited src/auth.ts (+6 −3)</div>
+              <div>● Bash pnpm install</div>
+              <div class="mt-1.5 text-waiting">? Allow network access</div>
+              <div class="text-waiting">&nbsp;&nbsp;for npm install?</div>
+              <div class="text-subtle">❯ 1. Yes&nbsp;&nbsp;2. No</div>
+              <div class="grow"></div>
+              <div class="mt-3 grid grid-cols-2 gap-1.5" aria-hidden="true">
+                <span class="flex h-[34px] items-center justify-center rounded-[4px] border border-control text-[12px] font-medium">[enter]</span>
+                <span class="flex h-[34px] items-center justify-center rounded-[4px] bg-accent text-[12px] font-semibold text-on-accent">take control</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="font-sans text-[12.5px] text-subtle" set:html={c.hero.figcaption} />
+    </figure>
+  </section>
+
+  <!-- Proof: Offdesk's own row of the comparison table further down. -->
+  <section aria-label={c.proofLabel} class="border-y border-line">
+    <ul class="wrap grid grid-cols-1 font-mono text-[13px] sm:grid-cols-2 lg:grid-cols-5">
+      {c.proof.map((p, i) => (
+        <li class:list={[
+          "flex flex-col gap-1 py-4 lg:py-[18px]",
+          i > 0 && "border-t border-line sm:border-t-0",
+          i % 2 === 1 && "sm:border-l sm:pl-4",
+          i >= 2 && "sm:border-t lg:border-t-0",
+          i > 0 && "lg:border-l lg:pl-4",
+        ]}>
+          <span class="text-accent" set:html={p.key} />
+          <span class="text-muted" set:html={p.value} />
+        </li>
+      ))}
+    </ul>
+  </section>
+
+  <!-- Three beats: who does what with the one terminal. -->
+  <section class="wrap flex flex-col gap-7 py-16 md:py-[72px]">
+    <h2 class="h2" set:html={c.beats.title} />
+    <ol class="cells grid-cols-1 md:grid-cols-3">
+      {c.beats.items.map((b) => (
+        <li class="flex flex-col gap-2.5 p-6">
+          <span class="label" set:html={b.label} />
+          <h3 class="h3" set:html={b.title} />
+          <p class="prose-body" set:html={b.body} />
+        </li>
+      ))}
+    </ol>
+  </section>
+
+  <!-- First setup, on the machine at home. -->
+  <section id="start" class="border-t border-line">
+    <div class="wrap flex flex-col gap-6 py-16 md:py-[72px]">
+      <p class="prompt">get-started</p>
+      <h2 class="h2" set:html={c.start.title} />
+      <ol class="cells grid-cols-1 lg:grid-cols-3">
+        {c.start.steps.map((step, i) => (
+          <li class="flex min-w-0 flex-col gap-3 p-6">
+            <span class="label" set:html={step.label} />
+            <h3 class="h3" set:html={step.title} />
+            <p class="prose-body" set:html={step.body} />
+            {i === 0 && (
+              <div class="cmd">
+                <pre><code><span class="cmd-prompt">$ </span>{install}</code></pre>
+                <button type="button" class="cmd-copy" data-copy={install} aria-label={c.hero.copyInstallLabel}>{chrome.copy}</button>
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+      <div class="flex flex-wrap gap-2.5">
+        <a href={docs} class="btn-primary">{c.start.readGuide}</a>
+        <a href={ios} class="btn">{c.start.iphone}</a>
+        <a href={apk} class="btn">{c.start.android}</a>
+        <span class="self-center font-sans text-[13px] text-subtle" set:html={c.start.orBrowser} />
+      </div>
+    </div>
+  </section>
+
+  <!-- Download: every client, one place -->
+  <section id="download" class="border-y border-line bg-surface">
+    <div class="wrap flex flex-col gap-6 py-16">
+      <p class="prompt">download</p>
+      <h2 class="h2" set:html={c.download.title} />
+      <p class="prose-lead max-w-2xl" set:html={c.download.lead} />
+      <div class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div class="panel flex flex-col gap-3 p-5">
+          <h3 class="font-mono text-[15px] font-semibold">macOS</h3>
+          <p class="prose-body grow" set:html={c.download.mac.body} />
+          <a href="/mac" class="btn-primary self-start">{c.download.mac.button}</a>
+          <p class="font-mono text-[12px] text-subtle" set:html={c.download.mac.meta} />
+        </div>
+        <div class="panel flex flex-col gap-3 p-5">
+          <h3 class="font-mono text-[15px] font-semibold">Windows</h3>
+          <p class="prose-body grow" set:html={c.download.windows.body} />
+          <a href="/windows" class="btn self-start">{c.download.windows.button}</a>
+          <p class="font-mono text-[12px] text-subtle">x64 · .msi</p>
+        </div>
+        <div class="panel flex flex-col gap-3 p-5">
+          <h3 class="font-mono text-[15px] font-semibold">Linux</h3>
+          <p class="prose-body grow" set:html={c.download.linux.body} />
+          <a href="/linux" class="btn self-start">{c.download.linux.button}</a>
+          <p class="font-mono text-[12px] text-subtle"><Fragment set:html={releaseBefore} /><a href="/desktop" class="text-text underline decoration-accent/60 underline-offset-4 hover:text-accent" set:html={c.download.linux.release} /><Fragment set:html={releaseAfter} /></p>
+        </div>
+        <div class="panel flex flex-col gap-3 p-5">
+          <h3 class="font-mono text-[15px] font-semibold">iPhone</h3>
+          <p class="prose-body grow" set:html={c.download.iphone.body} />
+          <a href={ios} class="btn self-start">{c.download.iphone.button}</a>
+        </div>
+        <div class="panel flex flex-col gap-3 p-5">
+          <h3 class="font-mono text-[15px] font-semibold">Android</h3>
+          <p class="prose-body grow" set:html={c.download.android.body} />
+          <a href={apk} class="btn self-start">{c.download.android.button}</a>
+        </div>
+        <div class="panel flex min-w-0 flex-col gap-3 p-5">
+          <h3 class="font-mono text-[15px] font-semibold" set:html={c.download.cli.title} />
+          <p class="prose-body grow" set:html={c.download.cli.body} />
+          <div class="cmd">
+            <pre><code><span class="cmd-prompt">$ </span>{install}</code></pre>
+            <button type="button" class="cmd-copy" data-copy={install} aria-label={c.hero.copyInstallLabel}>{chrome.copy}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section id="how" class="wrap flex flex-col gap-6 py-16">
+    <p class="prompt">how-it-works</p>
+    <h2 class="h2" set:html={c.how.title} />
+    <ol class="cells grid-cols-1 lg:grid-cols-3">
+      {how.map((item) => (
+        <li class="flex flex-col gap-2.5 p-6">
+          <span class="label">{item.label}</span>
+          <h3 class="h3" set:html={item.title} />
+          <p class="prose-body grow" set:html={item.body} />
+          <code class="font-mono text-[12px] text-subtle">{item.code}</code>
+        </li>
+      ))}
+    </ol>
+    <p class="prose-body max-w-2xl" set:html={c.how.note} />
+  </section>
+
+  <!-- Away from home: deployment, encryption, the tunnel -->
+  <section id="away" class="border-y border-line bg-surface">
+    <div class="wrap flex flex-col gap-10 py-16">
+      <div class="flex flex-wrap items-start gap-x-12 gap-y-8">
+        <div class="flex min-w-0 flex-[999_1_420px] flex-col gap-4">
+          <p class="prompt">remote-access</p>
+          <h2 class="h2" set:html={c.away.title} />
+          {c.away.body.map((p) => <p class="prose-body" set:html={p} />)}
+          <div class="flex flex-wrap gap-2.5 pt-2">
+            <a href={localize("/tunnel/", locale)} class="btn-primary">{c.away.tunnelGuide}</a>
+            <a href={`${repo}/blob/main/docs/setup-lan.md`} class="btn">{c.away.lanSetup}</a>
+            <a href={`${repo}/blob/main/docs/encrypted-connections.md`} class="btn">{c.away.pairing}</a>
+            <a href={`${repo}/blob/main/docs/managed-connections.md`} class="btn">{c.away.cloudSetup}</a>
+          </div>
+        </div>
+        <div class="flex min-w-0 flex-[1_1_380px] flex-col gap-4">
+          <div class="panel flex min-w-0 flex-col gap-3 p-5">
+            <h3 class="font-mono text-[14px] font-semibold" set:html={c.away.homeTitle} />
+            <p class="prose-body" set:html={c.away.homeBody} />
+            <div class="cmd">
+              <pre><code>{tunnel.split("\n").map((line) => (<span class="block"><span class="cmd-prompt">$ </span>{line}</span>))}</code></pre>
+              <button type="button" class="cmd-copy" data-copy={tunnel} aria-label={c.away.copyTunnelLabel}>{chrome.copy}</button>
+            </div>
+            <p class="prose-body" set:html={c.away.homeAfter} />
+          </div>
+          <div class="panel flex flex-col gap-2 p-5">
+            <h3 class="font-mono text-[14px] font-semibold">offdesk cloud <span class="ml-1 rounded-[3px] border border-control px-1.5 py-0.5 text-[11px] font-medium text-muted" set:html={c.away.cloudBadge} /></h3>
+            <p class="prose-body" set:html={c.away.cloudBody} />
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- More: other machines, the phone, any agent -->
+  <section id="more" class="wrap flex flex-col gap-6 py-16">
+    <p class="prompt">more</p>
+    <h2 class="h2" set:html={c.more.title} />
+    <div class="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div class="panel flex min-w-0 flex-col gap-3 p-6">
+        <h3 class="h3" set:html={c.more.machines.title} />
+        <p class="prose-body" set:html={c.more.machines.body} />
+        <pre class="term overflow-x-auto px-4 py-3 text-[12.5px]"><code>{join}</code></pre>
+      </div>
+      <div class="panel flex min-w-0 flex-col gap-3 p-6">
+        <h3 class="h3" set:html={c.more.agents.title} />
+        <p class="prose-body" set:html={c.more.agents.body} />
+        <ul class="flex flex-wrap gap-2">
+          {agents.map((a, i) => (<li class:list={["chip", i === agents.length - 1 && "text-accent"]} set:html={a} />))}
+        </ul>
+      </div>
+    </div>
+
+    <div id="phone" class="panel flex flex-wrap items-center gap-x-10 gap-y-8 p-6 md:p-8">
+      <div class="flex min-w-0 flex-[999_1_420px] flex-col gap-4">
+        <h3 class="h3" set:html={c.more.phone.title} />
+        {c.more.phone.body.map((p) => <p class="prose-body" set:html={p} />)}
+        <div class="flex flex-wrap gap-2.5">
+          <a href={apk} class="btn-primary">{c.more.phone.android}</a>
+          <a href="https://offdesk.dev/apk/universal" class="btn">{c.more.phone.universal}</a>
+          <a href={ios} class="btn">{c.more.phone.iphone}</a>
+        </div>
+      </div>
+      {
+        hasHero ? (
+          <figure class="min-w-0 flex-[1_1_360px] overflow-hidden rounded-[6px] border border-line">
+            <img src="/media/hero.gif" alt={c.more.phone.heroAlt} width="1200" height="750" loading="lazy" class="block w-full" />
+          </figure>
+        ) : hasIphone || hasStill ? (
+          <figure class="mx-auto flex w-full max-w-[15rem] flex-[0_1_15rem] flex-col gap-3">
+            <div class="overflow-hidden rounded-[2rem] border border-control bg-surface p-1.5">
+              {hasIphone ? (
+                <img src="/media/phone-ios.jpg" alt={c.more.phone.iosAlt} width="1179" height="2556" loading="lazy" class="block w-full rounded-[1.6rem]" />
+              ) : (
+                <img src="/media/phone-terminal.png" alt={c.more.phone.stillAlt} width="390" height="844" loading="lazy" class="block w-full rounded-[1.6rem]" />
+              )}
+            </div>
+            <figcaption class="text-center font-sans text-[13px] text-subtle" set:html={c.more.phone.caption} />
+          </figure>
+        ) : null
+      }
+    </div>
+  </section>
+
+  <!-- For agents -->
+  <section id="agents" class="border-y border-line bg-surface">
+    <div class="wrap flex flex-wrap items-start gap-x-12 gap-y-8 py-16">
+      <div id="cli" class="flex min-w-0 flex-[999_1_360px] flex-col gap-4">
+        <p class="prompt">for-agents</p>
+        <h2 class="h2" set:html={c.cli.title} />
+        <p class="prose-lead" set:html={c.cli.lead} />
+        <p class="prose-body" set:html={c.cli.body} />
+      </div>
+      <div class="cmd min-w-0 flex-[1_1_440px] bg-bg" lang="en">
+        <pre class="text-[12.5px]"><code>{orchestration.split("\n").map((line) => (
+          <span class="block">{line.startsWith(" ") ? line : (<><span class="cmd-prompt">$ </span>{line}</>)}</span>
+        ))}</code></pre>
+        <button type="button" class="cmd-copy" data-copy={orchestration} aria-label={c.cli.copyLabel}>{chrome.copy}</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Compare -->
+  <section id="compare" class="wrap flex flex-col gap-5 py-16">
+    <p class="prompt">compare</p>
+    <h2 class="h2" set:html={c.compare.title} />
+    <p class="prose-body max-w-2xl" set:html={c.compare.note} />
+    <div class="overflow-x-auto rounded-[6px] border border-line">
+      <table class="w-full min-w-[56rem] border-collapse text-left font-sans text-[14px]">
+        <thead>
+          <tr>
+            <th scope="col" class="px-4 py-3"><span class="sr-only">{c.compare.project}</span></th>
+            {c.compare.columns.map((col) => <th scope="col" class="px-4 py-3 align-bottom font-mono text-[12.5px] font-medium text-subtle" set:html={col} />)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr class:list={["border-t border-line", { "bg-surface-2": row.self }]}>
+              <th scope="row" class:list={["px-4 py-3 align-top font-mono text-[13px] font-semibold", row.self ? "text-accent" : "text-text"]}>{row.name}</th>
+              {row.cells.map((cell) => (
+                <td class:list={["px-4 py-3 align-top leading-snug", cell.dim ? "text-subtle" : row.self ? "text-text" : "text-muted"]} set:html={cell.html} />
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Close -->
+  <section class="border-t border-line">
+    <div class="wrap flex flex-col items-center gap-5 py-20 text-center">
+      <h2 class="display text-[32px] leading-[38px] md:text-[44px] md:leading-[50px]">
+        <Fragment set:html={c.close.title} /><span class="cursor" aria-hidden="true"></span>
+      </h2>
+      <p class="prose-lead max-w-xl" set:html={c.close.lead} />
+      <div class="cmd max-w-full text-left">
+        <pre><code><span class="cmd-prompt">$ </span>{install}</code></pre>
+        <button type="button" class="cmd-copy" data-copy={install} aria-label={c.hero.copyInstallLabel}>{chrome.copy}</button>
+      </div>
+      <div class="flex flex-wrap justify-center gap-2.5">
+        <a href={repo} class="btn-primary"><Icon name="github" />github ↗</a>
+        <a href={discord} class="btn"><Icon name="discord" />discord</a>
+        <a href={ios} class="btn">{c.close.iphone}</a>
+        <a href={apk} class="btn">{c.close.android}</a>
+      </div>
+    </div>
+  </section>
+</Site>

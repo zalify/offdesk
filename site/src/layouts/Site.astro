@@ -1,38 +1,80 @@
 ---
-// The frame every page shares: fonts, nav, footer.
+// The frame every page shares: fonts, meta, nav, footer.
 import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "../styles/global.css";
 import Icon from "../components/Icon.astro";
+import LanguageSwitcher from "../components/LanguageSwitcher.astro";
+import { t, around, locales, localeInfo, localize, pageUrl, origin, type Locale, type Page } from "../i18n";
 
 interface Props {
   title: string;
   description: string;
-  path?: string;
-  lang?: "en" | "zh-CN";
+  page: Page;
+  locale: Locale;
 }
-const { title, description, path = "/", lang = "en" } = Astro.props;
+const { title, description, page, locale } = Astro.props;
+const { chrome, home } = t(locale);
+const info = localeInfo(locale);
 const repo = "https://github.com/zalify/offdesk";
 const discord = "https://discord.gg/aFUu6VMzc";
-const canonical = `https://offdesk.dev${path}`;
+const canonical = pageUrl(page, locale);
+const href = (path: string) => localize(path, locale);
 const nav = [
-  { href: "/#download", label: "download" },
-  { href: "/#how", label: "how-it-works" },
-  { href: "/#away", label: "remote-access" },
-  { href: "/docs/mac", label: "docs", docs: true },
-  { href: "/#agents", label: "cli" },
+  { href: href("/#download"), label: chrome.nav.download },
+  { href: href("/#how"), label: chrome.nav.how },
+  { href: href("/#away"), label: chrome.nav.away },
+  { href: href("/docs/mac/"), label: chrome.nav.docs, docs: true },
+  { href: href("/#agents"), label: chrome.nav.cli },
 ];
-const inDocs = path.includes("/docs/");
+const inDocs = page === "mac";
+const [madeByBefore, madeByAfter] = around(chrome.footer.madeBy, "zalify");
+
+// Structured data: what the software is, who publishes it, and the site it
+// lives on. Facts only: no ratings or reviews.
+const org = { "@type": "Organization", "@id": "https://zalify.com/#organization", name: "Zalify", url: "https://zalify.com" };
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    org,
+    {
+      "@type": "WebSite",
+      "@id": `${origin}/#website`,
+      name: "Offdesk DEV",
+      url: `${origin}/`,
+      inLanguage: locales.map((l) => l.htmlLang),
+      publisher: { "@id": org["@id"] },
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": `${origin}/#software`,
+      name: "Offdesk DEV",
+      alternateName: "Offdesk",
+      description: home.description,
+      url: pageUrl("home", locale),
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "macOS, Linux, Windows, iOS, Android",
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+      isAccessibleForFree: true,
+      license: "https://opensource.org/licenses/MIT",
+      downloadUrl: `${repo}/releases`,
+      sameAs: [repo],
+      publisher: { "@id": org["@id"] },
+    },
+  ],
+};
 ---
 
 <!doctype html>
-<html lang={lang}>
+<html lang={info.htmlLang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
+    {locales.map((l) => <link rel="alternate" hreflang={l.htmlLang} href={pageUrl(page, l.code)} />)}
+    <link rel="alternate" hreflang="x-default" href={pageUrl(page, "en")} />
     <!-- The query string is a cache key: browsers hold on to a favicon long
          after the file behind it changed. -->
     <link rel="icon" href="/favicon.svg?v=dev1" type="image/svg+xml" />
@@ -42,9 +84,12 @@ const inDocs = path.includes("/docs/");
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0c0c0b" />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Offdesk DEV" />
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
+    <meta property="og:locale" content={info.og} />
+    {locales.filter((l) => l.code !== locale).map((l) => <meta property="og:locale:alternate" content={l.og} />)}
     <meta property="og:image" content="https://offdesk.dev/brand/og-square.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -52,13 +97,14 @@ const inDocs = path.includes("/docs/");
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content="https://offdesk.dev/brand/og-square.png" />
+    <script type="application/ld+json" set:html={JSON.stringify(jsonLd).replace(/</g, "\\u003c")} />
   </head>
 
-  <body class="min-h-screen">
-    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-20 focus:rounded-[4px] focus:bg-accent focus:px-3 focus:py-2 focus:text-[13px] focus:font-semibold focus:text-on-accent">skip to content</a>
+  <body class="min-h-screen" data-label-copy={chrome.copy} data-label-copied={chrome.copied} data-label-copy-failed={chrome.copyFailed}>
+    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-20 focus:rounded-[4px] focus:bg-accent focus:px-3 focus:py-2 focus:text-[13px] focus:font-semibold focus:text-on-accent">{chrome.skip}</a>
     <header class="border-b border-line">
       <div class="wrap flex flex-wrap items-center gap-x-7 gap-y-3 py-4">
-        <a href="/" aria-label="Offdesk DEV home" class="flex items-center gap-2.5 text-text no-underline hover:text-text">
+        <a href={href("/")} aria-label={chrome.homeLabel} class="flex items-center gap-2.5 text-text no-underline hover:text-text">
           <!-- The mark: a desk, and a terminal window flying off it. -->
           <svg width="32" height="26" viewBox="0 0 40 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M3 23h18M5.5 23v7M18.5 23v7" />
@@ -70,7 +116,7 @@ const inDocs = path.includes("/docs/");
           </svg>
           <span class="font-mono text-[18px] font-semibold tracking-[-0.02em]">offdesk<span class="text-accent">/dev</span></span>
         </a>
-        <nav aria-label="Main" class="order-last flex w-full flex-wrap gap-x-5 gap-y-1 font-mono text-[13px] md:order-none md:w-auto md:flex-1">
+        <nav aria-label={chrome.navLabel} class="order-last flex w-full flex-wrap gap-x-5 gap-y-1 font-mono text-[13px] md:order-none md:w-auto md:flex-1">
           {nav.map((item) => (
             <a
               href={item.href}
@@ -85,10 +131,11 @@ const inDocs = path.includes("/docs/");
           ))}
         </nav>
         <div class="ml-auto flex items-center gap-4 md:ml-0">
-          <a href={discord} class="inline-flex items-center gap-1.5 font-mono text-[13px] text-muted no-underline hover:text-accent" aria-label="Offdesk on Discord">
+          <LanguageSwitcher page={page} locale={locale} />
+          <a href={discord} class="inline-flex items-center gap-1.5 font-mono text-[13px] text-muted no-underline hover:text-accent" aria-label={chrome.discordLabel}>
             <Icon name="discord" class="h-4 w-4 sm:hidden" /><span class="hidden sm:inline">discord</span>
           </a>
-          <a href={repo} class="btn h-[34px] px-3.5 no-underline" aria-label="Offdesk on GitHub">
+          <a href={repo} class="btn h-[34px] px-3.5 no-underline" aria-label={chrome.githubLabel}>
             <Icon name="github" class="h-4 w-4" /><span class="hidden sm:inline">github ↗</span>
           </a>
         </div>
@@ -102,29 +149,54 @@ const inDocs = path.includes("/docs/");
     <footer class="border-t border-line">
       <div class="wrap flex flex-wrap items-center gap-x-6 gap-y-3 py-6 font-mono text-[12.5px] text-muted">
         <span class="grow">
-          MIT · made by <a href="https://zalify.com" class="text-text hover:text-accent">Zalify</a> · self-hosted remote terminal
+          MIT · {madeByBefore}<a href="https://zalify.com" class="text-text hover:text-accent">Zalify</a>{madeByAfter} · {chrome.footer.tagline}
         </span>
-        <a href="/docs/mac" class="hover:text-accent">getting started</a>
-        <a href="/tunnel" class="hover:text-accent">tunnel guide</a>
-        <a href={`${repo}/blob/main/SECURITY.md`} class="hover:text-accent">security</a>
-        <a href={`${repo}/releases`} class="hover:text-accent">release notes</a>
+        <a href={href("/docs/mac/")} class="hover:text-accent">{chrome.footer.gettingStarted}</a>
+        <a href={href("/tunnel/")} class="hover:text-accent">{chrome.footer.tunnel}</a>
+        <a href={`${repo}/blob/main/SECURITY.md`} class="hover:text-accent">{chrome.footer.security}</a>
+        <a href={`${repo}/releases`} class="hover:text-accent">{chrome.footer.releases}</a>
         <a href={discord} class="inline-flex items-center gap-1.5 hover:text-accent"><Icon name="discord" class="h-3.5 w-3.5" /> discord</a>
         <a href={repo} class="inline-flex items-center gap-1.5 hover:text-accent"><Icon name="github" class="h-3.5 w-3.5" /> github</a>
       </div>
+      <!-- Every language, as plain links: for people who scroll here first, and for crawlers. -->
+      <nav aria-label={chrome.language} class="wrap flex flex-wrap gap-x-4 gap-y-1 border-t border-line py-4 font-mono text-[12.5px]">
+        {locales.map((l) => (
+          <a
+            href={pageUrl(page, l.code).slice(origin.length)}
+            hreflang={l.htmlLang}
+            lang={l.htmlLang}
+            aria-current={l.code === locale ? "true" : undefined}
+            class:list={["py-0.5", l.code === locale ? "text-text underline decoration-accent underline-offset-[5px]" : "text-subtle hover:text-accent"]}
+          >{l.name}</a>
+        ))}
+      </nav>
     </footer>
 
     <script is:inline>
+      const labels = document.body.dataset;
       for (const button of document.querySelectorAll("[data-copy]")) {
         button.addEventListener("click", async () => {
           try {
             await navigator.clipboard.writeText(button.dataset.copy);
-            button.textContent = "[copied]";
+            button.textContent = labels.labelCopied;
           } catch {
-            button.textContent = "[press ⌘C]";
+            button.textContent = labels.labelCopyFailed;
           }
           setTimeout(() => {
-            button.textContent = "[copy]";
+            button.textContent = labels.labelCopy;
           }, 1600);
+        });
+      }
+      // The language menu is a <details>: close it on a click elsewhere or Escape.
+      for (const menu of document.querySelectorAll("details[data-menu]")) {
+        document.addEventListener("click", (event) => {
+          if (menu.open && !menu.contains(event.target)) menu.open = false;
+        });
+        menu.addEventListener("keydown", (event) => {
+          if (event.key === "Escape" && menu.open) {
+            menu.open = false;
+            menu.querySelector("summary").focus();
+          }
         });
       }
     </script>
