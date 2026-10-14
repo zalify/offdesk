@@ -124,6 +124,8 @@ mod tests {
             cwd: "~/work/shop".into(),
             status,
             request: None,
+            progress: None,
+            report: None,
             started_at_ms: started,
             updated_at_ms: started,
             ended_at_ms: ended,

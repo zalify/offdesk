@@ -1,5 +1,6 @@
 mod acp;
 mod agent_detect;
+mod agent_socket;
 mod agent_browser;
 mod attach;
 mod config;
@@ -436,6 +437,11 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
     // crate::attach::AttachManager + crate::session_watcher::SessionWatcher
     // inside HubConnection. There is no machine-wide reattach loop anymore.
 
+    // Agents' hooks and reports come in on the agent socket; each hub connection
+    // passes them on while it's up
+    let (agent_signals, _) = tokio::sync::broadcast::channel(256);
+    agent_socket::spawn(pty_manager.clone(), agent_signals.clone());
+
     let conn = hub_conn::HubConnection {
         machine_id,
         machine_name,
@@ -443,6 +449,7 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
         hub_url: ws_url,
         pty_manager,
         agent_browser: agent_browser.clone(),
+        agent_signals,
         acp_agents: loaded_config
             .as_ref()
             .map(|cfg| cfg.acp_agents.clone())

@@ -343,6 +343,45 @@ pub enum AgentEvent {
     },
 }
 
+/// Where the node listens for agents' hooks and reports (`offdesk hook`, `offdesk run`):
+/// a Unix socket in the config directory, readable only by its user.
+pub fn agent_socket_path() -> std::path::PathBuf {
+    agent_socket_path_in(&config_dir(), &std::env::temp_dir())
+}
+
+/// Unix socket paths are limited to about 104 bytes (macOS): a config directory too
+/// deep for it gets a socket in `temp` named after it, the same for the node and CLI.
+pub fn agent_socket_path_in(config: &std::path::Path, temp: &std::path::Path) -> std::path::PathBuf {
+    const MAX_SOCKET_PATH: usize = 100;
+    let path = config.join("agent.sock");
+    if path.as_os_str().len() < MAX_SOCKET_PATH {
+        return path;
+    }
+    // FNV-1a: stable across builds, unlike the std hasher
+    let hash = config
+        .as_os_str()
+        .as_encoded_bytes()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3));
+    temp.join(format!("offdesk-agent-{hash:016x}.sock"))
+}
+
+/// One line a hook or report writes to the node's agent socket. The node finds the
+/// terminal from the tmux pane the agent runs in, so agents need no token or id.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalAgentReport {
+    /// `$TMUX_PANE` of the agent's process, e.g. "%12".
+    pub tmux_pane: String,
+    /// The tmux socket from `$TMUX`, so a pane of another tmux server (with the same
+    /// pane number) is never taken for one of the node's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_socket: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<RunAgent>,
+    pub source: String,
+    pub signal: AgentSignal,
+}
+
 /// The coding agent of an agent run: a CLI in a terminal (docs/plans/2026-10-14-agent-runs.md).
 /// Distinct from `AgentKind`, which names ACP adapters.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -473,6 +512,91 @@ pub struct AgentRunRequest {
     pub created_at_ms: i64,
 }
 
+/// How far along a run is, from the agent's own task list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentRunProgress {
+    pub done: u32,
+    pub total: u32,
+    /// The step in progress, when the agent names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentReportKind {
+    /// Progress worth telling a person.
+    Note,
+    /// It stopped and needs help.
+    Blocked,
+    /// It says the work is finished.
+    Finished,
+    #[serde(other)]
+    Other,
+}
+
+impl AgentReportKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentReportKind::Note => "note",
+            AgentReportKind::Blocked => "blocked",
+            AgentReportKind::Finished => "finished",
+            AgentReportKind::Other => "other",
+        }
+    }
+
+    pub fn from_name(name: &str) -> AgentReportKind {
+        match name {
+            "note" => AgentReportKind::Note,
+            "blocked" => AgentReportKind::Blocked,
+            "finished" => AgentReportKind::Finished,
+            _ => AgentReportKind::Other,
+        }
+    }
+}
+
+/// The latest thing a run's agent reported about itself (`offdesk run note|blocked|done`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentRunReport {
+    pub kind: AgentReportKind,
+    pub text: String,
+    /// A link it handed over, e.g. a pull request. Stored as given; never fetched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    pub at_ms: i64,
+}
+
+/// What a running agent says about itself, through its hooks or its own report
+/// (`offdesk hook …`, `offdesk run …`), via the node's local socket.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "signal", rename_all = "snake_case")]
+pub enum AgentSignal {
+    /// It's working (a prompt arrived, a tool runs, a request was answered).
+    Working,
+    /// A turn ended; it waits for its next instruction.
+    Idle,
+    /// It waits on a person: an approval, a question (often with options), or input.
+    Waiting {
+        request: AgentRequestKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<AgentQuestionOption>,
+    },
+    /// Its task list changed.
+    Progress(AgentRunProgress),
+    /// A note, that it's blocked, or that it finished.
+    Report {
+        kind: AgentReportKind,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<String>,
+    },
+    /// A signal a newer node knows.
+    #[serde(other)]
+    Other,
+}
+
 /// One agent process's life in one terminal: a run (docs/plans/2026-10-14-agent-runs.md).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentRunInfo {
@@ -486,6 +610,12 @@ pub struct AgentRunInfo {
     /// The open request, while the run is Waiting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request: Option<AgentRunRequest>,
+    /// From the agent's task list, when its hooks report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<AgentRunProgress>,
+    /// The latest note, blocked or finished report from the agent itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<AgentRunReport>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1269,6 +1399,16 @@ pub enum MachineToHub {
     TerminalAgent {
         terminal_id: String,
         agent: Option<RunAgent>,
+    },
+    /// What the agent in a terminal says about its run, through its hooks ("hooks") or
+    /// its own report ("report"). The hub opens a run for it if none is open.
+    #[serde(rename = "agent_signal")]
+    AgentSignal {
+        terminal_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<RunAgent>,
+        source: String,
+        signal: AgentSignal,
     },
     #[serde(rename = "pong")]
     Pong,
@@ -2079,6 +2219,45 @@ mod tests {
         .unwrap();
         assert!(snapshot.agent_sessions.is_empty());
         assert!(snapshot.agent_session_seen.is_empty());
+    }
+
+    #[test]
+    fn agent_socket_paths_fit_unix_limits() {
+        use std::path::Path;
+        let short = super::agent_socket_path_in(Path::new("/Users/a/Library/Application Support/offdesk"), Path::new("/tmp"));
+        assert_eq!(short, Path::new("/Users/a/Library/Application Support/offdesk/agent.sock"));
+        let deep = Path::new("/private/tmp/very/deep/directory/that/goes/on/and/on/for/a/long/while/until/it/is/too/long/offdesk");
+        let fallback = super::agent_socket_path_in(deep, Path::new("/tmp"));
+        assert!(fallback.starts_with("/tmp") && fallback.as_os_str().len() < 100);
+        assert_eq!(fallback, super::agent_socket_path_in(deep, Path::new("/tmp")), "the same for every caller");
+        assert_ne!(fallback, super::agent_socket_path_in(&deep.join("other"), Path::new("/tmp")));
+    }
+
+    #[test]
+    fn agent_signals_have_a_stable_shape_and_tolerate_newer_signals() {
+        use super::{AgentReportKind, AgentRequestKind, AgentRunProgress, AgentSignal, LocalAgentReport, MachineToHub};
+        assert_eq!(serde_json::to_value(AgentSignal::Idle).unwrap(), serde_json::json!({"signal": "idle"}));
+        assert_eq!(
+            serde_json::to_value(AgentSignal::Waiting { request: AgentRequestKind::Approval, prompt: Some("Bash: npm test".into()), options: vec![] }).unwrap(),
+            serde_json::json!({"signal": "waiting", "request": "approval", "prompt": "Bash: npm test"})
+        );
+        assert_eq!(
+            serde_json::to_value(AgentSignal::Progress(AgentRunProgress { done: 1, total: 3, current: None })).unwrap(),
+            serde_json::json!({"signal": "progress", "done": 1, "total": 3})
+        );
+        assert_eq!(
+            serde_json::from_value::<AgentSignal>(serde_json::json!({"signal": "report", "kind": "blocked", "text": "stuck"})).unwrap(),
+            AgentSignal::Report { kind: AgentReportKind::Blocked, text: "stuck".into(), link: None }
+        );
+        // A newer node's signal reads as Other rather than failing the message
+        assert_eq!(serde_json::from_value::<AgentSignal>(serde_json::json!({"signal": "paused"})).unwrap(), AgentSignal::Other);
+        let message: MachineToHub = serde_json::from_value(serde_json::json!({
+            "type": "agent_signal", "terminal_id": "t1", "source": "hooks", "signal": {"signal": "working"}
+        }))
+        .unwrap();
+        assert!(matches!(message, MachineToHub::AgentSignal { agent: None, signal: AgentSignal::Working, .. }));
+        let local: LocalAgentReport = serde_json::from_str(r#"{"tmux_pane":"%3","source":"report","signal":{"signal":"idle"}}"#).unwrap();
+        assert_eq!((local.tmux_socket, local.agent), (None, None));
     }
 
     #[test]

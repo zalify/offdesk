@@ -70,6 +70,32 @@ async fn get_run(
     Ok(Json(agent_runs::to_info(&db, &row).map_err(internal)?))
 }
 
+#[derive(Deserialize)]
+struct EventsQuery {
+    #[serde(default)]
+    after_seq: i64,
+}
+
+/// A run's history (requests, reports, status changes from its hooks), oldest first.
+/// Never terminal output.
+async fn run_events(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(run_id): Path<String>,
+    Query(query): Query<EventsQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, Response> {
+    let db = state.db.get().map_err(internal)?;
+    if agent_runs::find_for_user(&db, &run_id, &auth_user.user_id)
+        .map_err(internal)?
+        .is_none()
+    {
+        return Err((StatusCode::NOT_FOUND, "Agent run not found").into_response());
+    }
+    Ok(Json(
+        agent_runs::list_events(&db, &run_id, query.after_seq, 500).map_err(internal)?,
+    ))
+}
+
 fn internal(error: impl std::fmt::Display) -> Response {
     tracing::warn!("agent runs: {}", error);
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
@@ -79,6 +105,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/agent-runs", get(list_runs))
         .route("/api/agent-runs/{run_id}", get(get_run))
+        .route("/api/agent-runs/{run_id}/events", get(run_events))
 }
 
 #[cfg(test)]

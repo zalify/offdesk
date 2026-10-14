@@ -1,6 +1,6 @@
 # Agent 运行：Hub 管理 agent 状态
 
-状态：A1 已实现（见下文“A1 实现说明”），A2–A4 待做。对外开放（权限、Webhook、Bridge）见
+状态：A1、A2 已实现（见下文“A1 实现说明”“A2 实现说明”），A3、A4 待做。对外开放（权限、Webhook、Bridge）见
 `2026-10-14-agent-runs-external-access.md`。
 
 ## 目标与范围
@@ -231,6 +231,23 @@ Hub SQLite 新增 `agent_runs`、`agent_run_requests`、`agent_run_events`（按
 
 - `offdesk-node hook`、本地 socket、pane 环境变量、`offdesk agents hooks install|uninstall`、`offdesk run note|blocked|done`。
 - 完成标准：E2E 的假 claude（从 #492 找回）通过钩子触发 working、idle、approval（带命令）、question（带选项）和 progress。用户已有的钩子在安装和卸载后保持原样。agent 环境变量里没有 token。
+
+#### A2 实现说明（2026-10-15）
+
+钩子的事件和字段对照了 Claude Code 当时的文档（code.claude.com/docs/en/hooks）。和上面的设计相比：
+
+- **由 CLI 而不是 `offdesk-node` 接钩子**：`offdesk hook claude <事件>`（隐藏命令）从 stdin 读钩子的 JSON，翻译成 `AgentSignal`，写到 node 的 agent socket。它在读配置、找 Hub、要 token 之前就返回；不打印任何东西，总是退出 0，所以不会改变 agent 的行为。`offdesk run note|blocked|done` 走同一条路，供 agent 自报。
+- **不往 pane 里设环境变量**：tmux 本来就给每个 pane 的进程设了 `$TMUX`（含 socket 路径）和 `$TMUX_PANE`。CLI 把两者交给 node，node 只接受 socket 名和自己一样的上报（排除用户自己的另一个 tmux 里编号相同的 pane），再用 `list-panes` 把 pane 换成终端。已经开着的终端也能用，agent 的环境里没有 token。
+- **socket**：`<配置目录>/agent.sock`，权限 0600；配置目录太深、超出 Unix socket 路径上限（macOS 约 104 字节）时，放到临时目录，按配置目录的哈希命名，node 和 CLI 算出同一个位置（`offdesk_protocol::agent_socket_path`）。
+- **事件映射**（`crates/cli/src/agents.rs`，Codex 的钩子事件和字段同名，共用一套）：
+  - `SessionStart`、`Stop`、`Notification(idle_prompt)` → idle；`UserPromptSubmit`、`PreToolUse`、`PostToolUse(Failure)` → working。
+  - `PermissionRequest` → approval，内容是“工具: 命令”（如 `Bash: npm test`）。`Notification(permission_prompt)` 不再报一次：前者更具体；没有这个钩子的旧版本还有屏幕识别。
+  - `PreToolUse` 的 `AskUserQuestion` → question，带第一个问题和选项（字段格式文档没写，读得到多少用多少）；`TodoWrite` → 进度。新模型默认用 Task 系列工具代替 TodoWrite，它们的进度留待以后。
+  - `Notification(agent_needs_input / elicitation_dialog)` → input。
+  - Codex 的 `notify`（只有一轮结束）→ idle：`offdesk hook codex notify '<json>'`。
+- **Hub**：没有打开的运行时，信号会开一个（钩子往往比 5 秒的轮询早）；working/idle 只在状态变化或请求被答复时才更新和广播；waiting 记下请求原文和选项；`blocked` 转 idle 并记下原因，`finished` 结束为 done。运行多了 `progress` 和 `report`（最近一条自报）。`agent_run_events` 记请求、自报和状态变化，`GET /api/agent-runs/{id}/events` 可读（不含终端输出）。
+- **安装**：`offdesk agents hooks install|uninstall [--print]` 改 `$CLAUDE_CONFIG_DIR/settings.json` 或 `~/.claude/settings.json`：只加或删自己的钩子（命令里有 `offdesk` 和 ` hook claude `），用户的其他设置原样保留（顶层顺序和文本不变），重复安装不重复，写之前备份为 `settings.json.offdesk-backup`。没有用 `claude --settings`：文档没说清楚它的 hooks 会不会盖掉用户自己的。Codex 的钩子配置暂不自动安装。
+- **验证**：除单元测试外，在隔离的 Hub 和 node 上，在一个终端里按顺序调用钩子和 `offdesk run`：approval（带命令）→ 答复后 working、进度 1/3 和备注 → idle → done 带链接，事件日志按序记下；在 Offdesk 之外、或在另一个 tmux 里调用钩子时，没有输出，退出 0。
 
 ### A3 回答
 

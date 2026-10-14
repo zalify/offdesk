@@ -427,6 +427,17 @@ impl PtyManager {
             .collect()
     }
 
+    /// The terminal a tmux pane (`$TMUX_PANE`, e.g. "%12") of this node belongs to.
+    pub fn terminal_for_pane(&self, pane_id: &str) -> Option<String> {
+        let output = tmux_cmd()
+            .args(["-L", tmux_socket(), "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())?;
+        let terminal = pane_terminal(&String::from_utf8_lossy(&output.stdout), pane_id)?;
+        self.list_terminal_ids().contains(&terminal).then_some(terminal)
+    }
+
     pub fn list_terminals(&self) -> Vec<SessionInfo> {
         self.sessions.lock().unwrap().values().cloned().collect()
     }
@@ -946,6 +957,14 @@ pub fn tmux_session_name(id: &str) -> String {
 /// path and command columns may be missing or empty on older tmux — then
 /// there is simply no cwd / command to report. A bare shell counts as "no
 /// foreground command".
+/// From `list-panes -F "#{pane_id}\t#{session_name}"`: the terminal id of `pane_id`.
+fn pane_terminal(listing: &str, pane_id: &str) -> Option<String> {
+    listing.lines().find_map(|line| {
+        let (pane, session) = line.trim_end_matches('\r').split_once('\t')?;
+        (pane == pane_id).then(|| session.strip_prefix(tmux_prefix()).map(str::to_string))?
+    })
+}
+
 fn parse_pane_info(output: &str, hostname: &str) -> HashMap<String, PaneInfo> {
     let mut panes = HashMap::new();
     for line in output.lines() {
@@ -1404,6 +1423,16 @@ mod tests {
         let panes = parse_pane_info("odk_a\ttradebase\t/same/path\tcodex\t123\n", "dev");
         assert_eq!(panes["a"].pid, Some(123));
         assert_eq!(panes["a"].current_command.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn panes_map_to_this_nodes_terminals_only() {
+        let prefix = tmux_prefix();
+        let listing = format!("%1\t{prefix}abc\n%2\tsomeone-elses\n%30\t{prefix}def\r\n");
+        assert_eq!(pane_terminal(&listing, "%1").as_deref(), Some("abc"));
+        assert_eq!(pane_terminal(&listing, "%30").as_deref(), Some("def"));
+        assert_eq!(pane_terminal(&listing, "%2"), None);
+        assert_eq!(pane_terminal(&listing, "%3"), None);
     }
 
     #[test]

@@ -242,8 +242,33 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_agent_run_requests_open
             ON agent_run_requests(run_id) WHERE resolved_at IS NULL;
+
+        -- A run's history: requests, reports and status changes (not terminal output).
+        CREATE TABLE IF NOT EXISTS agent_run_events (
+            run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            seq INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            event_json TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (run_id, seq)
+        );
     ",
     )?;
+
+    // Agent runs: progress from the agent's task list and its latest own report (A2)
+    for (column, definition) in [
+        ("progress_done", "INTEGER"),
+        ("progress_total", "INTEGER"),
+        ("progress_current", "TEXT"),
+        ("report_kind", "TEXT"),
+        ("report_text", "TEXT"),
+        ("report_link", "TEXT"),
+        ("report_at", "INTEGER"),
+    ] {
+        if !column_exists(conn, "agent_runs", column)? {
+            conn.execute(&format!("ALTER TABLE agent_runs ADD COLUMN {column} {definition}"), [])?;
+        }
+    }
 
     if !column_exists(conn, "terminal_sessions", "workspace_group_id")? {
         conn.execute(
