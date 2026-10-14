@@ -1,13 +1,15 @@
 // P02 on iPhone: the app comes from TestFlight, which has no in-app check, so
 // the newest build is read off the repo's `ios-v*` GitHub releases (the
-// release workflow publishes one per TestFlight build). At most one request a
-// day, cached in localStorage; "later" holds the card back for a day too.
+// release workflow publishes one per TestFlight build). A release counts once
+// it is a day old: TestFlight's external testers get a build only after Beta
+// App Review, which lags the GitHub release. At most one request a day,
+// cached in localStorage; "later" holds the card back for a day too.
 
 import { isTauri } from "./platform";
 import { compareVersions } from "./versions";
 
 export const TESTFLIGHT_URL = "https://testflight.apple.com/join/rV4ktaGv";
-export const IOS_RELEASES_URL = "https://api.github.com/repos/zalify/offdesk/releases?per_page=30";
+export const IOS_RELEASES_URL = "https://api.github.com/repos/zalify/offdesk/releases?per_page=100";
 export const IOS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CACHE_KEY = "offdesk:ios-update";
 
@@ -22,16 +24,22 @@ export interface IosUpdateCache {
   dismissedAt?: number;
 }
 
-/** The newest published `ios-vX.Y.Z` in a GitHub releases listing. Drafts,
- * pre-releases and other tags (app-v, desktop-v, v, ui-stable) are not iOS
- * builds people can install. */
-export function newestIosVersion(releases: unknown): string | null {
+/** How long a release waits before it is offered (see the top). */
+export const IOS_RELEASE_SETTLE_MS = 24 * 60 * 60 * 1000;
+
+/** The newest published `ios-vX.Y.Z` in a GitHub releases listing that is at
+ * least a day old at `now`. Drafts, pre-releases and other tags (app-v,
+ * desktop-v, v, ui-stable) are not iOS builds people can install. */
+export function newestIosVersion(releases: unknown, now: number): string | null {
   if (!Array.isArray(releases)) return null;
   let newest: string | null = null;
   for (const release of releases) {
     if (!release || typeof release !== "object") continue;
-    const { tag_name: tag, draft, prerelease } = release as { tag_name?: unknown; draft?: unknown; prerelease?: unknown };
+    const { tag_name: tag, draft, prerelease, published_at: publishedAt } =
+      release as { tag_name?: unknown; draft?: unknown; prerelease?: unknown; published_at?: unknown };
     if (draft || prerelease || typeof tag !== "string") continue;
+    const published = typeof publishedAt === "string" ? Date.parse(publishedAt) : NaN;
+    if (!(now - published >= IOS_RELEASE_SETTLE_MS)) continue;
     const match = /^ios-v(\d+\.\d+\.\d+)$/.exec(tag);
     if (!match) continue;
     if (newest === null || (compareVersions(match[1], newest) ?? 0) > 0) newest = match[1];
@@ -97,7 +105,7 @@ export async function checkIosUpdate(
     const current = await readCurrent();
     let cache = readCache();
     if (needsIosCheck(cache, now)) {
-      const newest = newestIosVersion(await fetchReleases());
+      const newest = newestIosVersion(await fetchReleases(), now);
       cache = { ...cache, checkedAt: now, newest };
       writeCache(cache);
     }

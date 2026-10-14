@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, type MachineVersionInfo } from "./api";
-import { anyNodeBehind, loadSheetVersions, nodeUpdateChip, nodeVersionLabel } from "./machineVersions";
+import { anyNodeBehind, copyNodeUpdateCommand, loadSheetVersions, NODE_UPDATE_COMMAND, nodeUpdateChip, nodeVersionLabel } from "./machineVersions";
 
 const hub = { hub: "0.23.0", latest: "0.24.0", update_available: true };
 const mini: MachineVersionInfo = { id: "m1", name: "mac-mini", version: "0.23.0", update_available: true };
@@ -37,5 +37,17 @@ describe("machine versions in the phone sheet (P03)", () => {
     await expect(loadSheetVersions(async () => hub, async () => { throw new ApiError(405, ""); })).resolves.toBeNull();
     // A hub whose SPA answered instead of the API.
     await expect(loadSheetVersions(async () => "<!doctype html>" as never, async () => [])).resolves.toBeNull();
+  });
+});
+
+describe("copy update command", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("writes to the browser clipboard within the tap, before any await", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("window", { isSecureContext: true });
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const copied = copyNodeUpdateCommand();
+    expect(writeText).toHaveBeenCalledWith(NODE_UPDATE_COMMAND);
+    await copied;
   });
 });

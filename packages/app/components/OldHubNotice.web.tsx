@@ -4,15 +4,16 @@
 
 import { colors } from "@/lib/colors";
 import { hubInterfaceLabel } from "@/lib/hubVersionCheck";
-import { Body, Button, Display, Eyebrow, fontDisplay } from "./Primitives.web";
+import { Body, Button, Display, Eyebrow, TextButton, fontDisplay } from "./Primitives.web";
 
 export function OldHubNotice({
   host,
   appVersion,
   hub,
-  expected,
+  target,
   busy,
   error,
+  onBack,
   onScanEncrypted,
   onOpenAnyway,
 }: {
@@ -21,10 +22,12 @@ export function OldHubNotice({
   appVersion: string | null;
   /** The hub's version, null for a hub from before 0.23. */
   hub: string | null;
-  /** The hub version this app was built with. */
-  expected: string;
+  /** The hub version to update to (built with, capped at the newest release). */
+  target: string;
   busy: boolean;
   error: string | null;
+  /** Back to the welcome screen, nothing opened. */
+  onBack: () => void;
   onScanEncrypted: () => void;
   onOpenAnyway: () => void;
 }) {
@@ -48,6 +51,9 @@ export function OldHubNotice({
       }}
     >
       <div style={{ width: "100%", maxWidth: 480, display: "flex", flexDirection: "column", gap: 20 }}>
+        <TextButton label="back" onClick={onBack} disabled={busy} testId="old-hub-back" style={{ alignSelf: "flex-start", marginLeft: -8 }}>
+          ← back
+        </TextButton>
         <Eyebrow prompt>connect {host}</Eyebrow>
         <Display size={28}>This hub is older than your app</Display>
         <Body>
@@ -74,7 +80,7 @@ export function OldHubNotice({
           <span style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, color: colors.fg0 }}>to get the new interface</span>
           <Body size={14}>
             Pair encrypted: on {host} open settings › phone and scan the encrypted code. Or update the hub on {host}
-            {expected !== "0.0.0" ? ` to ${expected}` : ""}.
+            {` to ${target}`}.
           </Body>
         </div>
         {error ? <Body size={13} style={{ color: colors.err }}><span role="alert">{error}</span></Body> : null}

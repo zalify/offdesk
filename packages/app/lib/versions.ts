@@ -42,5 +42,12 @@ export function compareVersions(a: string, b: string): number | null {
   return 0;
 }
 
-/** True only when both are versions and `a` is older than `b`. */
-export const isOlder = (a: string, b: string) => (compareVersions(a, b) ?? 0) < 0;
+/** Order by major.minor only: a patch behind is not "behind" for prompts
+ * that send someone off to update another machine. Null when either is not
+ * a version. */
+export function compareMinor(a: string, b: string): number | null {
+  const left = parse(a);
+  const right = parse(b);
+  if (!left || !right) return null;
+  return left.core[0] - right.core[0] || left.core[1] - right.core[1];
+}

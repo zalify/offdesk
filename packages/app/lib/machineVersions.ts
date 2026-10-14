@@ -8,6 +8,7 @@ import { getHubVersion, getMachineVersions, type HubVersionInfo, type MachineVer
 import { FIRST_VERSIONED_HUB, hubHost } from "./hubVersionCheck";
 import { savedHubs, secureConnectionStatus } from "./secureTransport";
 import { getServerUrl } from "./serverUrl";
+import { isTauri } from "./platform";
 
 export const NODE_UPDATE_COMMAND = "curl -fsSL https://offdesk.dev/install | sh -s -- --node-only";
 
@@ -80,21 +81,27 @@ export function useSheetVersions(open: boolean): { versions: SheetVersions | nul
   return { versions, hubName };
 }
 
-/** The app's clipboard where there is one (the phone app), else the
- * browser's. A hub on plain http at home is not a secure context, so the
- * browser has no clipboard API there; the old copy command still works. */
-export async function copyNodeUpdateCommand(): Promise<void> {
-  try {
-    const { writeText } = await import("@tauri-apps/plugin-clipboard-manager");
-    await writeText(NODE_UPDATE_COMMAND);
-    return;
-  } catch {
-    // Not the app: the browser's clipboard below.
+/** The app's clipboard in the app; in a browser, its own clipboard, called
+ * straight from the tap so Safari keeps the user gesture. A hub on plain
+ * http at home is not a secure context and has no clipboard API, so the old
+ * copy command is the fallback. */
+export function copyNodeUpdateCommand(): Promise<void> {
+  if (isTauri()) {
+    return import("@tauri-apps/plugin-clipboard-manager")
+      .then(({ writeText }) => writeText(NODE_UPDATE_COMMAND))
+      .catch(() => copyInBrowser());
   }
+  return copyInBrowser();
+}
+
+function copyInBrowser(): Promise<void> {
   if (navigator.clipboard && window.isSecureContext) {
-    await navigator.clipboard.writeText(NODE_UPDATE_COMMAND);
-    return;
+    return navigator.clipboard.writeText(NODE_UPDATE_COMMAND).catch(() => execCopy());
   }
+  return execCopy();
+}
+
+function execCopy(): Promise<void> {
   const field = document.createElement("textarea");
   field.value = NODE_UPDATE_COMMAND;
   field.setAttribute("readonly", "");
@@ -104,7 +111,9 @@ export async function copyNodeUpdateCommand(): Promise<void> {
   field.focus();
   field.select();
   try {
-    if (!document.execCommand("copy")) throw new Error("copy was refused");
+    return document.execCommand("copy") ? Promise.resolve() : Promise.reject(new Error("copy was refused"));
+  } catch (error) {
+    return Promise.reject(error);
   } finally {
     field.remove();
   }

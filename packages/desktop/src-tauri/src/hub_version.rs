@@ -21,27 +21,34 @@ pub const BUILT_WITH_HUB: &str = env!("OFFDESK_HUB_VERSION");
 /// answer in time is let through as before.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// /api/version is a few dozen bytes; anything much bigger is not a hub.
+const MAX_ANSWER: usize = 16 * 1024;
+
 #[derive(Debug, Serialize, PartialEq)]
 pub struct HubProbe {
     /// The hub's version; `None` for a hub from before 0.23, which has no
     /// `/api/version`.
     pub hub: Option<String>,
+    /// The newest hub release, as that hub knows it (it looks it up itself).
+    pub latest: Option<String>,
     /// The hub version this app was built with.
     pub expected: &'static str,
 }
 
-#[derive(Deserialize)]
-struct VersionAnswer {
-    hub: String,
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct HubAnswer {
+    pub hub: String,
+    #[serde(default)]
+    pub latest: Option<String>,
 }
 
 /// What a hub's answer to `GET /api/version` says. 404 (and 405) is a hub
 /// from before the endpoint existed; anything else unexpected is an error,
 /// and the caller then opens the hub as it always has.
-pub fn read_answer(status: u16, body: &str) -> Result<Option<String>, String> {
+pub fn read_answer(status: u16, body: &[u8]) -> Result<Option<HubAnswer>, String> {
     match status {
-        200 => serde_json::from_str::<VersionAnswer>(body)
-            .map(|answer| Some(answer.hub))
+        200 => serde_json::from_slice::<HubAnswer>(body)
+            .map(Some)
             .map_err(|e| format!("unexpected /api/version answer: {e}")),
         404 | 405 => Ok(None),
         other => Err(format!("/api/version answered {other}")),
@@ -56,12 +63,27 @@ pub async fn probe_hub_version(url: String) -> Result<HubProbe, String> {
     let endpoint = format!("{}/api/version", hub_url::origin(&parsed));
     let client = reqwest::Client::builder()
         .timeout(PROBE_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::limited(3))
         .build()
         .map_err(|e| e.to_string())?;
-    let response = client.get(endpoint).send().await.map_err(|e| e.to_string())?;
+    let mut response = client.get(endpoint).send().await.map_err(|e| e.to_string())?;
+    if response.content_length().is_some_and(|length| length > MAX_ANSWER as u64) {
+        return Err("/api/version answered too much".into());
+    }
     let status = response.status().as_u16();
-    let body = response.text().await.map_err(|e| e.to_string())?;
-    Ok(HubProbe { hub: read_answer(status, &body)?, expected: BUILT_WITH_HUB })
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if body.len() + chunk.len() > MAX_ANSWER {
+            return Err("/api/version answered too much".into());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let answer = read_answer(status, &body)?;
+    Ok(HubProbe {
+        hub: answer.as_ref().map(|answer| answer.hub.clone()),
+        latest: answer.and_then(|answer| answer.latest),
+        expected: BUILT_WITH_HUB,
+    })
 }
 
 #[cfg(test)]
@@ -70,21 +92,27 @@ mod tests {
 
     #[test]
     fn a_hub_with_the_endpoint_says_its_version() {
-        let body = r#"{"hub":"0.23.0","latest":"0.23.1","update_available":true}"#;
-        assert_eq!(read_answer(200, body), Ok(Some("0.23.0".into())));
+        let body = br#"{"hub":"0.23.0","latest":"0.23.1","update_available":true}"#;
+        assert_eq!(
+            read_answer(200, body),
+            Ok(Some(HubAnswer { hub: "0.23.0".into(), latest: Some("0.23.1".into()) }))
+        );
+        // Before the hub has looked the newest release up.
+        let body = br#"{"hub":"0.23.0","latest":null,"update_available":false}"#;
+        assert_eq!(read_answer(200, body), Ok(Some(HubAnswer { hub: "0.23.0".into(), latest: None })));
     }
 
     #[test]
     fn a_hub_without_it_is_older_than_the_endpoint() {
-        assert_eq!(read_answer(404, ""), Ok(None));
-        assert_eq!(read_answer(405, ""), Ok(None));
+        assert_eq!(read_answer(404, b""), Ok(None));
+        assert_eq!(read_answer(405, b""), Ok(None));
     }
 
     #[test]
     fn anything_else_is_unknown_not_old() {
-        assert!(read_answer(200, "<!doctype html>").is_err());
-        assert!(read_answer(502, "").is_err());
-        assert!(read_answer(401, "").is_err());
+        assert!(read_answer(200, b"<!doctype html>").is_err());
+        assert!(read_answer(502, b"").is_err());
+        assert!(read_answer(401, b"").is_err());
     }
 
     #[test]

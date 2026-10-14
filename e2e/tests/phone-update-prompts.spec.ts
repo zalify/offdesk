@@ -58,6 +58,21 @@ test("a browser code for an older hub explains before opening it (P01)", async (
   await expect.poll(() => page.evaluate(() => (window as any).__p01.opened)).toEqual(["http://mac-mini.local:4317/?token=abc"]);
 });
 
+test("P01 has a way back, and another hub's code starts over", async ({ page }) => {
+  await bundledSetupScreen(page, { hub: "0.21.4", expected: "0.23.0" });
+  const notice = page.getByTestId("old-hub-notice");
+  await expect(notice).toContainText("connect mac-mini.local");
+  // A browser code for a different hub is asked about like any scan.
+  await page.evaluate(() => { (window as any).__p01.scans.push("http://studio.local:4317/?token=def"); });
+  await notice.getByRole("button", { name: "scan the encrypted code" }).click();
+  await expect(notice).toContainText("connect studio.local");
+  await expect(notice.getByRole("alert")).toHaveCount(0);
+  await notice.getByRole("button", { name: "back", exact: true }).click();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Scan the code" })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__p01.opened)).toEqual([]);
+});
+
 test("the encrypted code from P01 goes to encrypted pairing", async ({ page }) => {
   await bundledSetupScreen(page, { hub: null, expected: "0.23.0" });
   const notice = page.getByTestId("old-hub-notice");
@@ -98,10 +113,13 @@ async function iosBridge(page: Page) {
   let requests = 0;
   await page.route("https://api.github.com/repos/zalify/offdesk/releases**", async (route) => {
     requests++;
+    const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     await route.fulfill({ json: [
-      { tag_name: "app-v0.9.1", draft: false, prerelease: false },
-      { tag_name: "ios-v0.9.0", draft: false, prerelease: false },
-      { tag_name: "ios-v0.8.0", draft: false, prerelease: false },
+      // Too fresh to be on TestFlight for everyone yet.
+      { tag_name: "ios-v0.9.1", draft: false, prerelease: false, published_at: daysAgo(0.1) },
+      { tag_name: "app-v0.9.1", draft: false, prerelease: false, published_at: daysAgo(2) },
+      { tag_name: "ios-v0.9.0", draft: false, prerelease: false, published_at: daysAgo(2) },
+      { tag_name: "ios-v0.8.0", draft: false, prerelease: false, published_at: daysAgo(9) },
     ] });
   });
   return () => requests;

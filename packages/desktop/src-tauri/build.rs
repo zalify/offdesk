@@ -57,13 +57,22 @@ fn main() {
 /// hub's against (`hub_version.rs`). App versions are a separate line.
 fn hub_version() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../Cargo.toml");
-    println!("cargo:rerun-if-changed={}", manifest.display());
+    if manifest.exists() {
+        println!("cargo:rerun-if-changed={}", manifest.display());
+    }
     let version = std::fs::read_to_string(&manifest)
         .ok()
         .and_then(|text| workspace_version::workspace_version(&text));
     let version = version.unwrap_or_else(|| {
-        // Outside the repo nothing is known; 0.0.0 makes every hub look new
-        // enough, so only a hub without /api/version gets the warning.
+        // Only the phone app uses it; a release of that must know it.
+        let mobile = matches!(std::env::var("CARGO_CFG_TARGET_OS").as_deref(), Ok("ios" | "android"));
+        let release = std::env::var("PROFILE").as_deref() == Ok("release");
+        if mobile && release {
+            panic!("no [workspace.package] version in {}", manifest.display());
+        }
+        // 0.0.0 is below every hub, so the phone never shows the older-hub
+        // notice (hub_version.rs, lib/hubVersionCheck.ts) rather than
+        // showing it for every hub.
         println!("cargo:warning=no [workspace.package] version in {}", manifest.display());
         "0.0.0".to_string()
     });

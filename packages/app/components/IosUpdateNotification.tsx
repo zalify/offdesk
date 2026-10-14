@@ -11,9 +11,12 @@ export function IosUpdateNotification() {
   const ios = isIosApp();
   useEffect(() => {
     if (!ios) return;
-    // Same pacing as Android's first check: after launch has settled.
+    // Same pacing as Android: after launch has settled, and again on coming
+    // back to the foreground (the day-long cache keeps that to one request).
     const timer = setTimeout(() => void checkIosUpdate(), 5000);
-    return () => clearTimeout(timer);
+    const onForeground = () => { if (document.visibilityState === "visible") void checkIosUpdate(); };
+    document.addEventListener("visibilitychange", onForeground);
+    return () => { clearTimeout(timer); document.removeEventListener("visibilitychange", onForeground); };
   }, [ios]);
   if (!ios || !state.version) return null;
   return <AppUpdateCard

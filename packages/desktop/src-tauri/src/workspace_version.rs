@@ -9,7 +9,8 @@
 pub fn workspace_version(manifest: &str) -> Option<String> {
     let mut in_section = false;
     for line in manifest.lines() {
-        let line = line.trim();
+        // Versions never contain `#`, so anything after one is a comment.
+        let line = line.split('#').next().unwrap_or_default().trim();
         if line.starts_with('[') {
             in_section = line == "[workspace.package]";
             continue;
@@ -21,8 +22,10 @@ pub fn workspace_version(manifest: &str) -> Option<String> {
         if key.trim() != "version" {
             continue;
         }
-        let value = value.split('#').next().unwrap_or_default().trim();
-        let value = value.strip_prefix('"')?.strip_suffix('"')?;
+        let value = value.trim();
+        let value = ['"', '\'']
+            .iter()
+            .find_map(|quote| value.strip_prefix(*quote)?.strip_suffix(*quote))?;
         return (!value.is_empty()).then(|| value.to_string());
     }
     None
@@ -36,6 +39,18 @@ mod tests {
     fn reads_the_workspace_package_version() {
         let manifest = "[workspace]\nmembers = [\"crates/hub\"]\n\n[workspace.package]\n# What `offdesk --version` prints.\nversion = \"0.23.0\" # bump with releases\nedition = \"2021\"\n\n[workspace.dependencies]\nserde = { version = \"1\" }\n";
         assert_eq!(workspace_version(manifest).as_deref(), Some("0.23.0"));
+    }
+
+    #[test]
+    fn tolerates_comments_on_the_header_and_single_quotes() {
+        let manifest = "[workspace.package] # shared by every crate\nversion = '0.23.1'\n";
+        assert_eq!(workspace_version(manifest).as_deref(), Some("0.23.1"));
+    }
+
+    #[test]
+    fn an_unquoted_or_empty_value_is_no_version() {
+        assert_eq!(workspace_version("[workspace.package]\nversion = 0.23\n"), None);
+        assert_eq!(workspace_version("[workspace.package]\nversion = \"\"\n"), None);
     }
 
     #[test]
