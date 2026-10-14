@@ -211,7 +211,7 @@ curl -fsSL https://offdesk.dev/install | sh -s -- --hub-url ws://192.168.1.10:43
 
 另外还有三个打包好的客户端：
 
-- **iPhone / iPad**——加入 [公开的 TestFlight 测试](https://testflight.apple.com/join/rV4ktaGv)。在 App 里打开 **Scan QR Code**，扫描 Hub 的加密配对码。加密连接使用 App 内置的界面，通过 TestFlight 更新即可获得界面改动。同一个版本适用于任何 Hub。手机上有两个开关可能挡住局域网里的 Hub，遇到时 App 会直接指出来：本地网络（Local
+- **iPhone / iPad**——加入 [公开的 TestFlight 测试](https://testflight.apple.com/join/rV4ktaGv)。在 App 里打开 **Scan QR Code**，扫描 Hub 的加密配对码。加密连接使用 App 自带并经过签名的界面，它和桌面版、Android 版一样在线更新（0.9.1 起）；App 本身通过 TestFlight 更新。同一个版本适用于任何 Hub。手机上有两个开关可能挡住局域网里的 Hub，遇到时 App 会直接指出来：本地网络（Local
   Network），以及国行手机上的无线数据（Wireless Data）。由 `ios-v*` 标签构建。
 - **Android**——从 [offdesk.dev/apk](https://offdesk.dev/apk) 下载 APK，这个地址始终指向最新的 App 构建（通用版用 `/apk/universal`）；较新的手机选 `arm64-v8a`，不确定就选 `universal`。侧载安装；它支持 App 内检查更新、剪贴板和加密配对。首次启动时扫描 Hub 显示的二维码——安装时打印在终端里的、Phone 按钮下的，或 `offdesk-hub link` 输出的——即可登录；一个 APK 适用于任何 Hub，不会把任何 Hub
   的信息编译进去。也可以手动输入地址，或粘贴登录链接。

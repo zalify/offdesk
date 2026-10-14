@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 fn main() -> Result<(), String> {
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 5 {
-        return Err("stage <private UI store directory> <fixture directory> <public-key-file> <macos|android>".into());
+        return Err("stage <private UI store directory> <fixture directory> <public-key-file> <macos|android|windows|linux|ios>".into());
     }
     let key = std::fs::read_to_string(&args[3]).map_err(|e| e.to_string())?;
     let key: [u8; 32] = STANDARD

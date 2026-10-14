@@ -107,7 +107,7 @@ jobs:
       - name: Build isolated Mac test app
         run: pnpm --filter @offdesk/desktop tauri build --debug --bundles app --config /tmp/offdesk-ui-fixtures/tauri.smoke.conf.json
       - name: Exercise native asset loading and rollback
-        run: python3 scripts/ui-updates/macos-smoke.py 'packages/desktop/src-tauri/target/debug/bundle/macos/Offdesk UI Smoke.app' /tmp/offdesk-ui-fixtures
+        run: python3 scripts/ui-updates/desktop-smoke.py 'packages/desktop/src-tauri/target/debug/bundle/macos/Offdesk UI Smoke.app/Contents/MacOS/offdesk-desktop' /tmp/offdesk-ui-fixtures
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -115,3 +115,82 @@ jobs:
           path: |
             /tmp/offdesk-ui-fixtures/macos-*.json
             /tmp/offdesk-ui-fixtures/macos-native.log
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri
+          key: ui-native-linux
+      - name: WebKitGTK and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Prepare ephemeral signed UI fixtures
+        run: |
+          node scripts/stamp-build.mjs packages/app/dist ui-smoke-base
+          node scripts/ui-updates/prepare-smoke.mjs packages/app/dist /tmp/offdesk-ui-fixtures
+          echo "OFFDESK_UI_PUBLIC_KEY=$(cat /tmp/offdesk-ui-fixtures/public-key.txt)" >> "$GITHUB_ENV"
+          echo 'OFFDESK_UI_CHANNEL=rc' >> "$GITHUB_ENV"
+      - name: Build isolated Linux test app
+        run: pnpm --filter @offdesk/desktop tauri build --debug --no-bundle --config /tmp/offdesk-ui-fixtures/tauri.smoke.conf.json
+      - name: Exercise native asset loading and rollback
+        run: xvfb-run -a python3 scripts/ui-updates/desktop-smoke.py packages/desktop/src-tauri/target/debug/offdesk-desktop /tmp/offdesk-ui-fixtures
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-native-linux-evidence
+          path: |
+            /tmp/offdesk-ui-fixtures/linux-*.json
+            /tmp/offdesk-ui-fixtures/linux-native.log
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: packages/desktop/src-tauri
+          key: ui-native-windows
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Prepare ephemeral signed UI fixtures
+        run: |
+          FIXTURES="$RUNNER_TEMP/offdesk-ui-fixtures"
+          node scripts/stamp-build.mjs packages/app/dist ui-smoke-base
+          node scripts/ui-updates/prepare-smoke.mjs packages/app/dist "$FIXTURES"
+          echo "FIXTURES=$FIXTURES" >> "$GITHUB_ENV"
+          echo "OFFDESK_UI_PUBLIC_KEY=$(cat "$FIXTURES/public-key.txt")" >> "$GITHUB_ENV"
+          echo 'OFFDESK_UI_CHANNEL=rc' >> "$GITHUB_ENV"
+      - name: Build isolated Windows test app
+        run: pnpm --filter @offdesk/desktop tauri build --debug --no-bundle --config "$FIXTURES/tauri.smoke.conf.json"
+      - name: Exercise native asset loading and rollback
+        run: python scripts/ui-updates/desktop-smoke.py packages/desktop/src-tauri/target/debug/offdesk-desktop.exe "$FIXTURES"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-native-windows-evidence
+          path: |
+            ${{ runner.temp }}/offdesk-ui-fixtures/windows-*.json
+            ${{ runner.temp }}/offdesk-ui-fixtures/windows-native.log

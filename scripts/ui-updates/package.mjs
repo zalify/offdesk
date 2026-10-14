@@ -33,7 +33,7 @@ export function packageUi({ directory, output, version, sequence, channel, priva
   const bundle = Buffer.from(JSON.stringify({format:1, version, files}));
   if (bundle.length > 48 * 1024 * 1024) throw new Error('UI bundle too large');
   const payload = JSON.stringify({format:1, sequence, version, channel, minBridge:1, maxBridge:1,
-    platforms:['macos','android'], url:`https://github.com/zalify/offdesk/releases/download/ui-${version}/bundle.json`,
+    platforms:['macos','android','windows','linux','ios'], url:`https://github.com/zalify/offdesk/releases/download/ui-${version}/bundle.json`,
     sha256:createHash('sha256').update(bundle).digest('hex'), size:bundle.length});
   const key = createPrivateKey(privateKey);
   if (key.asymmetricKeyType !== 'ed25519') throw new Error('Expected Ed25519 release key');

@@ -336,8 +336,9 @@ Three packaged clients also ship:
 
 - **iPhone / iPad** — join the [public TestFlight beta](https://testflight.apple.com/join/rV4ktaGv).
   Open **Scan QR Code** in the App and scan the Hub's encrypted pairing code.
-  Encrypted connections use the App's bundled interface; update through
-  TestFlight to receive interface changes. One build works with any hub. Two switches on the
+  Encrypted connections use the App's own signed interface, which updates
+  over the air like the desktop and Android apps (from 0.9.1); the app itself
+  updates through TestFlight. One build works with any hub. Two switches on the
   phone can stand in the way of a hub on the LAN, and the app names them when
   they do: Local Network, and on phones sold in China, Wireless Data. Built
   from `ios-v*` tags.

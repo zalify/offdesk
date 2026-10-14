@@ -205,7 +205,7 @@ macOS では、到達可能な状態を保つため、動作中のノードは�
 
 パッケージ化されたクライアントも 3 つあります。
 
-- **iPhone / iPad** — [公開 TestFlight ベータ](https://testflight.apple.com/join/rV4ktaGv)に参加してください。App で **Scan QR Code** を開き、Hub の暗号化ペアリングコードを読み取ります。暗号化接続では App に同梱されたインターフェースを使うため、インターフェースの更新は TestFlight 経由で受け取ります。ひとつのビルドでどの Hub
+- **iPhone / iPad** — [公開 TestFlight ベータ](https://testflight.apple.com/join/rV4ktaGv)に参加してください。App で **Scan QR Code** を開き、Hub の暗号化ペアリングコードを読み取ります。暗号化接続では App 自身の署名済みインターフェースを使います。インターフェースはデスクトップ版や Android 版と同じくネット経由で更新され（0.9.1 以降）、App 本体は TestFlight で更新します。ひとつのビルドでどの Hub
   にも接続できます。LAN 上の Hub への接続を妨げうる設定がスマートフォンに 2 つあり、該当する場合はアプリがその名前を表示します。ローカルネットワークと、中国で販売された端末ではワイヤレスデータです。`ios-v*` タグからビルドされます。
 - **Android** — [offdesk.dev/apk](https://offdesk.dev/apk) から APK を入手します。このリンクは常に最新のアプリビルドを指します（ユニバーサル版は `/apk/universal`）。最近の端末なら `arm64-v8a`、迷ったら `universal` を選んでください。サイドロードして使います。アプリ内の更新チェック、クリップボード、暗号化ペアリングに対応しています。初回起動時に Hub が表示するコード（インストール時のターミナル、Phone ボタンの中、または `offdesk-hub link`）を読み取ると、サインインが完了します。ひとつの APK でどの Hub にも接続でき、Hub に関する情報は何も組み込まれていません。アドレスを手入力したり、サインインリンクを貼り付けたりすることもできます。
 - **デスクトップ** — macOS（[offdesk.dev/mac](https://offdesk.dev/mac)、署名・公証済み）、Windows（[/windows](https://offdesk.dev/windows)）、Linux

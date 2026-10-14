@@ -364,8 +364,9 @@ También hay tres clientes empaquetados:
 - **iPhone / iPad** — únete a la
   [beta pública de TestFlight](https://testflight.apple.com/join/rV4ktaGv).
   Abre **Scan QR Code** en la App y escanea el código de emparejamiento
-  cifrado del Hub. Las conexiones cifradas usan la interfaz incluida en la
-  App; actualízala desde TestFlight para recibir los cambios de interfaz. Una
+  cifrado del Hub. Las conexiones cifradas usan la interfaz firmada de la App, que se
+  actualiza por red como en escritorio y Android (desde 0.9.1); la App en sí
+  se actualiza desde TestFlight. Una
   misma compilación sirve para cualquier hub. Dos ajustes del teléfono pueden
   bloquear un hub en la LAN, y la app los nombra cuando ocurre: Red local y,
   en teléfonos vendidos en China, Datos inalámbricos. Se compila a partir de

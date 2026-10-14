@@ -366,8 +366,9 @@ Trois clients empaquetés sont aussi disponibles :
 
 - **iPhone / iPad** — rejoignez la [bêta publique TestFlight](https://testflight.apple.com/join/rV4ktaGv).
   Ouvrez **Scan QR Code** dans l'App et scannez le code d'appairage chiffré du
-  Hub. Les connexions chiffrées utilisent l'interface embarquée dans l'App ;
-  mettez-la à jour via TestFlight pour recevoir les évolutions de l'interface.
+  Hub. Les connexions chiffrées utilisent l'interface signée de l'App, mise à jour
+  à distance comme sur ordinateur et Android (à partir de 0.9.1) ; l'App
+  elle-même se met à jour via TestFlight.
   Un même build fonctionne avec n'importe quel hub. Deux réglages du téléphone
   peuvent bloquer l'accès à un hub sur le réseau local, et l'app les nomme le
   cas échéant : Réseau local et, sur les téléphones vendus en Chine, Données
