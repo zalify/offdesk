@@ -62,19 +62,25 @@ for (const width of [390, 1280]) {
     await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("Geist");
     await expect(preferences.locator("body")).toHaveCSS("font-family", /^'?"?Geist'?"?, system-ui/);
     await expect(page.locator("body")).toHaveCSS("font-family", /^'?"?Geist'?"?, system-ui/);
-    await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("Courier New");
+    await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).selectOption("Fira Code");
     await preferences.getByRole("spinbutton", { name: "Terminal Font Size", exact: true }).fill("20");
-    await expect.poll(() => options(page)).toEqual({ family: "'Courier New', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
+    await expect.poll(() => options(page)).toEqual({ family: "'Fira Code', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
     expect(await page.evaluate(() => Array.from(document.fonts).some(font => font.family.replace(/["']/g, "") === "JetBrains Mono" && font.status === "loaded"))).toBe(true);
+    // Fira Code ships with the app, so the terminal really draws it.
+    await expect.poll(() => page.evaluate(() => Array.from(document.fonts).some(font => font.family.replace(/["']/g, "") === "Fira Code" && font.status === "loaded"))).toBe(true);
+    // Fonts the device lacks are not offered; the bundled ones always are.
+    const offered = await preferences.getByRole("combobox", { name: "Terminal Font", exact: true }).locator("option").allTextContents();
+    expect(offered).toEqual(expect.arrayContaining(["Geist Mono (included)", "Fira Code (included)", "IBM Plex Mono (included)", "Source Code Pro (included)"]));
+    expect(offered).not.toContain("Consolas");
     expect(await page.evaluate(() => {
       const win = window as unknown as { __offdeskTerminals: Map<string, Terminal>; savedTerminal: Terminal };
       return win.savedTerminal === win.__offdeskTerminals.get("font-test");
     })).toBe(true);
     await preferences.getByTitle("Back", { exact: true }).click();
-    await expect.poll(() => options(preferences)).toEqual({ family: "'Courier New', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
+    await expect.poll(() => options(preferences)).toEqual({ family: "'Fira Code', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
     await page.reload();
     await expect(page.locator("body")).toHaveCSS("font-family", /^'?"?Geist'?"?, system-ui/);
-    await expect.poll(() => options(page)).toEqual({ family: "'Courier New', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
+    await expect.poll(() => options(page)).toEqual({ family: "'Fira Code', 'JetBrains Mono', 'Offdesk Terminal Symbols', monospace", size: 20 });
     await settings(preferences);
     await preferences.getByRole("combobox", { name: "UI Font", exact: true }).selectOption("System UI");
     await expect(preferences.locator("body")).toHaveCSS("font-family", /system-ui/);

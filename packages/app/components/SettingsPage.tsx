@@ -2,6 +2,7 @@ import { UiUpdateNotification } from "./UiUpdateNotification";
 import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
+import { BUNDLED_TERMINAL_FONTS, BUNDLED_UI_FONTS, DEFAULT_TERMINAL_FONT, availableTerminalFonts, availableUiFonts, resolveTerminalFontFamily } from "@/lib/terminalFonts";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
 import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTransport";
 import { useState, useCallback, useEffect, useRef } from "react";
@@ -65,43 +66,11 @@ async function getShellVersion(): Promise<string> {
   return internals.invoke<string>("plugin:app|version");
 }
 
-// Common UI (proportional) fonts
-const UI_FONTS = [
-  "App Default",
-  "System UI",
-  "Geist Mono",
-  "Geist",
-  "Inter",
-  "Roboto",
-  "Segoe UI",
-  "Helvetica Neue",
-  "Arial",
-  "SF Pro",
-  "Noto Sans",
-  "Open Sans",
-  "Lato",
-  "Source Sans Pro",
-];
-
-// Common monospace / terminal fonts
-const TERMINAL_FONTS = [
-  "App Default",
-  "Maple Mono NF CN",
-  "Noto Sans Mono CJK SC",
-  "JetBrains Mono",
-  "Geist Mono",
-  "Fira Code",
-  "Cascadia Code",
-  "Source Code Pro",
-  "Inconsolata",
-  "IBM Plex Mono",
-  "Hack",
-  "Ubuntu Mono",
-  "Menlo",
-  "Consolas",
-  "Monaco",
-  "Courier New",
-];
+// The font lists: what ships with the app, then what this device has
+// (lib/terminalFonts.ts), so no choice silently falls back to the default.
+const INCLUDED_FONTS = new Set([...BUNDLED_TERMINAL_FONTS, ...BUNDLED_UI_FONTS.filter((font) => font !== "System UI")]);
+const uiFontOptions = () => ["App Default", ...availableUiFonts()];
+const terminalFontOptions = () => ["App Default", ...availableTerminalFonts().filter((font) => font !== DEFAULT_TERMINAL_FONT)];
 
 interface QuickCommand {
   label: string;
@@ -172,7 +141,7 @@ function FontSelect({
     >
       {options.map((opt) => (
         <option key={opt} value={opt}>
-          {opt === options[0] ? emptyLabel.toLowerCase() : ["Geist Mono", "Geist", "JetBrains Mono"].includes(opt) ? `${opt} (included)` : opt}
+          {opt === options[0] ? emptyLabel.toLowerCase() : INCLUDED_FONTS.has(opt) ? `${opt} (included)` : opt}
         </option>
       ))}
       <option value={CUSTOM_FONT}>custom font…</option>
@@ -334,6 +303,9 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   const secureStatus = useSecureConnectionStatus();
   const { logout } = useAuth();
   // Terminal font settings
+  // Measured once per visit to Settings: which listed fonts this device draws.
+  const [uiFonts] = useState(uiFontOptions);
+  const [terminalFonts] = useState(terminalFontOptions);
   const [terminalFont, setTerminalFont] = useState(
     () => localStorage.getItem("offdesk:terminal-font-family") || "",
   );
@@ -800,12 +772,12 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           <SettingRow
             label="Interface font"
-            description="Applies immediately to the interface. Included fonts work on every device; other fonts must be installed locally."
+            description="Applies immediately to the interface. Geist and Geist Mono come with the app; the others listed are installed on this device."
           >
             <FontSelect
               label="UI Font"
               value={uiFont}
-              options={UI_FONTS}
+              options={uiFonts}
               emptyLabel="App Default"
               onChange={handleUiFontChange}
             />
@@ -834,15 +806,24 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           <SettingRow
             label="Terminal font"
-            description="JetBrains Mono is the built-in default on every device. Changes apply immediately. Other fonts must be installed locally; Chinese characters use a system fallback."
+            description="JetBrains Mono (the default), Geist Mono, Fira Code, IBM Plex Mono and Source Code Pro come with the app, so they look the same on every device; the others listed are installed on this one. Changes apply immediately; Chinese characters use a system fallback."
           >
-            <FontSelect
-              label="Terminal Font"
-              value={terminalFont}
-              options={TERMINAL_FONTS}
-              emptyLabel="App Default"
-              onChange={handleTerminalFontChange}
-            />
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+              <FontSelect
+                label="Terminal Font"
+                value={terminalFont}
+                options={terminalFonts}
+                emptyLabel="App Default"
+                onChange={handleTerminalFontChange}
+              />
+              {/* A line in the chosen font, so the difference is visible here. */}
+              <span
+                data-testid="terminal-font-preview"
+                style={{ fontFamily: resolveTerminalFontFamily(terminalFont), fontSize: 13, color: colors.fg1, whiteSpace: "nowrap" }}
+              >
+                0O 1lI {"{}[]"} =&gt; != -&gt; 中文
+              </span>
+            </div>
           </SettingRow>
 
           <SettingRow label="Terminal text size">

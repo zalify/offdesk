@@ -29,3 +29,14 @@ Latin and Latin Extended variable-weight subsets from @fontsource-variable/geist
 and @fontsource-variable/geist-mono 5.3.0 (upstream:
 https://github.com/vercel/geist-font). Their copyright and SIL Open Font
 License are in Geist-OFL.txt and GeistMono-OFL.txt.
+
+Fira Code, IBM Plex Mono and Source Code Pro are optional terminal fonts that
+ship with the app, so choosing one looks the same on every device (fonts that
+are not bundled are offered only where the device has them installed). Each is
+the unmodified regular-weight Latin and Latin Extended subset from Fontsource:
+@fontsource/fira-code 5.3.0, @fontsource/ibm-plex-mono 5.3.0 and
+@fontsource/source-code-pro 5.3.1 (upstream: https://github.com/tonsky/FiraCode,
+https://github.com/IBM/plex, https://github.com/adobe-fonts/source-code-pro).
+Their copyright notices and SIL Open Font Licenses are in FiraCode-OFL.txt,
+IBMPlexMono-OFL.txt and SourceCodePro-OFL.txt. A browser downloads one only
+when a terminal uses it.
