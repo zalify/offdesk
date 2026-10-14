@@ -6,16 +6,12 @@ import { colors } from "@/lib/colors";
 import { useTheme } from "@/lib/theme";
 import { THEMES } from "@/lib/themes";
 import { readTerminalFontSetting, writeTerminalFontSetting } from "@/lib/fontPreferences";
-import { DEFAULT_TERMINAL_FONT, quoteFontFamily } from "@/lib/terminalFonts";
+import { DEFAULT_TERMINAL_FONT, availableTerminalFonts, quoteFontFamily } from "@/lib/terminalFonts";
 import { ThemeRow } from "./ThemePicker";
 
-// Fonts a phone has: the two the app ships, and Menlo on iPhone. Settings
-// lists every font for computers that have more installed.
-const PHONE_FONTS = [
-  { value: "", label: DEFAULT_TERMINAL_FONT },
-  { value: "Geist Mono", label: "Geist Mono" },
-  { value: "Menlo", label: "Menlo" },
-];
+// The fonts the app ships, then any listed font this phone has (Menlo on an
+// iPhone): never one it would draw as the default instead.
+const phoneFonts = () => availableTerminalFonts().map((font) => ({ value: font === DEFAULT_TERMINAL_FONT ? "" : font, label: font }));
 const DEFAULT_SIZE = 14;
 
 export function AppearanceSheet({ onClose }: { onClose: () => void }) {
@@ -23,6 +19,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
   const [opened] = useState(() => ({ theme, font: readTerminalFontSetting() }));
   const [tab, setTab] = useState<"theme" | "font">("theme");
   const [font, setFont] = useState(opened.font);
+  const [fonts] = useState(phoneFonts);
   const size = font.size ?? DEFAULT_SIZE;
 
   const applyFont = (next: { family: string; size: number | null }) => {
@@ -106,7 +103,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
           <>
             <span style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: colors.fg2 }}>terminal font</span>
             <div role="group" aria-label="Terminal font" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {PHONE_FONTS.map((option) => {
+              {fonts.map((option) => {
                 const on = (font.family || "") === option.value || (!option.value && font.family === DEFAULT_TERMINAL_FONT);
                 return (
                   <button
