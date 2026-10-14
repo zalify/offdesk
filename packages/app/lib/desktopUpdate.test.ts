@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { cardVisible, installsBeforeQuit, startOfNextDay, type DesktopUpdateState } from "./desktopUpdate";
+import { afterCheck, cardVisible, installsBeforeQuit, startOfNextDay, type DesktopUpdateState } from "./desktopUpdate";
 
 const ready: DesktopUpdateState = {
   current: "0.9.0",
   available: "0.9.1",
   phase: "ready",
+  checking: false,
+  progress: null,
   error: null,
   message: null,
   checkedAt: 0,
@@ -52,5 +54,24 @@ describe("`when I quit`", () => {
     expect(installsBeforeQuit("linux")).toBe(true);
     expect(installsBeforeQuit("windows")).toBe(false);
     expect(installsBeforeQuit("unknown")).toBe(false);
+  });
+});
+
+describe("a check", () => {
+  it("leaves a downloaded or installed update showing instead of flickering", () => {
+    expect(afterCheck({ phase: "ready", available: "0.9.1" }, "0.9.1", true)).toBe("keep");
+    expect(afterCheck({ phase: "installed", available: "0.9.1" }, "0.9.1", false)).toBe("keep");
+    // Installed stays installed, even when something newer is out: the
+    // restart comes first.
+    expect(afterCheck({ phase: "installed", available: "0.9.1" }, "0.9.2", false)).toBe("keep");
+    expect(afterCheck({ phase: "installed", available: "0.9.1" }, null, false)).toBe("keep");
+  });
+
+  it("downloads what is new or not here yet, and forgets an offer that is gone", () => {
+    expect(afterCheck({ phase: "idle", available: null }, "0.9.1", false)).toBe("download");
+    expect(afterCheck({ phase: "ready", available: "0.9.1" }, "0.9.2", true)).toBe("download");
+    // Reloaded window: the offer is known but its bytes are not here.
+    expect(afterCheck({ phase: "ready", available: "0.9.1" }, "0.9.1", false)).toBe("download");
+    expect(afterCheck({ phase: "ready", available: "0.9.1" }, null, true)).toBe("none");
   });
 });

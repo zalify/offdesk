@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 const STORE_FILE: &str = "desktop.json";
-const HUB_PORT: u16 = 4317;
+pub(crate) const HUB_PORT: u16 = 4317;
 
 // ── The first-run answer ──────────────────────────────────────────
 
@@ -205,7 +205,7 @@ pub struct SetupStatus {
     pub error: Option<String>,
 }
 
-fn service_files(home: &Path) -> (PathBuf, PathBuf) {
+pub(crate) fn service_files(home: &Path) -> (PathBuf, PathBuf) {
     if cfg!(target_os = "macos") {
         let agents = home.join("Library").join("LaunchAgents");
         (
@@ -382,38 +382,6 @@ pub async fn hub_uninstall() -> Result<(), String> {
     .map_err(|e| e.to_string())?
 }
 
-// ── After the app updates ─────────────────────────────────────────
-
-/// Whether a service file starts `binary`. The services this app installed
-/// run the hub and node from beside it; ones the install script set up run
-/// ~/.local/bin's, which an app update leaves alone.
-fn runs_binary(service_file: &str, binary: &Path) -> bool {
-    service_file.contains(&*binary.to_string_lossy())
-}
-
-/// An app update replaces the hub and node beside the app, but launchd (or
-/// systemd) keeps running the old processes until they restart. Restart
-/// the services that run the bundled binaries — the same `service restart`
-/// a person would type. Best effort: the app is on its way out.
-pub fn restart_bundled_services() {
-    let Ok((hub, Some(_))) = hub_binary() else { return };
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let (hub_file, node_file) = service_files(&home);
-    let node = hub.with_file_name("offdesk-node");
-    for (binary, file, what) in [
-        (&hub, hub_file, "offdesk-hub service restart"),
-        (&node, node_file, "offdesk-node service restart"),
-    ] {
-        let ours = fs::read_to_string(&file).is_ok_and(|text| runs_binary(&text, binary));
-        if !ours || !binary.is_file() {
-            continue;
-        }
-        let mut command = Command::new(binary);
-        command.args(["service", "restart"]);
-        let _ = run(command, what);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -493,17 +461,6 @@ mod tests {
         assert!(parse_link("Nothing is listening on 0.0.0.0:4317.")
             .unwrap_err()
             .contains("no JSON"));
-    }
-
-    #[test]
-    fn only_services_running_the_bundled_binaries_restart_with_the_app() {
-        let bundled = Path::new("/Applications/Offdesk DEV.app/Contents/MacOS/offdesk-hub");
-        let plist = "<key>ProgramArguments</key>\n<array>\n\t<string>/Applications/Offdesk DEV.app/Contents/MacOS/offdesk-hub</string>\n\t<string>--listen</string>";
-        assert!(runs_binary(plist, bundled));
-        let script = "<array>\n\t<string>/Users/me/.local/bin/offdesk-hub</string>";
-        assert!(!runs_binary(script, bundled));
-        let unit = "ExecStart=\"/opt/offdesk/offdesk-hub\" \"--listen\" \"0.0.0.0:4317\"";
-        assert!(runs_binary(unit, Path::new("/opt/offdesk/offdesk-hub")));
     }
 
     #[test]

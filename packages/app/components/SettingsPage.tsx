@@ -16,6 +16,7 @@ import { useAuth } from "@/lib/auth";
 import { isTauri, isTauriMobile } from "@/lib/platform";
 import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
 import { useDesktopUpdate } from "@/lib/desktopUpdate";
+import { useBundledServices } from "@/lib/bundledServices";
 import { subscribeOpenSettings, takeRequestedSection } from "@/lib/openSettings";
 import { hostOf, partsBehind, useVersions } from "@/lib/hubVersions";
 import {
@@ -718,7 +719,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   // Settings › versions: how many parts are behind, for the nav.
   const versions = useVersions();
   const desktopUpdate = useDesktopUpdate();
-  const behind = partsBehind(desktopUpdate.available, versions.hub, versions.nodes);
+  const services = useBundledServices();
+  const behind = partsBehind(desktopUpdate.available, versions.hub, versions.nodes, services?.bundled ? services : null);
   const hubAddress = hostOf(secureStatus?.endpoint.hub_url || getServerUrl() || (typeof window === "undefined" ? "" : window.location.origin));
 
   const inputStyle: React.CSSProperties = {

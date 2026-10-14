@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "./api";
-import { checkedAgo, hostOf, hubBehind, hubWarning, isOlderHub, partsBehind, type HubAnswer } from "./hubVersions";
+import { bundledPart, checkedAgo, hostOf, hubBehind, hubWarning, isOlderHub, needsRetry, partsBehind, type HubAnswer } from "./hubVersions";
 
 const known = (hub: string, latest: string | null): HubAnswer => ({
   kind: "known",
@@ -39,6 +39,14 @@ describe("parts behind", () => {
     expect(partsBehind(null, { kind: "older" }, null)).toBe(1);
     expect(partsBehind(null, null, null)).toBe(0);
   });
+
+  it("counts a bundled hub or node that runs something other than what the app ships", () => {
+    const bundled = { hub_version: "0.24.0", node_version: "0.24.0", machine_id: "c" };
+    expect(partsBehind(null, known("0.24.0", "0.24.0"), nodes, bundled)).toBe(2);
+    expect(partsBehind(null, known("0.23.0", "0.23.0"), nodes, bundled)).toBe(3);
+    const local = [{ id: "c", name: "nas", version: "0.23.0", update_available: false }];
+    expect(partsBehind(null, known("0.24.0", "0.24.0"), local, bundled)).toBe(1);
+  });
 });
 
 describe("the warning on a node's phone panel", () => {
@@ -68,5 +76,35 @@ describe("small words", () => {
     expect(hostOf("https://mac-mini.tail1234.ts.net")).toBe("mac-mini.tail1234.ts.net");
     expect(hostOf("http://[fd00::2]:4317")).toBe("fd00::2");
     expect(hostOf("not a url")).toBe("not a url");
+  });
+});
+
+describe("asking again", () => {
+  it("only when the hub or its nodes gave no answer", () => {
+    expect(needsRetry({ hub: { kind: "unknown" }, nodes: null })).toBe(true);
+    expect(needsRetry({ hub: known("0.23.0", null), nodes: null })).toBe(true);
+    expect(needsRetry({ hub: known("0.23.0", null), nodes: [] })).toBe(false);
+    // An older hub has no node versions to give; asking again won't help.
+    expect(needsRetry({ hub: { kind: "older" }, nodes: null })).toBe(false);
+    expect(needsRetry({ hub: null, nodes: null })).toBe(false);
+  });
+});
+
+describe("a part this app bundles, on the hub machine", () => {
+  it("is red only while it runs something other than the bundled version", () => {
+    expect(bundledPart("0.23.0", "0.23.1", false, false)).toEqual({ red: true, newer: false, action: "restarts at next launch" });
+    expect(bundledPart(null, "0.23.1", true, false)).toEqual({ red: true, newer: false, action: "restarts at next launch" });
+    expect(bundledPart("0.23.0", "0.23.1", false, true).action).toBe("with the app");
+  });
+
+  it("shows a release no app ships yet as news, not a fault", () => {
+    expect(bundledPart("0.23.1", "0.23.1", true, false)).toEqual({ red: false, newer: true, action: "comes with the next app update" });
+    expect(bundledPart("0.23.1", "0.23.1", true, true)).toEqual({ red: false, newer: true, action: "with the app" });
+    expect(bundledPart("0.23.1", "0.23.1", false, false)).toEqual({ red: false, newer: false, action: "current" });
+  });
+
+  it("falls back to the hub's word when the bundled version is unknown", () => {
+    expect(bundledPart("0.23.0", null, true, false).red).toBe(true);
+    expect(bundledPart("0.23.0", null, false, false).red).toBe(false);
   });
 });

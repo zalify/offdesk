@@ -3,14 +3,16 @@
 // the card above the status line (components/UpdateNotification.tsx), the
 // status line's `↑ update`, Settings › versions, and the menu bar item,
 // which hears about it through `app_update_state` (src-tauri/src/tray.rs).
-// Its numbers (0.9.x) are the app's; the hub's (0.23.x) live in versions.ts.
+// The shell keeps whether a new bundle is installed, so a reloaded window
+// picks up where it was. Its numbers (0.9.x) are the app's; the hub's
+// (0.23.x) live in versions.ts.
 
 import { useSyncExternalStore } from "react";
-import type { Update } from "@tauri-apps/plugin-updater";
+import type { DownloadEvent, Update } from "@tauri-apps/plugin-updater";
 
 import { detectOS } from "./platform";
 
-export type UpdatePhase = "idle" | "checking" | "downloading" | "ready" | "installing" | "installed";
+export type UpdatePhase = "idle" | "downloading" | "ready" | "installing" | "installed";
 
 export interface DesktopUpdateState {
   /** This app's version; null until known. */
@@ -18,12 +20,16 @@ export interface DesktopUpdateState {
   /** The newer version the updater offers. */
   available: string | null;
   phase: UpdatePhase;
+  /** A check is running. It never changes `phase` until it has an answer. */
+  checking: boolean;
+  /** Share of the download done, 0–1, when its size is known. */
+  progress: number | null;
   /** The last failure, in words. */
   error: string | null;
   /** "You’re up to date." after a check someone asked for. */
   message: string | null;
   checkedAt: number | null;
-  /** `when I quit` where nothing can install on quit: hidden until the next launch. */
+  /** `when I quit` where nothing can install before it: hidden until next launch. */
   deferred: boolean;
   /** Asked for (status line, Settings): shown even when dismissed. */
   cardOpen: boolean;
@@ -32,6 +38,7 @@ export interface DesktopUpdateState {
 }
 
 const DISMISSED_KEY = "offdesk:desktop-update-dismissed";
+export const RESTART_TO_FINISH = "Installed. Restart Offdesk DEV to finish.";
 
 /** Local midnight after `now`: "until tomorrow". */
 export function startOfNextDay(now: number): number {
@@ -53,10 +60,22 @@ export function cardVisible(state: DesktopUpdateState, now: number): boolean {
 }
 
 /** macOS and Linux replace the app in place and keep running the old one,
- *  so `when I quit` can install now and let the quit finish it. Windows'
- *  installer closes the app, so there it can only wait for the next launch. */
+ *  so `when I quit` can install now and the next start is the new version.
+ *  Windows' installer closes the app, so there it waits for the next launch. */
 export function installsBeforeQuit(os: ReturnType<typeof detectOS>): boolean {
   return os === "macos" || os === "linux";
+}
+
+/** What a finished check does to the state: nothing changes under a card
+ *  that is showing, and an installed bundle stays installed. */
+export function afterCheck(
+  state: Pick<DesktopUpdateState, "phase" | "available">,
+  offered: string | null,
+  downloaded: boolean,
+): "keep" | "none" | "download" {
+  if (state.phase === "installed") return "keep";
+  if (!offered) return "none";
+  return offered === state.available && state.phase === "ready" && downloaded ? "keep" : "download";
 }
 
 function readDismissed(): DesktopUpdateState["dismissed"] {
@@ -72,6 +91,8 @@ let state: DesktopUpdateState = {
   current: null,
   available: null,
   phase: "idle",
+  checking: false,
+  progress: null,
   error: null,
   message: null,
   checkedAt: null,
@@ -93,11 +114,9 @@ const subscribe = (listener: () => void) => {
 export const getDesktopUpdateState = () => state;
 export const useDesktopUpdate = () => useSyncExternalStore(subscribe, getDesktopUpdateState, getDesktopUpdateState);
 
-// The updater's handle on the offered version, whether its bytes are here,
-// and whether any version has replaced the bundle under the running app.
+// The updater's handle on the offered version and whether its bytes are here.
 let pending: Update | null = null;
 let downloaded = false;
-let bundleReplaced = false;
 
 async function dropPending() {
   const old = pending;
@@ -106,14 +125,14 @@ async function dropPending() {
   await old?.close().catch(() => {});
 }
 
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
+}
+
 /** The menu bar item mirrors this: a `restart to update` item and a dot. */
 async function tellShell(version: string | null, installed: boolean) {
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("app_update_state", { version, installed });
-  } catch {
-    /* an older shell has no menu item to update */
-  }
+  await invoke("app_update_state", { version, installed }).catch(() => {});
 }
 
 // Direct __TAURI_INTERNALS__ invoke, as Settings › about does: Metro's
@@ -128,14 +147,30 @@ async function readAppVersion(): Promise<string | null> {
   }
 }
 
+// A reloaded window: the shell knows whether a new bundle is in place.
+let restored: Promise<void> | null = null;
+export function restoreDesktopUpdate(): Promise<void> {
+  restored ??= (async () => {
+    const [current, shell] = await Promise.all([
+      readAppVersion(),
+      invoke<{ version: string | null; installed: boolean }>("app_update_status").catch(() => null),
+    ]);
+    publish({ current: state.current ?? current });
+    if (shell?.installed && shell.version) publish({ phase: "installed", available: shell.version });
+  })();
+  return restored;
+}
+
 // One check (and its download) at a time; whoever comes next waits for it.
 let running: Promise<void> | null = null;
 async function settled() {
+  await restoreDesktopUpdate();
   while (running) await running.catch(() => {});
 }
 
 /** Ask the updater; download what it offers so `restart now` is quick.
- *  `silent` keeps "up to date" and failures out of sight (the launch check). */
+ *  `silent` keeps "up to date" and failures out of sight (the launch and
+ *  periodic checks). What is showing stays as it is while it runs. */
 export async function checkDesktopUpdate({ silent = false }: { silent?: boolean } = {}): Promise<void> {
   await settled();
   if (state.phase === "installing") return;
@@ -146,39 +181,50 @@ export async function checkDesktopUpdate({ silent = false }: { silent?: boolean 
 }
 
 async function check(silent: boolean): Promise<void> {
-  const before = state.phase;
-  publish({ phase: "checking", error: null, message: null });
-  if (!state.current) publish({ current: await readAppVersion() });
-  let update: Update | null = null;
+  publish({ checking: true, error: null, message: null });
   try {
     const updater = await import("@tauri-apps/plugin-updater");
-    update = await updater.check();
+    const update = await updater.check();
     const checkedAt = Date.now();
-    if (!update) {
-      await dropPending();
-      publish({ available: null, phase: "idle", message: silent ? null : "You’re up to date.", checkedAt });
-      void tellShell(null, bundleReplaced);
+    const next = afterCheck(state, update?.version ?? null, downloaded);
+    if (next === "keep") {
+      await update?.close().catch(() => {});
+      publish({ checkedAt });
       return;
     }
-    if (update.version === state.available && (before === "installed" || (before === "ready" && downloaded))) {
-      // Already here; the running app is just still the old one.
-      await update.close().catch(() => {});
-      publish({ phase: before, checkedAt });
+    if (next === "none" || !update) {
+      await dropPending();
+      publish({ available: null, phase: "idle", message: silent ? null : "You’re up to date.", checkedAt });
+      void tellShell(null, false);
       return;
     }
     await dropPending();
     pending = update;
-    publish({ available: update.version, current: update.currentVersion || state.current, phase: "downloading", checkedAt });
-    await update.download();
-    downloaded = true;
-    publish({ phase: "ready" });
-    void tellShell(update.version, bundleReplaced);
+    publish({ available: update.version, current: update.currentVersion || state.current, phase: "downloading", progress: null, checkedAt });
+    await download(update);
+    publish({ phase: "ready", progress: null });
+    void tellShell(update.version, false);
   } catch (error) {
-    // What is already downloaded or installed stays; an offer whose download
-    // failed stands too, and `restart to update` downloads it again.
-    const kept = before === "installed" || (before === "ready" && downloaded) ? before : "idle";
-    publish({ phase: kept, error: silent ? null : `Could not check for updates: ${String(error)}` });
+    // What is downloaded or installed stays; an offer whose download failed
+    // stands too, and `restart to update` downloads it again.
+    if (state.phase === "downloading") publish({ phase: "idle", progress: null });
+    if (!silent) publish({ error: `Could not check for updates: ${String(error)}` });
+  } finally {
+    publish({ checking: false });
   }
+}
+
+async function download(update: Update) {
+  let total = 0;
+  let done = 0;
+  await update.download((event: DownloadEvent) => {
+    if (event.event === "Started") total = event.data.contentLength ?? 0;
+    if (event.event === "Progress" && total > 0) {
+      done += event.data.chunkLength;
+      publish({ progress: Math.min(1, done / total) });
+    }
+  });
+  downloaded = true;
 }
 
 /** Download if needed and install the offered version. False when there
@@ -191,39 +237,47 @@ async function install(): Promise<boolean> {
     // Another installation may already have picked it up.
     if (!pending) {
       publish({ available: null, phase: "idle", message: "You’re up to date." });
-      void tellShell(null, bundleReplaced);
+      void tellShell(null, false);
       return false;
     }
     publish({ available: pending.version });
   }
-  if (!downloaded) {
-    await pending.download();
-    downloaded = true;
-  }
+  if (!downloaded) await download(pending);
   await pending.install();
   // install() released the bytes; the bundle on disk is the new version.
   downloaded = false;
-  bundleReplaced = true;
   await tellShell(pending.version, true);
   return true;
 }
 
-/** `restart now`: install and relaunch. On the hub machine the shell's exit
- *  hook restarts the hub and node onto the new bundled binaries. */
+async function relaunchOrSay() {
+  try {
+    const { relaunch } = await import("@tauri-apps/plugin-process");
+    await relaunch();
+    // Still here: the new version is in place for the next start.
+    publish({ phase: "installed" });
+  } catch {
+    publish({ phase: "installed", error: RESTART_TO_FINISH, cardOpen: true });
+  }
+}
+
+/** `restart now`: install and relaunch. On the hub machine the next launch
+ *  restarts the hub and node onto the new bundled binaries
+ *  (src-tauri/src/bundled_services.rs). */
 export async function restartToUpdate(): Promise<void> {
   await settled();
   if (state.phase === "installing") return;
   const before = state.phase;
   publish({ phase: "installing", error: null, message: null });
-  try {
-    if (before !== "installed" && !(await install())) return;
-    const { relaunch } = await import("@tauri-apps/plugin-process");
-    await relaunch();
-    // Still here: the new version is in place for the next start.
-    publish({ phase: "installed" });
-  } catch (error) {
-    publish({ phase: downloaded ? "ready" : before === "installed" ? "installed" : "idle", error: `Update failed. You can try again: ${String(error)}` });
+  if (before !== "installed") {
+    try {
+      if (!(await install())) return;
+    } catch (error) {
+      publish({ phase: downloaded ? "ready" : "idle", error: `Update failed. You can try again: ${String(error)}` });
+      return;
+    }
   }
+  await relaunchOrSay();
 }
 
 /** `when I quit`: install now where the running app survives it, so the next

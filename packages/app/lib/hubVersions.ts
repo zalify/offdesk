@@ -39,11 +39,23 @@ export function latestRelease(hub: HubAnswer | null): string | null {
   return hub?.kind === "known" ? hub.version.latest : null;
 }
 
+/** What the desktop app ships, on the hub machine (lib/bundledServices.ts). */
+export interface Bundled {
+  hub_version: string | null;
+  node_version: string | null;
+  machine_id: string | null;
+}
+
 /** How many parts are behind: the desktop app (when an update for it is
  *  available), the hub (the interface follows it, so it is not counted
- *  again), and each node. */
-export function partsBehind(appUpdate: string | null, hub: HubAnswer | null, nodes: MachineVersion[] | null): number {
-  return (appUpdate ? 1 : 0) + (hubBehind(hub) ? 1 : 0) + (nodes ?? []).filter((node) => node.update_available).length;
+ *  again), and each node. On the hub machine a bundled part running
+ *  something other than what the app ships counts too. */
+export function partsBehind(appUpdate: string | null, hub: HubAnswer | null, nodes: MachineVersion[] | null, bundled: Bundled | null = null): number {
+  const running = hub?.kind === "known" ? hub.version.hub : null;
+  const hubStale = !!bundled?.hub_version && running !== bundled.hub_version;
+  const nodeStale = (node: MachineVersion) =>
+    !!bundled?.node_version && node.id === bundled.machine_id && node.version !== bundled.node_version;
+  return (appUpdate ? 1 : 0) + (hubBehind(hub) || hubStale ? 1 : 0) + (nodes ?? []).filter((node) => node.update_available || nodeStale(node)).length;
 }
 
 /** The phone panel's warning on a node, or null when the hub is current
@@ -80,6 +92,14 @@ const subscribe = (listener: () => void) => {
 const snapshot = () => state;
 
 let inflight: Promise<void> | null = null;
+// An answer that didn't come is asked for once more, 30 s later.
+let retry: ReturnType<typeof setTimeout> | null = null;
+let retried = false;
+
+/** Nothing came back about the hub or its nodes: worth asking again. */
+export function needsRetry(current: Pick<VersionsState, "hub" | "nodes">): boolean {
+  return current.hub?.kind === "unknown" || (current.hub?.kind === "known" && current.nodes === null);
+}
 
 /** Ask the hub again. Concurrent callers share one round trip. */
 export function refreshVersions(): Promise<void> {
@@ -95,6 +115,14 @@ export function refreshVersions(): Promise<void> {
       checking: false,
       checkedAt: Date.now(),
     });
+    if (!needsRetry(state)) retried = false;
+    else if (!retried && !retry) {
+      retried = true;
+      retry = setTimeout(() => {
+        retry = null;
+        void refreshVersions();
+      }, 30_000);
+    }
   })().finally(() => {
     inflight = null;
   });
@@ -105,6 +133,12 @@ export function refreshVersions(): Promise<void> {
 export function useVersions(): VersionsState {
   useEffect(() => {
     if (state.hub === null) void refreshVersions();
+    // Back at the window after the hub was unreachable: ask again.
+    const focus = () => {
+      if (needsRetry(state)) void refreshVersions();
+    };
+    window.addEventListener("focus", focus);
+    return () => window.removeEventListener("focus", focus);
   }, []);
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
@@ -117,4 +151,23 @@ export function hostOf(address: string): string {
   } catch {
     return address;
   }
+}
+
+/** How a row reads for a part this app bundles (the hub and node on the hub
+ *  machine). Red only when the running part isn't the bundled version — a
+ *  restart that hasn't happened. A newer release that no app ships yet is
+ *  news, not a fault: the latest column shows it in the accent and the part
+ *  comes with the next app update. */
+export function bundledPart(
+  running: string | null,
+  bundled: string | null,
+  updateAvailable: boolean,
+  appUpdate: boolean,
+): { red: boolean; newer: boolean; action: "with the app" | "restarts at next launch" | "comes with the next app update" | "current" } {
+  const red = bundled ? running !== bundled : updateAvailable;
+  const newer = !red && updateAvailable;
+  if (appUpdate) return { red, newer, action: "with the app" };
+  // The app restarts its services onto the bundled binaries at launch.
+  if (red) return { red, newer, action: "restarts at next launch" };
+  return { red, newer, action: newer ? "comes with the next app update" : "current" };
 }

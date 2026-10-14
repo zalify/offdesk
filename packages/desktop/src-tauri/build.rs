@@ -21,6 +21,8 @@ fn main() {
         "ui_ready",
         "ui_recover",
         "app_update_state",
+        "app_update_status",
+        "bundled_services",
         "start_oauth_listener",
         "hub_pair",
         "cloud_action",

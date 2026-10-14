@@ -3,13 +3,15 @@
 // updater (lib/desktopUpdate.ts); the hub's, the interface's and each node's
 // from the hub (lib/versions.ts). The two lines are never compared.
 
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 import { colors } from "@/lib/colors";
 import { checkDesktopUpdate, restartToUpdate, useDesktopUpdate } from "@/lib/desktopUpdate";
-import { desktopRole, isDesktopShell } from "@/lib/desktopHub";
+import { isDesktopShell } from "@/lib/desktopHub";
+import { useBundledServices } from "@/lib/bundledServices";
 import { detectOS } from "@/lib/platform";
 import {
+  bundledPart,
   checkedAgo,
   hubBehind,
   latestRelease,
@@ -24,17 +26,15 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
   const versions = useVersions();
   const update = useDesktopUpdate();
   const desktop = isDesktopShell();
-  const [isHub, setIsHub] = useState(false);
-  useEffect(() => {
-    if (!desktop) return;
-    desktopRole().then((role) => setIsHub(role === "hub")).catch(() => {});
-  }, [desktop]);
+  // On the hub machine, the hub and node services that run from this app.
+  const services = useBundledServices();
+  const bundled = desktop && !!services?.bundled;
 
   const checkNow = () => {
     void refreshVersions();
     if (desktop) void checkDesktopUpdate();
   };
-  const checking = versions.checking || update.phase === "checking" || update.phase === "downloading";
+  const checking = versions.checking || update.checking;
   const latest = latestRelease(versions.hub);
   const hub = hubRunning(versions.hub);
   const thisMachine = detectOS() === "macos" ? "this mac" : "this computer";
@@ -44,6 +44,23 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
       current
     </span>
   );
+  const newer = <span style={{ color: colors.accent }}>↑ {latest}</span>;
+  // A part this app ships, on the hub machine (lib/versions.ts bundledPart).
+  const bundledRow = (running: string | null, shipped: string | null, behind: boolean) => {
+    const row = bundledPart(running, shipped, behind, !!update.available);
+    return {
+      behind: row.red,
+      latest: row.newer ? newer : latest ?? "—",
+      action: row.action === "current" ? (latest ? current : null) : <Quiet>{row.action}</Quiet>,
+    };
+  };
+  const hubRow = bundled
+    ? bundledRow(versions.hub?.kind === "known" ? versions.hub.version.hub : null, services?.hub_version ?? null, hubBehind(versions.hub))
+    : {
+        behind: hubBehind(versions.hub),
+        latest: latest ?? "—",
+        action: hubBehind(versions.hub) ? <Quiet>update on that mac</Quiet> : latest ? current : null,
+      };
 
   return (
     <div data-testid="settings-versions" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -51,7 +68,7 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
         <div style={{ flex: "1 1 240px", fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
           Everything this hub knows about.
           {versions.checkedAt ? ` Checked ${checkedAgo(versions.checkedAt, Date.now())}.` : ""}
-          {desktop && isHub ? " On this Mac the hub and node are bundled with the app and update with it." : ""}
+          {bundled ? " On this Mac the hub and node are bundled with the app and update with it." : ""}
         </div>
         <Button size="sm" kind="secondary" disabled={checking} onClick={checkNow}>
           {checking ? "checking…" : "check now"}
@@ -85,23 +102,29 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
             ) : null}
             <Row
               part="hub"
-              where={desktop && isHub ? `${thisMachine} · bundled` : hubAddress}
+              where={bundled ? `${thisMachine} · bundled` : hubAddress}
               running={hub}
-              behind={hubBehind(versions.hub)}
-              latest={latest ?? "—"}
-              action={desktop && isHub ? <Quiet>with the app</Quiet> : hubBehind(versions.hub) ? <Quiet>update on that mac</Quiet> : latest ? current : null}
+              {...hubRow}
             />
-            {(versions.nodes ?? []).map((node) => (
-              <Row
-                key={node.id}
-                part="node"
-                where={node.name}
-                running={node.version ?? OLDER_THAN_REPORTING}
-                behind={node.update_available}
-                latest={latest ?? "—"}
-                action={node.update_available ? <Quiet>update on that mac</Quiet> : latest ? current : null}
-              />
-            ))}
+            {(versions.nodes ?? []).map((node) => {
+              const local = bundled && node.id === services?.machine_id;
+              const row = local
+                ? bundledRow(node.version, services?.node_version ?? null, node.update_available)
+                : {
+                    behind: node.update_available,
+                    latest: latest ?? "—",
+                    action: node.update_available ? <Quiet>update on that mac</Quiet> : latest ? current : null,
+                  };
+              return (
+                <Row
+                  key={node.id}
+                  part="node"
+                  where={local ? `${node.name} · bundled` : node.name}
+                  running={node.version ?? OLDER_THAN_REPORTING}
+                  {...row}
+                />
+              );
+            })}
             <Row
               part="interface"
               where="served by the hub"
@@ -113,6 +136,7 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
           </tbody>
         </table>
       </div>
+      {services?.error ? <div role="alert" style={{ fontFamily: fontProse, fontSize: 12, color: colors.err, overflowWrap: "anywhere" }}>{services.error}</div> : null}
       {update.error ? <div role="alert" style={{ fontFamily: fontProse, fontSize: 12, color: colors.err, overflowWrap: "anywhere" }}>{update.error}</div> : null}
     </div>
   );
@@ -132,7 +156,7 @@ function Row({ part, where, running, behind, latest, action }: {
   where: string;
   running: string;
   behind: boolean;
-  latest: string;
+  latest: ReactNode;
   action: ReactNode;
 }) {
   return (

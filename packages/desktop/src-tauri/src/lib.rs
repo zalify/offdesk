@@ -1,5 +1,7 @@
 #[cfg(desktop)]
 mod app_update;
+#[cfg(desktop)]
+mod bundled_services;
 // Pure enough to build and test everywhere, even though only the mobile
 // app has a hub address to parse.
 #[allow(dead_code)]
@@ -109,17 +111,8 @@ pub fn run() {
             let _ = app;
             Ok(())
         })
-        .build(context)
-        .expect("error while building tauri application")
-        .run(|app, event| {
-            // Quitting (or restarting into an update) finishes what the
-            // update started on the hub machine; see app_update.rs.
-            #[cfg(desktop)]
-            if let tauri::RunEvent::Exit = event {
-                app_update::on_exit(app);
-            }
-            let _ = (app, event);
-        });
+        .run(context)
+        .expect("error while running tauri application");
 }
 
 #[cfg(desktop)]
@@ -132,8 +125,11 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
         .register_asynchronous_uri_scheme_protocol(file_preview::SCHEME, file_preview::protocol)
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_update::AppUpdate::default())
+        .manage(bundled_services::BundledServices::default())
         .invoke_handler(tauri::generate_handler![
             app_update::app_update_state,
+            app_update::app_update_status,
+            bundled_services::bundled_services,
             ui_updates::ui_status,
             ui_updates::ui_check,
             ui_updates::ui_ready,
@@ -189,6 +185,9 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
 #[cfg(desktop)]
 fn setup_desktop(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     tray::setup_tray(app.handle())?;
+    // An app update leaves the hub and node services on the old binaries
+    // until they restart; catch them up, off the main thread.
+    bundled_services::reconcile(app.handle());
 
     if let Some(window) = app.get_webview_window("main") {
         let window_clone = window.clone();

@@ -56,7 +56,9 @@
     "allow-ui-check",
     "allow-ui-ready",
     "allow-ui-recover",
-    "allow-app-update-state"
+    "allow-app-update-state",
+    "allow-app-update-status",
+    "allow-bundled-services"
   ],
   "local": true
 }

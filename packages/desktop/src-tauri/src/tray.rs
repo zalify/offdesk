@@ -166,16 +166,9 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = crate::ui_updates::ui_recover(app.clone());
                 show_window(app);
             }
-            // Installed already: restarting is all that is left, and the
-            // exit hook moves the hub and node over. Otherwise the window
-            // installs it, the same as its `restart now`.
-            "restart-to-update" => {
-                if crate::app_update::installed(app) {
-                    app.request_restart();
-                } else {
-                    show_and_emit(app, "offdesk://restart-to-update");
-                }
-            }
+            // Natively, so it works whatever the window shows (or whether
+            // it has loaded at all).
+            "restart-to-update" => crate::app_update::restart_to_update(app),
             "quit" => app.exit(0),
             _ => {}
         })

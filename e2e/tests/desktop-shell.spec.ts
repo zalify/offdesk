@@ -18,8 +18,16 @@ async function desktopBridge(page: Page, role: "client" | "hub" | null = "client
           return callbackId;
         },
         unregisterCallback: (id: number) => callbacks.delete(id),
-        invoke: async (command: string, args?: { role?: "client" | "hub"; handler?: number; baseUrl?: string; action?: string }) => {
+        invoke: async (command: string, args?: { role?: "client" | "hub"; handler?: number; baseUrl?: string; action?: string; version?: string | null; installed?: boolean }) => {
           state.calls.push(command);
+          // The shell's update flag outlives a reload of the window (app_update.rs).
+          if (command === "app_update_state") {
+            const previous = JSON.parse(sessionStorage.getItem("__appUpdate") ?? "{}");
+            sessionStorage.setItem("__appUpdate", JSON.stringify({ version: args?.version ?? null, installed: !!(previous.installed || args?.installed) }));
+            return;
+          }
+          if (command === "app_update_status") return JSON.parse(sessionStorage.getItem("__appUpdate") ?? '{"version":null,"installed":false}');
+          if (command === "bundled_services") return (window as any).__bundledServices ?? { done: true, bundled: false, hub_version: null, node_version: null, machine_id: null, restarted: [], error: null };
           if (command === "cloud_action") {
             const action = args?.action ?? "status"; state.cloudActions.push(action);
             if (state.cloudError) throw new Error(state.cloudError);
@@ -120,7 +128,7 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await page.screenshot({ path: testInfo.outputPath("desktop-settings-versions-dark.png") });
   await page.evaluate(() => { (window as any).__desktopTest.calls = []; });
   await versions.getByRole("button", { name: "restart to update" }).click();
-  // Installs, tells the menu bar (whose exit hook restarts a bundled hub), relaunches.
+  // Installs, tells the shell (menu bar item, sticky installed flag), relaunches.
   await expect.poll(() => page.evaluate(() => (window as any).__desktopTest.calls.filter((call: string) => ["plugin:updater|install", "app_update_state", "plugin:process|restart"].includes(call))))
     .toEqual(["plugin:updater|install", "app_update_state", "plugin:process|restart"]);
 
@@ -141,10 +149,11 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await page.getByTestId("workspace-manager-close").click();
   await page.getByTestId("tab-bar-phone").click();
   await expect(page.getByTestId("phone-dialog")).toBeVisible();
-  // A node's phone panel (U03): pair on the hub; the browser code is a fallback.
+  // A client's phone panel (U03): pair on the hub; the browser code is a fallback.
+  await expect(page.getByTestId("phone-dialog")).toContainText("This computer connects to the hub on hub. Only the hub makes pairing codes.");
   await expect(page.getByRole("region", { name: "Pair on the hub" })).toContainText("Pair your phone on hub");
   await expect(page.getByRole("link", { name: "iPhone · TestFlight" })).toHaveCount(0);
-  await page.screenshot({ path: testInfo.outputPath("desktop-phone-node-dark.png") });
+  await page.screenshot({ path: testInfo.outputPath("desktop-phone-client-dark.png") });
   await page.getByRole("button", { name: "show browser code" }).click();
   await expect(page.getByRole("link", { name: "iPhone · TestFlight" })).toHaveAttribute("href", "https://testflight.apple.com/join/rV4ktaGv");
   await page.screenshot({ path: testInfo.outputPath("desktop-phone-dark.png") });
@@ -154,12 +163,42 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await page.reload();
   await expect(page.getByTestId("tab-bar")).toBeVisible();
   await expect(page.locator("html")).toHaveCSS("color-scheme", "dark");
+  // Installed before the reload: still installed, not offered or downloaded again.
+  await expect(page.getByTestId("status-update")).toContainText("0.5.4");
+  await expect(page.getByTestId("desktop-update-toast")).toHaveCount(0);
+  await page.getByTestId("status-update").click();
+  await expect(page.getByTestId("desktop-update-toast")).toContainText("Installed. It takes over the next time Offdesk DEV starts.");
+  await page.getByTestId("desktop-update-toast").getByRole("button", { name: "Dismiss until tomorrow" }).click();
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls.includes("plugin:updater|download"))).toBe(false);
   await page.setViewportSize({ width: 1200, height: 800 });
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Paper theme", exact: true }).click();
   await page.getByTitle("Back", { exact: true }).click();
   await page.screenshot({ path: testInfo.outputPath("desktop-workbench-light.png") });
   expect(pageErrors).toEqual([]);
+});
+
+test("on the hub machine, versions read the bundled hub against what runs and say when a restart failed", async ({ page }, testInfo) => {
+  await desktopBridge(page, "hub");
+  const hubVersion = await (await page.request.get("/api/version")).json();
+  await page.addInitScript((running) => {
+    // The bundle ships something other than what runs: a restart that failed.
+    (window as any).__bundledServices = { done: true, bundled: true, hub_version: `${running}-next`, node_version: null, machine_id: "e2e-node", restarted: [], error: "couldn't restart the hub: Operation not permitted" };
+  }, hubVersion.hub);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await openApp(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const versions = page.getByTestId("settings-versions");
+  const hubRow = versions.getByRole("row").filter({ hasText: /^hub/ });
+  await expect(hubRow).toContainText("· bundled");
+  await expect(hubRow).toContainText("restarts at next launch");
+  await expect(versions.getByRole("row").filter({ hasText: "e2e-machine · bundled" })).toBeVisible();
+  await expect(versions.getByRole("alert")).toHaveText("couldn't restart the hub: Operation not permitted");
+  await expect(versions).toContainText("On this Mac the hub and node are bundled with the app and update with it.");
+  await expect(page.getByRole("button", { name: "Versions, 1 behind" })).toBeVisible();
+  await page.getByRole("button", { name: "Versions, 1 behind" }).click();
+  await expect(versions).toBeInViewport({ ratio: 0.5 });
+  await page.screenshot({ path: testInfo.outputPath("desktop-settings-versions-hub.png") });
 });
 
 test("changing the desktop hub drops the previous hub login", async ({ page }) => {

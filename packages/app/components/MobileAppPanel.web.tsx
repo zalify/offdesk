@@ -7,7 +7,6 @@ import { getAuthProviders, mintLoginCode } from "@/lib/api";
 import { colors } from "@/lib/colors";
 import { desktopRole, isDesktopShell } from "@/lib/desktopHub";
 import { getServerUrl } from "@/lib/serverUrl";
-import { detectOS } from "@/lib/platform";
 import { openSettings } from "@/lib/openSettings";
 import { hostOf, hubWarning, useVersions } from "@/lib/hubVersions";
 import { HubPhoneCode } from "./DesktopSetup.web";
@@ -19,8 +18,8 @@ import { Button, fontDisplay, fontProse, TextButton } from "./Primitives.web";
  *
  * Shown on the onboarding page — where someone setting up a hub actually is —
  * and in Settings, which is where they will look for it later. The desktop
- * app on a node sends the phone to the hub instead (wireframe U03): only the
- * hub makes encrypted pairing codes, and the browser code is the fallback.
+ * app on a client sends the phone to the hub instead (wireframe U03): only
+ * the hub makes encrypted pairing codes, and the browser code is the fallback.
  */
 export function MobileAppPanel() {
   // The desktop app on the machine that is the hub has the hub's own code,
@@ -107,7 +106,7 @@ export function MobileAppPanel() {
   if (isHub) return <HubPhoneCode />;
 
   // A browser on the phone, signed in by scanning: the whole panel in a
-  // browser, the fallback on a node's desktop app.
+  // browser, the fallback on a client's desktop app.
   const browserCode = (
     <div>
       <div
@@ -229,15 +228,15 @@ export function MobileAppPanel() {
     </div>
   );
 
-  if (isDesktopShell()) return <NodePhonePanel browserCode={isSecureConnection() ? null : browserCode} />;
+  if (isDesktopShell()) return <ClientPhonePanel browserCode={isSecureConnection() ? null : browserCode} />;
   if (isSecureConnection()) return <p style={{ color: colors.foregroundMuted, fontSize: 13 }}>To pair another encrypted App, create a new pairing code on the Hub’s own screen.</p>;
   return browserCode;
 }
 
-/** The desktop app on a node (wireframe U03): the phone pairs on the hub,
+/** The desktop app on a client (wireframe U03): the phone pairs on the hub,
  *  with a warning when that hub is behind, and the browser code demoted to
  *  a fallback behind a button. */
-function NodePhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
+function ClientPhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
   const versions = useVersions();
   const [showBrowserCode, setShowBrowserCode] = useState(false);
   const address = secureConnectionStatus()?.endpoint.hub_url || getServerUrl() || (typeof window === "undefined" ? "" : window.location.origin);
@@ -261,9 +260,9 @@ function NodePhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
   const shownAddress = address.replace(/^[a-z]+:\/\//i, "").replace(/\/+$/, "");
 
   return (
-    <div data-testid="node-phone-panel" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+    <div data-testid="client-phone-panel" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
-        This {detectOS() === "macos" ? "Mac" : "computer"} is a node. Your phone pairs with the hub, and only the hub makes pairing codes.
+        This computer connects to the hub on {hubName}. Only the hub makes pairing codes.
       </div>
       <section aria-label="Pair on the hub" style={{ boxSizing: "border-box", padding: 24, display: "flex", flexWrap: "wrap", gap: "20px 32px", alignItems: "center", background: colors.bg1, border: `1px solid ${colors.line}`, borderRadius: 6 }}>
         <div style={{ flex: "1 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
@@ -280,7 +279,7 @@ function NodePhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
         </div>
       </section>
       {warning ? (
-        <div data-testid="node-phone-hub-behind" style={{ boxSizing: "border-box", padding: "14px 16px", display: "flex", gap: 12, alignItems: "center", background: colors.bg1, border: `1px solid ${colors.err}`, borderRadius: 6 }}>
+        <div data-testid="client-phone-hub-behind" style={{ boxSizing: "border-box", padding: "14px 16px", display: "flex", gap: 12, alignItems: "center", background: colors.bg1, border: `1px solid ${colors.err}`, borderRadius: 6 }}>
           <span aria-hidden="true" style={{ color: colors.err, fontFamily: fontDisplay, fontSize: 13, fontWeight: 600 }}>!</span>
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg0 }}>{warning}</span>
