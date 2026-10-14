@@ -49,7 +49,7 @@ Bridge protocol version 1 supports `macos`, `windows`, `linux`, `android` and
 `ios`: the shell checks manifests against its own OS name, and releases list all
 five. Windows and Linux builds have carried the public key since the updater
 shipped, so they take Web UI releases as soon as a manifest names them. iOS
-builds carry it from 0.9.1; earlier iOS builds keep their bundled UI. On iOS
+builds carry it from 0.9.2 (0.9.1 was built without it: Xcode runs cargo outside the job's environment, so the workflow now writes the key into cargo's config and checks the IPA for it); earlier iOS builds keep their bundled UI. On iOS
 the downloaded code is web content running in WebKit, as App Review allows for
 an app whose purpose it does not change. New native
 capabilities require a new shell and a compatibility change; shipping Web UI
