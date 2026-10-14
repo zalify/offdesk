@@ -9,6 +9,7 @@ mod mode;
 mod registration;
 mod settings;
 mod terminals;
+mod version;
 
 use axum::Router;
 
@@ -28,4 +29,5 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(mode::router())
         .merge(settings::router())
+        .merge(version::router())
 }

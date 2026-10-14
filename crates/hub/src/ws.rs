@@ -831,6 +831,7 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
                     os,
                     home_dir,
                     capabilities,
+                    version,
                 }) => {
                     let machine_owner =
                         match authenticate_machine(&state, &machine_id, &machine_secret).await {
@@ -894,6 +895,7 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
                         .manager
                         .register_machine_with_capabilities(info, machine_owner, capabilities)
                         .await;
+                    state.manager.set_machine_version(&machine_id, version).await;
                     tracing::info!("Machine {} registered (conn={})", machine_id, &conn_id[..8]);
 
                     // Spawn task to forward commands from Hub to Machine

@@ -181,6 +181,7 @@ impl HubConnection {
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
             ],
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
         let msg = serde_json::to_string(&register).unwrap();
         ws_tx

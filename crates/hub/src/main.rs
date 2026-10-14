@@ -16,6 +16,7 @@ mod embedded_ui;
 pub mod db;
 mod machine_manager;
 mod routes;
+mod versions;
 mod ws;
 mod web_preview;
 
