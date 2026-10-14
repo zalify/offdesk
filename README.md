@@ -5,13 +5,35 @@
   </picture>
 </p>
 
-# Offdesk — self-hosted remote terminal for tmux and AI coding agents
+<p align="center">
+  <img src="docs/media/hero-banner.png" alt="One terminal, shared by you and your agents. Any program in tmux, on all your machines, behind one hub you run." width="800">
+</p>
+
+<p align="center">
+  <b>English</b> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="README.de.md">Deutsch</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.es.md">Español</a>
+</p>
+
+# Offdesk DEV — self-hosted remote terminal for tmux and AI coding agents
+
+**One terminal, shared by you and your agents.** Agents open, type into and
+read terminals through the `offdesk` CLI; you watch the same terminals from
+your phone and take the keyboard when they need you.
 
 Access **Claude Code, Codex, OpenCode, or any terminal program** from a browser,
 iPhone, Android phone, or desktop app. Offdesk connects clients to persistent
 **tmux sessions** on your own macOS and Linux machines through one self-hosted
 Hub. Commands run on the remote machine; clients stream terminal input and
 output over WebSocket connections.
+
+The app installs as **Offdesk DEV**; this README calls the project Offdesk for
+short. The command-line tools keep the `offdesk` name: the `offdesk` CLI, the
+`offdesk-hub` server and the `offdesk-node` machine agent.
 
 Use it to check an AI coding agent from your phone, resume a shell after a
 network disconnect, or manage terminals on a Mac, Linux server, NAS, and VPS
@@ -21,12 +43,15 @@ from one interface. The machines running your Hub and sessions must stay online.
   interactive CLIs, editors, build output, and shell history.
 - **Multiple machines behind one Hub:** each `offdesk-node` connects outbound
   to the Hub; nodes need no inbound port or public IP.
-- **Mobile terminal controls:** customizable shortcut keys, Shift+Tab, Shift
-  combinations, Backspace repeat, file attachments, and encrypted App pairing
-  via QR code. Arrows, Enter and the keyboard toggle stay fixed. Tap the task
-  title to switch sessions, or the monitor icon to open Machines & Hub.
+- **Mobile terminal controls:** a key bar laid out as an even grid, with
+  customizable shortcut keys, Shift+Tab, Shift combinations and Backspace
+  repeat; the arrows, Enter and the keyboard toggle stay fixed. File
+  attachments, and encrypted App pairing via QR code. Tap the terminal's name
+  in the title bar to switch sessions; `[f]`, `[b]` and `[m]` beside it open
+  files, the agent browser, and Machines & Hub.
 - **CLI automation:** open a terminal, send input, wait for output, and read
-  results with `offdesk open / send / wait / read` and JSON output.
+  results with `offdesk open / send / wait / read` and JSON output. Terminals
+  an agent opened are marked as such in the apps.
 - **Self-hosted deployment:** Rust binaries or Docker on macOS/Linux, with
   SQLite storage and the web UI embedded in the Hub binary.
 - **Encrypted App connections:** end-to-end encryption between paired Apps
@@ -69,6 +94,8 @@ Linux can also host a Hub with tmux installed separately.
   machine as a page in the desktop or Android app
 - [Customize terminal keys](docs/terminal-keys.md): key placement, Shift combinations
   and backward deletion without reopening the system keyboard
+- [Agent browser](docs/agent-browser.md): a headless Chromium on a machine that
+  agents drive with `offdesk browser`, and hand to you when they need a person
 - [Build from source](docs/building.md) · [Security model](SECURITY.md)
 - [Release notes and version history](https://github.com/zalify/offdesk/releases)
 
@@ -83,11 +110,12 @@ machine you want to reach.
 
 **On a Mac:** download the app from [offdesk.dev/mac](https://offdesk.dev/mac)
 (signed and notarized, one dmg for Apple silicon and Intel). Open it and it
-asks one question: is this the machine that stays on? Say yes and it installs
-the hub, the node and tmux as services that run at login and restart if they
-stop, registers this machine, and shows the code your phone scans. The app
-stays in the menu bar, where the code, the address and **Add a machine** live.
-Say no and it is a client of a hub somewhere else, like the phone.
+asks one question: which machine is this? Choose **The one that stays on** and
+it installs the hub, the node and tmux as services that run at login and
+restart if they stop, registers this machine, and shows the code your phone
+scans. The app stays in the menu bar, where the phone code, the hub address and
+**Add a machine** live. Choose **Just connecting** and it is a client of a hub
+somewhere else, like the phone.
 
 **On a NAS, a VPS, or anything without a screen:**
 
@@ -103,12 +131,12 @@ stops, registers this machine with it, and prints a link that signs you in:
 ```
   offdesk is running at http://192.168.1.10:4317
   data: /Users/you/Library/Application Support/offdesk
-  It starts at login and restarts if it stops.
+  It starts at login and restarts if it stops. Logs: ~/Library/Logs/offdesk/offdesk-hub.stdout.log
 
   This machine is registered as "studio" and its node runs as a service
   too, so the first terminal you open is a shell right here.
 
-  Scan this with your phone's camera, or open the link:
+  Scan this with your phone's camera (good for 15 minutes), or open the link:
 
     █▀▀▀▀▀█ ▀▄█ ▄ █▀▀▀▀▀█
     …
@@ -285,12 +313,22 @@ already reach the hub's address.
 ## On your phone
 
 The browser is the whole client. Open the hub's URL and you are there, on
-any phone. A full terminal with a key bar for Ctrl, Esc and the arrows,
-because agents ask questions and builds need a Ctrl-C.
+any phone. A full terminal with a key bar for Ctrl-C, Esc, Tab and the
+arrows, because agents ask questions and builds need a Ctrl-C. The keys form
+an even grid: `↑` sits above `↓`, and the arrows, Enter and the keyboard
+toggle never move. The rest can be rearranged in Settings
+([customize terminal keys](docs/terminal-keys.md)).
 
-A waiting banner lists detected Claude/Codex confirmation requests in other
-terminals. Open a request by its name, or use its Enter button to confirm the
-currently selected option while keeping your current view. See
+The title bar shows the terminal you are in, its machine, and whether you are
+in control or watching. Tap the terminal's name for the session switcher,
+where new terminals start too. Beside it, `[f]` opens the machine's files
+(from the `[m]` menu on the narrowest phones), `[b]` the agent browser, and
+`[m]` Machines & Hub.
+
+When Claude Code or Codex in another terminal asks for a confirmation, a strip
+under the title bar lists it. Tap a terminal to open it, or its `[enter]` to
+confirm the currently selected option while keeping your current view. The
+terminal you are in gets a waiting card above the keys instead. See
 [terminal attention and input behavior](docs/terminal-attention.md) for detection
 limits and which components need updating.
 
@@ -313,9 +351,11 @@ Three packaged clients also ship:
   be typed, and the sign-in link pasted.
 - **Desktop** — macOS ([offdesk.dev/mac](https://offdesk.dev/mac), signed
   and notarized), Windows ([/windows](https://offdesk.dev/windows)) and Linux
-  ([/linux](https://offdesk.dev/linux)), with an auto-updater. On a Mac it can
-  be the hub — see Install; on Windows and Linux it is a client, and asks for
-  the hub's link. Built from `desktop-v*` tags.
+  ([/linux](https://offdesk.dev/linux)), with an auto-updater. tmux-style tabs,
+  pane headers that show who opened a terminal, and a status line that shows
+  a terminal waiting on you. On a Mac it can be the hub — see
+  [Install](#install); on Windows and Linux it is a client, and asks for the
+  hub's link. Built from `desktop-v*` tags.
 
 To build any of them yourself: [docs/building.md](docs/building.md).
 
@@ -384,10 +424,11 @@ offdesk layout rotate --group <name|cwd:path> [--machine <id>] [--json]
                                                 # flip every split between side-by-side and stacked
 offdesk browser open [URL] [--machine M] [--json]   # open a node's headless Chromium tab; prints its id
 offdesk browser ls [--machine M] [--json]           # list agent browsers
-offdesk browser goto|snapshot|click|fill|press|wait|screenshot|close <browser> ...
+offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|close <browser> ...
                                                 # drive it; see docs/agent-browser.md
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # ask a person for help
-offdesk browser wait-control <browser>          # block while a person controls it (exit 3 = refused)
+offdesk browser wait-control <browser>          # block while a person controls it (exit 1 on timeout)
+offdesk browser take <browser> --reason "..." [--force]   # take control back from a person
 offdesk mcp                                     # the agent browser as MCP tools over stdio: claude mcp add offdesk -- offdesk mcp
 offdesk fetch <path>... [--plain]               # print click-to-download links (OSC 8) for files/folders on this machine; max 20 MiB per file; no hub token needed
 offdesk link [--no-open]                        # open the hub in a browser; on the hub's machine, the sign-in link + code
@@ -399,7 +440,8 @@ offdesk link [--no-open]                        # open the hub in a browser; on 
   `ls`, named by `--label` or else the API token's name, so you can tell them
   from your own. Terminals opened in an app are not marked.
 - Exit codes: `0` success or wait condition met · `1` wait timed out ·
-  `2` usage/config/network error. `--json` on every command that prints.
+  `2` usage/config/network error · `3` an agent browser command was refused
+  because a person controls the browser. `--json` on every command that prints.
 - `--lines N` means "the last N rendered lines of the current screen" (after
   trailing blank lines are trimmed) in both text and JSON mode; JSON also
   reports `lines_total` (pre-slice count) and `truncated`.
