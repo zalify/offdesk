@@ -115,7 +115,9 @@ pub fn verify(
     {
         return Err("UI release is incompatible with this shell".into());
     }
-    // A signed manifest can select only immutable assets in the official repository.
+    // A signed manifest can select only Web UI assets in the official repository
+    // (`ui-<channel>/bundle-<version>.json`; older releases used `ui-<version>/bundle.json`).
+    // Bundle names are never reused, and the signed sha256 pins the bytes.
     if !manifest
         .url
         .starts_with("https://github.com/zalify/offdesk/releases/download/ui-")

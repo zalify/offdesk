@@ -1,6 +1,7 @@
 // P02 on iPhone: the app comes from TestFlight, which has no in-app check, so
-// the newest build is read off the repo's `ios-v*` GitHub releases (the
-// release workflow publishes one per TestFlight build). A release counts once
+// the newest build is read off the repo's GitHub releases: one `vX.Y.Z` per
+// version from 0.23.0 (with every component, the .ipa among them), `ios-vX.Y.Z`
+// before that. Each holds the build sent to TestFlight. A release counts once
 // it is a day old: TestFlight's external testers get a build only after Beta
 // App Review, which lags the GitHub release. At most one request a day,
 // cached in localStorage; "later" holds the card back for a day too.
@@ -27,22 +28,26 @@ export interface IosUpdateCache {
 /** How long a release waits before it is offered (see the top). */
 export const IOS_RELEASE_SETTLE_MS = 24 * 60 * 60 * 1000;
 
-/** The newest published `ios-vX.Y.Z` in a GitHub releases listing that is at
- * least a day old at `now`. Drafts, pre-releases and other tags (app-v,
- * desktop-v, v, ui-stable) are not iOS builds people can install. */
+/** The newest published iOS build in a GitHub releases listing that is at
+ * least a day old at `now`: a `vX.Y.Z` release with an .ipa, or an older
+ * `ios-vX.Y.Z`. Drafts, pre-releases, other tags (app-v, desktop-v, ui-stable)
+ * and Hub-only `v` releases (before 0.23.0) are not iOS builds. */
 export function newestIosVersion(releases: unknown, now: number): string | null {
   if (!Array.isArray(releases)) return null;
   let newest: string | null = null;
   for (const release of releases) {
     if (!release || typeof release !== "object") continue;
-    const { tag_name: tag, draft, prerelease, published_at: publishedAt } =
-      release as { tag_name?: unknown; draft?: unknown; prerelease?: unknown; published_at?: unknown };
+    const { tag_name: tag, draft, prerelease, published_at: publishedAt, assets } =
+      release as { tag_name?: unknown; draft?: unknown; prerelease?: unknown; published_at?: unknown; assets?: unknown };
     if (draft || prerelease || typeof tag !== "string") continue;
     const published = typeof publishedAt === "string" ? Date.parse(publishedAt) : NaN;
     if (!(now - published >= IOS_RELEASE_SETTLE_MS)) continue;
-    const match = /^ios-v(\d+\.\d+\.\d+)$/.exec(tag);
+    const match = /^(ios-)?v(\d+\.\d+\.\d+)$/.exec(tag);
     if (!match) continue;
-    if (newest === null || (compareVersions(match[1], newest) ?? 0) > 0) newest = match[1];
+    const hasIpa = Array.isArray(assets) && assets.some((asset) =>
+      typeof (asset as { name?: unknown })?.name === "string" && (asset as { name: string }).name.endsWith(".ipa"));
+    if (!match[1] && !hasIpa) continue;
+    if (newest === null || (compareVersions(match[2], newest) ?? 0) > 0) newest = match[2];
   }
   return newest;
 }

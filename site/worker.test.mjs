@@ -133,3 +133,22 @@ test("downloads still resolve once the app is named Offdesk DEV (GitHub turns th
   assert.match(desktopTarget(renamed, "windows"), /Offdesk\.DEV_0\.7\.12_x64_en-US\.msi$/);
   assert.match(desktopTarget(renamed, "linux"), /Offdesk\.DEV_0\.7\.12_amd64\.AppImage$/);
 });
+
+test("from 0.23.0 one release carries everything, and it wins over its transitional app-v copy", () => {
+  const url = (tag, name) => `https://github.com/zalify/offdesk/releases/download/${tag}/${name}`;
+  const files = (tag, version) => [
+    `offdesk-hub-linux-x64`, `offdesk-${version}-arm64-v8a.apk`, `offdesk-${version}-universal.apk`,
+    `Offdesk.DEV_${version}_universal.dmg`, `Offdesk.DEV_${version}_x64_en-US.msi`, `Offdesk.DEV_${version}_amd64.AppImage`,
+  ].map((name) => ({ name, browser_download_url: url(tag, name) }));
+  const unified = { tag_name: "v0.23.0", html_url: "https://github.com/zalify/offdesk/releases/tag/v0.23.0", assets: files("v0.23.0", "0.23.0") };
+  const copy = { tag_name: "app-v0.23.0", html_url: "copy", assets: files("app-v0.23.0", "0.23.0").filter((a) => a.name.endsWith(".apk")) };
+  // The Hub's own v0.22.0 carries neither, so it is never a download.
+  const hubOnly = { tag_name: "v0.22.0", html_url: "hub", assets: [{ name: "offdesk-hub-linux-x64", browser_download_url: "hub" }] };
+  const listing = [hubOnly, copy, unified, ...releases];
+  assert.equal(newestAppRelease(listing).tag_name, "v0.23.0");
+  assert.equal(newestAppRelease([copy, unified]).tag_name, "v0.23.0");
+  assert.match(apkTarget(listing, "arm64-v8a"), /\/v0\.23\.0\/offdesk-0\.23\.0-arm64-v8a\.apk$/);
+  assert.match(desktopTarget(listing, "mac"), /\/v0\.23\.0\/Offdesk\.DEV_0\.23\.0_universal\.dmg$/);
+  assert.equal(desktopTarget(listing, "release"), unified.html_url);
+  assert.equal(newestAppRelease([hubOnly, ...releases]).tag_name, "app-v0.4.2");
+});
