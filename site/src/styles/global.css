@@ -23,6 +23,24 @@
     Menlo, Consolas, monospace;
 }
 
+/* Geist has no CJK glyphs. Each language names its own system fonts after
+   Geist, so Latin words keep Geist and the rest gets a font drawn for that
+   script (a Chinese font draws kanji differently from a Japanese one).
+   :lang() matches the page's <html lang> and any element with its own lang,
+   like the names in the language menu. */
+:lang(zh) {
+  --font-sans: "Geist Variable", "Geist", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Noto Sans SC", monospace;
+}
+:lang(ja) {
+  --font-sans: "Geist Variable", "Geist", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Hiragino Sans", "Yu Gothic UI", "Meiryo", "Noto Sans CJK JP", "Noto Sans JP", monospace;
+}
+:lang(ko) {
+  --font-sans: "Geist Variable", "Geist", "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans KR", sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, "Apple SD Gothic Neo", "Malgun Gothic", "Noto Sans CJK KR", "Noto Sans KR", monospace;
+}
+
 @layer base {
   html {
     scroll-behavior: smooth;
@@ -179,4 +197,40 @@
   .doc td {
     @apply text-muted;
   }
+}
+
+/* Per-language typesetting. Unlayered, so it wins over the component
+   classes above (.display and .h2 set their own tracking). */
+/* Tight negative tracking suits Geist's Latin, not CJK glyphs. */
+:lang(zh) :is(.display, .h2, .h3, .doc h2, .doc h3),
+:lang(ja) :is(.display, .h2, .h3, .doc h2, .doc h3),
+:lang(ko) :is(.display, .h2, .h3, .doc h2, .doc h3) {
+  letter-spacing: 0;
+}
+/* Japanese: break headings between phrases, not mid-word. Korean: keep
+   words whole, as Korean text wraps at spaces. */
+:lang(ja) :is(.display, .h2, .h3, .doc h2, .doc h3) {
+  word-break: auto-phrase;
+}
+:lang(ko) {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+/* German, French and Spanish words run long. Body text hyphenates; headings
+   and the mono chrome wrap at spaces and only break a word that cannot fit
+   a phone screen at all. */
+:lang(de),
+:lang(fr),
+:lang(es) {
+  overflow-wrap: break-word;
+}
+:lang(de) :is(.prose-lead, .prose-body, .doc p, .doc li, .doc td, figcaption),
+:lang(fr) :is(.prose-lead, .prose-body, .doc p, .doc li, .doc td, figcaption),
+:lang(es) :is(.prose-lead, .prose-body, .doc p, .doc li, .doc td, figcaption) {
+  hyphens: auto;
+}
+:lang(de) :is(.prose-lead, .prose-body, .doc p, .doc li) :is(code, .inline-code),
+:lang(fr) :is(.prose-lead, .prose-body, .doc p, .doc li) :is(code, .inline-code),
+:lang(es) :is(.prose-lead, .prose-body, .doc p, .doc li) :is(code, .inline-code) {
+  hyphens: manual;
 }
