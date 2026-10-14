@@ -1,8 +1,8 @@
 # Independent Web UI releases
 
-Android and macOS still use the existing Tauri WebView, local origin, encrypted
-transport and native commands. A compatible shell can download a signed Web UI
-release independently of APK/App updates. Frontend changes still require a Web
+Every app — macOS, Windows, Linux, Android and iOS — keeps its Tauri WebView,
+local origin, encrypted transport and native commands. A compatible shell can
+download a signed Web UI release independently of APK/App updates. Frontend changes still require a Web
 build, but no Rust/Gradle build, Apple notarization or user installation.
 
 ## Runtime behavior
@@ -45,7 +45,13 @@ builds do not run the updater. The RC native workflows read the public key from
 the repository variable `OFFDESK_UI_PUBLIC_KEY` and explicitly select `rc`.
 The private key is never built into the app or passed to native build jobs.
 
-Bridge protocol version 1 currently supports `macos` and `android`. New native
+Bridge protocol version 1 supports `macos`, `windows`, `linux`, `android` and
+`ios`: the shell checks manifests against its own OS name, and releases list all
+five. Windows and Linux builds have carried the public key since the updater
+shipped, so they take Web UI releases as soon as a manifest names them. iOS
+builds carry it from 0.9.1; earlier iOS builds keep their bundled UI. On iOS
+the downloaded code is web content running in WebKit, as App Review allows for
+an app whose purpose it does not change. New native
 capabilities require a new shell and a compatibility change; shipping Web UI
 cannot add Rust commands, platform permissions or native plugins. A new Hub API
 still requires a compatible Hub. Check those API capabilities before exposing
@@ -96,8 +102,11 @@ recovery, never delete pairing data to repair UI state.
 - `E2E_TEST_GREP='UI updates' pnpm e2e:test` locally; `pnpm e2e:ci` in automation.
   Browser processes run in the `runner` container. No host Chromium is needed.
 - `Web UI native smoke` uses ephemeral signing keys on disposable CI machines.
-  A single macOS app and a single Android APK each render UI A, render UI B, then
-  load an intentionally broken UI and automatically return to B. The native
+  A single macOS, Windows and Linux app (`scripts/ui-updates/desktop-smoke.py`;
+  Linux under a virtual display) and a single Android APK each render UI A,
+  render UI B, then load an intentionally broken UI and automatically return to
+  B. iOS has no CI smoke yet: check a TestFlight build by hand (Settings → About
+  shows the interface version) before the first stable Web UI it should take. The native
   readiness write proves the downloaded React UI reached its bridge; fixture
   staging alone is not considered success. The Android run also preserves a
   damaged pairing marker through rollback. These fixtures exercise native asset

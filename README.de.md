@@ -364,9 +364,9 @@ Außerdem gibt es drei paketierte Clients:
 
 - **iPhone / iPad** – tritt der [öffentlichen TestFlight-Beta](https://testflight.apple.com/join/rV4ktaGv) bei.
   Öffne in der App **Scan QR Code** und scanne den verschlüsselten
-  Pairing-Code des Hubs. Verschlüsselte Verbindungen nutzen die in der App
-  mitgelieferte Oberfläche; Änderungen daran kommen über Updates in
-  TestFlight. Ein Build funktioniert mit jedem Hub. Zwei Schalter auf dem
+  Pairing-Code des Hubs. Verschlüsselte Verbindungen nutzen die signierte
+  Oberfläche der App; sie aktualisiert sich wie bei Desktop und Android über
+  das Netz (ab 0.9.1), die App selbst über TestFlight. Ein Build funktioniert mit jedem Hub. Zwei Schalter auf dem
   Smartphone können einem Hub im LAN im Weg stehen, und die App nennt sie,
   wenn das passiert: Lokales Netzwerk und, auf in China verkauften Geräten,
   WLAN & mobile Daten. Gebaut aus `ios-v*`-Tags.
