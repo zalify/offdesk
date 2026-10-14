@@ -1,33 +1,26 @@
 @import "tailwindcss";
 
-/* Sand, sun, sea, and a coral donut. The page is a warm afternoon; the
-   terminals on it stay night-dark, because the product is dark and a
-   terminal that is not is not a terminal. */
+/* Direction B, "Terminal". The site looks like the product: a dark page,
+   monospace for anything a machine says (chrome, headings, commands), a
+   sans-serif for anything a person reads at length, and one lime accent for
+   the cursor, the primary action and focus. Red (#ff8a75) only means
+   "waiting on you". #8f8d87 is the darkest grey allowed for small text. */
 @theme {
-  --color-sand: #fff4e3;
-  --color-sand-2: #ffe9cc;
-  --color-cream: #fffbf4;
-  --color-ink: #2b2340;
-  --color-ink-2: #4a4160;
-  --color-muted: #6e6486;
-  --color-faint: #9d95b3;
-  --color-line: #f1dec6;
-  --color-line-2: #e6cfae;
-  --color-coral: #ff6b57;
-  --color-coral-2: #e8543f;
-  --color-sun: #ffc857;
-  --color-sea: #38b6e3;
-  --color-lagoon: #5ed3c1;
-  --color-pink: #ff8fb1;
-  --color-term: #1e1b2e;
-  --color-term-fg: #f3eee6;
-  --color-term-dim: #9c94b8;
+  --color-bg: #0c0c0b;
+  --color-surface: #111110;
+  --color-surface-2: #141413;
+  --color-line: #2a2927;
+  --color-control: #3a3936;
+  --color-text: #ecebe6;
+  --color-muted: #aeaca6;
+  --color-subtle: #8f8d87;
+  --color-accent: #d4ff3a;
+  --color-on-accent: #0c0c0b;
+  --color-waiting: #ff8a75;
 
-  --font-display: "Fredoka Variable", "Fredoka", ui-rounded, "Nunito Variable",
-    system-ui, sans-serif;
-  --font-sans: "Nunito Variable", "Nunito", ui-rounded, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    monospace;
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, SFMono-Regular,
+    Menlo, Consolas, monospace;
 }
 
 @layer base {
@@ -36,105 +29,152 @@
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
-  /* The sun and the lagoon bleed past the edges on purpose; nothing else
-     may, and they must not widen the page. */
   html,
   body {
     overflow-x: hidden;
   }
   body {
-    @apply bg-sand font-sans text-ink;
+    @apply bg-bg font-mono text-text;
   }
   ::selection {
-    @apply bg-sun text-ink;
+    @apply bg-accent text-on-accent;
+  }
+  a {
+    @apply transition-colors;
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  [id] {
+    scroll-margin-top: 24px;
   }
 }
 
 @layer components {
-  .eyebrow {
-    @apply font-display text-[13px] font-semibold tracking-[0.06em] text-coral;
+  .wrap {
+    @apply mx-auto w-full max-w-[1200px] px-4 sm:px-6;
+  }
+  /* "~ $ download": the line above a heading, like the prompt it was typed at. */
+  .prompt {
+    @apply font-mono text-[13px] text-subtle;
+  }
+  .prompt::before {
+    content: "~ $ ";
+    color: var(--color-accent);
+    white-space: pre;
   }
   .display {
-    @apply font-display font-bold tracking-[-0.01em] text-ink;
+    @apply font-mono font-semibold tracking-[-0.035em] text-text;
     text-wrap: balance;
   }
-  .btn-coral {
-    @apply inline-flex items-center justify-center gap-2 rounded-full bg-coral px-6 py-3 font-display text-[15px] font-semibold text-cream shadow-[0_6px_0_0_#e8543f] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_0_0_#e8543f] active:translate-y-0.5 active:shadow-[0_2px_0_0_#e8543f];
+  .cursor {
+    @apply ml-1.5 inline-block h-[0.95em] w-[0.55em] bg-accent align-[-0.12em];
   }
-  .btn-sky {
-    @apply inline-flex items-center justify-center gap-2 rounded-full border-2 border-ink/15 bg-cream px-6 py-3 font-display text-[15px] font-semibold text-ink transition-colors hover:border-sea hover:text-sea;
+  .h2 {
+    @apply font-mono text-[26px] leading-[32px] font-semibold tracking-[-0.03em] text-text md:text-[34px] md:leading-[40px];
+    text-wrap: balance;
   }
-  .card {
-    @apply rounded-[28px] border border-line bg-cream p-7 shadow-[0_10px_30px_-18px_rgba(43,35,64,0.35)];
+  .h3 {
+    @apply font-mono text-[18px] leading-[24px] font-semibold tracking-[-0.02em] text-text md:text-[20px];
   }
-  /* A terminal on the page: night-dark on the sand, with a sun-coloured
-     offset like a sticker on a postcard. */
-  .term {
-    @apply rounded-2xl bg-term font-mono text-[13px] leading-[1.75] text-term-fg;
+  .label {
+    @apply font-mono text-[12px] font-medium text-accent;
   }
+  .btn-primary {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-[4px] bg-accent px-4 font-mono text-[13px] font-semibold text-on-accent transition-colors hover:bg-text;
+  }
+  .btn {
+    @apply inline-flex h-10 items-center justify-center gap-2 rounded-[4px] border border-control px-4 font-mono text-[13px] font-medium text-text transition-colors hover:border-text;
+  }
+  .btn-lg {
+    @apply h-[46px] px-5 text-[14px];
+  }
+  .panel {
+    @apply rounded-[6px] border border-line bg-bg;
+  }
+  /* Cells separated by hairlines: the gap shows the line colour through. */
+  .cells {
+    @apply grid gap-px border border-line bg-line;
+  }
+  .cells > * {
+    @apply bg-bg;
+  }
+  /* A command to copy: "$ curl ... [copy]". */
   .cmd {
-    @apply flex max-w-full flex-col gap-3 overflow-hidden rounded-2xl bg-term p-4 pr-3 font-mono text-[13px] leading-[1.75] text-term-fg shadow-[8px_8px_0_0_#ffc857] sm:flex-row sm:items-start sm:gap-4;
+    @apply flex max-w-full items-start gap-3 rounded-[4px] border border-line bg-surface px-3.5 py-3 font-mono text-[13px] leading-[22px] text-text;
+  }
+  .cmd pre {
+    @apply min-w-0 flex-1 overflow-x-auto whitespace-pre;
   }
   .cmd-prompt {
-    @apply select-none text-lagoon;
+    @apply text-accent select-none;
   }
   .cmd-copy {
-    @apply shrink-0 self-end rounded-full bg-coral px-3.5 py-1.5 font-display text-[12px] font-semibold text-cream transition-colors hover:bg-coral-2 sm:self-auto;
+    @apply shrink-0 cursor-pointer rounded-[3px] border-0 bg-transparent px-1 font-mono text-[12px] leading-[22px] text-subtle hover:text-accent;
+  }
+  .term {
+    @apply rounded-[6px] border border-line bg-surface font-mono text-[13px] leading-[22px] text-text;
   }
   .prose-lead {
-    @apply text-[19px] leading-relaxed text-ink-2;
+    @apply font-sans text-[17px] leading-[27px] text-muted md:text-[18px] md:leading-[28px];
     text-wrap: pretty;
   }
   .prose-body {
-    @apply text-[16px] leading-relaxed text-muted;
+    @apply font-sans text-[15px] leading-[24px] text-muted md:text-[16px] md:leading-[25px];
     text-wrap: pretty;
   }
   .prose-body a,
   .prose-lead a {
-    @apply font-semibold text-sea underline decoration-sea/40 underline-offset-4 hover:decoration-sea;
+    @apply text-text underline decoration-accent/60 underline-offset-4 hover:text-accent hover:decoration-accent;
+  }
+  .prose-body strong,
+  .prose-lead strong {
+    @apply font-semibold text-text;
   }
   .inline-code {
-    @apply rounded-md bg-ink/6 px-1.5 py-0.5 font-mono text-[0.85em] text-ink;
+    @apply rounded-[3px] bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em] text-text;
   }
-  /* The number on a step: a small donut. */
-  .step {
-    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-[5px] border-coral bg-cream font-display text-[15px] font-bold text-ink;
+  .chip {
+    @apply rounded-[3px] border border-control px-2.5 py-1 font-mono text-[13px] font-medium text-text;
   }
-  /* Long-form pages (the tunnel guide). */
+
+  /* Long-form pages: the tunnel guide and the Mac guide. Headings in mono,
+     paragraphs in Geist Sans. */
   .doc h2 {
-    @apply mt-12 font-display text-3xl font-bold tracking-[-0.01em] text-ink;
+    @apply mt-12 border-t border-line pt-6 font-mono text-[24px] leading-[30px] font-semibold tracking-[-0.03em] text-text md:text-[26px] md:leading-[32px];
   }
   .doc h3 {
-    @apply mt-8 font-display text-xl font-bold tracking-[-0.01em] text-ink;
+    @apply mt-8 font-mono text-[18px] font-semibold tracking-[-0.02em] text-text;
   }
   .doc p,
   .doc li {
-    @apply mt-4 text-[16px] leading-relaxed text-muted;
+    @apply mt-4 font-sans text-[16px] leading-[25px] text-muted;
   }
   .doc a {
-    @apply font-semibold text-sea underline decoration-sea/40 underline-offset-4 hover:decoration-sea;
+    @apply text-text underline decoration-accent/60 underline-offset-4 hover:text-accent hover:decoration-accent;
   }
   .doc strong {
-    @apply text-ink;
+    @apply font-semibold text-text;
   }
   .doc ul {
-    @apply list-disc pl-6;
+    @apply list-disc pl-6 marker:text-subtle;
   }
   .doc pre {
-    @apply mt-4 overflow-x-auto rounded-2xl bg-term p-4 font-mono text-[13px] leading-[1.75] text-term-fg;
+    @apply mt-4 overflow-x-auto rounded-[4px] border border-line bg-surface px-4 py-3 font-mono text-[13px] leading-[22px] text-text;
   }
   .doc code:not(pre code) {
-    @apply rounded-md bg-ink/6 px-1.5 py-0.5 font-mono text-[0.85em] text-ink;
+    @apply rounded-[3px] bg-surface-2 px-1.5 py-0.5 font-mono text-[0.85em] text-text;
   }
   .doc table {
-    @apply mt-4 w-full border-collapse text-[15px];
+    @apply mt-4 w-full border-collapse font-sans text-[15px];
   }
   .doc th,
   .doc td {
     @apply border-b border-line px-3 py-2 text-left align-top;
   }
   .doc th {
-    @apply font-display font-semibold text-ink;
+    @apply font-mono text-[13px] font-medium text-subtle;
   }
   .doc td {
     @apply text-muted;

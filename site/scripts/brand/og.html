@@ -1,19 +1,22 @@
 <!doctype html><meta charset="utf-8">
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@700&family=Nunito:wght@500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   html,body{margin:0}
-  .og{position:relative;width:1200px;height:630px;overflow:hidden;background:#fff4e3;font-family:"Nunito",sans-serif;color:#2b2340}
-  .sun{position:absolute;right:-160px;top:-240px;width:640px;height:640px;border-radius:50%;background:rgba(255,200,87,.6);filter:blur(60px)}
-  .lagoon{position:absolute;left:-200px;bottom:-260px;width:520px;height:520px;border-radius:50%;background:rgba(94,211,193,.35);filter:blur(60px)}
-  .logo{position:absolute;left:80px;top:70px;height:64px}
-  h1{position:absolute;left:80px;top:200px;margin:0;width:880px;font-family:"Fredoka",sans-serif;font-weight:700;font-size:70px;line-height:1.04;letter-spacing:-.01em}
-  p{position:absolute;left:80px;top:470px;margin:0;width:760px;font-size:26px;line-height:1.45;color:#4a4160;font-weight:500}
-  .ring{position:absolute;left:1000px;top:400px;width:130px;height:130px;border-radius:50%;border:20px solid #ff6b57}
-  .dot{position:absolute;left:940px;top:300px;width:60px;height:60px;border-radius:50%;background:#ff8fb1}
+  .og{position:relative;width:1200px;height:630px;overflow:hidden;background:#0c0c0b;color:#ecebe6;font-family:"Geist Mono",monospace}
+  .logo{position:absolute;left:72px;top:64px;height:48px}
+  h1{position:absolute;left:72px;top:168px;margin:0;width:1000px;font-weight:600;font-size:68px;line-height:1.08;letter-spacing:-.035em}
+  h1 i{display:inline-block;width:.55em;height:.9em;margin-left:.12em;vertical-align:-.1em;background:#d4ff3a}
+  p{position:absolute;left:72px;top:356px;margin:0;width:900px;font-family:"Geist",sans-serif;font-size:27px;line-height:1.45;color:#aeaca6}
+  .cmd{position:absolute;left:72px;top:462px;display:flex;gap:28px;font-size:22px;color:#aeaca6}
+  .cmd b{color:#d4ff3a;font-weight:500}
+  .status{position:absolute;left:0;right:0;bottom:0;height:48px;display:flex;align-items:center;gap:22px;padding:0 72px;background:#141413;border-top:1px solid #2a2927;font-size:19px;color:#8f8d87}
+  .status .on{color:#0c0c0b;background:#d4ff3a;padding:2px 8px}
+  .status .r{margin-left:auto;color:#aeaca6}
 </style>
-<div class="og"><div class="sun"></div><div class="lagoon"></div>
-  <img class="logo" src="logo.svg">
-  <h1>Your terminal stays home. You don't have to.</h1>
-  <p>Vibe code from your phone, on the terminal you left at home.</p>
-  <div class="dot"></div><div class="ring"></div>
+<div class="og">
+  <img class="logo" src="logo-dark.svg">
+  <h1>One terminal, shared by you and your <span style="white-space:nowrap">agents.<i></i></span></h1>
+  <p>Any program in tmux, on all your machines, behind one hub you run. Open source, MIT.</p>
+  <div class="cmd"><span><b>$</b> offdesk open</span><span>send</span><span>wait</span><span>read</span></div>
+  <div class="status"><span>[offdesk]</span><span class="on">0:app*</span><span>1:nas</span><span>2:agent</span><span class="r">offdesk.dev</span></div>
 </div>

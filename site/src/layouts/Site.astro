@@ -1,9 +1,7 @@
 ---
-// The frame every page shares: fonts, nav, footer, the sun in the corner.
-import "@fontsource-variable/fredoka";
-import "@fontsource-variable/nunito";
-import "@fontsource/geist-mono/400.css";
-import "@fontsource/geist-mono/500.css";
+// The frame every page shares: fonts, nav, footer.
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "../styles/global.css";
 import Icon from "../components/Icon.astro";
 
@@ -17,6 +15,14 @@ const { title, description, path = "/", lang = "en" } = Astro.props;
 const repo = "https://github.com/zalify/offdesk";
 const discord = "https://discord.gg/aFUu6VMzc";
 const canonical = `https://offdesk.dev${path}`;
+const nav = [
+  { href: "/#download", label: "download" },
+  { href: "/#how", label: "how-it-works" },
+  { href: "/#away", label: "remote-access" },
+  { href: "/docs/mac", label: "docs", docs: true },
+  { href: "/#agents", label: "cli" },
+];
+const inDocs = path.includes("/docs/");
 ---
 
 <!doctype html>
@@ -27,14 +33,14 @@ const canonical = `https://offdesk.dev${path}`;
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonical} />
-    <!-- The donut. The query string is a cache key: browsers hold on to a
-         favicon long after the file behind it changed. -->
-    <link rel="icon" href="/favicon.svg?v=donut" type="image/svg+xml" />
-    <link rel="icon" href="/brand/favicon-32.png?v=donut" sizes="32x32" type="image/png" />
-    <link rel="icon" href="/brand/favicon-16.png?v=donut" sizes="16x16" type="image/png" />
-    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png?v=donut" />
-    <meta name="color-scheme" content="light" />
-    <meta name="theme-color" content="#fff4e3" />
+    <!-- The query string is a cache key: browsers hold on to a favicon long
+         after the file behind it changed. -->
+    <link rel="icon" href="/favicon.svg?v=dev1" type="image/svg+xml" />
+    <link rel="icon" href="/brand/favicon-32.png?v=dev1" sizes="32x32" type="image/png" />
+    <link rel="icon" href="/brand/favicon-16.png?v=dev1" sizes="16x16" type="image/png" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png?v=dev1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0c0c0b" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
@@ -48,68 +54,62 @@ const canonical = `https://offdesk.dev${path}`;
     <meta name="twitter:image" content="https://offdesk.dev/brand/og-square.png" />
   </head>
 
-  <body class="relative min-h-screen overflow-x-hidden">
-    <!-- The sun: one big soft disc behind the top of every page. -->
-    <div
-      aria-hidden="true"
-      class="pointer-events-none absolute -top-40 -right-32 h-[34rem] w-[34rem] rounded-full bg-sun/50 blur-3xl"
-    ></div>
-    <div
-      aria-hidden="true"
-      class="pointer-events-none absolute top-[42rem] -left-40 h-[26rem] w-[26rem] rounded-full bg-lagoon/25 blur-3xl"
-    ></div>
-
-    <header class="relative z-10">
-      <nav class="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
-        <a href="/" aria-label="Offdesk home" class="flex items-center gap-2.5">
-          <!-- The mark: a coral donut with sprinkles. -->
-          <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
-            <circle cx="17" cy="17" r="10" fill="none" stroke="#ff6b57" stroke-width="9" />
-            <g stroke-width="2.6" stroke-linecap="round">
-              <path d="M10 8.5l3.2-2.2" stroke="#38b6e3" />
-              <path d="M24.5 9.5l2.6 2.6" stroke="#ff8fb1" />
-              <path d="M6 20l-1.2 3.4" stroke="#ffc857" />
-              <path d="M22 28.4l3.6 0.6" stroke="#5ed3c1" />
-              <path d="M14.5 30l-2.8 1.6" stroke="#ff8fb1" />
+  <body class="min-h-screen">
+    <a href="#main" class="sr-only focus:not-sr-only focus:absolute focus:top-3 focus:left-3 focus:z-20 focus:rounded-[4px] focus:bg-accent focus:px-3 focus:py-2 focus:text-[13px] focus:font-semibold focus:text-on-accent">skip to content</a>
+    <header class="border-b border-line">
+      <div class="wrap flex flex-wrap items-center gap-x-7 gap-y-3 py-4">
+        <a href="/" aria-label="Offdesk DEV home" class="flex items-center gap-2.5 text-text no-underline hover:text-text">
+          <!-- The mark: a desk, and a terminal window flying off it. -->
+          <svg width="32" height="26" viewBox="0 0 40 32" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 23h18M5.5 23v7M18.5 23v7" />
+            <path d="M19.5 16l3-2M18 12.5l3-2" />
+            <g transform="rotate(-14 30 9)">
+              <rect x="23" y="3" width="15" height="12" rx="2.5" />
+              <path d="M26.5 7.2l2 1.6-2 1.6M30.5 11h3" stroke="#d4ff3a" />
             </g>
           </svg>
-          <span class="font-display text-[26px] font-bold tracking-[-0.02em] text-ink">Offdesk</span>
+          <span class="font-mono text-[18px] font-semibold tracking-[-0.02em]">offdesk<span class="text-accent">/dev</span></span>
         </a>
-        <div class="hidden items-center gap-7 md:flex">
-          <a href="/#download" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Download</a>
-          <a href="/#how" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">How it works</a>
-          <a href="/#away" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Remote access</a>
-          <a href="/docs/mac" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">Docs</a>
-          <a href="/#agents" class="font-display text-[15px] font-semibold text-ink-2 hover:text-coral">CLI</a>
-        </div>
-        <div class="flex items-center gap-2">
-          <a href={discord} class="btn-sky px-4 py-2 text-[14px]" aria-label="Offdesk on Discord">
-            <Icon name="discord" /><span class="hidden sm:inline">Discord</span>
+        <nav aria-label="Main" class="order-last flex w-full flex-wrap gap-x-5 gap-y-1 font-mono text-[13px] md:order-none md:w-auto md:flex-1">
+          {nav.map((item) => (
+            <a
+              href={item.href}
+              aria-current={item.docs && inDocs ? "page" : undefined}
+              class:list={[
+                "py-1",
+                item.docs && inDocs
+                  ? "text-text underline decoration-accent underline-offset-[6px]"
+                  : "text-muted no-underline hover:text-accent",
+              ]}
+            >{item.label}</a>
+          ))}
+        </nav>
+        <div class="ml-auto flex items-center gap-4 md:ml-0">
+          <a href={discord} class="inline-flex items-center gap-1.5 font-mono text-[13px] text-muted no-underline hover:text-accent" aria-label="Offdesk on Discord">
+            <Icon name="discord" class="h-4 w-4 sm:hidden" /><span class="hidden sm:inline">discord</span>
           </a>
-          <a href={repo} class="btn-coral px-4 py-2 text-[14px]" aria-label="Offdesk on GitHub">
-            <Icon name="github" /><span class="hidden sm:inline">GitHub</span>
+          <a href={repo} class="btn h-[34px] px-3.5 no-underline" aria-label="Offdesk on GitHub">
+            <Icon name="github" class="h-4 w-4" /><span class="hidden sm:inline">github ↗</span>
           </a>
         </div>
-      </nav>
+      </div>
     </header>
 
-    <main class="relative z-10">
+    <main id="main">
       <slot />
     </main>
 
-    <footer class="relative z-10 mt-10 border-t border-line">
-      <div class="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-6 py-8">
-        <span class="font-display text-[14px] font-semibold text-muted">
-          MIT · made by <a href="https://zalify.com" class="text-ink hover:text-coral">Zalify</a> · self-hosted remote terminal
+    <footer class="border-t border-line">
+      <div class="wrap flex flex-wrap items-center gap-x-6 gap-y-3 py-6 font-mono text-[12.5px] text-muted">
+        <span class="grow">
+          MIT · made by <a href="https://zalify.com" class="text-text hover:text-accent">Zalify</a> · self-hosted remote terminal
         </span>
-        <span class="flex flex-wrap items-center gap-x-6 gap-y-3 font-display text-[14px] font-semibold text-muted">
-          <a href="/docs/mac" class="hover:text-coral">Getting started</a>
-          <a href="/tunnel" class="hover:text-coral">Tunnel guide</a>
-          <a href={`${repo}/blob/main/SECURITY.md`} class="hover:text-coral">Security</a>
-          <a href={`${repo}/releases`} class="hover:text-coral">Release notes</a>
-          <a href={discord} class="inline-flex items-center gap-1.5 hover:text-coral"><Icon name="discord" /> Discord</a>
-          <a href={repo} class="inline-flex items-center gap-1.5 hover:text-coral"><Icon name="github" /> GitHub</a>
-        </span>
+        <a href="/docs/mac" class="hover:text-accent">getting started</a>
+        <a href="/tunnel" class="hover:text-accent">tunnel guide</a>
+        <a href={`${repo}/blob/main/SECURITY.md`} class="hover:text-accent">security</a>
+        <a href={`${repo}/releases`} class="hover:text-accent">release notes</a>
+        <a href={discord} class="inline-flex items-center gap-1.5 hover:text-accent"><Icon name="discord" class="h-3.5 w-3.5" /> discord</a>
+        <a href={repo} class="inline-flex items-center gap-1.5 hover:text-accent"><Icon name="github" class="h-3.5 w-3.5" /> github</a>
       </div>
     </footer>
 
@@ -118,12 +118,12 @@ const canonical = `https://offdesk.dev${path}`;
         button.addEventListener("click", async () => {
           try {
             await navigator.clipboard.writeText(button.dataset.copy);
-            button.textContent = "Copied";
+            button.textContent = "[copied]";
           } catch {
-            button.textContent = "Press ⌘C";
+            button.textContent = "[press ⌘C]";
           }
           setTimeout(() => {
-            button.textContent = "Copy";
+            button.textContent = "[copy]";
           }, 1600);
         });
       }
