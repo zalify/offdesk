@@ -9,6 +9,7 @@ pub mod machines;
 pub mod open;
 pub mod read;
 pub mod read_all;
+pub mod runs;
 pub mod send;
 pub mod version;
 pub mod wait;

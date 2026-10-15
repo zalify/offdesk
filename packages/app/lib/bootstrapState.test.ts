@@ -513,3 +513,41 @@ describe("agent browsers", () => {
     expect(state.agentBrowsers.map((b) => b.id)).toEqual(["b2"]);
   });
 });
+
+describe("agent runs", () => {
+  const run = (id: string, status: "working" | "waiting" | "done") => ({
+    id,
+    machine_id: "m1",
+    terminal_id: "t1",
+    agent: "claude" as const,
+    cwd: "/w",
+    status,
+    started_at_ms: 1,
+    updated_at_ms: 2,
+  });
+
+  it("come from the snapshot, absent from older hubs", () => {
+    const base = {
+      snapshot_seq: 1,
+      last_focused_terminal_id: null,
+      machines: [],
+      terminals: [],
+      machine_stats: [],
+      control_leases: [],
+    };
+    expect(applyBootstrapSnapshot(base).agentRuns).toEqual([]);
+    expect(applyBootstrapSnapshot({ ...base, agent_runs: [run("r1", "working")] }).agentRuns.map((r) => r.id)).toEqual(["r1"]);
+  });
+
+  it("are updated in place, and new ones go first", () => {
+    let state: BrowserSessionState = { ...EMPTY_BROWSER_SESSION_STATE, lastSeq: 1 };
+    state = applyBrowserEventEnvelope(state, envelope(2, { type: "agent_run_updated", run: run("r1", "working") }));
+    state = applyBrowserEventEnvelope(state, envelope(3, { type: "agent_run_updated", run: run("r2", "working") }));
+    state = applyBrowserEventEnvelope(state, envelope(4, { type: "agent_run_updated", run: run("r1", "waiting") }));
+    expect(state.agentRuns.map((r) => [r.id, r.status])).toEqual([
+      ["r2", "working"],
+      ["r1", "waiting"],
+    ]);
+    expect(state.lastSeq).toBe(4);
+  });
+});

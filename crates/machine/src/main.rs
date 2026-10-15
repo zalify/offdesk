@@ -1,4 +1,5 @@
 mod acp;
+mod agent_detect;
 mod agent_browser;
 mod attach;
 mod config;

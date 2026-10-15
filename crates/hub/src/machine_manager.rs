@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
+
+mod agent_runs;
 use offdesk_protocol::{
     AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
     AgentBrowserReclaim, AgentSessionInfo, MouseAction, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
@@ -429,6 +431,10 @@ impl MachineManager {
                     }
                 }
             }
+
+            // Its agent runs are Gone until it comes back (the same agent still in the
+            // terminal then carries a run on)
+            self.end_machine_runs(target_user_id.clone(), machine_id);
 
             // Move terminals to persisted_terminals instead of destroying them
             if !conn.terminals.is_empty() {
@@ -2047,6 +2053,7 @@ impl MachineManager {
                             &group_id,
                         );
                     }
+                    self.end_terminal_runs(target_user_id.clone(), &terminal_id);
                     self.send_event(
                         target_user_id,
                         BrowserEvent::TerminalDestroyed {
@@ -2109,10 +2116,14 @@ impl MachineManager {
                             terminal.attention = attention;
                             let terminal = terminal.clone();
                             drop(machines);
-                            self.send_event(user_id, BrowserEvent::TerminalUpdated { terminal });
+                            self.send_event(user_id.clone(), BrowserEvent::TerminalUpdated { terminal });
+                            self.on_run_attention(user_id, &terminal_id, attention);
                         }
                     }
                 }
+            }
+            MachineToHub::TerminalAgent { terminal_id, agent } => {
+                self.on_terminal_agent(machine_id, &terminal_id, agent).await;
             }
             MachineToHub::TerminalCwd { terminal_id, cwd } => {
                 let updated = match self.db.get() {
@@ -2320,6 +2331,7 @@ impl MachineManager {
                                     group_id,
                                 );
                             }
+                            self.end_terminal_runs(target_user_id.clone(), &old_terminal.id);
                             self.send_event(
                                 target_user_id.clone(),
                                 BrowserEvent::TerminalDestroyed {
@@ -2599,6 +2611,7 @@ impl MachineManager {
         if let Some(group_id) = group_id {
             self.prune_auto_tab_if_empty(target_user_id.as_deref(), machine_id, &group_id);
         }
+        self.end_terminal_runs(target_user_id.clone(), terminal_id);
         self.send_event(
             target_user_id,
             BrowserEvent::TerminalDestroyed {
@@ -2966,6 +2979,7 @@ impl MachineManager {
             agent_sessions,
             agent_session_seen,
             agent_browsers,
+            agent_runs: self.runs_for_snapshot(user_id),
         }
     }
 
@@ -3591,6 +3605,107 @@ mod tests {
             .await;
         manager.unregister_machine("machine-a", &conn_id).await;
         assert!(!manager.snapshot_for_user("user-a").await.terminals[0].reachable);
+    }
+
+    /// The next agent run event, skipping the terminal events in between.
+    async fn next_run(events: &mut EventSubscription) -> offdesk_protocol::AgentRunInfo {
+        loop {
+            if let BrowserEvent::AgentRunUpdated { run } = events.receiver.recv().await.unwrap().event {
+                return run;
+            }
+        }
+    }
+
+    fn no_run_events(events: &mut EventSubscription) -> bool {
+        std::iter::from_fn(|| events.receiver.try_recv().ok())
+            .all(|envelope| !matches!(envelope.event, BrowserEvent::AgentRunUpdated { .. }))
+    }
+
+    #[tokio::test]
+    async fn agent_runs_follow_the_terminal_agent_its_screen_and_its_terminal() {
+        use offdesk_protocol::{AgentRequestKind, AgentRunStatus, RunAgent, TerminalAttention};
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-b", "machine-b");
+        let manager = MachineManager::new(pool.clone());
+        let (conn_id, _rx) = manager.register_machine(machine("machine-a"), Some("user-a".into())).await;
+        manager.register_machine(machine("machine-b"), Some("user-b".into())).await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-a"), terminal("machine-a", "term-b")] },
+            )
+            .await;
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert!(snapshot.agent_runs.is_empty());
+        let mut events = manager.subscribe_events_after("user-a", snapshot.snapshot_seq);
+        let agent = |terminal: &str, agent| MachineToHub::TerminalAgent { terminal_id: terminal.into(), agent };
+        let attention = |attention| MachineToHub::TerminalAttention { terminal_id: "term-a".into(), attention };
+        let pending = Some(TerminalAttention::Confirmation);
+
+        // Claude in the foreground opens a run; reporting it again changes nothing
+        manager.handle_machine_message("machine-a", agent("term-a", Some(RunAgent::Claude))).await;
+        let run = next_run(&mut events).await;
+        assert_eq!((run.agent, run.status, run.terminal_id.as_deref()), (RunAgent::Claude, AgentRunStatus::Working, Some("term-a")));
+        manager.handle_machine_message("machine-a", agent("term-a", Some(RunAgent::Claude))).await;
+        assert!(no_run_events(&mut events));
+        // Another machine can't touch it, even knowing the terminal id
+        manager.handle_machine_message("machine-b", agent("term-a", None)).await;
+        manager.handle_machine_message("machine-b", MachineToHub::TerminalAttention { terminal_id: "term-a".into(), attention: pending }).await;
+        assert!(no_run_events(&mut events));
+
+        // A confirmation on its screen: it waits on a person, with an approval request (no text)
+        manager.handle_machine_message("machine-a", attention(pending)).await;
+        let waiting = next_run(&mut events).await;
+        assert_eq!((waiting.id.as_str(), waiting.status), (run.id.as_str(), AgentRunStatus::Waiting));
+        let request = waiting.request.expect("an open request");
+        assert_eq!((request.kind, request.prompt, request.source.as_str()), (AgentRequestKind::Approval, None, "screen"));
+        manager.handle_machine_message("machine-a", attention(None)).await;
+        let working = next_run(&mut events).await;
+        assert_eq!((working.status, working.request), (AgentRunStatus::Working, None));
+
+        // The bootstrap has it for its owner only
+        assert_eq!(manager.snapshot_for_user("user-a").await.agent_runs.len(), 1);
+        assert!(manager.snapshot_for_user("user-b").await.agent_runs.is_empty());
+
+        // Claude exits: Done. Codex then starts in the same terminal: a new run
+        manager.handle_machine_message("machine-a", agent("term-a", None)).await;
+        let done = next_run(&mut events).await;
+        assert_eq!((done.id.as_str(), done.status), (run.id.as_str(), AgentRunStatus::Done));
+        assert!(done.ended_at_ms.is_some());
+        manager.handle_machine_message("machine-a", agent("term-a", Some(RunAgent::Codex))).await;
+        let codex = next_run(&mut events).await;
+        assert_ne!(codex.id, run.id);
+        // Switching straight to another agent ends the first one
+        manager.handle_machine_message("machine-a", agent("term-a", Some(RunAgent::Claude))).await;
+        assert_eq!((next_run(&mut events).await.id, next_run(&mut events).await.agent), (codex.id.clone(), RunAgent::Claude));
+
+        // A run in term-b; the machine disconnects: open runs are Gone
+        manager.handle_machine_message("machine-a", agent("term-b", Some(RunAgent::Codex))).await;
+        let in_b = next_run(&mut events).await;
+        manager.unregister_machine("machine-a", &conn_id).await;
+        let mut gone = vec![next_run(&mut events).await, next_run(&mut events).await];
+        gone.sort_by(|a, b| a.terminal_id.cmp(&b.terminal_id));
+        assert!(gone.iter().all(|run| run.status == AgentRunStatus::Gone));
+
+        // It comes back with Codex still in term-b (carried on, same run) and term-a gone
+        // from the machine (closed while away)
+        manager.register_machine(machine("machine-a"), Some("user-a".into())).await;
+        manager
+            .handle_machine_message("machine-a", MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-b")] })
+            .await;
+        manager.handle_machine_message("machine-a", agent("term-b", Some(RunAgent::Codex))).await;
+        let back = next_run(&mut events).await;
+        assert_eq!((back.id.as_str(), back.status, back.ended_at_ms), (in_b.id.as_str(), AgentRunStatus::Working, None));
+
+        // Its terminal closing ends it Gone
+        manager.handle_machine_message("machine-a", MachineToHub::TerminalDestroyed { terminal_id: "term-b".into() }).await;
+        let closed = next_run(&mut events).await;
+        assert_eq!((closed.id.as_str(), closed.status), (in_b.id.as_str(), AgentRunStatus::Gone));
+
+        // A hub restart reads them back from the database
+        let restarted = MachineManager::new(pool);
+        assert_eq!(restarted.snapshot_for_user("user-a").await.agent_runs.len(), 4);
     }
 
     #[tokio::test]

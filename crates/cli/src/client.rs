@@ -1,5 +1,5 @@
 use offdesk_protocol::{
-    MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
+    AgentRunInfo, MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
 };
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Response, StatusCode};
@@ -154,6 +154,12 @@ impl HubClient {
     /// Each online node's version; None from hubs before 0.23.
     pub async fn machine_versions(&self) -> Result<Option<Vec<crate::commands::version::MachineVersion>>, CliError> {
         self.get_optional("/machines/versions", None).await
+    }
+
+    /// Agent runs; `query` is "" or "?active=true&machine=…". None from hubs that
+    /// don't track agent runs yet.
+    pub async fn agent_runs(&self, query: &str) -> Result<Option<Vec<AgentRunInfo>>, CliError> {
+        self.get_optional(&format!("/agent-runs{query}"), None).await
     }
 
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, CliError> {

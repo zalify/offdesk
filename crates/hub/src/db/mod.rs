@@ -6,6 +6,7 @@ use rusqlite::{params, Connection};
 use serde::Deserialize;
 use offdesk_protocol::{WorkspaceLayoutNode, WorkspaceSplitDirection};
 
+pub mod agent_runs;
 pub mod agent_sessions;
 pub mod bookmarks;
 pub mod hub_state;
@@ -204,6 +205,43 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             last_seen_seq INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (user_id, session_id)
         );
+
+        -- Agent runs: one coding agent process's life in one terminal
+        -- (docs/plans/2026-10-14-agent-runs.md). terminal_id has no foreign key:
+        -- a run outlives its terminal's row being marked destroyed.
+        CREATE TABLE IF NOT EXISTS agent_runs (
+            id TEXT PRIMARY KEY,
+            machine_id TEXT NOT NULL REFERENCES machines(id) ON DELETE CASCADE,
+            terminal_id TEXT,
+            agent TEXT NOT NULL,
+            cwd TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            ended_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_machine
+            ON agent_runs(machine_id, started_at);
+
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_terminal
+            ON agent_runs(terminal_id, started_at);
+
+        -- What a run waits on a person for; one open (resolved_at IS NULL) at a time.
+        CREATE TABLE IF NOT EXISTS agent_run_requests (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            prompt TEXT,
+            options TEXT NOT NULL DEFAULT '[]',
+            source TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            resolved_at INTEGER,
+            resolution TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_agent_run_requests_open
+            ON agent_run_requests(run_id) WHERE resolved_at IS NULL;
     ",
     )?;
 
