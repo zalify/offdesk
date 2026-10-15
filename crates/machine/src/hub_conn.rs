@@ -183,6 +183,7 @@ impl HubConnection {
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
+                offdesk_protocol::AGENT_CHOOSE_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_DIRS_CAPABILITY.to_string(),
             ],

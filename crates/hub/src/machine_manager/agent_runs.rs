@@ -9,8 +9,9 @@
 use offdesk_protocol::{
     AgentAnswer, AgentKey, AgentReportKind, AgentRequestKind, AgentRunInfo, AgentRunRequest,
     AgentRunStatus, AgentSignal, AgentStart, BrowserEvent, HubToMachine, InstalledAgent, RunAgent,
-    StartAgentRun, TerminalAttention, TerminalInfo, TerminalOpener, AGENT_KEYS_CAPABILITY,
-    AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY,
+    StartAgentRun, TerminalAttention, TerminalInfo, TerminalOpener, AGENT_CHOOSE_CAPABILITY,
+    AGENT_KEYS_CAPABILITY, AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY, FOLDER_TRUST_PROMPT,
+    FOLDER_TRUST_SOURCE, FOLDER_TRUST_YES,
 };
 
 use super::MachineManager;
@@ -61,7 +62,8 @@ const START_SIZE: (u16, u16) = (120, 36);
 
 /// The keys that answer a request: an approval's yes is the menu's first option
 /// (Claude and Codex both put "Yes" there) and no is Escape (their "cancel"); a
-/// question's option is its number; words are typed and sent with Enter.
+/// question's option is its number; words are typed and sent with Enter. Claude Code's
+/// folder trust prompt is chosen by its label instead.
 pub fn keys_for(
     request: &AgentRunRequest,
     answer: &AgentAnswer,
@@ -82,6 +84,13 @@ pub fn keys_for(
         }
     };
     match request.kind {
+        // Claude Code's folder trust prompt has no numbers, and its highlight starts on
+        // "No, exit": the node moves it to the yes before Enter
+        AgentRequestKind::Approval if request.source == FOLDER_TRUST_SOURCE => match answer.approve {
+            Some(true) => Ok(vec![AgentKey::Choose(FOLDER_TRUST_YES.to_string())]),
+            Some(false) => Ok(vec![AgentKey::Escape]),
+            None => Err(AnswerError::BadRequest("Approve (true) or decline (false)")),
+        },
         AgentRequestKind::Approval => match answer.approve {
             Some(true) => Ok(vec![AgentKey::Digit(1)]),
             Some(false) => Ok(vec![AgentKey::Escape]),
@@ -354,9 +363,11 @@ impl MachineManager {
         if !self.user_can_access_machine(user_id, &run.machine_id).await {
             return Err(AnswerError::Unavailable("The machine is offline"));
         }
+        let choosing = keys.iter().any(|key| matches!(key, AgentKey::Choose(_)));
         if !self
             .machine_supports(&run.machine_id, AGENT_KEYS_CAPABILITY)
             .await
+            || (choosing && !self.machine_supports(&run.machine_id, AGENT_CHOOSE_CAPABILITY).await)
         {
             return Err(AnswerError::Unavailable(
                 "Update Offdesk on that machine to answer from here",
@@ -655,10 +666,23 @@ fn begin(
     run_id: &str,
     attention: Option<TerminalAttention>,
 ) -> rusqlite::Result<Option<AgentRunRow>> {
-    if attention.is_some() {
-        agent_runs::insert_request(db, run_id, AgentRequestKind::Approval, None, &[], "screen")?;
-        agent_runs::set_status(db, run_id, AgentRunStatus::Waiting)
-    } else {
-        agent_runs::set_status(db, run_id, AgentRunStatus::Working)
+    match attention {
+        Some(TerminalAttention::Confirmation) => {
+            agent_runs::insert_request(db, run_id, AgentRequestKind::Approval, None, &[], "screen")?;
+            agent_runs::set_status(db, run_id, AgentRunStatus::Waiting)
+        }
+        // Claude Code's folder trust prompt: an approval, said in Offdesk's own words
+        Some(TerminalAttention::FolderTrust) => {
+            agent_runs::insert_request(
+                db,
+                run_id,
+                AgentRequestKind::Approval,
+                Some(FOLDER_TRUST_PROMPT),
+                &[],
+                FOLDER_TRUST_SOURCE,
+            )?;
+            agent_runs::set_status(db, run_id, AgentRunStatus::Waiting)
+        }
+        None => agent_runs::set_status(db, run_id, AgentRunStatus::Working),
     }
 }

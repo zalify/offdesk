@@ -19,7 +19,8 @@ export interface TerminalInfo {
   rows: number
   reachable: boolean
   /** Best-effort live-screen detection; absent on older nodes. */
-  attention?: "confirmation" | null
+  // "folder_trust": Claude Code asks whether to trust its folder (answer it as the run's request)
+  attention?: "confirmation" | "folder_trust" | null
   /** Set when an API-token client (the CLI an agent drives) opened it;
    *  absent when a person did, and from older hubs. */
   opened_by?: TerminalOpener | null

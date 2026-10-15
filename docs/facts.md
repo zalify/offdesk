@@ -40,6 +40,11 @@ rename mapping is at the bottom.
   agent leaves the foreground (no exit code), and `gone` when its terminal closes or
   its machine disconnects. The same agent still in the terminal when the machine
   comes back carries the run on (`crates/hub/src/machine_manager/agent_runs.rs`).
+- Claude Code's folder trust prompt (a folder it hasn't opened: "No, exit" /
+  "Yes, I trust this folder", unnumbered, "No" highlighted) is its own attention,
+  `folder_trust`, not a confirmation, since Enter there exits. The run waits with an
+  `approval` from `screen:folder-trust` in Offdesk's words (`FOLDER_TRUST_PROMPT`)
+  (`crates/machine/src/terminal_attention.rs`).
 - Runs are visible to the machine's owner: `GET /api/agent-runs`
   (`?active=true`, `?machine=`), `GET /api/agent-runs/{id}`, the
   `agent_run_updated` event and the bootstrap's `agent_runs` (open runs and those
@@ -51,12 +56,18 @@ rename mapping is at the bottom.
 
 - `POST /api/agent-runs/{id}/answer` types a person's answer into the run's terminal:
   approval yes is `1`, no is Escape; a question's option is its number; words are one
-  line plus Enter (`crates/hub/src/machine_manager/agent_runs.rs` `keys_for`). It needs
-  the open request's id, the machine's control lease and a node with `agent-keys-v1`,
-  and refuses a second answer; the request stays open until the agent moves on.
+  line plus Enter (`crates/hub/src/machine_manager/agent_runs.rs` `keys_for`). The
+  folder trust prompt's yes is `Choose("Yes, I trust this folder")` and its no Escape
+  (Claude Code exits). It needs the open request's id, the machine's control lease and
+  a node with `agent-keys-v1` (and `agent-choose-v1` for Choose), and refuses a second
+  answer; the request stays open until the agent moves on.
 - The node types it with `tmux send-keys` (`HubToMachine::SendAgentKeys`,
-  `crates/machine/src/pty.rs` `send_agent_keys`), accepting only digits, Enter, Escape
-  and one line of text.
+  `crates/machine/src/pty.rs` `send_agent_keys`), accepting only digits, Enter, Escape,
+  one line of text, and Choose: it reads the screen and moves the highlight Up/Down to
+  the option with that label before Enter (menus wrap, so blind keys could land on
+  the other option), refusing when the option isn't on screen
+  (`crates/machine/src/terminal_attention.rs` `choose_moves`). Checked in real Claude
+  Code 2.1 sessions, with the highlight on either option, and declining.
 - `offdesk answer <run> --approve|--decline|--option|--text`; the phone's attention
   strip answers approvals and questions in place
   (`packages/app/components/MobileTerminalAttention.web.tsx`).

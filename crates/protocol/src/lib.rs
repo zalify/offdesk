@@ -104,6 +104,10 @@ pub fn clean_opener_label(label: &str) -> Option<String> {
 #[serde(rename_all = "snake_case")]
 pub enum TerminalAttention {
     Confirmation,
+    /// Claude Code asks whether to trust the folder it starts in ("Yes, I trust this
+    /// folder" / "No, exit", unnumbered). Not a Confirmation: Enter picks the
+    /// highlighted option, which is "No, exit" until someone moves it.
+    FolderTrust,
 }
 
 fn default_reachable() -> bool {
@@ -346,6 +350,18 @@ pub enum AgentEvent {
 /// A node that types answers into agent runs' terminals (`HubToMachine::SendAgentKeys`).
 pub const AGENT_KEYS_CAPABILITY: &str = "agent-keys-v1";
 
+/// A node that types `AgentKey::Choose`: it reads the screen to move a menu's highlight.
+pub const AGENT_CHOOSE_CAPABILITY: &str = "agent-choose-v1";
+
+/// The source of a run's request when the screen showed Claude Code's folder trust
+/// prompt: an approval whose yes is choosing `FOLDER_TRUST_YES`, whose no is Escape.
+pub const FOLDER_TRUST_SOURCE: &str = "screen:folder-trust";
+/// The option that trusts the folder in Claude Code's prompt.
+pub const FOLDER_TRUST_YES: &str = "Yes, I trust this folder";
+/// What that request says (fixed text: screen recognition never copies terminal text).
+pub const FOLDER_TRUST_PROMPT: &str =
+    "Trust this folder? Claude Code asks before it works in a folder it hasn't opened before. Declining exits it.";
+
 /// One key (or literal text) a node types into an agent's terminal to answer it.
 /// Only these: an answer can pick an option, confirm, cancel or say something; it
 /// can't send control sequences.
@@ -358,6 +374,9 @@ pub enum AgentKey {
     Digit(u8),
     Enter,
     Escape,
+    /// Highlight the menu option whose line reads this, then Enter: for menus without
+    /// numbers. The node finds it on the screen (nodes with AGENT_CHOOSE_CAPABILITY).
+    Choose(String),
 }
 
 impl AgentKey {
@@ -369,6 +388,9 @@ impl AgentKey {
             }
             AgentKey::Digit(digit) => (1..=9).contains(digit),
             AgentKey::Enter | AgentKey::Escape => true,
+            AgentKey::Choose(label) => {
+                !label.trim().is_empty() && label.chars().count() <= 200 && !label.chars().any(char::is_control)
+            }
         }
     }
 }
@@ -917,7 +939,8 @@ pub struct AgentRunRequest {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<AgentQuestionOption>,
-    /// Where it was recognized: "screen"; later "hooks", "acp", "report".
+    /// Where it was recognized: "screen", "hooks", or FOLDER_TRUST_SOURCE for Claude
+    /// Code's folder trust prompt; later "acp", "report".
     pub source: String,
     pub created_at_ms: i64,
     /// When a person's answer was typed into the terminal. The request stays open
