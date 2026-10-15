@@ -80,6 +80,31 @@ rename mapping is at the bottom.
 - Runs carry `progress` and the latest `report`; `GET /api/agent-runs/{id}/events`
   lists requests, reports and status changes (`crates/hub/src/db/agent_runs.rs`).
 
+## Starting agent runs (implementation added 2026-10-15)
+
+- `POST /api/agent-runs` (`StartAgentRun`: machine, `claude` or `codex`, folder,
+  optional prompt, label, external reference and permission mode) starts the agent
+  in a new terminal and tab and returns the run (`starting`) and the terminal. There
+  is no command field; the modes are `ask`, `accept_edits` and `plan` (Claude only),
+  none of which skips the agent's prompts. It needs the machine's control lease and a
+  node with `agent-start-v1` (else 503); a missing folder is refused (502)
+  (`crates/hub/src/routes/agent_runs.rs` `start_run`,
+  `crates/hub/src/machine_manager/agent_runs.rs` `start_agent_run`).
+- The node builds the command (`crates/machine/src/agent_start.rs`): the prompt and
+  reference go to 0600 files under `<config dir>/agent-start/` and are read with
+  `"$(cat '<file>')"`, so the shell never parses them; a prompt can't start with `-`.
+  The agent gets `OFFDESK_RUN_ID` and `OFFDESK_EXTERNAL_REF`.
+- Hooks for that session: Claude gets `--settings` with Offdesk's hooks unless its
+  user settings have them already; Codex gets `-c notify=[offdesk, hook, codex,
+  notify, <the person's own notify program…>]`, and `offdesk hook codex notify`
+  runs that program with the same JSON after reporting.
+- The run turns `working` when the agent shows up in the terminal and `error` if it
+  hasn't within 60 seconds.
+- The node reports the agents it found in the person's login shell
+  (`MachineToHub::InstalledAgents`); `GET /api/machines/{id}/agents` lists them.
+- `offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt|--prompt-file]
+  [--label] [--ref] [--mode]` (`crates/cli/src/commands/runs.rs` `start`).
+
 ## Terminals opened by an agent (implementation added 2026-10-13)
 
 - A terminal created with an API token (the `offdesk` CLI) records

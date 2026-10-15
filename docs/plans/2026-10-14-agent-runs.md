@@ -269,6 +269,18 @@ Hub SQLite 新增 `agent_runs`、`agent_run_requests`、`agent_run_events`（按
 - 启动 API、CLI `offdesk start`、Codex `notify` 链式接入、Node 上报已安装的 agent。
 - 完成标准：`offdesk start` 启动的 claude 和 codex 带着第一条消息开始工作，钩子自动生效；提示里的 shell 元字符原样传给 agent，不被执行；不提供跳过权限确认的方式。
 
+#### A4 实现说明（2026-10-15）
+
+- **接口**：`POST /api/agent-runs`，body 是 `StartAgentRun { machine_id, agent, cwd, prompt?, label?, external_ref?, permission_mode?, device_id }`，成功返回 201 和 `{ run, terminal }`。运行先是 `starting`，agent 出现在终端里后变成 `working`（或屏幕上有确认时 `waiting`）；60 秒还没出现就是 `error`（没装、没登录、一启动就退出）。终端和其他新终端一样放进自己的标签页。需要这台机器的控制权和声明了 `agent-start-v1` 的 node（否则 503，提示更新）。
+- **没有命令字段**：hub 只把 `AgentStart { run_id, agent, prompt, permission_mode, external_ref }` 发给 node，由 node 拼命令。提示和外部引用写进 `<config dir>/agent-start/` 下的 0600 文件，命令里用 `"$(cat '<文件>')"` 读，shell 不解析内容；提示不能以 `-` 开头（会被当成选项），控制字符拒绝，最长 32 KB。命令形如 `env OFFDESK_RUN_ID=<id> [OFFDESK_EXTERNAL_REF=…] claude [模式参数] [钩子参数] "<提示>"`。文件一天后清理。
+- **权限模式**只有三个，都不跳过确认：`ask`（Claude `--permission-mode default`；Codex `--sandbox read-only --ask-for-approval on-request`）、`accept_edits`（Claude `acceptEdits`；Codex `workspace-write` 沙箱加 `on-request`）、`plan`（只有 Claude）。不传就按 agent 自己的设置。`bypass_permissions` 之类的值反序列化就失败（422）。
+- **钩子按会话生效**，不改用户的全局配置：Claude 用 `--settings <文件>` 带上 Offdesk 的钩子（用户已经 `offdesk agents hooks install` 过就不带，免得每个信号报两次）；Codex 用 `-c notify=[offdesk, hook, codex, notify, <用户自己的 notify…>]`（同样从文件读，用户的程序里有什么字符都行）。`offdesk hook codex notify` 报告之后用同一个 JSON 参数 exec 用户原来的程序。用户的 `config.toml` 读不了或者已经接了 Offdesk，就不加。钩子命令用 node 找到的 `offdesk` CLI 的绝对路径，找不到就不加钩子（屏幕识别照常）。
+- **文件夹**：不存在的文件夹直接拒绝（502 “There's no folder … on this machine”），因为终端会退回到别的目录，agent 不能在那里干活。
+- **已安装的 agent**：node 连上 hub 后在用户的交互式登录 shell 里 `command -v offdesk claude codex`（那里的 PATH 才是终端里的 PATH，服务进程的不是），再补查常见目录，各跑一次 `--version`（10 秒超时），用 `MachineToHub::InstalledAgents` 报给 hub；`GET /api/machines/{id}/agents` 列出来，给以后的启动界面用。
+- **CLI**：`offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt <text> | --prompt-file <path|->] [--label] [--ref] [--mode ask|accept-edits|plan] [--json]`，会先取得控制权。
+- **没做**：启动界面（wireframe 里的提议）；`offdesk agents hooks install` 还只装 Claude 的全局钩子，Codex 的全局 notify 没有自动安装（通过 Offdesk 启动的 Codex 已经有）；不按 agent 版本调整参数。
+- **验证**：node 单元测试用真的 `sh` 跑生成的命令，确认提示里的 `$(…)`、反引号、引号原样到达、什么都没执行，文件权限 0600/0700；hub 测试覆盖错误输入、旧 node、starting → working、超时变 error；隔离环境里用假的 claude/codex 走了一遍：提示原样到达，`OFFDESK_RUN_ID` 和运行一致，注入的 Claude 钩子把运行变成 idle，Codex 的 notify 先报告再调用用户自己的程序。**注意**：隔离测试要给 node 一个临时 `HOME` 并去掉 `USER`，否则终端用账户的登录 shell（读 `.zshrc`），会找到真的 claude。
+
 ## 待定问题
 
 1. 钩子是否要扩展到 Offdesk 之外启动的 claude（比如用户自己的 iTerm）？本设计不支持：没有终端就无法接管，也无法回答。

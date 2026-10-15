@@ -183,6 +183,7 @@ impl HubConnection {
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
+                offdesk_protocol::AGENT_START_CAPABILITY.to_string(),
             ],
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
@@ -321,6 +322,19 @@ impl HubConnection {
                 terminals,
             }))
             .await;
+
+        // The coding agents installed here, found in the person's login shell (slow:
+        // off the connection's path)
+        let send_tx_for_agents = send_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(agents) = tokio::task::spawn_blocking(crate::agent_start::probe).await {
+                let _ = send_tx_for_agents
+                    .send(OutboundHubMessage::Json(MachineToHub::InstalledAgents {
+                        agents,
+                    }))
+                    .await;
+            }
+        });
 
         // Agent browsers: subscribe before listing so nothing falls in
         // between, report the full list (like ExistingTerminals), then
@@ -699,9 +713,36 @@ async fn handle_hub_message(
             cols,
             rows,
             startup_command,
+            agent_start,
             ..
         } => {
             let terminal_id = uuid::Uuid::new_v4().to_string();
+            // An agent to start: the node builds its command (the prompt stays out of
+            // the shell's parsing)
+            let startup_command = match agent_start {
+                // A terminal falls back to another folder; an agent mustn't work there
+                Some(_) if !std::path::Path::new(&crate::pty::resolve_cwd(&cwd)).is_dir() => {
+                    let _ = send_tx
+                        .send(OutboundHubMessage::Json(MachineToHub::TerminalCreateError {
+                            request_id,
+                            error: format!("There's no folder {cwd} on this machine"),
+                        }))
+                        .await;
+                    return;
+                }
+                Some(start) => match crate::agent_start::startup_command(&terminal_id, &start) {
+                    Ok(command) => Some(command),
+                    Err(error) => {
+                        let _ = send_tx
+                            .send(OutboundHubMessage::Json(
+                                MachineToHub::TerminalCreateError { request_id, error },
+                            ))
+                            .await;
+                        return;
+                    }
+                },
+                None => startup_command,
+            };
             match pty.create_terminal(&terminal_id, &cwd, cols, rows) {
                 Ok(info) => {
                     let _ = send_tx

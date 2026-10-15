@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
 
 mod agent_runs;
-pub use agent_runs::AnswerError;
+pub use agent_runs::{AnswerError, StartError, START_TIMEOUT};
 use offdesk_protocol::{
     AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
     AgentBrowserReclaim, AgentSessionInfo, MouseAction, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
@@ -175,6 +175,8 @@ struct MachineConnection {
     pub agent_browsers: HashMap<String, AgentBrowserInfo>,
     /// The node's version from its Register; None for nodes before 0.23.
     pub version: Option<String>,
+    /// The coding agent CLIs the node found (`MachineToHub::InstalledAgents`).
+    pub installed_agents: Vec<offdesk_protocol::InstalledAgent>,
 }
 
 pub struct MachineManager {
@@ -326,6 +328,7 @@ impl MachineManager {
             capabilities,
             agent_browsers: HashMap::new(),
             version: None,
+            installed_agents: Vec::new(),
         };
 
         {
@@ -970,6 +973,22 @@ impl MachineManager {
         startup_command: Option<String>,
         opened_by: Option<TerminalOpener>,
     ) -> Result<TerminalInfo, String> {
+        self.create_terminal_with(machine_id, cwd, cols, rows, startup_command, opened_by, None)
+            .await
+    }
+
+    /// `create_terminal`, optionally starting an agent in it (the node builds the command).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_terminal_with(
+        &self,
+        machine_id: &str,
+        cwd: &str,
+        cols: u16,
+        rows: u16,
+        startup_command: Option<String>,
+        opened_by: Option<TerminalOpener>,
+        agent_start: Option<offdesk_protocol::AgentStart>,
+    ) -> Result<TerminalInfo, String> {
         let request_id = uuid::Uuid::new_v4().to_string();
 
         // Register pending request
@@ -981,7 +1000,15 @@ impl MachineManager {
                 .insert(request_id.clone(), opener.clone());
         }
         let result = self
-            .send_create_terminal(machine_id, &request_id, rx, cwd, cols, rows, startup_command)
+            .send_create_terminal(
+                machine_id,
+                &request_id,
+                rx,
+                cwd,
+                (cols, rows),
+                startup_command,
+                agent_start,
+            )
             .await;
         self.pending_openers.lock().unwrap().remove(&request_id);
 
@@ -1019,9 +1046,9 @@ impl MachineManager {
         request_id: &str,
         rx: oneshot::Receiver<Result<PendingResult, String>>,
         cwd: &str,
-        cols: u16,
-        rows: u16,
+        (cols, rows): (u16, u16),
         startup_command: Option<String>,
+        agent_start: Option<offdesk_protocol::AgentStart>,
     ) -> Result<PendingResult, String> {
         let request_id = request_id.to_string();
 
@@ -1042,6 +1069,7 @@ impl MachineManager {
                 cols,
                 rows,
                 startup_command,
+                agent_start,
             })
             .await
         {
@@ -2125,6 +2153,11 @@ impl MachineManager {
             }
             MachineToHub::TerminalAgent { terminal_id, agent } => {
                 self.on_terminal_agent(machine_id, &terminal_id, agent).await;
+            }
+            MachineToHub::InstalledAgents { agents } => {
+                if let Some(conn) = self.machines.lock().await.get_mut(machine_id) {
+                    conn.installed_agents = agents;
+                }
             }
             MachineToHub::AgentSignal {
                 terminal_id,
@@ -4024,6 +4057,106 @@ mod tests {
                 controller_device_id: Some(_),
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn started_runs_wait_for_their_agent_and_expire_without_it() {
+        use super::StartError;
+        use offdesk_protocol::{
+            AgentPermissionMode, AgentRunStatus, RunAgent, StartAgentRun, AGENT_START_CAPABILITY,
+        };
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-a", "machine-old");
+        let manager = MachineManager::new(pool.clone());
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(machine("machine-a"), Some("user-a".into()), vec![AGENT_START_CAPABILITY.into()])
+            .await;
+        let start = |prompt: &str| StartAgentRun {
+            machine_id: "machine-a".into(),
+            agent: RunAgent::Claude,
+            cwd: "/tmp/shop".into(),
+            prompt: Some(prompt.into()),
+            label: Some(" fix tax ".into()),
+            external_ref: Some("ZAL-12".into()),
+            permission_mode: Some(AgentPermissionMode::Ask),
+            device_id: None,
+        };
+        let status = |id: &str| crate::db::agent_runs::find(&pool.get().unwrap(), id).unwrap().unwrap().status;
+
+        // Bad input is refused before anything reaches the machine
+        let dash = manager.start_agent_run("user-a", start("--dangerously-skip-permissions"), None).await;
+        assert!(matches!(dash, Err(StartError::BadRequest(_))));
+        let mut plan = start("Plan it");
+        plan.agent = RunAgent::Codex;
+        plan.permission_mode = Some(AgentPermissionMode::Plan);
+        assert_eq!(
+            manager.start_agent_run("user-a", plan, None).await.unwrap_err(),
+            StartError::BadRequest("Codex has no plan mode".into())
+        );
+        assert!(commands.try_recv().is_err());
+
+        // The node gets what to start, never a command line, and answers with the terminal
+        async fn reply(
+            manager: &MachineManager,
+            commands: &mut tokio::sync::mpsc::Receiver<HubToMachine>,
+            terminal_id: &str,
+        ) -> offdesk_protocol::AgentStart {
+            let Some(HubToMachine::CreateTerminal { request_id, cwd, startup_command, agent_start, .. }) = commands.recv().await else {
+                panic!("expected CreateTerminal");
+            };
+            assert_eq!(startup_command, None);
+            manager
+                .handle_machine_message(
+                    "machine-a",
+                    MachineToHub::TerminalCreated { request_id, terminal_id: terminal_id.into(), title: "t".into(), cwd, cols: 120, rows: 36 },
+                )
+                .await;
+            agent_start.unwrap()
+        }
+        let (started, agent_start) = tokio::join!(
+            manager.start_agent_run("user-a", start("  Fix the tax $(rm -rf ~)\r\n"), None),
+            reply(&manager, &mut commands, "term-s")
+        );
+        assert_eq!(agent_start.prompt.as_deref(), Some("Fix the tax $(rm -rf ~)"));
+        assert_eq!(agent_start.external_ref.as_deref(), Some("ZAL-12"));
+        assert_eq!(agent_start.permission_mode, Some(AgentPermissionMode::Ask));
+        let (run, terminal) = started.unwrap();
+        assert_eq!((run.id.as_str(), terminal.id.as_str()), (agent_start.run_id.as_str(), "term-s"));
+        assert_eq!(run.status, AgentRunStatus::Starting);
+        assert_eq!((run.label.as_deref(), run.external_ref.as_deref()), (Some("fix tax"), Some("ZAL-12")));
+
+        // The shell comes first: still starting; then claude shows up and works
+        let agent = |agent| MachineToHub::TerminalAgent { terminal_id: "term-s".into(), agent };
+        manager.handle_machine_message("machine-a", agent(None)).await;
+        assert_eq!(status(&run.id), AgentRunStatus::Starting);
+        manager.handle_machine_message("machine-a", agent(Some(RunAgent::Claude))).await;
+        assert_eq!(status(&run.id), AgentRunStatus::Working);
+        manager.expire_start("user-a", &run.id);
+        assert_eq!(status(&run.id), AgentRunStatus::Working);
+        assert_eq!(manager.snapshot_for_user("user-a").await.agent_runs.len(), 1, "one run, not a second for the detected agent");
+
+        // One whose agent never shows up ends as an Error
+        let (started, _) = tokio::join!(
+            manager.start_agent_run("user-a", start("Again"), None),
+            reply(&manager, &mut commands, "term-t")
+        );
+        let lost = started.unwrap().0;
+        manager.expire_start("user-a", &lost.id);
+        assert_eq!(status(&lost.id), AgentRunStatus::Error);
+
+        // A node that can't start agents yet
+        manager.register_machine(machine("machine-old"), Some("user-a".into())).await;
+        let mut old = start("Hi");
+        old.machine_id = "machine-old".into();
+        assert!(matches!(manager.start_agent_run("user-a", old, None).await, Err(StartError::Unavailable(_))));
+
+        // What a node found installed
+        assert_eq!(manager.installed_agents("machine-a").await, Some(vec![]));
+        let installed = vec![offdesk_protocol::InstalledAgent { agent: RunAgent::Codex, version: Some("codex-cli 0.159.2".into()) }];
+        manager.handle_machine_message("machine-a", MachineToHub::InstalledAgents { agents: installed.clone() }).await;
+        assert_eq!(manager.installed_agents("machine-a").await, Some(installed));
+        assert_eq!(manager.installed_agents("machine-gone").await, None);
     }
 
     #[tokio::test]

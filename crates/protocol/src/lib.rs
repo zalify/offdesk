@@ -392,6 +392,216 @@ pub struct AgentAnswer {
     pub device_id: Option<String>,
 }
 
+/// A node that starts agents itself (`HubToMachine::CreateTerminal` with `agent_start`).
+pub const AGENT_START_CAPABILITY: &str = "agent-start-v1";
+
+/// Longest first message for a started agent.
+pub const MAX_START_PROMPT_BYTES: usize = 32 * 1024;
+/// Longest label or external reference of a started run.
+pub const MAX_START_LABEL_CHARS: usize = 200;
+
+/// The agent's own permission mode for a started run. Only modes in which it still
+/// asks or stays sandboxed: nothing here skips its permission prompts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPermissionMode {
+    /// It asks before edits and commands (Claude `default`; Codex in a read-only
+    /// sandbox, asking for anything more).
+    Ask,
+    /// Edits in its folder go ahead, commands still ask (Claude `acceptEdits`; Codex in
+    /// a workspace-write sandbox, asking for anything more).
+    AcceptEdits,
+    /// It plans and changes nothing until you agree (Claude only).
+    Plan,
+}
+
+impl AgentPermissionMode {
+    /// The agent's own flags for this mode.
+    pub fn args(self, agent: RunAgent) -> Result<&'static [&'static str], &'static str> {
+        match (agent, self) {
+            (RunAgent::Claude, AgentPermissionMode::Ask) => Ok(&["--permission-mode", "default"]),
+            (RunAgent::Claude, AgentPermissionMode::AcceptEdits) => {
+                Ok(&["--permission-mode", "acceptEdits"])
+            }
+            (RunAgent::Claude, AgentPermissionMode::Plan) => Ok(&["--permission-mode", "plan"]),
+            (RunAgent::Codex, AgentPermissionMode::Ask) => {
+                Ok(&["--sandbox", "read-only", "--ask-for-approval", "on-request"])
+            }
+            (RunAgent::Codex, AgentPermissionMode::AcceptEdits) => {
+                Ok(&["--sandbox", "workspace-write", "--ask-for-approval", "on-request"])
+            }
+            (RunAgent::Codex, AgentPermissionMode::Plan) => Err("Codex has no plan mode"),
+            (RunAgent::Other, _) => Err("Only claude and codex can be started"),
+        }
+    }
+}
+
+/// Start a coding agent in a new terminal (`POST /api/agent-runs`). The hub builds the
+/// command from these fields: it never takes a command line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StartAgentRun {
+    pub machine_id: String,
+    pub agent: RunAgent,
+    pub cwd: String,
+    /// Its first message, passed as one argument (never through the shell).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// A name for the run, shown beside it ("fix tax rounding").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The caller's own reference (an issue, a task), given to the agent as
+    /// `OFFDESK_EXTERNAL_REF`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
+    /// None: the agent's own settings decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<AgentPermissionMode>,
+    /// The calling device, which must hold the machine's control lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
+/// A started run and the terminal it runs in (`POST /api/agent-runs`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StartedAgentRun {
+    pub run: AgentRunInfo,
+    pub terminal: TerminalInfo,
+}
+
+/// What a node needs to start an agent in the terminal it creates. The node builds the
+/// command line itself; the prompt is passed as one argument, never parsed by a shell.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentStart {
+    /// Given to the agent as `OFFDESK_RUN_ID`.
+    pub run_id: String,
+    pub agent: RunAgent,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<AgentPermissionMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
+}
+
+impl AgentStart {
+    /// A prompt as it will be passed: line endings normalized to `\n`, trimmed; empty
+    /// is none. Terminal controls (ESC, NUL, paste markers) are refused, and so is a
+    /// leading `-`, which the agent's CLI would read as an option.
+    pub fn normalize_prompt(text: &str) -> Result<Option<String>, &'static str> {
+        let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        if text.len() > MAX_START_PROMPT_BYTES {
+            return Err("The prompt is too long (32 KB at most)");
+        }
+        if text.chars().any(|c| c.is_control() && c != '\n' && c != '\t') {
+            return Err("The prompt contains control characters");
+        }
+        if text.starts_with('-') {
+            return Err("The prompt can't start with '-'");
+        }
+        Ok(Some(text.to_string()))
+    }
+
+    /// A label or external reference: one line, trimmed, at most 200 characters.
+    pub fn normalize_label(text: &str) -> Result<Option<String>, &'static str> {
+        let text = text.trim();
+        if text.is_empty() {
+            return Ok(None);
+        }
+        if text.chars().count() > MAX_START_LABEL_CHARS || text.chars().any(char::is_control) {
+            return Err("Labels and references are one line of at most 200 characters");
+        }
+        Ok(Some(text.to_string()))
+    }
+
+    /// Checks everything a node relies on: a known agent and mode, a run id that's a
+    /// UUID, and a prompt and reference as `normalize_*` leaves them.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !matches!(self.agent, RunAgent::Claude | RunAgent::Codex) {
+            return Err("Only claude and codex can be started");
+        }
+        if uuid::Uuid::parse_str(&self.run_id).is_err() {
+            return Err("Invalid run id");
+        }
+        if let Some(mode) = self.permission_mode {
+            mode.args(self.agent)?;
+        }
+        if let Some(prompt) = &self.prompt {
+            if Self::normalize_prompt(prompt)?.as_deref() != Some(prompt.as_str()) {
+                return Err("The prompt isn't normalized");
+            }
+        }
+        if let Some(reference) = &self.external_ref {
+            if Self::normalize_label(reference)?.as_deref() != Some(reference.as_str()) {
+                return Err("The reference isn't normalized");
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The Claude Code hook events Offdesk listens to (`offdesk agents hooks install`, and
+/// the settings a node passes to a Claude it starts).
+pub const CLAUDE_HOOK_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PermissionRequest",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "Notification",
+    "Stop",
+];
+
+/// A path as one shell word: bare when it's only safe characters, else single-quoted.
+pub fn shell_word(path: &str) -> String {
+    if !path.is_empty() && path.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c)) {
+        path.to_string()
+    } else {
+        format!("'{}'", path.replace('\'', "'\\''"))
+    }
+}
+
+/// The hook command Claude Code runs for `event`; `cli` is the `offdesk` program.
+pub fn claude_hook_command(cli: &str, event: &str) -> String {
+    format!("{} hook claude {event}", shell_word(cli))
+}
+
+/// Whether a Claude Code hook handler is one of Offdesk's.
+pub fn is_offdesk_claude_hook(handler: &serde_json::Value) -> bool {
+    handler
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|command| command.contains(" hook claude ") && command.contains("offdesk"))
+}
+
+/// One hook group per event in `CLAUDE_HOOK_EVENTS`, running `offdesk hook claude <event>`.
+pub fn claude_hook_groups(cli: &str) -> Vec<(&'static str, serde_json::Value)> {
+    CLAUDE_HOOK_EVENTS
+        .iter()
+        .map(|event| {
+            (
+                *event,
+                serde_json::json!({
+                    "hooks": [{ "type": "command", "command": claude_hook_command(cli, event), "timeout": 5 }]
+                }),
+            )
+        })
+        .collect()
+}
+
+/// A coding agent CLI a node found, for choosing what to start.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledAgent {
+    pub agent: RunAgent,
+    /// What `<agent> --version` printed (first line), when it answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
 /// Where the node listens for agents' hooks and reports (`offdesk hook`, `offdesk run`):
 /// a Unix socket in the config directory, readable only by its user.
 pub fn agent_socket_path() -> std::path::PathBuf {
@@ -669,6 +879,12 @@ pub struct AgentRunInfo {
     /// The latest note, blocked or finished report from the agent itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<AgentRunReport>,
+    /// The name it was started with (`POST /api/agent-runs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The starter's own reference (an issue, a task).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_ref: Option<String>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1182,6 +1398,10 @@ pub enum HubToMachine {
         rows: u16,
         #[serde(skip_serializing_if = "Option::is_none", default)]
         startup_command: Option<String>,
+        /// Start this agent in the new terminal (nodes with `AGENT_START_CAPABILITY`;
+        /// the hub never sends it with `startup_command`).
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        agent_start: Option<AgentStart>,
     },
     #[serde(rename = "destroy_terminal")]
     DestroyTerminal { terminal_id: String },
@@ -1461,6 +1681,9 @@ pub enum MachineToHub {
     },
     /// What the agent in a terminal says about its run, through its hooks ("hooks") or
     /// its own report ("report"). The hub opens a run for it if none is open.
+    /// The coding agent CLIs this node found, sent after it registers.
+    #[serde(rename = "installed_agents")]
+    InstalledAgents { agents: Vec<InstalledAgent> },
     #[serde(rename = "agent_signal")]
     AgentSignal {
         terminal_id: String,
@@ -2493,6 +2716,42 @@ mod tests {
             MachineToHub::Register { capabilities, .. }
                 if capabilities == ["deflate-raw-v1"]
         ));
+    }
+    #[test]
+    fn agent_starts_take_a_prompt_never_a_command() {
+        use super::{AgentPermissionMode, AgentStart, HubToMachine, InstalledAgent, MachineToHub, RunAgent};
+        // Line endings and space are tidied; controls and a leading dash are refused
+        assert_eq!(AgentStart::normalize_prompt("  Fix it\r\nthen test \t ").unwrap().as_deref(), Some("Fix it\nthen test"));
+        assert_eq!(AgentStart::normalize_prompt(" \n ").unwrap(), None);
+        assert!(AgentStart::normalize_prompt("a\u{1b}[201~b").is_err());
+        assert!(AgentStart::normalize_prompt("--dangerously-skip-permissions").is_err());
+        assert!(AgentStart::normalize_prompt(&"x".repeat(super::MAX_START_PROMPT_BYTES + 1)).is_err());
+        assert!(AgentStart::normalize_label("two\nlines").is_err());
+
+        // Modes map to the agent's own safe flags; there's no mode that skips prompts
+        assert_eq!(AgentPermissionMode::AcceptEdits.args(RunAgent::Claude).unwrap(), ["--permission-mode", "acceptEdits"]);
+        assert!(AgentPermissionMode::Plan.args(RunAgent::Codex).is_err());
+        assert!(serde_json::from_str::<AgentPermissionMode>(r#""bypass_permissions""#).is_err());
+
+        let mut start = AgentStart {
+            run_id: "44444444-4444-4444-8444-444444444444".into(),
+            agent: RunAgent::Codex,
+            prompt: Some("Fix it".into()),
+            permission_mode: Some(AgentPermissionMode::Ask),
+            external_ref: None,
+        };
+        assert_eq!(start.validate(), Ok(()));
+        start.prompt = Some(" Fix it".into());
+        assert!(start.validate().is_err(), "a node only takes what the hub normalized");
+        start.prompt = None;
+        start.run_id = "../x".into();
+        assert!(start.validate().is_err());
+
+        // A plain terminal's message is as before; old nodes ignore the new field
+        let plain = HubToMachine::CreateTerminal { request_id: "r".into(), cwd: "/w".into(), cols: 80, rows: 24, startup_command: None, agent_start: None };
+        assert_eq!(serde_json::to_value(&plain).unwrap(), serde_json::json!({"type": "create_terminal", "request_id": "r", "cwd": "/w", "cols": 80, "rows": 24}));
+        let installed = MachineToHub::InstalledAgents { agents: vec![InstalledAgent { agent: RunAgent::Claude, version: None }] };
+        assert_eq!(serde_json::to_value(&installed).unwrap(), serde_json::json!({"type": "installed_agents", "agents": [{"agent": "claude"}]}));
     }
 }
 

@@ -441,6 +441,9 @@ offdesk run note|blocked <text>                 # from an agent in an Offdesk te
 offdesk run done <summary> [--link <url>]       # ... or that the work is finished; no hub token needed
 offdesk answer <run> --approve | --decline | --option <id> | --text <words>
                                                 # answer an agent run waiting on you; typed into its terminal for you
+offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt <text> | --prompt-file <path>]
+        [--label <name>] [--ref <id>] [--mode ask|accept-edits|plan]
+                                                # start an agent in a new terminal with its first message; it still asks for permissions
 ```
 
 - Machines and terminals are addressed by **id prefix** (first column of `ls`);

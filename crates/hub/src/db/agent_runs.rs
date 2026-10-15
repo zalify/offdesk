@@ -24,11 +24,13 @@ pub struct AgentRunRow {
     pub ended_at: Option<i64>,
     pub progress: Option<AgentRunProgress>,
     pub report: Option<AgentRunReport>,
+    pub label: Option<String>,
+    pub external_ref: Option<String>,
 }
 
 const COLUMNS: &str = "id, machine_id, terminal_id, agent, cwd, status, started_at, updated_at, \
      ended_at, progress_done, progress_total, progress_current, report_kind, report_text, \
-     report_link, report_at";
+     report_link, report_at, label, external_ref";
 /// Events kept per run; older ones are trimmed on insert.
 const EVENTS_PER_RUN: i64 = 500;
 /// Prompts, notes and current steps are cut to this many characters.
@@ -77,6 +79,8 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<AgentRunRow> {
             }),
             _ => None,
         },
+        label: row.get(16)?,
+        external_ref: row.get(17)?,
     })
 }
 
@@ -126,11 +130,52 @@ pub fn insert(
         ended_at: status.ends_run().then_some(now),
         progress: None,
         report: None,
+        label: None,
+        external_ref: None,
     };
+    insert_row(conn, &row)?;
+    Ok(row)
+}
+
+/// A run someone started (`POST /api/agent-runs`): Starting in its new terminal until
+/// the agent shows up there. `id` is the one its agent got as `OFFDESK_RUN_ID`.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_started(
+    conn: &Connection,
+    id: &str,
+    machine_id: &str,
+    terminal_id: &str,
+    agent: RunAgent,
+    cwd: &str,
+    label: Option<&str>,
+    external_ref: Option<&str>,
+) -> rusqlite::Result<AgentRunRow> {
+    let now = now_ms();
+    let row = AgentRunRow {
+        id: id.to_string(),
+        machine_id: machine_id.to_string(),
+        terminal_id: Some(terminal_id.to_string()),
+        agent,
+        cwd: cwd.to_string(),
+        status: AgentRunStatus::Starting,
+        started_at: now,
+        updated_at: now,
+        ended_at: None,
+        progress: None,
+        report: None,
+        label: label.map(str::to_string),
+        external_ref: external_ref.map(str::to_string),
+    };
+    insert_row(conn, &row)?;
+    Ok(row)
+}
+
+fn insert_row(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO agent_runs
-            (id, machine_id, terminal_id, agent, cwd, status, started_at, updated_at, ended_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (id, machine_id, terminal_id, agent, cwd, status, started_at, updated_at, ended_at,
+             label, external_ref)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             row.id,
             row.machine_id,
@@ -140,10 +185,12 @@ pub fn insert(
             row.status.as_str(),
             row.started_at,
             row.updated_at,
-            row.ended_at
+            row.ended_at,
+            row.label,
+            row.external_ref
         ],
     )?;
-    Ok(row)
+    Ok(())
 }
 
 /// Sets a run's status: an ending status (Done, Error, Gone) stamps `ended_at` and
@@ -415,6 +462,8 @@ pub fn to_info(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<AgentRu
         request,
         progress: row.progress.clone(),
         report: row.report.clone(),
+        label: row.label.clone(),
+        external_ref: row.external_ref.clone(),
         started_at_ms: row.started_at,
         updated_at_ms: row.updated_at,
         ended_at_ms: row.ended_at,

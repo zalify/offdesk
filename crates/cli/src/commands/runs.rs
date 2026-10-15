@@ -114,6 +114,52 @@ pub async fn answer(
     Ok(())
 }
 
+/// Start an agent in a new terminal on a machine. Takes control of the machine first,
+/// as opening a terminal does.
+pub async fn start(
+    client: &HubClient,
+    machine_query: &str,
+    mut start: offdesk_protocol::StartAgentRun,
+    json: bool,
+) -> Result<(), CliError> {
+    let machines = client.machines().await?;
+    let machine = resolve_machine(machine_query, &machines)?;
+    start.machine_id = machine.id.clone();
+    start.device_id = Some(client.device_id().to_string());
+    client.claim_control(&machine.id).await?;
+    let Some(started) = client.start_agent_run(&start).await? else {
+        return Err(CliError::Protocol(
+            "this hub can't start agents yet; update the hub".to_string(),
+        ));
+    };
+    if json {
+        super::out_line(&super::json_pretty(&started)?);
+        return Ok(());
+    }
+    super::out_line(&format!(
+        "Started {} in {} on {} (run {}). `offdesk runs` follows it; if it asks something, `offdesk answer {}`.",
+        started.run.agent.as_str(),
+        short_id(&started.terminal.id),
+        machine.name,
+        short_id(&started.run.id),
+        short_id(&started.run.id),
+    ));
+    Ok(())
+}
+
+/// A prompt from a file, or from stdin for `-`.
+pub fn read_prompt_file(path: &str) -> Result<String, CliError> {
+    use std::io::Read;
+    let mut text = String::new();
+    let result = if path == "-" {
+        std::io::stdin().read_to_string(&mut text).map(|_| ())
+    } else {
+        std::fs::File::open(path).and_then(|mut file| file.read_to_string(&mut text).map(|_| ()))
+    };
+    result.map_err(|error| CliError::Usage(format!("can't read the prompt from {path}: {error}")))?;
+    Ok(text)
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -218,6 +264,8 @@ mod tests {
             request: None,
             progress: None,
             report: None,
+            label: None,
+            external_ref: None,
             started_at_ms: started,
             updated_at_ms: started,
             ended_at_ms: ended,

@@ -1,6 +1,6 @@
 //! Agent runs over HTTP (docs/plans/2026-10-14-agent-runs.md): what coding agents are
-//! doing in the caller's terminals. Read-only for now; live changes come over
-//! /ws/events as `agent_run_updated`.
+//! doing in the caller's terminals, answering them, and starting one. Live changes come
+//! over /ws/events as `agent_run_updated`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -9,7 +9,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use offdesk_protocol::{AgentAnswer, AgentRunInfo};
+use offdesk_protocol::{AgentAnswer, AgentRunInfo, InstalledAgent, StartAgentRun, StartedAgentRun};
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
@@ -125,6 +125,101 @@ async fn answer_run(
     }
 }
 
+/// Start a coding agent (claude or codex) in a new terminal with its first message. The
+/// hub builds the command from the fields; there's no way to pass a command line, nor
+/// to skip the agent's permission prompts. 201: the run is Starting until the agent
+/// shows up in the terminal, and an Error if it hasn't within a minute.
+async fn start_run(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Json(start): Json<StartAgentRun>,
+) -> Result<(StatusCode, Json<StartedAgentRun>), Response> {
+    use crate::machine_manager::StartError;
+    let user_id = auth_user.user_id.clone();
+    let machine_id = start.machine_id.clone();
+    if !state
+        .manager
+        .user_can_access_machine(&user_id, &machine_id)
+        .await
+    {
+        return Err((StatusCode::NOT_FOUND, "Machine not found").into_response());
+    }
+    crate::routes::terminals::ensure_machine_row(&state, &user_id, &machine_id)
+        .await
+        .map_err(IntoResponse::into_response)?;
+    let controller = state.manager.get_controller(&user_id, &machine_id);
+    if !crate::routes::terminals::control_action_allowed(
+        controller.as_deref(),
+        start.device_id.as_deref(),
+    ) {
+        return Err((StatusCode::FORBIDDEN, "Take control of the machine first").into_response());
+    }
+    let opened_by = crate::routes::terminals::opener_for(&auth_user, None);
+    let (run, terminal) = match state
+        .manager
+        .start_agent_run(&user_id, start, opened_by)
+        .await
+    {
+        Ok(started) => started,
+        Err(StartError::BadRequest(reason)) => {
+            return Err((StatusCode::BAD_REQUEST, reason).into_response())
+        }
+        Err(StartError::Unavailable(reason)) => {
+            return Err((StatusCode::SERVICE_UNAVAILABLE, reason).into_response())
+        }
+        Err(StartError::Machine(reason)) => {
+            return Err((StatusCode::BAD_GATEWAY, reason).into_response())
+        }
+        Err(StartError::Internal) => return Err(internal("start failed")),
+    };
+
+    // Like any new terminal, it gets its own tab
+    let group_id = crate::routes::terminals::auto_create_workspace_group(
+        &state,
+        &user_id,
+        &machine_id,
+        &terminal.cwd,
+    )
+    .await
+    .map_err(IntoResponse::into_response)?;
+    let terminal = state
+        .manager
+        .set_terminal_workspace_group(&user_id, &machine_id, &terminal.id, Some(group_id))
+        .await
+        .map_err(internal)?;
+
+    let manager = state.manager.clone();
+    let run_id = run.id.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(crate::machine_manager::START_TIMEOUT).await;
+        manager.expire_start(&user_id, &run_id);
+    });
+    Ok((StatusCode::CREATED, Json(StartedAgentRun { run, terminal })))
+}
+
+/// The coding agents a machine found installed, for choosing what to start. Empty when
+/// its node doesn't report them yet.
+async fn machine_agents(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+) -> Result<Json<Vec<InstalledAgent>>, Response> {
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, &machine_id)
+        .await
+    {
+        return Err((StatusCode::NOT_FOUND, "Machine not found").into_response());
+    }
+    Ok(Json(
+        state
+            .manager
+            .installed_agents(&machine_id)
+            .await
+            .unwrap_or_default(),
+    ))
+}
+
 fn internal(error: impl std::fmt::Display) -> Response {
     tracing::warn!("agent runs: {}", error);
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
@@ -132,7 +227,8 @@ fn internal(error: impl std::fmt::Display) -> Response {
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/agent-runs", get(list_runs))
+        .route("/api/agent-runs", get(list_runs).post(start_run))
+        .route("/api/machines/{machine_id}/agents", get(machine_agents))
         .route("/api/agent-runs/{run_id}", get(get_run))
         .route("/api/agent-runs/{run_id}/events", get(run_events))
         .route("/api/agent-runs/{run_id}/answer", post(answer_run))
@@ -209,6 +305,67 @@ mod tests {
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
+    }
+
+    async fn post_json(state: &AppState, user: &str, uri: &str, body: Value) -> (StatusCode, String) {
+        let token = sign_jwt(user, &state.jwt_secret);
+        let response = router()
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn starting_needs_the_machine_and_its_control() {
+        let state = test_state();
+        let machine = offdesk_protocol::MachineInfo {
+            id: "machine-a".into(),
+            name: "machine-a".into(),
+            os: "linux".into(),
+            home_dir: "/tmp".into(),
+            production: false,
+        };
+        let (_, _commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine,
+                Some("user-a".into()),
+                vec![offdesk_protocol::AGENT_START_CAPABILITY.into()],
+            )
+            .await;
+        let body = |device: &str, prompt: &str| {
+            serde_json::json!({ "machine_id": "machine-a", "agent": "claude", "cwd": "/tmp", "prompt": prompt, "device_id": device })
+        };
+        let (status, _) = post_json(&state, "user-b", "/api/agent-runs", body("phone", "Hi")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = post_json(&state, "user-a", "/api/agent-runs", body("phone", "Hi")).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        state.manager.request_control("user-a", "machine-a", "phone");
+        let (status, reason) =
+            post_json(&state, "user-a", "/api/agent-runs", body("phone", "-p hi")).await;
+        assert_eq!((status, reason.as_str()), (StatusCode::BAD_REQUEST, "The prompt can't start with '-'"));
+        // There's no field for a command, nor one to skip permissions
+        let mut sneaky = body("phone", "Hi");
+        sneaky["permission_mode"] = "bypass_permissions".into();
+        let (status, _) = post_json(&state, "user-a", "/api/agent-runs", sneaky).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+        let (status, agents) = get_json(&state, "user-a", "/api/machines/machine-a/agents").await;
+        assert_eq!((status, agents), (StatusCode::OK, serde_json::json!([])));
+        let (status, _) = get_json(&state, "user-b", "/api/machines/machine-a/agents").await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

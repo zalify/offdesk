@@ -236,9 +236,42 @@ export interface AgentRunInfo {
   progress?: { done: number; total: number; current?: string }
   /** The latest note, blocked or finished report from the agent itself. */
   report?: { kind: 'note' | 'blocked' | 'finished' | 'other'; text: string; link?: string; at_ms: number }
+  /** The name it was started with (`POST /api/agent-runs`). */
+  label?: string
+  /** The starter's own reference (an issue, a task). */
+  external_ref?: string
   started_at_ms: number
   updated_at_ms: number
   ended_at_ms?: number
+}
+
+/** The agent's own permission mode for a started run; none of them skips its prompts. */
+export type AgentPermissionMode = 'ask' | 'accept_edits' | 'plan'
+
+/** `POST /api/agent-runs`: the Hub builds the command; it never takes a command line. */
+export interface StartAgentRun {
+  machine_id: string
+  agent: 'claude' | 'codex'
+  cwd: string
+  /** Its first message, passed as one argument. */
+  prompt?: string
+  label?: string
+  external_ref?: string
+  /** Omitted: the agent's own settings decide. `plan` is Claude only. */
+  permission_mode?: AgentPermissionMode
+  /** Must hold the machine's control lease. */
+  device_id?: string
+}
+
+export interface StartedAgentRun {
+  run: AgentRunInfo
+  terminal: TerminalInfo
+}
+
+/** `GET /api/machines/{id}/agents`: the coding agent CLIs a machine found. */
+export interface InstalledAgent {
+  agent: RunAgent
+  version?: string
 }
 
 // ── Agent sessions (ACP) — mirrors crates/protocol/src/lib.rs ──

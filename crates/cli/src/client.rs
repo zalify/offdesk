@@ -178,6 +178,24 @@ impl HubClient {
         parse_json(response).await
     }
 
+    /// Start an agent in a new terminal; None when the hub is too old to.
+    pub async fn start_agent_run(
+        &self,
+        start: &offdesk_protocol::StartAgentRun,
+    ) -> Result<Option<offdesk_protocol::StartedAgentRun>, CliError> {
+        let response = self
+            .http
+            .post(self.url("/agent-runs"))
+            .json(start)
+            .send()
+            .await
+            .map_err(network_error)?;
+        if response.status() == reqwest::StatusCode::METHOD_NOT_ALLOWED {
+            return Ok(None);
+        }
+        parse_json(response).await.map(Some)
+    }
+
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, CliError> {
         self.get("/terminals").await
     }
