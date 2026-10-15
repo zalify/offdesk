@@ -1,6 +1,7 @@
 import { isSecureConnection, secureFetch } from "./secureTransport";
 import type {
   User,
+  AgentRunInfo,
   BrowserStateSnapshot,
   MachineInfo,
   TerminalInfo,
@@ -310,6 +311,13 @@ export const saveWorkspaceLayout = (
       base_updated_at: baseUpdatedAt ?? -1,
     },
   );
+
+// Agent runs: answer the open request (typed into the terminal by its node)
+export const answerAgentRun = (
+  runId: string,
+  answer: { request_id: string; approve?: boolean; option_id?: string; text?: string; device_id: string },
+  signal?: AbortSignal,
+) => request<AgentRunInfo>("POST", `/api/agent-runs/${encodeURIComponent(runId)}/answer`, answer, signal);
 
 // Registration
 export const createRegistrationToken = (name: string) =>

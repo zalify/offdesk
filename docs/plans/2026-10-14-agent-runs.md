@@ -1,6 +1,6 @@
 # Agent 运行：Hub 管理 agent 状态
 
-状态：A1、A2 已实现（见下文“A1 实现说明”“A2 实现说明”），A3、A4 待做。对外开放（权限、Webhook、Bridge）见
+状态：A1–A3 已实现（见下文各阶段的实现说明），A4 待做。对外开放（权限、Webhook、Bridge）见
 `2026-10-14-agent-runs-external-access.md`。
 
 ## 目标与范围
@@ -253,6 +253,16 @@ Hub SQLite 新增 `agent_runs`、`agent_run_requests`、`agent_run_events`（按
 
 - 回答 API、按键转换、CLI `offdesk answer`、手机注意力条直接回答。
 - 完成标准：回答 question 和 approval 后，请求被后续信号关闭；请求已经被别人处理时拒绝；只读模式下拒绝；送达不确定时显示“去终端查看”，不重试。
+
+#### A3 实现说明（2026-10-15）
+
+- **接口**：`POST /api/agent-runs/{id}/answer`，body 是 `AgentAnswer { request_id, approve? | option_id? | text?, device_id }`。成功返回 202 和运行：表示答案已经交给 node 打进终端，不表示 agent 已经接受。和设计里的 `/requests/{rid}/answer` 不同，请求 id 放在 body 里，便于“只回答当前打开的那个”。
+- **检查**：运行是调用者机器上的、未结束；`request_id` 是当前打开的请求，且还没有答案（否则 409，避免同一个答案打两次）；回答的设备持有这台机器的控制权（和其他会改动机器的接口一致）；node 声明了 `agent-keys-v1` 能力（否则 503，提示更新 node）。
+- **按键**（`keys_for`）：approval 同意是数字 `1`（Claude 和 Codex 的菜单第一项都是“Yes”），拒绝是 `Escape`；question 的选项是它的序号（前九个）；文字是一行（不含控制字符，最多 2000 字）加 Enter。node 新增 `HubToMachine::SendAgentKeys`，用 `tmux send-keys` 直接打进终端（文字用 `-l`，文字和 Enter 之间停 150 ms），只接受这几种键，不借用 attach。
+- **请求何时关闭**：答案发出后请求标记 `answer_sent_at_ms`，仍然打开；agent 的下一个信号（钩子的 working、屏幕上的确认消失）才关闭它。所以送达不确定时 UI 显示“已发送”，而不是“已完成”。
+- **CLI**：`offdesk answer <run> --approve|--decline|--option <id>|--text <words>`，会先取得控制权；`offdesk runs` 在等待中的运行下面写出它在等什么和怎么回答。
+- **手机注意力条**：除了屏幕识别的确认，等待中的运行（比如钩子报告的提问）也列出来，显示请求内容；approval 有 yes/no，question 有前三个选项，点了就发送并显示 sent，直到 agent 继续。没有运行的屏幕确认仍是原来的 Enter。没有控制权时按钮不可用，提示先取得控制权。
+- **验证**：Hub 测试覆盖别人、无控制权、错选项、过期请求、重复回答、旧 node 和各种按键；容器里的 E2E 覆盖注意力条里回答问题（含原有的注意力条测试）；隔离环境里，钩子报告 input 后用 `offdesk answer --text` 回答，假 agent 读到了 “Team, and keep the old prices”，再次回答得到 409。
 
 ### A4 启动 API 和 Codex
 

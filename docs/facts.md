@@ -47,6 +47,20 @@ rename mapping is at the bottom.
 - `offdesk runs` lists open runs; `--all` adds those ended in the last day and
   `--waiting` keeps only waiting ones (`crates/cli/src/commands/runs.rs`).
 
+## Answering agent runs (implementation added 2026-10-15)
+
+- `POST /api/agent-runs/{id}/answer` types a person's answer into the run's terminal:
+  approval yes is `1`, no is Escape; a question's option is its number; words are one
+  line plus Enter (`crates/hub/src/machine_manager/agent_runs.rs` `keys_for`). It needs
+  the open request's id, the machine's control lease and a node with `agent-keys-v1`,
+  and refuses a second answer; the request stays open until the agent moves on.
+- The node types it with `tmux send-keys` (`HubToMachine::SendAgentKeys`,
+  `crates/machine/src/pty.rs` `send_agent_keys`), accepting only digits, Enter, Escape
+  and one line of text.
+- `offdesk answer <run> --approve|--decline|--option|--text`; the phone's attention
+  strip answers approvals and questions in place
+  (`packages/app/components/MobileTerminalAttention.web.tsx`).
+
 ## Agent hooks and reports (implementation added 2026-10-15)
 
 - `offdesk hook claude <event>` reads a Claude Code hook's JSON on stdin and sends

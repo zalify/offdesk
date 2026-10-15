@@ -6,10 +6,10 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
-    routing::get,
+    routing::{get, post},
     Router,
 };
-use offdesk_protocol::AgentRunInfo;
+use offdesk_protocol::{AgentAnswer, AgentRunInfo};
 use serde::Deserialize;
 
 use crate::auth::AuthUser;
@@ -96,6 +96,35 @@ async fn run_events(
     ))
 }
 
+/// Answer the run's open request: the node types it into the terminal. 202 means it was
+/// sent, not that the agent took it; the run's next update says that.
+async fn answer_run(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(run_id): Path<String>,
+    Json(answer): Json<AgentAnswer>,
+) -> Result<(StatusCode, Json<AgentRunInfo>), Response> {
+    use crate::machine_manager::AnswerError;
+    match state
+        .manager
+        .answer_agent_run(&auth_user.user_id, &run_id, answer)
+        .await
+    {
+        Ok(run) => Ok((StatusCode::ACCEPTED, Json(run))),
+        Err(AnswerError::NotFound) => {
+            Err((StatusCode::NOT_FOUND, "Agent run not found").into_response())
+        }
+        Err(AnswerError::Conflict(reason)) => Err((StatusCode::CONFLICT, reason).into_response()),
+        Err(AnswerError::BadRequest(reason)) => {
+            Err((StatusCode::BAD_REQUEST, reason).into_response())
+        }
+        Err(AnswerError::Unavailable(reason)) => {
+            Err((StatusCode::SERVICE_UNAVAILABLE, reason).into_response())
+        }
+        Err(AnswerError::Internal) => Err(internal("answer failed")),
+    }
+}
+
 fn internal(error: impl std::fmt::Display) -> Response {
     tracing::warn!("agent runs: {}", error);
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
@@ -106,6 +135,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/agent-runs", get(list_runs))
         .route("/api/agent-runs/{run_id}", get(get_run))
         .route("/api/agent-runs/{run_id}/events", get(run_events))
+        .route("/api/agent-runs/{run_id}/answer", post(answer_run))
 }
 
 #[cfg(test)]

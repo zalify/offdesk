@@ -343,6 +343,55 @@ pub enum AgentEvent {
     },
 }
 
+/// A node that types answers into agent runs' terminals (`HubToMachine::SendAgentKeys`).
+pub const AGENT_KEYS_CAPABILITY: &str = "agent-keys-v1";
+
+/// One key (or literal text) a node types into an agent's terminal to answer it.
+/// Only these: an answer can pick an option, confirm, cancel or say something; it
+/// can't send control sequences.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "key", content = "value", rename_all = "snake_case")]
+pub enum AgentKey {
+    /// Literal text, typed as is (at most 2000 characters, no control characters).
+    Text(String),
+    /// A menu option's number, 1-9.
+    Digit(u8),
+    Enter,
+    Escape,
+}
+
+impl AgentKey {
+    /// Whether a node may type this key.
+    pub fn is_allowed(&self) -> bool {
+        match self {
+            AgentKey::Text(text) => {
+                !text.is_empty() && text.chars().count() <= 2000 && !text.chars().any(char::is_control)
+            }
+            AgentKey::Digit(digit) => (1..=9).contains(digit),
+            AgentKey::Enter | AgentKey::Escape => true,
+        }
+    }
+}
+
+/// A person's answer to a run's open request (`POST /api/agent-runs/{id}/answer`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentAnswer {
+    /// The request being answered; refused if it's no longer the open one.
+    pub request_id: String,
+    /// An approval: yes or no.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approve: Option<bool>,
+    /// A question's option, by id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub option_id: Option<String>,
+    /// Free text: a question in your own words, or the input it waits for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The answering device, which must hold the machine's control lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
 /// Where the node listens for agents' hooks and reports (`offdesk hook`, `offdesk run`):
 /// a Unix socket in the config directory, readable only by its user.
 pub fn agent_socket_path() -> std::path::PathBuf {
@@ -510,6 +559,10 @@ pub struct AgentRunRequest {
     /// Where it was recognized: "screen"; later "hooks", "acp", "report".
     pub source: String,
     pub created_at_ms: i64,
+    /// When a person's answer was typed into the terminal. The request stays open
+    /// until the agent's own signals (hooks, the screen) show it moved on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_sent_at_ms: Option<i64>,
 }
 
 /// How far along a run is, from the agent's own task list.
@@ -1216,6 +1269,12 @@ pub enum HubToMachine {
     RefreshAttach { attach_id: String },
     #[serde(rename = "attach_input")]
     AttachInput { attach_id: String, data: String },
+    /// Type an answer into an agent run's terminal (nodes with AGENT_KEYS_CAPABILITY).
+    #[serde(rename = "send_agent_keys")]
+    SendAgentKeys {
+        terminal_id: String,
+        keys: Vec<AgentKey>,
+    },
     #[serde(rename = "attach_resize")]
     AttachResize {
         attach_id: String,
@@ -2219,6 +2278,23 @@ mod tests {
         .unwrap();
         assert!(snapshot.agent_sessions.is_empty());
         assert!(snapshot.agent_session_seen.is_empty());
+    }
+
+    #[test]
+    fn answer_keys_are_limited_to_options_confirm_cancel_and_one_line() {
+        use super::{AgentKey, HubToMachine};
+        assert!(AgentKey::Digit(1).is_allowed() && AgentKey::Digit(9).is_allowed());
+        assert!(!AgentKey::Digit(0).is_allowed() && !AgentKey::Digit(10).is_allowed());
+        assert!(AgentKey::Text("Team, and keep the old prices".into()).is_allowed());
+        assert!(!AgentKey::Text("".into()).is_allowed());
+        assert!(!AgentKey::Text("rm -rf ~\n".into()).is_allowed());
+        assert!(!AgentKey::Text("\u{1b}[A".into()).is_allowed());
+        assert!(!AgentKey::Text("x".repeat(2001)).is_allowed());
+        let message = HubToMachine::SendAgentKeys { terminal_id: "t".into(), keys: vec![AgentKey::Text("hi".into()), AgentKey::Enter] };
+        assert_eq!(
+            serde_json::to_value(&message).unwrap(),
+            serde_json::json!({"type": "send_agent_keys", "terminal_id": "t", "keys": [{"key": "text", "value": "hi"}, {"key": "enter"}]})
+        );
     }
 
     #[test]

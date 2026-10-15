@@ -51,6 +51,69 @@ pub async fn run(
     Ok(())
 }
 
+/// Answer a run's open request: approve or decline, pick an option, or say it in words.
+/// Takes control of the machine first, as typing into a terminal does.
+pub async fn answer(
+    client: &HubClient,
+    run_query: &str,
+    approve: Option<bool>,
+    option: Option<String>,
+    text: Option<String>,
+) -> Result<(), CliError> {
+    let Some(runs) = client.agent_runs("?active=true").await? else {
+        return Err(CliError::Protocol(
+            "this hub doesn't track agent runs yet; update the hub".to_string(),
+        ));
+    };
+    let matches: Vec<&AgentRunInfo> = runs
+        .iter()
+        .filter(|run| run.id.starts_with(run_query))
+        .collect();
+    let run = match matches.as_slice() {
+        [run] => *run,
+        [] => {
+            return Err(CliError::Usage(format!(
+                "no open agent run {run_query}; see `offdesk runs`"
+            )))
+        }
+        _ => {
+            return Err(CliError::Usage(format!(
+                "{run_query} matches several runs; use more of its id"
+            )))
+        }
+    };
+    let Some(request) = &run.request else {
+        return Err(CliError::Usage(format!(
+            "{} isn't waiting on anyone",
+            short_id(&run.id)
+        )));
+    };
+    client.claim_control(&run.machine_id).await?;
+    let answered = client
+        .answer_agent_run(
+            &run.id,
+            &offdesk_protocol::AgentAnswer {
+                request_id: request.id.clone(),
+                approve,
+                option_id: option,
+                text,
+                device_id: Some(client.device_id().to_string()),
+            },
+        )
+        .await?;
+    super::out_line(&format!(
+        "Sent to {} in {}; it carries on once the agent takes it ({}).",
+        answered.agent.as_str(),
+        answered
+            .terminal_id
+            .as_deref()
+            .map(short_id)
+            .unwrap_or("its terminal"),
+        "`offdesk runs` shows when it does"
+    ));
+    Ok(())
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -98,6 +161,35 @@ fn table(runs: &[AgentRunInfo], machines: &[MachineInfo], now: i64) -> Vec<Strin
             length,
             run.cwd,
         ));
+        // What it waits for, and how to answer from here
+        if let (Some(request), None) = (&run.request, run.ended_at_ms) {
+            let how = match request.kind {
+                offdesk_protocol::AgentRequestKind::Approval => "--approve | --decline".to_string(),
+                offdesk_protocol::AgentRequestKind::Question if !request.options.is_empty() => {
+                    let options: Vec<String> = request
+                        .options
+                        .iter()
+                        .map(|o| format!("{}={}", o.id, o.label))
+                        .collect();
+                    format!("--option {} | --text ...", options.join(" "))
+                }
+                _ => "--text ...".to_string(),
+            };
+            let sent = if request.answer_sent_at_ms.is_some() {
+                " (answer sent)"
+            } else {
+                ""
+            };
+            lines.push(format!(
+                "{:<10} ↳ {}: {}{}  offdesk answer {} {}",
+                "",
+                request.kind.as_str(),
+                request.prompt.as_deref().unwrap_or("(see its terminal)"),
+                sent,
+                short_id(&run.id),
+                how
+            ));
+        }
     }
     lines
 }
@@ -147,6 +239,24 @@ mod tests {
             )
         );
         assert!(lines[2].contains(" done ") && lines[2].contains(" 1m "));
+        let mut waiting = run("run-ccccccccc", AgentRunStatus::Waiting, 0, None);
+        waiting.request = Some(offdesk_protocol::AgentRunRequest {
+            id: "q".into(),
+            kind: offdesk_protocol::AgentRequestKind::Approval,
+            prompt: Some("Bash: npm test".into()),
+            options: vec![],
+            source: "hooks".into(),
+            created_at_ms: 0,
+            answer_sent_at_ms: None,
+        });
+        let lines = table(&[waiting], &machines, 1000);
+        assert!(
+            lines[2].trim_start().starts_with(
+                "↳ approval: Bash: npm test  offdesk answer run-cccc --approve | --decline"
+            ),
+            "{}",
+            lines[2]
+        );
         assert_eq!(age(59_000), "59s");
         assert_eq!(age(3 * 86_400_000), "3d");
     }

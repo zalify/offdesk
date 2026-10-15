@@ -162,6 +162,22 @@ impl HubClient {
         self.get_optional(&format!("/agent-runs{query}"), None).await
     }
 
+    /// Answer an agent run's open request; the node types it into the terminal.
+    pub async fn answer_agent_run(
+        &self,
+        run_id: &str,
+        answer: &offdesk_protocol::AgentAnswer,
+    ) -> Result<AgentRunInfo, CliError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/agent-runs/{run_id}/answer")))
+            .json(answer)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, CliError> {
         self.get("/terminals").await
     }

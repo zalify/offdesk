@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import { sendAttentionEnter } from "@/lib/attentionEnter";
-import type { AgentBrowserInfo, MachineInfo, TerminalInfo } from "@offdesk/shared";
+import { answerAgentRun } from "@/lib/api";
+import { answerChoices, waitingRunsByTerminal } from "@/lib/agentRunRequests";
+import type { AgentBrowserInfo, AgentRunInfo, MachineInfo, TerminalInfo } from "@offdesk/shared";
 import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { browserLabel } from "@/lib/agentBrowserOverlay";
 
 const NO_BROWSERS: AgentBrowserInfo[] = [];
+const NO_RUNS: AgentRunInfo[] = [];
 
-export function MobileTerminalAttention({ terminals, machines, activeTerminalId, groupLabels, onPick, deviceId, canSend, browsers = NO_BROWSERS, activeBrowserId = null, onPickBrowser }: {
+export function MobileTerminalAttention({ terminals, machines, activeTerminalId, groupLabels, onPick, deviceId, canSend, browsers = NO_BROWSERS, activeBrowserId = null, onPickBrowser, runs = NO_RUNS }: {
   terminals: TerminalInfo[];
   machines: MachineInfo[];
   activeTerminalId: string | null;
@@ -19,9 +22,14 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
   browsers?: AgentBrowserInfo[];
   activeBrowserId?: string | null;
   onPickBrowser?: (id: string) => void;
+  /** Agent runs; one waiting on a person shows its question here, answerable in place. */
+  runs?: AgentRunInfo[];
 }) {
-  const pending = terminals.filter(t => t.id !== activeTerminalId && t.reachable && t.attention === "confirmation"
+  const waitingRuns = waitingRunsByTerminal(runs);
+  const pending = terminals.filter(t => t.id !== activeTerminalId && t.reachable
+    && (t.attention === "confirmation" || waitingRuns.has(t.id))
     && machines.some(m => m.id === t.machine_id));
+  const [answering, setAnswering] = useState<Set<string>>(() => new Set());
   // A browser the agent handed off, that this device is not already helping with.
   const handoffs = browsers.filter(b => b.handoff && b.id !== activeBrowserId
     && !(b.controller === "human" && b.controller_device_id === deviceId));
@@ -62,6 +70,23 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
     } finally { requests.current.delete(terminal.id); }
     // Keep disabled until the prompt clears, even after an uncertain delivery.
   };
+  // An answer to the run's open request, typed into its terminal by the node. The
+  // request stays until the agent moves on; the hub refuses a second answer.
+  const answer = async (run: AgentRunInfo, choice: { approve?: boolean; option_id?: string }) => {
+    if (!deviceId || !run.request || answering.has(run.request.id)) return;
+    const requestId = run.request.id;
+    setAnswering(previous => new Set(previous).add(requestId));
+    setError(null);
+    try {
+      await answerAgentRun(run.id, { request_id: requestId, ...choice, device_id: deviceId });
+    } catch (reason) {
+      setAnswering(previous => { const next = new Set(previous); next.delete(requestId); return next; });
+      const message = reason instanceof Error ? reason.message : "";
+      setError(message.includes("control") ? "Take control of this machine to answer."
+        : message.includes("Update Offdesk") ? "Update Offdesk on that machine to answer from here."
+        : "Couldn't send the answer. Open the terminal to check.");
+    }
+  };
   const waiting = pending.length + handoffs.length;
   if (waiting === 0) return null;
   return (
@@ -91,16 +116,41 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
           const group = groupLabels.get(terminal.id) ?? terminal.cwd.split(/[\\/]/).filter(Boolean).pop();
           const context = [group, machine].filter(Boolean).join(" · ");
           const blocked = !deviceId || !canSend(terminal.machine_id) || sent.has(terminal.id);
+          const run = waitingRuns.get(terminal.id);
+          const prompt = run?.request?.prompt;
+          const asking = run?.request?.kind === "question" ? "asks" : run?.request?.kind === "input" ? "needs input" : "confirmation requested";
+          const choices = run ? answerChoices(run) : [];
+          const answered = !!run?.request && (!!run.request.answer_sent_at_ms || answering.has(run.request.id));
           return (
             <div key={terminal.id} style={{ ...chip, padding: "0 3px 0 0" }}>
               <button type="button" data-testid={`mobile-attention-${terminal.id}`}
-                aria-label={`Open ${title}, ${context}, confirmation requested`}
-                title={`${title} · ${context} — confirmation requested`}
+                aria-label={`Open ${title}, ${context}, ${asking}${prompt ? `: ${prompt}` : ""}`}
+                title={`${title} · ${context} — ${asking}${prompt ? `: ${prompt}` : ""}`}
                 onClick={() => onPick(terminal.id)}
                 style={{ display: "flex", alignItems: "center", alignSelf: "stretch", maxWidth: 170, padding: "0 8px", border: 0, background: "transparent", color: colors.fg0, font: "inherit", fontSize: 12, fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{title} · {group ?? machine}</span>
               </button>
-              <button type="button" data-testid={`mobile-attention-enter-${terminal.id}`}
+              {prompt && (
+                <span data-testid={`mobile-attention-prompt-${terminal.id}`} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160, color: colors.fg2, fontSize: 11.5 }}>{prompt}</span>
+              )}
+              {run && answered && (
+                <span data-testid={`mobile-attention-sent-${terminal.id}`} style={{ padding: "0 8px", color: colors.fg3, fontSize: 11 }}>sent</span>
+              )}
+              {run && !answered && choices.map(choice => {
+                const disabled = !deviceId || !canSend(terminal.machine_id);
+                return (
+                  <button key={choice.label} type="button" data-testid={`mobile-attention-answer-${terminal.id}-${choice.label}`}
+                    aria-label={`Answer ${title}: ${choice.label}`}
+                    disabled={disabled}
+                    onPointerDown={event => event.preventDefault()}
+                    onClick={() => void answer(run, choice.answer)}
+                    className="odk-bracketed"
+                    style={{ minWidth: 40, maxWidth: 110, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: disabled ? "transparent" : colors.primary, color: disabled ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: 11, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer", opacity: disabled ? 0.7 : 1 }}>
+                    {choice.label}
+                  </button>
+                );
+              })}
+              {!run && <button type="button" data-testid={`mobile-attention-enter-${terminal.id}`}
                 aria-label={`Send Enter to ${title}, ${context}`}
                 title="Confirm the currently selected option in this terminal"
                 disabled={blocked}
@@ -109,7 +159,7 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
                 className="odk-bracketed"
                 style={{ minWidth: 52, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: blocked ? "transparent" : colors.primary, color: blocked ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: 11, fontWeight: 600, textTransform: "lowercase", cursor: "pointer", opacity: blocked ? 0.7 : 1 }}>
                 {sent.has(terminal.id) ? result[terminal.id] === "sent" ? "Sent" : result[terminal.id] === "check" ? "Check" : "…" : "Enter"}
-              </button>
+              </button>}
             </div>
           );
         })}

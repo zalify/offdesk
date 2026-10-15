@@ -173,3 +173,58 @@ test("mobile attention Enter respects view-only and a prompt resolved while atta
   expect(inputs).toEqual([]);
   await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Current");
 });
+
+test("an agent run waiting on you shows its question in the strip and is answered in place", async ({ page }) => {
+  let seq = 300;
+  let events: WebSocketRoute;
+  const terminal = (id: string, title: string): TerminalInfo => ({
+    id, title, machine_id: "e2e-node", cwd: `/tmp/${id}`, cols: 80, rows: 24, reachable: true,
+  });
+  const current = terminal("current", "Current task");
+  // No confirmation on its screen: the question came from Claude Code's hooks
+  const asking = terminal("asking", "Pricing page");
+  const run = {
+    id: "run-1", machine_id: "e2e-node", terminal_id: asking.id, agent: "claude" as const, cwd: asking.cwd, status: "waiting" as const,
+    started_at_ms: 1, updated_at_ms: 2,
+    request: { id: "req-1", kind: "question" as const, prompt: "Which plan should the page highlight?", options: [{ id: "1", label: "Pro" }, { id: "2", label: "Team" }], source: "hooks", created_at_ms: 2 },
+  };
+  await page.route("**/api/bootstrap", route => route.fulfill({ json: {
+    snapshot_seq: seq, last_focused_terminal_id: current.id,
+    machines: [{ id: "e2e-node", name: "MacBook", os: "macos", home_dir: "/tmp" }],
+    terminals: [current, asking], workspace_groups: [], workspace_layouts: [], machine_stats: [], control_leases: [],
+    agent_runs: [run],
+  } }));
+  await page.routeWebSocket(/\/ws\/events/, socket => {
+    events = socket;
+    socket.onMessage(raw => {
+      if (typeof raw === "string") {
+        const message = JSON.parse(raw);
+        if (message.type === "ping") socket.send(JSON.stringify({ type: "pong", t: message.t }));
+      }
+    });
+  });
+  await page.routeWebSocket(/\/ws\/terminal\//, socket => { socket.send(Buffer.from("Terminal ready\r\n")); });
+  const answers: unknown[] = [];
+  await page.route("**/api/agent-runs/run-1/answer", async route => {
+    answers.push(route.request().postDataJSON());
+    await route.fulfill({ status: 202, json: { ...run, request: { ...run.request, answer_sent_at_ms: 3 } } });
+  });
+  await openApp(page);
+  const emit = (event: BrowserEvent) => events.send(JSON.stringify({ seq: ++seq, event }));
+
+  const strip = page.getByTestId("mobile-terminal-attention");
+  await expect(strip).toContainText("1 waiting");
+  await expect(page.getByTestId("mobile-attention-prompt-asking")).toHaveText("Which plan should the page highlight?");
+  await expect(page.getByTestId("mobile-attention-enter-asking")).toHaveCount(0);
+  await page.getByTestId("mobile-attention-answer-asking-Team").click();
+  await expect(page.getByTestId("mobile-attention-sent-asking")).toBeVisible();
+  await expect(page.getByTestId("mobile-attention-answer-asking-Pro")).toHaveCount(0);
+  expect(answers).toEqual([{ request_id: "req-1", option_id: "2", device_id: expect.any(String) }]);
+  // The view stays where it was
+  await expect(page.getByTestId("mobile-title-bar-label")).toContainText("Current task");
+
+  // The agent took the answer and works on: the strip clears
+  const { request: _answered, ...working } = run;
+  emit({ type: "agent_run_updated", run: { ...working, status: "working", updated_at_ms: 4 } });
+  await expect(strip).toHaveCount(0);
+});
