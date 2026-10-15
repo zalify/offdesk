@@ -27,18 +27,6 @@ const SOCKET_TIMEOUT: Duration = Duration::from_millis(500);
 const MAX_INPUT_BYTES: u64 = 1024 * 1024;
 const MAX_PROMPT_CHARS: usize = 300;
 
-/// The Claude Code hook events Offdesk listens to (`offdesk agents hooks install`).
-pub const CLAUDE_HOOK_EVENTS: [&str; 8] = [
-    "SessionStart",
-    "UserPromptSubmit",
-    "PreToolUse",
-    "PermissionRequest",
-    "PostToolUse",
-    "PostToolUseFailure",
-    "Notification",
-    "Stop",
-];
-
 fn clip(text: &str, max: usize) -> String {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     match text.char_indices().nth(max) {
@@ -232,16 +220,33 @@ fn report(agent: Option<RunAgent>, source: &str, signal: AgentSignal) -> std::io
     )
 }
 
-/// `offdesk hook <agent> <event> [payload]`: never fails, never prints.
-pub fn hook(agent: &str, event: &str, payload: Option<&str>) {
+/// `offdesk hook <agent> <event> [args]`: never fails, never prints. For Codex's
+/// `notify`, the last argument is Codex's JSON and any before it are the person's own
+/// notify program, which then runs with that JSON as Codex would have run it.
+pub fn hook(agent: &str, event: &str, args: &[String]) {
     let run_agent = match agent {
         "claude" => RunAgent::Claude,
         "codex" => RunAgent::Codex,
         _ => return,
     };
-    let signal = if event == "notify" {
-        payload.and_then(codex_notify_signal)
-    } else {
+    if event == "notify" {
+        let Some((payload, chained)) = args.split_last() else {
+            return;
+        };
+        if let Some(signal) = codex_notify_signal(payload) {
+            let _ = report(Some(run_agent), "hooks", signal);
+        }
+        if let Some((program, program_args)) = chained.split_first() {
+            use std::os::unix::process::CommandExt;
+            // Replaces this process; if it can't run, there's nothing to report
+            let _ = std::process::Command::new(program)
+                .args(program_args)
+                .arg(payload)
+                .exec();
+        }
+        return;
+    }
+    let signal = {
         let mut input = String::new();
         let stdin = std::io::stdin();
         if !stdin.is_terminal() {
@@ -288,27 +293,6 @@ pub fn claude_settings_path() -> Option<PathBuf> {
     }
 }
 
-/// The hook command for an event; `exe` is this program.
-fn hook_command(exe: &Path, event: &str) -> String {
-    let path = exe.to_string_lossy();
-    let quoted = if path
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || "/._-+".contains(c))
-    {
-        path.to_string()
-    } else {
-        format!("'{}'", path.replace('\'', "'\\''"))
-    };
-    format!("{quoted} hook claude {event}")
-}
-
-fn is_ours(handler: &Value) -> bool {
-    handler
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(|command| command.contains(" hook claude ") && command.contains("offdesk"))
-}
-
 /// Settings with Offdesk's hooks removed (`install` false) or added once per event.
 /// Other keys keep their order and text; the person's own hooks stay as they are.
 pub fn update_claude_settings(original: &str, exe: &Path, install: bool) -> Result<String, String> {
@@ -326,7 +310,7 @@ pub fn update_claude_settings(original: &str, exe: &Path, install: bool) -> Resu
     for groups in hooks.values_mut() {
         for group in groups.iter_mut() {
             if let Some(handlers) = group.get_mut("hooks").and_then(Value::as_array_mut) {
-                handlers.retain(|handler| !is_ours(handler));
+                handlers.retain(|handler| !offdesk_protocol::is_offdesk_claude_hook(handler));
             }
         }
         groups.retain(|group| {
@@ -338,10 +322,8 @@ pub fn update_claude_settings(original: &str, exe: &Path, install: bool) -> Resu
     }
     hooks.retain(|_, groups| !groups.is_empty());
     if install {
-        for event in CLAUDE_HOOK_EVENTS {
-            hooks.entry(event.to_string()).or_default().push(serde_json::json!({
-                "hooks": [{ "type": "command", "command": hook_command(exe, event), "timeout": 5 }]
-            }));
+        for (event, group) in offdesk_protocol::claude_hook_groups(&exe.to_string_lossy()) {
+            hooks.entry(event.to_string()).or_default().push(group);
         }
     }
     if hooks.is_empty() {
@@ -575,7 +557,7 @@ mod tests {
         );
         assert_eq!(
             value["hooks"].as_object().unwrap().len(),
-            CLAUDE_HOOK_EVENTS.len()
+            offdesk_protocol::CLAUDE_HOOK_EVENTS.len()
         );
         // Installing again changes nothing; uninstalling gives their hooks back alone
         assert_eq!(

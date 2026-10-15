@@ -1314,7 +1314,7 @@ fn revive_cwd(persisted: &str) -> String {
     }
 }
 
-fn resolve_cwd(cwd: &str) -> String {
+pub(crate) fn resolve_cwd(cwd: &str) -> String {
     if cwd.starts_with("~/") || cwd == "~" {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
         cwd.replacen('~', &home, 1)

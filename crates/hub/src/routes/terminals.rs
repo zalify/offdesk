@@ -37,7 +37,7 @@ pub struct CreateTerminalRequest {
 /// The opener to record for a terminal this caller creates: API-token callers
 /// (the CLI an agent drives, scripts) are marked, labelled with the label they
 /// passed or else their token's name. People in an app are not marked.
-fn opener_for(
+pub(crate) fn opener_for(
     auth_user: &AuthUser,
     requested_label: Option<&str>,
 ) -> Option<offdesk_protocol::TerminalOpener> {

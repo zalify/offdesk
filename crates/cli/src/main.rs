@@ -146,8 +146,10 @@ enum Commands {
         agent: String,
         /// The hook event, e.g. PreToolUse; `notify` for Codex's notify program
         event: String,
-        /// Codex notify's JSON argument
-        payload: Option<String>,
+        /// Codex notify: the person's own notify program and its arguments (run after
+        /// Offdesk's, with the same JSON), then the JSON argument Codex adds
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
     },
     /// Report on your own work from an agent in an Offdesk terminal: a note, that
     /// you're blocked, or that you're done. People see it on the agent run
@@ -172,6 +174,38 @@ enum Commands {
         /// Only runs waiting on a person (e.g. a confirmation on screen)
         #[arg(long)]
         waiting: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Start Claude Code or Codex in a new terminal with its first message. It asks
+    /// for permissions as usual (there's no way to skip them from here); follow it with
+    /// `offdesk runs`
+    Start {
+        /// Machine id, unique prefix or name
+        machine: String,
+        /// claude or codex
+        #[arg(long, value_enum)]
+        agent: StartAgent,
+        /// The folder to work in, on that machine
+        #[arg(long)]
+        cwd: String,
+        /// Its first message (passed as is; nothing in it runs in the shell)
+        #[arg(long, conflicts_with = "prompt_file")]
+        prompt: Option<String>,
+        /// Read the first message from a file (`-` for stdin)
+        #[arg(long)]
+        prompt_file: Option<String>,
+        /// A name for the run, shown beside it
+        #[arg(long)]
+        label: Option<String>,
+        /// Your own reference (an issue, a task); the agent gets it as OFFDESK_EXTERNAL_REF
+        #[arg(long = "ref")]
+        external_ref: Option<String>,
+        /// The agent's permission mode: ask (before edits and commands), accept-edits
+        /// (edits go ahead, commands ask) or plan (Claude only). Default: its own settings
+        #[arg(long, value_enum)]
+        mode: Option<StartMode>,
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -562,6 +596,19 @@ enum BrowserAction {
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
+enum StartAgent {
+    Claude,
+    Codex,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum StartMode {
+    Ask,
+    AcceptEdits,
+    Plan,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
 enum DialogAnswer {
     Accept,
     Dismiss,
@@ -700,8 +747,8 @@ fn env_with_legacy(name: &str, legacy: &str) -> Option<String> {
 async fn run(cli: Cli) -> Result<(), CliError> {
     // Agents' hooks and reports go to the local node: no config file, no hub, no token.
     match &cli.command {
-        Commands::Hook { agent, event, payload } => {
-            agents::hook(agent, event, payload.as_deref());
+        Commands::Hook { agent, event, args } => {
+            agents::hook(agent, event, args);
             return Ok(());
         }
         Commands::Run { action } => {
@@ -894,6 +941,30 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Commands::Runs { machine, all, waiting, json } => {
             commands::runs::run(&hub_client, machine, all, waiting, json).await
+        }
+        Commands::Start { machine, agent, cwd, prompt, prompt_file, label, external_ref, mode, json } => {
+            let prompt = match prompt_file {
+                Some(path) => Some(commands::runs::read_prompt_file(&path)?),
+                None => prompt,
+            };
+            let start = offdesk_protocol::StartAgentRun {
+                machine_id: String::new(),
+                agent: match agent {
+                    StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
+                    StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
+                },
+                cwd,
+                prompt,
+                label,
+                external_ref,
+                permission_mode: mode.map(|mode| match mode {
+                    StartMode::Ask => offdesk_protocol::AgentPermissionMode::Ask,
+                    StartMode::AcceptEdits => offdesk_protocol::AgentPermissionMode::AcceptEdits,
+                    StartMode::Plan => offdesk_protocol::AgentPermissionMode::Plan,
+                }),
+                device_id: None,
+            };
+            commands::runs::start(&hub_client, &machine, start, json).await
         }
         Commands::Open {
             machine,

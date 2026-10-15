@@ -8,8 +8,9 @@
 
 use offdesk_protocol::{
     AgentAnswer, AgentKey, AgentReportKind, AgentRequestKind, AgentRunInfo, AgentRunRequest,
-    AgentRunStatus, AgentSignal, BrowserEvent, HubToMachine, RunAgent, TerminalAttention,
-    AGENT_KEYS_CAPABILITY,
+    AgentRunStatus, AgentSignal, AgentStart, BrowserEvent, HubToMachine, InstalledAgent, RunAgent,
+    StartAgentRun, TerminalAttention, TerminalInfo, TerminalOpener, AGENT_KEYS_CAPABILITY,
+    AGENT_START_CAPABILITY,
 };
 
 use super::MachineManager;
@@ -33,6 +34,30 @@ impl From<rusqlite::Error> for AnswerError {
         AnswerError::Internal
     }
 }
+
+/// Why a run wasn't started.
+#[derive(Debug, PartialEq, Eq)]
+pub enum StartError {
+    BadRequest(String),
+    /// The node can't start agents yet.
+    Unavailable(String),
+    /// The machine couldn't open the terminal (offline, a missing folder).
+    Machine(String),
+    Internal,
+}
+
+impl From<rusqlite::Error> for StartError {
+    fn from(error: rusqlite::Error) -> Self {
+        tracing::warn!("agent run start: {}", error);
+        StartError::Internal
+    }
+}
+
+/// How long a started run may stay Starting: after that its agent never showed up in
+/// the terminal (not installed, not logged in, it exited at once) and the run is an Error.
+pub const START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// The size of a started agent's terminal until someone opens it.
+const START_SIZE: (u16, u16) = (120, 36);
 
 /// The keys that answer a request: an approval's yes is the menu's first option
 /// (Claude and Codex both put "Yes" there) and no is Escape (their "cancel"); a
@@ -117,6 +142,15 @@ impl MachineManager {
             let latest = agent_runs::latest_for_terminal(&db, terminal_id)?;
             let mut changed = Vec::new();
             match (latest, agent) {
+                // A run someone started: its agent showed up
+                (Some(run), Some(agent))
+                    if run.agent == agent && run.status == AgentRunStatus::Starting =>
+                {
+                    changed.extend(begin(&db, &run.id, attention)?);
+                }
+                // Still starting: the shell runs before the agent does (a start that
+                // never comes is ended by `expire_start`)
+                (Some(run), None) if run.status == AgentRunStatus::Starting => {}
                 // The same agent still running: nothing new
                 (Some(run), Some(agent)) if run.agent == agent && run.ended_at.is_none() => {}
                 // Its machine came back with the same agent in the terminal: carry the run on
@@ -370,6 +404,127 @@ impl MachineManager {
             BrowserEvent::AgentRunUpdated { run: info.clone() },
         );
         Ok(info)
+    }
+
+    /// Starts a coding agent in a new terminal: the node builds its command from `start`
+    /// (the prompt is one argument, never shell syntax) and the run waits in Starting
+    /// until the agent shows up there. The caller has checked the machine and control.
+    pub async fn start_agent_run(
+        &self,
+        user_id: &str,
+        start: StartAgentRun,
+        opened_by: Option<TerminalOpener>,
+    ) -> Result<(AgentRunInfo, TerminalInfo), StartError> {
+        let bad = |reason: &str| StartError::BadRequest(reason.to_string());
+        let cwd = start.cwd.trim();
+        if cwd.is_empty() {
+            return Err(bad("Choose the folder to start in"));
+        }
+        let label = AgentStart::normalize_label(start.label.as_deref().unwrap_or("")).map_err(bad)?;
+        let agent_start = AgentStart {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            agent: start.agent,
+            prompt: AgentStart::normalize_prompt(start.prompt.as_deref().unwrap_or("")).map_err(bad)?,
+            permission_mode: start.permission_mode,
+            external_ref: AgentStart::normalize_label(start.external_ref.as_deref().unwrap_or(""))
+                .map_err(bad)?,
+        };
+        agent_start.validate().map_err(bad)?;
+        if !self
+            .machine_supports(&start.machine_id, AGENT_START_CAPABILITY)
+            .await
+        {
+            return Err(StartError::Unavailable(
+                "Update Offdesk on that machine to start agents from here".to_string(),
+            ));
+        }
+
+        let summary = serde_json::json!({
+            "agent": agent_start.agent,
+            "permission_mode": agent_start.permission_mode,
+            "label": label,
+            "external_ref": agent_start.external_ref,
+            "prompt_chars": agent_start.prompt.as_deref().map_or(0, |p| p.chars().count()),
+        });
+        let (run_id, agent, external_ref) = (
+            agent_start.run_id.clone(),
+            agent_start.agent,
+            agent_start.external_ref.clone(),
+        );
+        let terminal = self
+            .create_terminal_with(
+                &start.machine_id,
+                cwd,
+                START_SIZE.0,
+                START_SIZE.1,
+                None,
+                opened_by,
+                Some(agent_start),
+            )
+            .await
+            .map_err(StartError::Machine)?;
+
+        let db = self.db.get().map_err(|_| StartError::Internal)?;
+        // Its hooks may have beaten this here and opened a run already: that one it is
+        let row = match agent_runs::latest_for_terminal(&db, &terminal.id)?
+            .filter(|run| run.ended_at.is_none())
+        {
+            Some(run) => {
+                db.execute(
+                    "UPDATE agent_runs SET label = ?1, external_ref = ?2 WHERE id = ?3",
+                    rusqlite::params![label, external_ref, run.id],
+                )?;
+                agent_runs::find(&db, &run.id)?.ok_or(StartError::Internal)?
+            }
+            None => agent_runs::insert_started(
+                &db,
+                &run_id,
+                &start.machine_id,
+                &terminal.id,
+                agent,
+                &terminal.cwd,
+                label.as_deref(),
+                external_ref.as_deref(),
+            )?,
+        };
+        agent_runs::insert_event(&db, &row.id, "start", &summary)?;
+        let info = agent_runs::to_info(&db, &row)?;
+        self.send_event(
+            Some(user_id.to_string()),
+            BrowserEvent::AgentRunUpdated { run: info.clone() },
+        );
+        Ok((info, terminal))
+    }
+
+    /// A started run whose agent never showed up in `START_TIMEOUT` is an Error.
+    pub fn expire_start(&self, user_id: &str, run_id: &str) {
+        let Ok(db) = self.db.get() else { return };
+        let result = (|| -> rusqlite::Result<Vec<AgentRunRow>> {
+            match agent_runs::find(&db, run_id)? {
+                Some(run) if run.status == AgentRunStatus::Starting => {
+                    agent_runs::insert_event(
+                        &db,
+                        run_id,
+                        "status",
+                        &serde_json::json!({ "status": AgentRunStatus::Error, "source": "start", "reason": "The agent didn't start; see its terminal" }),
+                    )?;
+                    Ok(agent_runs::set_status(&db, run_id, AgentRunStatus::Error)?
+                        .into_iter()
+                        .collect())
+                }
+                _ => Ok(Vec::new()),
+            }
+        })();
+        self.announce_runs(Some(user_id.to_string()), &db, result, run_id);
+    }
+
+    /// The coding agent CLIs a connected machine reported, or None while it's offline.
+    pub async fn installed_agents(&self, machine_id: &str) -> Option<Vec<InstalledAgent>> {
+        self.machines
+            .lock()
+            .await
+            .get(machine_id)
+            .map(|conn| conn.installed_agents.clone())
     }
 
     /// A terminal's attention changed: its open run waits on a person while the screen

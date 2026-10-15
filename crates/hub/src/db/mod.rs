@@ -277,6 +277,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
 
+    // Agent runs: the name and reference a run was started with (A4)
+    for column in ["label", "external_ref"] {
+        if !column_exists(conn, "agent_runs", column)? {
+            conn.execute(&format!("ALTER TABLE agent_runs ADD COLUMN {column} TEXT"), [])?;
+        }
+    }
+
     if !column_exists(conn, "terminal_sessions", "workspace_group_id")? {
         conn.execute(
             "ALTER TABLE terminal_sessions ADD COLUMN workspace_group_id TEXT REFERENCES workspace_groups(id) ON DELETE SET NULL",
