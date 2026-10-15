@@ -74,9 +74,13 @@ rename mapping is at the bottom.
   and passes them to the hub as `MachineToHub::AgentSignal`
   (`crates/machine/src/agent_socket.rs`, `crates/protocol/src/lib.rs`
   `agent_socket_path`).
-- `offdesk agents hooks install|uninstall [--print]` adds or removes only Offdesk's
-  hooks in Claude Code's user settings, keeping the rest and backing the file up
-  first.
+- `offdesk agents hooks install|uninstall [--agent claude|codex] [--print]` adds or
+  removes only Offdesk's hooks in Claude Code's user settings and Offdesk's `notify` in
+  Codex's `config.toml` (`$CODEX_HOME` or `~/.codex`), keeping the rest (TOML comments
+  included) and backing each file up first. Codex runs one notify program, so the
+  person's own is chained after Offdesk's (`notify = [offdesk, hook, codex, notify,
+  <theirs…>]`) and restored on uninstall; Codex is skipped when it has no config folder
+  and wasn't named (`crates/cli/src/agents.rs` `update_codex_config`).
 - Runs carry `progress` and the latest `report`; `GET /api/agent-runs/{id}/events`
   lists requests, reports and status changes (`crates/hub/src/db/agent_runs.rs`).
 

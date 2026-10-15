@@ -246,7 +246,7 @@ Hub SQLite 新增 `agent_runs`、`agent_run_requests`、`agent_run_events`（按
   - `Notification(agent_needs_input / elicitation_dialog)` → input。
   - Codex 的 `notify`（只有一轮结束）→ idle：`offdesk hook codex notify '<json>'`。
 - **Hub**：没有打开的运行时，信号会开一个（钩子往往比 5 秒的轮询早）；working/idle 只在状态变化或请求被答复时才更新和广播；waiting 记下请求原文和选项；`blocked` 转 idle 并记下原因，`finished` 结束为 done。运行多了 `progress` 和 `report`（最近一条自报）。`agent_run_events` 记请求、自报和状态变化，`GET /api/agent-runs/{id}/events` 可读（不含终端输出）。
-- **安装**：`offdesk agents hooks install|uninstall [--print]` 改 `$CLAUDE_CONFIG_DIR/settings.json` 或 `~/.claude/settings.json`：只加或删自己的钩子（命令里有 `offdesk` 和 ` hook claude `），用户的其他设置原样保留（顶层顺序和文本不变），重复安装不重复，写之前备份为 `settings.json.offdesk-backup`。没有用 `claude --settings`：文档没说清楚它的 hooks 会不会盖掉用户自己的。Codex 的钩子配置暂不自动安装。
+- **安装**：`offdesk agents hooks install|uninstall [--print]` 改 `$CLAUDE_CONFIG_DIR/settings.json` 或 `~/.claude/settings.json`：只加或删自己的钩子（命令里有 `offdesk` 和 ` hook claude `），用户的其他设置原样保留（顶层顺序和文本不变），重复安装不重复，写之前备份为 `settings.json.offdesk-backup`。没有用 `claude --settings`：文档没说清楚它的 hooks 会不会盖掉用户自己的。Codex 的 notify 后来也加进来了（见 A4 的说明）。
 - **验证**：除单元测试外，在隔离的 Hub 和 node 上，在一个终端里按顺序调用钩子和 `offdesk run`：approval（带命令）→ 答复后 working、进度 1/3 和备注 → idle → done 带链接，事件日志按序记下；在 Offdesk 之外、或在另一个 tmux 里调用钩子时，没有输出，退出 0。
 
 ### A3 回答
@@ -279,7 +279,8 @@ Hub SQLite 新增 `agent_runs`、`agent_run_requests`、`agent_run_events`（按
 - **文件夹**：不存在的文件夹直接拒绝（502 “There's no folder … on this machine”），因为终端会退回到别的目录，agent 不能在那里干活。
 - **已安装的 agent**：node 连上 hub 后在用户的交互式登录 shell 里 `command -v offdesk claude codex`（那里的 PATH 才是终端里的 PATH，服务进程的不是），再补查常见目录，各跑一次 `--version`（10 秒超时），用 `MachineToHub::InstalledAgents` 报给 hub；`GET /api/machines/{id}/agents` 列出来，给以后的启动界面用。
 - **CLI**：`offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt <text> | --prompt-file <path|->] [--label] [--ref] [--mode ask|accept-edits|plan] [--json]`，会先取得控制权。
-- **没做**：启动界面（wireframe 里的提议）；`offdesk agents hooks install` 还只装 Claude 的全局钩子，Codex 的全局 notify 没有自动安装（通过 Offdesk 启动的 Codex 已经有）；不按 agent 版本调整参数。
+- **没做**：启动界面（wireframe 里的提议）；不按 agent 版本调整参数。
+- **Codex 全局 notify（后补，2026-10-15）**：`offdesk agents hooks install|uninstall [--agent claude|codex]` 现在也改 Codex 的 `config.toml`（`$CODEX_HOME` 或 `~/.codex`）：顶层 `notify` 改成 `[offdesk, "hook", "codex", "notify", <用户原来的 notify…>]`，用户的程序照样在后面拿到同一个 JSON；用 `toml_edit` 改，注释和其他内容原样保留，写之前备份为 `config.toml.offdesk-backup`；重复安装或换了 offdesk 路径不会出现两个；卸载只去掉 Offdesk 那四项，用户的 notify 原样恢复（只有 Offdesk 的就删掉这个键）；`notify` 不是字符串列表或文件不是合法 TOML 就报错不改。没有指明 `--agent codex` 且没有 Codex 配置目录时跳过，不替没装 Codex 的人建配置。装好后通过 Offdesk 启动的 Codex 不再加 `-c notify`（node 看到全局已有就不加）。
 - **验证**：node 单元测试用真的 `sh` 跑生成的命令，确认提示里的 `$(…)`、反引号、引号原样到达、什么都没执行，文件权限 0600/0700；hub 测试覆盖错误输入、旧 node、starting → working、超时变 error；隔离环境里用假的 claude/codex 走了一遍：提示原样到达，`OFFDESK_RUN_ID` 和运行一致，注入的 Claude 钩子把运行变成 idle，Codex 的 notify 先报告再调用用户自己的程序。**注意**：隔离测试要给 node 一个临时 `HOME` 并去掉 `USER`，否则终端用账户的登录 shell（读 `.zshrc`），会找到真的 claude。
 
 ## 待定问题

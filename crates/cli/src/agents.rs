@@ -359,13 +359,77 @@ pub fn update_claude_settings(original: &str, exe: &Path, install: bool) -> Resu
     Ok(out)
 }
 
-/// `offdesk agents hooks install|uninstall [--print]`
-pub fn hooks(install: bool, print: bool) -> Result<(), CliError> {
-    let path = claude_settings_path()
-        .ok_or_else(|| CliError::Usage("can't find your home directory".into()))?;
-    let exe = std::env::current_exe()
-        .map_err(|error| CliError::Usage(format!("can't find this program: {error}")))?;
-    let original = match std::fs::read_to_string(&path) {
+/// Codex's config: `$CODEX_HOME/config.toml`, else `~/.codex/config.toml`.
+pub fn codex_config_path() -> Option<PathBuf> {
+    match std::env::var_os("CODEX_HOME").filter(|dir| !dir.is_empty()) {
+        Some(dir) => Some(PathBuf::from(dir).join("config.toml")),
+        None => dirs::home_dir().map(|home| home.join(".codex").join("config.toml")),
+    }
+}
+
+/// Whether a notify command starts with Offdesk's hook: `<…offdesk…> hook codex notify`.
+fn runs_offdesk_first(argv: &[String]) -> bool {
+    argv.len() >= 4 && argv[0].contains("offdesk") && argv[1..4] == ["hook", "codex", "notify"]
+}
+
+/// Codex's config with Offdesk's `notify` put in front of the person's own (install), or
+/// taken out of it (uninstall). Codex runs one notify program, so the person's own keeps
+/// running after Offdesk's, with the same JSON (`offdesk hook codex notify` passes it on).
+/// Everything else in the file keeps its text, comments included.
+pub fn update_codex_config(original: &str, exe: &Path, install: bool) -> Result<String, String> {
+    let mut doc: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|error| format!("isn't valid TOML: {error}"))?;
+    let not_a_list = || "its \"notify\" isn't a list of strings".to_string();
+    let current: Option<Vec<String>> = match doc.get("notify") {
+        None => None,
+        Some(item) => Some(
+            item.as_array()
+                .ok_or_else(not_a_list)?
+                .iter()
+                .map(|value| value.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(not_a_list)?,
+        ),
+    };
+    // The person's own program, without Offdesk's in front (which may name a moved binary)
+    let own: Vec<String> = match current {
+        Some(argv) if runs_offdesk_first(&argv) => argv[4..].to_vec(),
+        Some(argv) => argv,
+        None => Vec::new(),
+    };
+    let next: Vec<String> = if install {
+        let mut argv = vec![
+            exe.to_string_lossy().into_owned(),
+            "hook".into(),
+            "codex".into(),
+            "notify".into(),
+        ];
+        argv.extend(own);
+        argv
+    } else {
+        own
+    };
+    if next.is_empty() {
+        doc.remove("notify");
+    } else {
+        let mut array = toml_edit::Array::new();
+        for arg in next {
+            array.push(arg);
+        }
+        doc["notify"] = toml_edit::value(array);
+    }
+    Ok(doc.to_string())
+}
+
+/// Writes one agent's settings file through `update`: printed instead with `print`, left
+/// alone when nothing changes, else backed up first and replaced in one rename.
+fn apply(
+    path: &Path,
+    print: bool,
+    update: impl FnOnce(&str) -> Result<String, String>,
+) -> Result<bool, CliError> {
+    let original = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(error) => {
@@ -375,42 +439,86 @@ pub fn hooks(install: bool, print: bool) -> Result<(), CliError> {
             )))
         }
     };
-    let updated = update_claude_settings(&original, &exe, install).map_err(|error| {
+    let updated = update(&original).map_err(|error| {
         CliError::Usage(format!(
             "{} {error}; fix it, then try again",
             path.display()
         ))
     })?;
     if print {
+        crate::commands::out_line(&format!("# {}", path.display()));
         crate::commands::out_line(updated.trim_end());
-        return Ok(());
+        return Ok(false);
     }
     if updated == original {
         crate::commands::out_line(&format!("Nothing to change in {}", path.display()));
-        return Ok(());
+        return Ok(false);
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)
             .map_err(|error| CliError::Usage(format!("can't create {}: {error}", dir.display())))?;
     }
     if !original.is_empty() {
-        let backup = path.with_extension("json.offdesk-backup");
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".offdesk-backup");
         std::fs::write(&backup, &original).map_err(|error| {
-            CliError::Usage(format!("can't back up to {}: {error}", backup.display()))
+            CliError::Usage(format!(
+                "can't back up to {}: {error}",
+                PathBuf::from(&backup).display()
+            ))
         })?;
     }
-    let temp = path.with_extension("json.offdesk-tmp");
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".offdesk-tmp");
     std::fs::write(&temp, &updated)
-        .and_then(|_| std::fs::rename(&temp, &path))
+        .and_then(|_| std::fs::rename(&temp, path))
         .map_err(|error| CliError::Usage(format!("can't write {}: {error}", path.display())))?;
-    crate::commands::out_line(&if install {
-        format!(
-            "Added Offdesk's hooks to {}. Claude Code sessions started in Offdesk terminals now report their state (new sessions; restart running ones).",
-            path.display()
-        )
-    } else {
-        format!("Removed Offdesk's hooks from {}", path.display())
-    });
+    Ok(true)
+}
+
+/// `offdesk agents hooks install|uninstall [--agent claude|codex] [--print]`: Claude Code's
+/// hooks and Codex's notify, or just the one named. Codex is skipped when it has no
+/// config folder and wasn't named.
+pub fn hooks(install: bool, print: bool, agent: Option<RunAgent>) -> Result<(), CliError> {
+    let exe = std::env::current_exe()
+        .map_err(|error| CliError::Usage(format!("can't find this program: {error}")))?;
+    let home_missing = || CliError::Usage("can't find your home directory".into());
+    if agent != Some(RunAgent::Codex) {
+        let path = claude_settings_path().ok_or_else(home_missing)?;
+        if apply(&path, print, |original| update_claude_settings(original, &exe, install))? {
+            crate::commands::out_line(&if install {
+                format!(
+                    "Added Offdesk's hooks to {}. Claude Code sessions started in Offdesk terminals now report their state (new sessions; restart running ones).",
+                    path.display()
+                )
+            } else {
+                format!("Removed Offdesk's hooks from {}", path.display())
+            });
+        }
+    }
+    if agent != Some(RunAgent::Claude) {
+        let path = codex_config_path().ok_or_else(home_missing)?;
+        let installed = path.parent().is_some_and(Path::exists);
+        if agent.is_none() && !installed {
+            if !print {
+                crate::commands::out_line(&format!(
+                    "Codex isn't set up here (no {}); skipped it",
+                    path.parent().map(|p| p.display().to_string()).unwrap_or_default()
+                ));
+            }
+            return Ok(());
+        }
+        if apply(&path, print, |original| update_codex_config(original, &exe, install))? {
+            crate::commands::out_line(&if install {
+                format!(
+                    "Added Offdesk's notify to {}. Codex sessions in Offdesk terminals now report when a turn ends (new sessions); your own notify program, if any, still runs after it.",
+                    path.display()
+                )
+            } else {
+                format!("Removed Offdesk's notify from {}; your own notify program, if any, is as it was", path.display())
+            });
+        }
+    }
     Ok(())
 }
 
@@ -534,6 +642,39 @@ mod tests {
         );
         assert_eq!(codex_notify_signal(r#"{"type":"other"}"#), None);
         assert_eq!(codex_notify_signal("not json"), None);
+    }
+
+    #[test]
+    fn codex_notify_goes_in_front_of_the_persons_own_and_comes_out_cleanly() {
+        let exe = Path::new("/Users/a/.local/bin/offdesk");
+        let original = "# my settings\nmodel = \"o3\" # the good one\nnotify = [\"notify-send\", \"Codex\"]\n\n[profiles.fast]\nmodel = \"o4-mini\"\n";
+        let installed = update_codex_config(original, exe, true).unwrap();
+        let doc: toml::Table = installed.parse().unwrap();
+        assert_eq!(
+            doc["notify"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>(),
+            ["/Users/a/.local/bin/offdesk", "hook", "codex", "notify", "notify-send", "Codex"]
+        );
+        assert!(installed.contains("# my settings") && installed.contains("# the good one"), "{installed}");
+        assert_eq!(doc["profiles"]["fast"]["model"].as_str(), Some("o4-mini"));
+        // Twice, or from a moved binary: still one Offdesk in front
+        let moved = update_codex_config(&installed, Path::new("/opt/offdesk/bin/offdesk"), true).unwrap();
+        let argv: toml::Table = moved.parse().unwrap();
+        assert_eq!(argv["notify"].as_array().unwrap().len(), 6);
+        assert_eq!(argv["notify"][0].as_str(), Some("/opt/offdesk/bin/offdesk"));
+        // Uninstalled: theirs exactly as it was
+        let removed = update_codex_config(&moved, exe, false).unwrap();
+        let doc: toml::Table = removed.parse().unwrap();
+        assert_eq!(doc["notify"].as_array().unwrap().iter().map(|v| v.as_str().unwrap()).collect::<Vec<_>>(), ["notify-send", "Codex"]);
+        assert!(removed.contains("# the good one"));
+
+        // Nothing of theirs: ours alone, and gone again on uninstall
+        let alone = update_codex_config("model = \"o3\"\n", exe, true).unwrap();
+        assert!(alone.starts_with("model = \"o3\"\nnotify = ["), "{alone}");
+        assert_eq!(update_codex_config(&alone, exe, false).unwrap(), "model = \"o3\"\n");
+        assert_eq!(update_codex_config("", exe, false).unwrap(), "");
+        // Something it can't safely change
+        assert!(update_codex_config("notify = \"script.sh\"\n", exe, true).is_err());
+        assert!(update_codex_config("notify = [", exe, true).is_err());
     }
 
     #[test]
