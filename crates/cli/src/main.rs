@@ -430,15 +430,22 @@ enum AgentsAction {
 
 #[derive(Subcommand)]
 enum HooksAction {
-    /// Add Offdesk's hooks to your Claude Code settings (your own hooks stay)
+    /// Add Offdesk's hooks to Claude Code's settings and its notify to Codex's config
+    /// (your own hooks and notify program stay; files are backed up first)
     Install {
-        /// Print the resulting settings instead of writing them
+        /// Only this agent's
+        #[arg(long, value_enum)]
+        agent: Option<StartAgent>,
+        /// Print the resulting files instead of writing them
         #[arg(long)]
         print: bool,
     },
-    /// Remove Offdesk's hooks from your Claude Code settings
+    /// Remove only Offdesk's hooks and notify again
     Uninstall {
-        /// Print the resulting settings instead of writing them
+        /// Only this agent's
+        #[arg(long, value_enum)]
+        agent: Option<StartAgent>,
+        /// Print the resulting files instead of writing them
         #[arg(long)]
         print: bool,
     },
@@ -782,6 +789,15 @@ enum StartAgent {
     Codex,
 }
 
+impl StartAgent {
+    fn run_agent(self) -> offdesk_protocol::RunAgent {
+        match self {
+            StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
+            StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
+        }
+    }
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum StartMode {
     Ask,
@@ -942,8 +958,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         }
         Commands::Agents { action: AgentsAction::Hooks { action } } => {
             return match action {
-                HooksAction::Install { print } => agents::hooks(true, *print),
-                HooksAction::Uninstall { print } => agents::hooks(false, *print),
+                HooksAction::Install { agent, print } => agents::hooks(true, *print, agent.map(StartAgent::run_agent)),
+                HooksAction::Uninstall { agent, print } => agents::hooks(false, *print, agent.map(StartAgent::run_agent)),
             };
         }
         _ => {}

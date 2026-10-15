@@ -26,5 +26,6 @@ clap = { version = "4", features = ["derive"] }
 regex = "1"
 base64 = "0.22"
 toml = "0.8"
+toml_edit = "0.22"
 uuid = { workspace = true }
 hostname = "0.4"
