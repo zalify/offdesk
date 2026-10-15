@@ -71,7 +71,9 @@ export function WebhooksPanel() {
     setError(`${what}: ${err instanceof Error ? err.message : String(err)}`);
 
   useEffect(() => {
-    listWebhooks().then(setHooks).catch((err) => {
+    listWebhooks()
+      .then((all) => setHooks(all.filter((h) => h.kind === "webhook")))
+      .catch((err) => {
       setHooks([]);
       fail("Failed to load webhooks")(err);
     });

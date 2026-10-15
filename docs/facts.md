@@ -105,6 +105,17 @@ rename mapping is at the bottom.
 - `offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt|--prompt-file]
   [--label] [--ref] [--mode]` (`crates/cli/src/commands/runs.rs` `start`).
 
+## Agent runs over MCP, and Settings for bridges (implementation added 2026-10-15)
+
+- `offdesk mcp` has `list_runs` (`waiting`, `all`, `machine`), `get_run` (with its
+  history), `answer_request` (`approve`, `option_id` or `text`; takes the machine's
+  control first) and `start_run`, over the same calls as `offdesk runs`, `answer` and
+  `start` (`crates/cli/src/mcp.rs`, `crates/cli/src/commands/runs.rs`
+  `find_open_run`, `answer_run`, `start_run`). What they may do is the CLI token's scope.
+- Settings › Bridges pairs, turns off and removes bridges and shows each one's
+  connection; Settings › Activity lists what tokens and bridges did and were refused
+  (`packages/app/components/BridgesPanel.tsx`). Settings › Webhooks lists webhooks only.
+
 ## Bridges (implementation added 2026-10-15)
 
 - An integration of kind `bridge` (wss:// URL, or ws:// to this machine; a one-time

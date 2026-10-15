@@ -51,15 +51,8 @@ pub async fn run(
     Ok(())
 }
 
-/// Answer a run's open request: approve or decline, pick an option, or say it in words.
-/// Takes control of the machine first, as typing into a terminal does.
-pub async fn answer(
-    client: &HubClient,
-    run_query: &str,
-    approve: Option<bool>,
-    option: Option<String>,
-    text: Option<String>,
-) -> Result<(), CliError> {
+/// An open run by id or unique id prefix.
+pub async fn find_open_run(client: &HubClient, run_query: &str) -> Result<AgentRunInfo, CliError> {
     let Some(runs) = client.agent_runs("?active=true").await? else {
         return Err(CliError::Protocol(
             "this hub doesn't track agent runs yet; update the hub".to_string(),
@@ -69,19 +62,26 @@ pub async fn answer(
         .iter()
         .filter(|run| run.id.starts_with(run_query))
         .collect();
-    let run = match matches.as_slice() {
-        [run] => *run,
-        [] => {
-            return Err(CliError::Usage(format!(
-                "no open agent run {run_query}; see `offdesk runs`"
-            )))
-        }
-        _ => {
-            return Err(CliError::Usage(format!(
-                "{run_query} matches several runs; use more of its id"
-            )))
-        }
-    };
+    match matches.as_slice() {
+        [run] => Ok((*run).clone()),
+        [] => Err(CliError::Usage(format!(
+            "no open agent run {run_query}; see `offdesk runs`"
+        ))),
+        _ => Err(CliError::Usage(format!(
+            "{run_query} matches several runs; use more of its id"
+        ))),
+    }
+}
+
+/// Answers a run's open request (taking control of its machine first, as typing into a
+/// terminal does); returns the run as the hub has it after sending the answer.
+pub async fn answer_run(
+    client: &HubClient,
+    run: &AgentRunInfo,
+    approve: Option<bool>,
+    option: Option<String>,
+    text: Option<String>,
+) -> Result<AgentRunInfo, CliError> {
     let Some(request) = &run.request else {
         return Err(CliError::Usage(format!(
             "{} isn't waiting on anyone",
@@ -89,7 +89,7 @@ pub async fn answer(
         )));
     };
     client.claim_control(&run.machine_id).await?;
-    let answered = client
+    client
         .answer_agent_run(
             &run.id,
             &offdesk_protocol::AgentAnswer {
@@ -100,7 +100,20 @@ pub async fn answer(
                 device_id: Some(client.device_id().to_string()),
             },
         )
-        .await?;
+        .await
+}
+
+/// Answer a run's open request: approve or decline, pick an option, or say it in words.
+/// Takes control of the machine first, as typing into a terminal does.
+pub async fn answer(
+    client: &HubClient,
+    run_query: &str,
+    approve: Option<bool>,
+    option: Option<String>,
+    text: Option<String>,
+) -> Result<(), CliError> {
+    let run = find_open_run(client, run_query).await?;
+    let answered = answer_run(client, &run, approve, option, text).await?;
     super::out_line(&format!(
         "Sent to {} in {}; it carries on once the agent takes it ({}).",
         answered.agent.as_str(),
@@ -114,16 +127,15 @@ pub async fn answer(
     Ok(())
 }
 
-/// Start an agent in a new terminal on a machine. Takes control of the machine first,
-/// as opening a terminal does.
-pub async fn start(
+/// Starts an agent on a machine (id, prefix or name), taking control of it first as
+/// opening a terminal does; returns the run, its terminal and the machine.
+pub async fn start_run(
     client: &HubClient,
     machine_query: &str,
     mut start: offdesk_protocol::StartAgentRun,
-    json: bool,
-) -> Result<(), CliError> {
+) -> Result<(offdesk_protocol::StartedAgentRun, MachineInfo), CliError> {
     let machines = client.machines().await?;
-    let machine = resolve_machine(machine_query, &machines)?;
+    let machine = resolve_machine(machine_query, &machines)?.clone();
     start.machine_id = machine.id.clone();
     start.device_id = Some(client.device_id().to_string());
     client.claim_control(&machine.id).await?;
@@ -132,6 +144,18 @@ pub async fn start(
             "this hub can't start agents yet; update the hub".to_string(),
         ));
     };
+    Ok((started, machine))
+}
+
+/// Start an agent in a new terminal on a machine. Takes control of the machine first,
+/// as opening a terminal does.
+pub async fn start(
+    client: &HubClient,
+    machine_query: &str,
+    start: offdesk_protocol::StartAgentRun,
+    json: bool,
+) -> Result<(), CliError> {
+    let (started, machine) = start_run(client, machine_query, start).await?;
     if json {
         super::out_line(&super::json_pretty(&started)?);
         return Ok(());

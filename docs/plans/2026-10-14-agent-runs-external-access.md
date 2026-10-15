@@ -214,6 +214,12 @@ Hub → 服务端
 - `offdesk mcp` 的运行工具；集成页的审计查看。
 - 完成标准：Claude Code 通过 `offdesk mcp` 列出等待中的运行并回答其中一个。
 
+#### B4 实现说明（2026-10-15）
+
+- **MCP 工具**：`offdesk mcp` 新增 `list_runs`（`waiting`、`all`、`machine`）、`get_run`（带历史：请求、回答、进展说明、状态变化，没有终端输出）、`answer_request`（`approve`、`option_id` 或 `text`，先取得机器的控制权，和 `offdesk answer` 一样）、`start_run`（agent、目录、提示、权限模式）。它们和 CLI 共用同一套调用（`commands::runs` 里抽出的 `find_open_run`、`answer_run`、`start_run`），用 CLI 的 token，所以能做什么由 token 的范围决定。服务端说明里写了：只批准用户让你批准的，并说明批准了什么。
+- **设置页**：“Bridges” 一节（配对：名字、wss 地址、配对码、范围、内容级别、启动目录、是否含生产机器；列表显示已连接 / 重连中（原因）/ 未配对，可以关闭、删除，每 5 秒刷新一次）；“Activity” 一节列出 token 和 bridge 最近做了什么、被拒了什么。“Webhooks” 一节现在只列 webhook。
+- **验证**：脚本按 MCP 客户端的方式通过 stdio 和 `offdesk mcp` 通信：`initialize` 后 `tools/list` 有四个运行工具，`list_runs {waiting: true}` 列出隔离环境里假 claude 的提问，`answer_request` 选了第二个选项，按键打进了终端，运行显示“answer sent”；不给答案时工具返回错误。e2e（1280/390）：窄范围 token 被拒后 Activity 里出现这条；配对一个连不上的 bridge 显示“not paired: couldn't connect”，Webhooks 里不出现它，然后删除。
+
 ## 待定问题
 
 1. 内容级别的默认值：托管服务默认 `requests`，否则锁屏上无法显示问题。这样是否可以接受，还是应该默认 `metadata`，让用户手动开？

@@ -1,4 +1,4 @@
-//! `offdesk mcp`: the agent browser as an MCP server on stdio.
+//! `offdesk mcp`: the agent browser and agent runs as an MCP server on stdio.
 //!
 //! Hand-rolled JSON-RPC 2.0, one message per line. Every tool is a thin
 //! wrapper over the same hub calls `offdesk browser ...` makes (see
@@ -48,7 +48,15 @@ chat; if there is no saved login, use browser_handoff. If a tool says the page \
 is showing a dialog (alert, confirm, prompt, leave page), answer it with \
 browser_dialog first. A page that opens a window (a popup, a target=_blank \
 link) gets a browser of its own: browser_list shows it with \
-opener_browser_id.";
+opener_browser_id.
+
+Coding agent runs (Claude Code, Codex) in the user's terminals: list_runs \
+(waiting=true for those waiting on a person), get_run for one with its \
+history, answer_request to answer what it waits for (an approval with \
+approve, a question with option_id or text, input with text), start_run to \
+start an agent with a first message. Approving runs a command on the user's \
+machine: only approve what the user asked you to, and say what you approved. \
+What you may do depends on the user's token.";
 
 // ---------------------------------------------------------------------------
 // Tool results
@@ -298,6 +306,57 @@ pub fn tool_definitions() -> Vec<Value> {
                 &["browser_id", "reason"],
             ),
         ),
+        tool(
+            "list_runs",
+            "List coding agent runs (Claude Code, Codex) in the user's terminals as JSON: agent, machine, folder, status, what it waits for (request: kind, prompt, options), progress and its last report. Open runs by default.",
+            schema(
+                json!({
+                    "waiting": {"type": "boolean", "description": "Only runs waiting on a person (an approval, a question, input)"},
+                    "all": {"type": "boolean", "description": "Also runs that ended in the last day"},
+                    "machine": {"type": "string", "description": "Only this machine (id, unique prefix or name)"},
+                }),
+                &[],
+            ),
+        ),
+        tool(
+            "get_run",
+            "One agent run as JSON, with its history (requests, answers, its notes and status changes; never terminal output).",
+            schema(
+                json!({
+                    "run_id": {"type": "string", "description": "Run id or unique prefix, from list_runs"},
+                }),
+                &["run_id"],
+            ),
+        ),
+        tool(
+            "answer_request",
+            "Answer what an open run waits for; it's typed into the agent's terminal. An approval: approve true (yes) or false (no). A question: option_id (from request.options) or text. Input: text. The run moves on once the agent takes it (list_runs shows it).",
+            schema(
+                json!({
+                    "run_id": {"type": "string", "description": "Run id or unique prefix"},
+                    "approve": {"type": "boolean", "description": "For an approval: yes (true) or no (false)"},
+                    "option_id": {"type": "string", "description": "For a question: the id of one of its options"},
+                    "text": {"type": "string", "description": "A question in your own words, or the input it waits for (one line)"},
+                }),
+                &["run_id"],
+            ),
+        ),
+        tool(
+            "start_run",
+            "Start Claude Code or Codex in a new terminal on a machine, with its first message. It still asks for permissions as usual. Returns the run and its terminal.",
+            schema(
+                json!({
+                    "machine": {"type": "string", "description": "Machine id, unique prefix or name"},
+                    "agent": {"type": "string", "enum": ["claude", "codex"], "description": "Which agent"},
+                    "cwd": {"type": "string", "description": "The folder to work in, on that machine"},
+                    "prompt": {"type": "string", "description": "Its first message"},
+                    "label": {"type": "string", "description": "A name for the run"},
+                    "external_ref": {"type": "string", "description": "Your reference (an issue, a task); the agent gets it as OFFDESK_EXTERNAL_REF"},
+                    "permission_mode": {"type": "string", "enum": ["ask", "accept_edits", "plan"], "description": "The agent's permission mode (plan: Claude only); default: its own settings"},
+                }),
+                &["machine", "agent", "cwd"],
+            ),
+        ),
     ]
 }
 
@@ -322,6 +381,43 @@ struct ListArgs {
 #[serde(deny_unknown_fields)]
 struct IdArgs {
     browser_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListRunsArgs {
+    #[serde(default)]
+    waiting: bool,
+    #[serde(default)]
+    all: bool,
+    machine: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunArgs {
+    run_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnswerArgs {
+    run_id: String,
+    approve: Option<bool>,
+    option_id: Option<String>,
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartRunArgs {
+    machine: String,
+    agent: offdesk_protocol::RunAgent,
+    cwd: String,
+    prompt: Option<String>,
+    label: Option<String>,
+    external_ref: Option<String>,
+    permission_mode: Option<offdesk_protocol::AgentPermissionMode>,
 }
 
 #[derive(Deserialize)]
@@ -837,6 +933,77 @@ impl Server {
                 })
                 .await
             }
+            "list_runs" => {
+                let a = args!(ListRunsArgs);
+                self.run(None, |client, _| async move {
+                    let mut query = vec![];
+                    if !a.all {
+                        query.push("active=true".to_string());
+                    }
+                    if let Some(machine) = &a.machine {
+                        let machines = client.machines_including_offline().await?;
+                        let machine = crate::resolve::resolve_machine(machine, &machines)?;
+                        query.push(format!("machine={}", machine.id));
+                    }
+                    let path = if query.is_empty() { String::new() } else { format!("?{}", query.join("&")) };
+                    let Some(mut runs) = client.agent_runs(&path).await? else {
+                        return Ok(ToolResult::error("this hub doesn't track agent runs yet; update the hub"));
+                    };
+                    if a.waiting {
+                        runs.retain(|run| run.request.is_some() && run.ended_at_ms.is_none());
+                    }
+                    ToolResult::ok_json(&runs)
+                })
+                .await
+            }
+            "get_run" => {
+                let a = args!(RunArgs);
+                self.run(None, |client, _| async move {
+                    let Some(runs) = client.agent_runs("").await? else {
+                        return Ok(ToolResult::error("this hub doesn't track agent runs yet; update the hub"));
+                    };
+                    let run = crate::resolve::resolve_prefix(&a.run_id, &runs, |run| run.id.as_str())?.clone();
+                    let history: Value = client
+                        .call(reqwest::Method::GET, &format!("/agent-runs/{}/events", run.id), None)
+                        .await?;
+                    ToolResult::ok_json(&json!({ "run": run, "history": history }))
+                })
+                .await
+            }
+            "answer_request" => {
+                let a = args!(AnswerArgs);
+                if a.approve.is_none() && a.option_id.is_none() && a.text.is_none() {
+                    return ToolResult::error("say the answer: approve, option_id or text");
+                }
+                self.run(None, |client, _| async move {
+                    let run = crate::commands::runs::find_open_run(&client, &a.run_id).await?;
+                    let answered = crate::commands::runs::answer_run(&client, &run, a.approve, a.option_id, a.text).await?;
+                    ToolResult::ok_json(&json!({
+                        "sent": true,
+                        "note": "Typed into the agent's terminal; list_runs shows when it moves on.",
+                        "run": answered,
+                    }))
+                })
+                .await
+            }
+            "start_run" => {
+                let a = args!(StartRunArgs);
+                self.run(None, |client, _| async move {
+                    let start = offdesk_protocol::StartAgentRun {
+                        machine_id: String::new(),
+                        agent: a.agent,
+                        cwd: a.cwd,
+                        prompt: a.prompt,
+                        label: a.label,
+                        external_ref: a.external_ref,
+                        permission_mode: a.permission_mode,
+                        device_id: None,
+                    };
+                    let (started, _) = crate::commands::runs::start_run(&client, &a.machine, start).await?;
+                    ToolResult::ok_json(&started)
+                })
+                .await
+            }
             _ => unreachable!("checked against tool_definitions"),
         }
     }
@@ -1004,7 +1171,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_has_all_seventeen_with_valid_schemas() {
+    async fn tools_list_has_all_twenty_one_with_valid_schemas() {
         let reply = send(&server(), json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
             .await
             .unwrap();
@@ -1030,6 +1197,10 @@ mod tests {
                 "browser_login",
                 "browser_wait_control",
                 "browser_take_control",
+                "list_runs",
+                "get_run",
+                "answer_request",
+                "start_run",
             ]
         );
         for tool in tools {

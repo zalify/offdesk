@@ -5,6 +5,7 @@ import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
 import { BUNDLED_TERMINAL_FONTS, BUNDLED_UI_FONTS, DEFAULT_TERMINAL_FONT, availableTerminalFonts, availableUiFonts, resolveTerminalFontFamily } from "@/lib/terminalFonts";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
 import { WebhooksPanel } from "./WebhooksPanel";
+import { BridgesPanel, TokenActivityPanel } from "./BridgesPanel";
 import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTransport";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
@@ -1227,6 +1228,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           {/* What the new token may do */}
           <div
+            role="group"
+            aria-label="New token access"
             style={{
               display: "flex",
               flexDirection: "column",
@@ -1516,6 +1519,16 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         <section style={{ marginBottom: 32 }}>
           <SectionTitle>Webhooks</SectionTitle>
           <WebhooksPanel />
+        </section>
+
+        <section style={{ marginBottom: 32 }}>
+          <SectionTitle>Bridges</SectionTitle>
+          <BridgesPanel />
+        </section>
+
+        <section style={{ marginBottom: 32 }}>
+          <SectionTitle>Activity</SectionTitle>
+          <TokenActivityPanel />
         </section>
 
         {/* Versions: the app, the hub, its interface and its nodes */}
