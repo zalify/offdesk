@@ -19,6 +19,7 @@ mod routes;
 mod versions;
 mod ws;
 mod web_preview;
+mod webhooks;
 
 use axum::body::Body;
 use axum::http::{header, HeaderValue};
@@ -494,6 +495,10 @@ async fn main() {
         google_client_id: env_opt("GOOGLE_CLIENT_ID"),
         google_client_secret: env_opt("GOOGLE_CLIENT_SECRET"),
     };
+    // Agent run events for the person's webhooks; also delivers what waited across a restart
+    state
+        .manager
+        .set_webhook_sink(webhooks::spawn(state.db.clone()));
 
     let pool_for_notice = state.db.clone();
     let base_url_for_notice = state.base_url.clone();

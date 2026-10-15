@@ -126,6 +126,53 @@ export const createApiToken = (name: string, access?: TokenAccess) =>
 export const deleteApiToken = (id: string) =>
   request<void>("DELETE", `/api/auth/api-tokens/${id}`);
 
+// Webhooks: agent run events sent to a URL
+export interface Webhook {
+  id: string;
+  kind: string;
+  name: string;
+  url: string;
+  /** Empty: every event. */
+  events: string[];
+  access: TokenAccess;
+  enabled: boolean;
+  created_at: number;
+  last_delivery_at: number | null;
+  last_error: string | null;
+}
+export interface NewWebhook {
+  name: string;
+  url: string;
+  events: string[];
+  content: "metadata" | "requests" | "notes";
+  include_production: boolean;
+}
+export interface WebhookDelivery {
+  id: number;
+  event_id: string;
+  event_type: string;
+  attempts: number;
+  created_at: number;
+  delivered_at: number | null;
+  failed_at: number | null;
+  last_error: string | null;
+}
+export const listWebhooks = () => request<Webhook[]>("GET", "/api/integrations");
+export const createWebhook = (webhook: NewWebhook) =>
+  request<{ integration: Webhook; secret: string }>(
+    "POST",
+    "/api/integrations",
+    webhook,
+  );
+export const setWebhookEnabled = (id: string, enabled: boolean) =>
+  request<Webhook>("PATCH", `/api/integrations/${id}`, { enabled });
+export const deleteWebhook = (id: string) =>
+  request<void>("DELETE", `/api/integrations/${id}`);
+export const testWebhook = (id: string) =>
+  request<void>("POST", `/api/integrations/${id}/test`);
+export const listWebhookDeliveries = (id: string) =>
+  request<WebhookDelivery[]>("GET", `/api/integrations/${id}/deliveries`);
+
 // Machines
 export const listMachines = () =>
   request<MachineInfo[]>("GET", "/api/machines");

@@ -1,11 +1,12 @@
 mod agent_browser;
-mod agent_runs;
+pub(crate) mod agent_runs;
 mod agent_sessions;
 mod api_tokens;
 mod auth;
 mod bookmarks;
 mod bootstrap;
 mod focus;
+mod integrations;
 mod mode;
 mod registration;
 mod settings;
@@ -24,6 +25,7 @@ pub fn router() -> Router<AppState> {
         .merge(agent_browser::router())
         .merge(agent_sessions::router())
         .merge(agent_runs::router())
+        .merge(integrations::router())
         .merge(bootstrap::router())
         .merge(focus::router())
         .merge(registration::router())

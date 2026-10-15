@@ -178,6 +178,18 @@ Hub → 服务端
 - 集成记录、发件箱、签名、重试、过滤、ntfy 示例。
 - 完成标准：Hub 离线重启后，未投递的事件继续投递；接收方用 Standard Webhooks 的现成库能校验签名；内容级别为 `metadata` 时，事件里没有请求原文。
 
+#### B2 实现说明（2026-10-15）
+
+- **集成记录**：`integrations` 表，`kind = "webhook"`，存 URL、签名密钥（`whsec_` 加 32 字节随机数，只在创建时返回一次，列表里没有）、要的事件类型（空表示全部）、`access`（复用 B1 的 `TokenAccess`：机器、是否含生产机器、内容级别；范围固定是 `runs:read`）、启用状态、最近一次投递和错误。接口在 `/api/integrations`（列表、创建、开关、删除、测试、最近投递），窄范围 token 访问不到。
+- **事件从哪来**：所有 `agent_run_updated` 都交给一个 webhook 后台任务（通过 channel，按顺序处理，所以同一个运行的事件不会乱）。它把运行和 `webhook_run_state` 里上次的描述比较，得出 `run.started`、`run.request`、`run.request_resolved`、`run.status`、`run.progress`、`run.report`、`run.ended`。一次更新里新请求或结束已经说明了状态时，不再单发 `run.status`。每个事件有运行内递增的 `seq`。没有指明用户的更新（比如开发模式的 node）按机器的主人算。
+- **发件箱**：每个启用的、要这个事件、能看这台机器的集成各写一条到 `webhook_outbox`，正文按它的内容级别裁剪（复用 B1 的 `shown_run`）。同一事件重试时 `webhook-id` 不变。
+- **投递**：`webhook-id`、`webhook-timestamp`、`webhook-signature: v1,<base64 HMAC-SHA256(id.timestamp.body)>`。HMAC 自己写在 `sha2` 上，用规范的测试向量验证；另外在隔离环境里用官方 `standardwebhooks` npm 库校验了 Hub 真实发出的请求。10 秒超时，不跟随重定向。失败后 5 秒、10 秒……最长一小时重试，24 小时后放弃；错误只记“HTTP 503”“couldn't connect”这类，不记 URL 和正文。发件箱在 SQLite 里，Hub 重启后继续投递。测试事件从接口加入时唤醒后台任务。
+- **开关和删除**：关掉后不再产生新事件，已排队的保留；删除时连同排队的一起删（连接池里不是每个连接都开了外键，所以显式删除，不靠级联）。
+- **设置页**：“Webhooks” 一节：名字、URL、事件（默认“等你处理”和“结束”）、内容级别、是否含生产机器；密钥只显示一次；列表显示事件、内容级别、最近投递或错误，可以测试、关闭、删除。
+- **ntfy 示例**：`examples/webhooks/ntfy-relay.mjs`，无依赖的 Node 脚本：校验签名和时间戳、按 `webhook-id` 去重、转成 ntfy 消息（等你处理是高优先级，内容级别够时带上问题原文）；ntfy 失败返回 502，让 Hub 重试。说明在 `docs/webhooks.md`。
+- **没做**：`offdesk-hub integrations` 命令行（接口和设置页已经能做）；投递记录的界面（接口有，B4）；按机器选择的界面。
+- **验证**：hub 测试覆盖事件推导、退避和放弃、签名测试向量；用本地 HTTP 接收方走一遍：过滤后只发要的事件、`metadata` 级别没有问题原文、接收方 503 时排队重试、换一个 Hub 进程打开同一个数据库后投递成功且只投一次、关闭和删除；接口测试覆盖校验、列表不含密钥、别人看不到、窄范围 token 403；e2e（1280/390）在设置页添加 webhook，测试事件到达接收方且签名正确，然后删除。隔离环境里：假 claude 启动、提问、终端关闭，ntfy 依次收到 started、status、“claude waits on you”（带问题原文）、request_resolved、done；伪造签名的请求被示例拒绝（401）。
+
 ### B3 Bridge
 
 - 协议规范、Hub 客户端、配对、断点续传、指令校验、在线状态、参考服务端。
