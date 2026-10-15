@@ -1854,6 +1854,7 @@ function TerminalCanvasInner() {
               groups={tabGroups}
               activeTerminalId={workspaceTerminal?.id ?? null}
               browsers={scopedAgentBrowsers}
+              agentRuns={browserState.agentRuns}
               browserButton={
                 activeMachine && machineOnline[activeMachine.id]
                   ? {

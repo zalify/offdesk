@@ -427,6 +427,43 @@ impl PtyManager {
             .collect()
     }
 
+    /// Types an answer into an agent's terminal (agent runs, A3): literal text, an
+    /// option's number, Enter or Escape, in order. Text is followed by a pause before
+    /// Enter, so the agent's UI doesn't take the Enter as part of a paste.
+    pub fn send_agent_keys(&self, id: &str, keys: &[offdesk_protocol::AgentKey]) -> Result<(), String> {
+        use offdesk_protocol::AgentKey;
+        if !self.list_terminal_ids().iter().any(|terminal| terminal == id) {
+            return Err(format!("no terminal {id}"));
+        }
+        if keys.is_empty() || keys.len() > 8 || !keys.iter().all(AgentKey::is_allowed) {
+            return Err("keys not allowed".to_string());
+        }
+        let target = format!("{}:0.0", tmux_session_name(id));
+        let mut after_text = false;
+        for key in keys {
+            let (literal, value) = match key {
+                AgentKey::Text(text) => (true, text.clone()),
+                AgentKey::Digit(digit) => (true, digit.to_string()),
+                AgentKey::Enter => (false, "Enter".to_string()),
+                AgentKey::Escape => (false, "Escape".to_string()),
+            };
+            if after_text && matches!(key, AgentKey::Enter) {
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            let mut args = vec!["-L", tmux_socket(), "send-keys", "-t", &target];
+            if literal {
+                args.extend(["-l", "--"]);
+            }
+            args.push(&value);
+            let status = tmux_cmd().args(&args).status().map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err(format!("tmux send-keys failed: {status}"));
+            }
+            after_text = matches!(key, AgentKey::Text(_));
+        }
+        Ok(())
+    }
+
     /// The terminal a tmux pane (`$TMUX_PANE`, e.g. "%12") of this node belongs to.
     pub fn terminal_for_pane(&self, pane_id: &str) -> Option<String> {
         let output = tmux_cmd()

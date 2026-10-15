@@ -439,6 +439,8 @@ offdesk agents hooks install|uninstall [--print]
                                                 # add (or remove) Claude Code hooks that report each session's state; your own hooks stay
 offdesk run note|blocked <text>                 # from an agent in an Offdesk terminal: report progress, or that it needs help
 offdesk run done <summary> [--link <url>]       # ... or that the work is finished; no hub token needed
+offdesk answer <run> --approve | --decline | --option <id> | --text <words>
+                                                # answer an agent run waiting on you; typed into its terminal for you
 ```
 
 - Machines and terminals are addressed by **id prefix** (first column of `ls`);

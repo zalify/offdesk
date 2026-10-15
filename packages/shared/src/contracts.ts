@@ -218,6 +218,8 @@ export interface AgentRunRequest {
   /** "screen"; later "hooks", "acp", "report". */
   source: string
   created_at_ms: number
+  /** When a person's answer was typed in; the request stays open until the agent moves on. */
+  answer_sent_at_ms?: number
 }
 
 /** One agent process's life in one terminal. */

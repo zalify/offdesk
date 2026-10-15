@@ -255,6 +255,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     ",
     )?;
 
+    // Agent run requests: when a person's answer was typed in, and what it was (A3)
+    for (column, definition) in [("answered_at", "INTEGER"), ("answer", "TEXT")] {
+        if !column_exists(conn, "agent_run_requests", column)? {
+            conn.execute(&format!("ALTER TABLE agent_run_requests ADD COLUMN {column} {definition}"), [])?;
+        }
+    }
+
     // Agent runs: progress from the agent's task list and its latest own report (A2)
     for (column, definition) in [
         ("progress_done", "INTEGER"),

@@ -43,6 +43,12 @@ excluded. For the Enter button, update the Hub's web UI for browser/ordinary
 connections, or update the App for encrypted connections that use its bundled
 UI. This feature is an in-app cue, not a background push notification.
 
+The strip also lists agent runs waiting on a person (from their hooks, even with no
+confirmation on screen) with what they ask: an approval offers yes and no, a question
+its first options. A tap sends the answer (`POST /api/agent-runs/{id}/answer`), the
+node types it into the terminal, and the chip says "sent" until the agent moves on.
+A confirmation with no run behind it keeps the Enter button.
+
 Agent runs (`docs/plans/2026-10-14-agent-runs.md`) use the same signal: while a
 terminal with a coding agent run shows a confirmation, that run is `waiting` with
 an `approval` request whose source is `screen` and which carries no text, and it

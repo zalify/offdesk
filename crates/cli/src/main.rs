@@ -120,6 +120,24 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Answer an agent run that waits on you (see `offdesk runs --waiting`): approve or
+    /// decline, pick an option, or answer in words. Typed into its terminal for you
+    Answer {
+        /// Run id or unique prefix
+        run: String,
+        /// Approve what it asks to do
+        #[arg(long, conflicts_with_all = ["decline", "option", "text"])]
+        approve: bool,
+        /// Decline it
+        #[arg(long, conflicts_with_all = ["option", "text"])]
+        decline: bool,
+        /// Pick one of its options by id (as `offdesk runs --json` lists them)
+        #[arg(long)]
+        option: Option<String>,
+        /// Answer in your own words
+        #[arg(long)]
+        text: Option<String>,
+    },
     /// For Claude Code and Codex hooks: report the agent's state to Offdesk (reads the
     /// hook's JSON on stdin; prints nothing, always succeeds)
     #[command(hide = true)]
@@ -870,6 +888,10 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             None => commands::machines::run(&hub_client, json, all).await,
         },
         Commands::Ls { machine, json } => commands::ls::run(&hub_client, machine, json).await,
+        Commands::Answer { run, approve, decline, option, text } => {
+            let approve = if approve { Some(true) } else if decline { Some(false) } else { None };
+            commands::runs::answer(&hub_client, &run, approve, option, text).await
+        }
         Commands::Runs { machine, all, waiting, json } => {
             commands::runs::run(&hub_client, machine, all, waiting, json).await
         }

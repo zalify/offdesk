@@ -315,7 +315,7 @@ pub fn find_for_user(
 
 pub fn open_request(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<AgentRunRequest>> {
     conn.query_row(
-        "SELECT id, kind, prompt, options, source, created_at FROM agent_run_requests
+        "SELECT id, kind, prompt, options, source, created_at, answered_at FROM agent_run_requests
          WHERE run_id = ?1 AND resolved_at IS NULL ORDER BY created_at DESC LIMIT 1",
         params![run_id],
         |row| {
@@ -328,6 +328,7 @@ pub fn open_request(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<
                     .unwrap_or_default(),
                 source: row.get(4)?,
                 created_at_ms: row.get(5)?,
+                answer_sent_at_ms: row.get(6)?,
             })
         },
     )
@@ -367,6 +368,21 @@ pub fn insert_request(
         ],
     )?;
     Ok(())
+}
+
+/// Records that a person's answer to an open request was typed in; false if the
+/// request isn't open or already has one (a second answer would type twice).
+pub fn mark_answer_sent(
+    conn: &Connection,
+    request_id: &str,
+    answer: &serde_json::Value,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE agent_run_requests SET answered_at = ?1, answer = ?2
+         WHERE id = ?3 AND resolved_at IS NULL AND answered_at IS NULL",
+        params![now_ms(), answer.to_string(), request_id],
+    )?;
+    Ok(changed > 0)
 }
 
 /// Resolves the run's open request, if any; returns whether there was one.

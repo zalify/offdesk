@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::agent_browser_stream::{Frame, NodeAction, Params, Streams, ViewerMsg};
 
 mod agent_runs;
+pub use agent_runs::AnswerError;
 use offdesk_protocol::{
     AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
     AgentBrowserReclaim, AgentSessionInfo, MouseAction, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
@@ -3800,6 +3801,125 @@ mod tests {
         let history = crate::db::agent_runs::list_events(&pool.get().unwrap(), &run.id, 0, 100).unwrap();
         let kinds: Vec<&str> = history.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds, vec!["request", "status", "report", "report", "status", "report", "status"]);
+    }
+
+    #[tokio::test]
+    async fn answers_are_typed_into_the_terminal_once_by_a_controlling_device() {
+        use super::agent_runs::{keys_for, AnswerError};
+        use offdesk_protocol::{
+            AgentAnswer, AgentKey, AgentQuestionOption, AgentRequestKind, AgentSignal, RunAgent,
+            AGENT_KEYS_CAPABILITY,
+        };
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-b", "machine-b");
+        let manager = MachineManager::new(pool.clone());
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(machine("machine-a"), Some("user-a".into()), vec![AGENT_KEYS_CAPABILITY.into()])
+            .await;
+        manager.register_machine(machine("machine-b"), Some("user-b".into())).await;
+        manager
+            .handle_machine_message("machine-a", MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-a")] })
+            .await;
+        while commands.try_recv().is_ok() {}
+        let options = vec![
+            AgentQuestionOption { id: "1".into(), label: "Pro".into(), detail: None },
+            AgentQuestionOption { id: "2".into(), label: "Team".into(), detail: None },
+        ];
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentSignal {
+                    terminal_id: "term-a".into(),
+                    agent: Some(RunAgent::Claude),
+                    source: "hooks".into(),
+                    signal: AgentSignal::Waiting { request: AgentRequestKind::Question, prompt: Some("Which plan?".into()), options },
+                },
+            )
+            .await;
+        let run = manager.snapshot_for_user("user-a").await.agent_runs.remove(0);
+        let request = run.request.clone().unwrap();
+        let answer = |option: &str, device: &str| AgentAnswer {
+            request_id: request.id.clone(),
+            option_id: Some(option.into()),
+            device_id: Some(device.into()),
+            ..Default::default()
+        };
+
+        // Someone else, a device without control, a wrong option, a stale request: refused
+        assert_eq!(manager.answer_agent_run("user-b", &run.id, answer("2", "phone")).await.unwrap_err(), AnswerError::NotFound);
+        assert_eq!(
+            manager.answer_agent_run("user-a", &run.id, answer("2", "phone")).await.unwrap_err(),
+            AnswerError::Conflict("Take control of the machine first")
+        );
+        manager.request_control("user-a", "machine-a", "phone");
+        assert_eq!(manager.answer_agent_run("user-a", &run.id, answer("9", "phone")).await.unwrap_err(), AnswerError::BadRequest("No such option"));
+        let stale = AgentAnswer { request_id: "old".into(), ..answer("2", "phone") };
+        assert!(matches!(manager.answer_agent_run("user-a", &run.id, stale).await, Err(AnswerError::Conflict(_))));
+        assert!(commands.try_recv().is_err(), "nothing typed yet");
+
+        // The answer goes to the node as the option's number; the request stays open, marked sent
+        let sent = manager.answer_agent_run("user-a", &run.id, answer("2", "phone")).await.unwrap();
+        assert!(sent.request.as_ref().unwrap().answer_sent_at_ms.is_some());
+        match commands.try_recv().unwrap() {
+            HubToMachine::SendAgentKeys { terminal_id, keys } => {
+                assert_eq!((terminal_id.as_str(), keys), ("term-a", vec![AgentKey::Digit(2)]))
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // A second answer would type twice: refused
+        assert_eq!(
+            manager.answer_agent_run("user-a", &run.id, answer("1", "phone")).await.unwrap_err(),
+            AnswerError::Conflict("An answer was already sent; check the terminal")
+        );
+        // The agent moving on closes the request
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentSignal { terminal_id: "term-a".into(), agent: None, source: "hooks".into(), signal: AgentSignal::Working },
+            )
+            .await;
+        assert!(manager.snapshot_for_user("user-a").await.agent_runs[0].request.is_none());
+        let history = crate::db::agent_runs::list_events(&pool.get().unwrap(), &run.id, 0, 100).unwrap();
+        assert!(history.iter().any(|e| e["kind"] == "answer" && e["event"]["answer"]["option_id"] == "2"));
+
+        // A node that can't type answers yet
+        manager.request_control("user-b", "machine-b", "laptop");
+        manager
+            .handle_machine_message("machine-b", MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-b", "term-b")] })
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-b",
+                MachineToHub::AgentSignal {
+                    terminal_id: "term-b".into(),
+                    agent: Some(RunAgent::Codex),
+                    source: "hooks".into(),
+                    signal: AgentSignal::Waiting { request: AgentRequestKind::Approval, prompt: Some("shell: cargo test".into()), options: vec![] },
+                },
+            )
+            .await;
+        let old_node = manager.snapshot_for_user("user-b").await.agent_runs.remove(0);
+        let approve = AgentAnswer { request_id: old_node.request.unwrap().id, approve: Some(true), device_id: Some("laptop".into()), ..Default::default() };
+        assert_eq!(
+            manager.answer_agent_run("user-b", &old_node.id, approve).await.unwrap_err(),
+            AnswerError::Unavailable("Update Offdesk on that machine to answer from here")
+        );
+
+        // Keys per kind
+        let request_of = |kind| offdesk_protocol::AgentRunRequest {
+            id: "r".into(), kind, prompt: None, options: vec![], source: "screen".into(), created_at_ms: 0, answer_sent_at_ms: None,
+        };
+        let with = |approve, text: Option<&str>| AgentAnswer { request_id: "r".into(), approve, text: text.map(str::to_string), ..Default::default() };
+        assert_eq!(keys_for(&request_of(AgentRequestKind::Approval), &with(Some(true), None)).unwrap(), vec![AgentKey::Digit(1)]);
+        assert_eq!(keys_for(&request_of(AgentRequestKind::Approval), &with(Some(false), None)).unwrap(), vec![AgentKey::Escape]);
+        assert!(keys_for(&request_of(AgentRequestKind::Approval), &with(None, Some("yes"))).is_err());
+        assert_eq!(
+            keys_for(&request_of(AgentRequestKind::Input), &with(None, Some("  OPENAI_KEY  "))).unwrap(),
+            vec![AgentKey::Text("OPENAI_KEY".into()), AgentKey::Enter]
+        );
+        assert!(keys_for(&request_of(AgentRequestKind::Input), &with(None, Some("two\nlines"))).is_err());
+        assert!(keys_for(&request_of(AgentRequestKind::Question), &with(None, None)).is_err());
     }
 
     #[tokio::test]

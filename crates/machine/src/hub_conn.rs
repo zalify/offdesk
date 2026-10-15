@@ -182,6 +182,7 @@ impl HubConnection {
                 offdesk_protocol::composer::COMPOSER_V1.to_string(),
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
+                offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
             ],
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
@@ -743,6 +744,16 @@ async fn handle_hub_message(
                         .await;
                 }
             }
+        }
+        // An answer to an agent run, typed into its terminal. Best effort: the run's
+        // own signals (hooks, the screen) say whether it took
+        HubToMachine::SendAgentKeys { terminal_id, keys } => {
+            let pty = pty.clone();
+            tokio::task::spawn_blocking(move || {
+                if let Err(error) = pty.send_agent_keys(&terminal_id, &keys) {
+                    tracing::warn!("answer for {terminal_id} not typed: {error}");
+                }
+            });
         }
         HubToMachine::DestroyTerminal { terminal_id } => {
             let _ = pty.destroy_terminal(&terminal_id);

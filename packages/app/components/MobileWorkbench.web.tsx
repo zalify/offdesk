@@ -24,7 +24,7 @@ import {
   useSyncExternalStore,
   useState,
 } from "react";
-import type {
+import type { AgentRunInfo,
   AgentBrowserInfo,
   MachineInfo,
   ResourceStats,
@@ -84,6 +84,8 @@ interface MobileWorkbenchProps {
   // The active machine's agent browsers. They are machine-wide, not sessions:
   // the title bar's Globe button opens a full-screen surface for them.
   browsers: AgentBrowserInfo[];
+  /** Agent runs; those waiting on a person show in the attention strip, answerable there. */
+  agentRuns?: AgentRunInfo[];
   browserButton?: { count: number; needsPerson: boolean; open: boolean };
   browserSurfaceOpen: boolean;
   /** The tab the person last picked on the active machine; may be gone. */
@@ -154,6 +156,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     groups,
     activeTerminalId,
     browsers,
+    agentRuns,
     browserButton,
     browserSurfaceOpen,
     selectedBrowserId,
@@ -666,6 +669,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         deviceId={deviceId} canSend={canSendAttention}
         activeTerminalId={activeTerminalId}
         browsers={browsers}
+        runs={agentRuns}
         activeBrowserId={
           browserSurfaceOpen
             ? pickSelectedBrowserId(browsers, selectedBrowserId)
