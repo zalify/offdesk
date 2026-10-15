@@ -433,6 +433,12 @@ offdesk browser take <browser> --reason "..." [--force]   # take control back fr
 offdesk mcp                                     # the agent browser as MCP tools over stdio: claude mcp add offdesk -- offdesk mcp
 offdesk fetch <path>... [--plain]               # print click-to-download links (OSC 8) for files/folders on this machine; max 20 MiB per file; no hub token needed
 offdesk link [--no-open]                        # open the hub in a browser; on the hub's machine, the sign-in link + code
+offdesk runs [--all] [--waiting] [--machine <id>] [--json]
+                                                # agent runs: which coding agent each terminal runs and what it's doing
+offdesk agents hooks install|uninstall [--print]
+                                                # add (or remove) Claude Code hooks that report each session's state; your own hooks stay
+offdesk run note|blocked <text>                 # from an agent in an Offdesk terminal: report progress, or that it needs help
+offdesk run done <summary> [--link <url>]       # ... or that the work is finished; no hub token needed
 ```
 
 - Machines and terminals are addressed by **id prefix** (first column of `ls`);

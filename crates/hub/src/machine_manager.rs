@@ -2125,6 +2125,15 @@ impl MachineManager {
             MachineToHub::TerminalAgent { terminal_id, agent } => {
                 self.on_terminal_agent(machine_id, &terminal_id, agent).await;
             }
+            MachineToHub::AgentSignal {
+                terminal_id,
+                agent,
+                source,
+                signal,
+            } => {
+                self.on_agent_signal(machine_id, &terminal_id, agent, &source, signal)
+                    .await;
+            }
             MachineToHub::TerminalCwd { terminal_id, cwd } => {
                 let updated = match self.db.get() {
                     Ok(db_conn) => {
@@ -3706,6 +3715,91 @@ mod tests {
         // A hub restart reads them back from the database
         let restarted = MachineManager::new(pool);
         assert_eq!(restarted.snapshot_for_user("user-a").await.agent_runs.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn agent_signals_open_refine_and_finish_runs() {
+        use offdesk_protocol::{
+            AgentQuestionOption, AgentReportKind, AgentRequestKind, AgentRunProgress,
+            AgentRunStatus, AgentSignal, RunAgent,
+        };
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-b", "machine-b");
+        let manager = MachineManager::new(pool.clone());
+        manager.register_machine(machine("machine-a"), Some("user-a".into())).await;
+        manager.register_machine(machine("machine-b"), Some("user-b".into())).await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-a")] },
+            )
+            .await;
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        let mut events = manager.subscribe_events_after("user-a", snapshot.snapshot_seq);
+        let signal = |signal| MachineToHub::AgentSignal {
+            terminal_id: "term-a".into(),
+            agent: Some(RunAgent::Claude),
+            source: "hooks".into(),
+            signal,
+        };
+
+        // A hook before the poll noticed the agent opens the run; repeats change nothing
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        let run = next_run(&mut events).await;
+        assert_eq!((run.agent, run.status), (RunAgent::Claude, AgentRunStatus::Working));
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        assert!(no_run_events(&mut events));
+        // The poll noticing the same agent afterwards keeps the same run
+        manager.handle_machine_message("machine-a", MachineToHub::TerminalAgent { terminal_id: "term-a".into(), agent: Some(RunAgent::Claude) }).await;
+        assert!(no_run_events(&mut events));
+        // Another machine can't signal it
+        manager.handle_machine_message("machine-b", signal(AgentSignal::Idle)).await;
+        assert!(no_run_events(&mut events));
+
+        // A question with options, then answered (work goes on)
+        let options = vec![AgentQuestionOption { id: "1".into(), label: "Team".into(), detail: None }];
+        manager
+            .handle_machine_message(
+                "machine-a",
+                signal(AgentSignal::Waiting { request: AgentRequestKind::Question, prompt: Some("Which plan?".into()), options: options.clone() }),
+            )
+            .await;
+        let asked = next_run(&mut events).await;
+        let request = asked.request.expect("the question");
+        assert_eq!((asked.status, request.prompt.as_deref(), request.options, request.source.as_str()), (AgentRunStatus::Waiting, Some("Which plan?"), options, "hooks"));
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        let answered = next_run(&mut events).await;
+        assert_eq!((answered.status, answered.request), (AgentRunStatus::Working, None));
+
+        // Progress, only when it changes; a note keeps the status
+        let progress = AgentRunProgress { done: 1, total: 3, current: Some("Fix the total".into()) };
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Progress(progress.clone()))).await;
+        assert_eq!(next_run(&mut events).await.progress, Some(progress.clone()));
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Progress(progress))).await;
+        assert!(no_run_events(&mut events));
+        let report = |kind, text: &str| signal(AgentSignal::Report { kind, text: text.into(), link: None });
+        manager.handle_machine_message("machine-a", report(AgentReportKind::Note, "Found it: tax is added twice")).await;
+        let noted = next_run(&mut events).await;
+        assert_eq!((noted.status, noted.report.map(|r| (r.kind, r.text))), (AgentRunStatus::Working, Some((AgentReportKind::Note, "Found it: tax is added twice".to_string()))));
+
+        // Blocked: it waits for instructions; idle again changes nothing
+        manager.handle_machine_message("machine-a", report(AgentReportKind::Blocked, "2 tests still fail")).await;
+        assert_eq!(next_run(&mut events).await.status, AgentRunStatus::Idle);
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Idle)).await;
+        assert!(no_run_events(&mut events));
+
+        // Finished ends it; a finish with nothing open does nothing
+        manager.handle_machine_message("machine-a", report(AgentReportKind::Finished, "Shipped in #212")).await;
+        let finished = next_run(&mut events).await;
+        assert_eq!((finished.id.as_str(), finished.status, finished.ended_at_ms.is_some()), (run.id.as_str(), AgentRunStatus::Done, true));
+        manager.handle_machine_message("machine-a", report(AgentReportKind::Finished, "again")).await;
+        assert!(no_run_events(&mut events));
+
+        // Its history has the request, the reports and the status changes, oldest first
+        let history = crate::db::agent_runs::list_events(&pool.get().unwrap(), &run.id, 0, 100).unwrap();
+        let kinds: Vec<&str> = history.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, vec!["request", "status", "report", "report", "status", "report", "status"]);
     }
 
     #[tokio::test]

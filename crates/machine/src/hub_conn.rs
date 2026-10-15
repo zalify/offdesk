@@ -125,6 +125,8 @@ pub struct HubConnection {
     pub hub_url: String,
     pub pty_manager: Arc<PtyManager>,
     pub agent_browser: Arc<AgentBrowserManager>,
+    /// Signals from agents' hooks and reports (crate::agent_socket), to pass on
+    pub agent_signals: tokio::sync::broadcast::Sender<MachineToHub>,
     /// Spawn-command overrides for agent sessions (machine.json `acp_agents`).
     pub acp_agents: std::collections::HashMap<String, Vec<String>>,
 }
@@ -246,6 +248,27 @@ impl HubConnection {
                     .is_err()
                 {
                     break;
+                }
+            }
+        });
+
+        // Agents' hooks and reports, passed on while this connection is up
+        let mut agent_signals = self.agent_signals.subscribe();
+        let send_tx_for_signals = send_tx.clone();
+        let mut agent_signal_task = tokio::spawn(async move {
+            loop {
+                match agent_signals.recv().await {
+                    Ok(signal) => {
+                        if send_tx_for_signals
+                            .send(OutboundHubMessage::Json(signal))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
@@ -632,6 +655,7 @@ impl HubConnection {
             _ = &mut title_fallback_task => {},
             _ = &mut acp_forward_task => {},
             _ = &mut agent_browser_task => {},
+            _ = &mut agent_signal_task => {},
         }
 
         // Abort all tasks to ensure full cleanup
@@ -641,6 +665,7 @@ impl HubConnection {
         title_fallback_task.abort();
         acp_forward_task.abort();
         agent_browser_task.abort();
+        agent_signal_task.abort();
         // Nobody is watching once the hub connection is gone.
         self.agent_browser.stop_all_screencasts().await;
 

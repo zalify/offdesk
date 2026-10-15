@@ -1,11 +1,14 @@
-//! Agent runs from what nodes report (docs/plans/2026-10-14-agent-runs.md, phase A1):
-//! a coding agent in a terminal's foreground opens a run, a confirmation on its screen
-//! makes it wait on a person, the process leaving ends it Done, and its terminal or
-//! machine going away ends it Gone. A machine coming back with the same agent still in
-//! the terminal carries the Gone run on rather than starting another.
+//! Agent runs from what nodes report (docs/plans/2026-10-14-agent-runs.md): a coding
+//! agent in a terminal's foreground opens a run, a confirmation on its screen makes it
+//! wait on a person, the process leaving ends it Done, and its terminal or machine going
+//! away ends it Gone. A machine coming back with the same agent still in the terminal
+//! carries the Gone run on rather than starting another. What the agent says itself
+//! (its hooks, `offdesk run …`) refines that: working or idle, a request with its text,
+//! progress, and its own notes (A2).
 
 use offdesk_protocol::{
-    AgentRequestKind, AgentRunStatus, BrowserEvent, RunAgent, TerminalAttention,
+    AgentReportKind, AgentRequestKind, AgentRunStatus, AgentSignal, BrowserEvent, RunAgent,
+    TerminalAttention,
 };
 
 use super::MachineManager;
@@ -75,6 +78,137 @@ impl MachineManager {
                 _ => {}
             }
             Ok(changed)
+        })();
+        self.announce_runs(user_id, &db, result, terminal_id);
+    }
+
+    /// The agent in a terminal said something about its run, through its hooks or its own
+    /// report. A run opens for it if none is open (hooks often beat the 5-second poll).
+    pub(super) async fn on_agent_signal(
+        &self,
+        machine_id: &str,
+        terminal_id: &str,
+        agent: Option<RunAgent>,
+        source: &str,
+        signal: AgentSignal,
+    ) {
+        let (user_id, cwd) = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                return;
+            };
+            let Some(terminal) = conn.terminals.get(terminal_id) else {
+                return;
+            };
+            (conn.user_id.clone(), terminal.cwd.clone())
+        };
+        let Ok(db) = self.db.get() else { return };
+        let result = (|| -> rusqlite::Result<Vec<AgentRunRow>> {
+            let open = agent_runs::latest_for_terminal(&db, terminal_id)?
+                .filter(|run| run.ended_at.is_none());
+            let (run, opened) = match open {
+                Some(run) => (run, false),
+                // Nothing to open a run for: an unknown signal, or a finish with no work open
+                None if matches!(
+                    signal,
+                    AgentSignal::Other
+                        | AgentSignal::Report {
+                            kind: AgentReportKind::Finished,
+                            ..
+                        }
+                ) =>
+                {
+                    return Ok(Vec::new())
+                }
+                None => {
+                    let run = agent_runs::insert(
+                        &db,
+                        machine_id,
+                        terminal_id,
+                        agent.unwrap_or(RunAgent::Other),
+                        &cwd,
+                        AgentRunStatus::Working,
+                    )?;
+                    (run, true)
+                }
+            };
+            let status_to = |status: AgentRunStatus| -> rusqlite::Result<Option<AgentRunRow>> {
+                agent_runs::insert_event(
+                    &db,
+                    &run.id,
+                    "status",
+                    &serde_json::json!({ "status": status, "source": source }),
+                )?;
+                agent_runs::set_status(&db, &run.id, status)
+            };
+            let changed = match signal {
+                AgentSignal::Working | AgentSignal::Idle => {
+                    let status = if signal == AgentSignal::Working {
+                        AgentRunStatus::Working
+                    } else {
+                        AgentRunStatus::Idle
+                    };
+                    let answered = agent_runs::resolve_open_request(&db, &run.id, "answered")?;
+                    if answered || run.status != status {
+                        status_to(status)?
+                    } else {
+                        None
+                    }
+                }
+                AgentSignal::Waiting {
+                    request,
+                    prompt,
+                    options,
+                } => {
+                    agent_runs::insert_request(
+                        &db,
+                        &run.id,
+                        request,
+                        prompt.as_deref(),
+                        &options,
+                        source,
+                    )?;
+                    agent_runs::insert_event(
+                        &db,
+                        &run.id,
+                        "request",
+                        &serde_json::json!({ "request": request, "prompt": prompt, "options": options, "source": source }),
+                    )?;
+                    agent_runs::set_status(&db, &run.id, AgentRunStatus::Waiting)?
+                }
+                AgentSignal::Progress(progress) => {
+                    if run.progress.as_ref() != Some(&progress) {
+                        agent_runs::set_progress(&db, &run.id, &progress)?
+                    } else {
+                        None
+                    }
+                }
+                AgentSignal::Report { kind, text, link } => {
+                    agent_runs::insert_event(
+                        &db,
+                        &run.id,
+                        "report",
+                        &serde_json::json!({ "kind": kind, "text": agent_runs::clip(&text), "link": link, "source": source }),
+                    )?;
+                    let reported =
+                        agent_runs::set_report(&db, &run.id, kind, &text, link.as_deref())?;
+                    match kind {
+                        // It stopped and needs help: it waits for instructions
+                        AgentReportKind::Blocked => {
+                            agent_runs::resolve_open_request(&db, &run.id, "blocked")?;
+                            status_to(AgentRunStatus::Idle)?
+                        }
+                        AgentReportKind::Finished => status_to(AgentRunStatus::Done)?,
+                        _ => reported,
+                    }
+                }
+                AgentSignal::Other => None,
+            };
+            Ok(match (changed, opened) {
+                (Some(row), _) => vec![row],
+                (None, true) => agent_runs::find(&db, &run.id)?.into_iter().collect(),
+                (None, false) => Vec::new(),
+            })
         })();
         self.announce_runs(user_id, &db, result, terminal_id);
     }
@@ -183,7 +317,7 @@ fn begin(
     attention: Option<TerminalAttention>,
 ) -> rusqlite::Result<Option<AgentRunRow>> {
     if attention.is_some() {
-        agent_runs::insert_request(db, run_id, AgentRequestKind::Approval, "screen")?;
+        agent_runs::insert_request(db, run_id, AgentRequestKind::Approval, None, &[], "screen")?;
         agent_runs::set_status(db, run_id, AgentRunStatus::Waiting)
     } else {
         agent_runs::set_status(db, run_id, AgentRunStatus::Working)

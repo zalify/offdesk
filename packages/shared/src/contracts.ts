@@ -230,6 +230,10 @@ export interface AgentRunInfo {
   status: AgentRunStatus
   /** The open request, while the run is waiting. */
   request?: AgentRunRequest
+  /** From the agent's task list, when its hooks report it. */
+  progress?: { done: number; total: number; current?: string }
+  /** The latest note, blocked or finished report from the agent itself. */
+  report?: { kind: 'note' | 'blocked' | 'finished' | 'other'; text: string; link?: string; at_ms: number }
   started_at_ms: number
   updated_at_ms: number
   ended_at_ms?: number

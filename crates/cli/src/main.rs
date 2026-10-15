@@ -1,3 +1,4 @@
+mod agents;
 mod attach;
 mod client;
 mod commands;
@@ -118,6 +119,28 @@ enum Commands {
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
+    },
+    /// For Claude Code and Codex hooks: report the agent's state to Offdesk (reads the
+    /// hook's JSON on stdin; prints nothing, always succeeds)
+    #[command(hide = true)]
+    Hook {
+        /// claude or codex
+        agent: String,
+        /// The hook event, e.g. PreToolUse; `notify` for Codex's notify program
+        event: String,
+        /// Codex notify's JSON argument
+        payload: Option<String>,
+    },
+    /// Report on your own work from an agent in an Offdesk terminal: a note, that
+    /// you're blocked, or that you're done. People see it on the agent run
+    Run {
+        #[command(subcommand)]
+        action: RunAction,
+    },
+    /// Connect coding agents to Offdesk
+    Agents {
+        #[command(subcommand)]
+        action: AgentsAction,
     },
     /// List agent runs: the coding agents (Claude Code, Codex) in your terminals and
     /// what they're doing. Open runs unless --all
@@ -291,6 +314,54 @@ browser_wait_control that time out are not errors; their text says so.")]
         /// Print the link without opening a browser
         #[arg(long)]
         no_open: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum RunAction {
+    /// Progress worth telling a person, e.g. "Found it: tax is added twice"
+    Note {
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+    },
+    /// You stopped and need help, e.g. "2 tests still fail after 3 tries"
+    Blocked {
+        #[arg(required = true, num_args = 1..)]
+        text: Vec<String>,
+    },
+    /// The work is finished: what changed and how to check it
+    Done {
+        #[arg(required = true, num_args = 1..)]
+        summary: Vec<String>,
+        /// A link to hand over, e.g. the pull request
+        #[arg(long)]
+        link: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AgentsAction {
+    /// Claude Code hooks that report each session's state (working, waiting on you,
+    /// idle) to Offdesk
+    Hooks {
+        #[command(subcommand)]
+        action: HooksAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum HooksAction {
+    /// Add Offdesk's hooks to your Claude Code settings (your own hooks stay)
+    Install {
+        /// Print the resulting settings instead of writing them
+        #[arg(long)]
+        print: bool,
+    },
+    /// Remove Offdesk's hooks from your Claude Code settings
+    Uninstall {
+        /// Print the resulting settings instead of writing them
+        #[arg(long)]
+        print: bool,
     },
 }
 
@@ -609,6 +680,28 @@ fn env_with_legacy(name: &str, legacy: &str) -> Option<String> {
 }
 
 async fn run(cli: Cli) -> Result<(), CliError> {
+    // Agents' hooks and reports go to the local node: no config file, no hub, no token.
+    match &cli.command {
+        Commands::Hook { agent, event, payload } => {
+            agents::hook(agent, event, payload.as_deref());
+            return Ok(());
+        }
+        Commands::Run { action } => {
+            let (kind, text, link) = match action {
+                RunAction::Note { text } => (offdesk_protocol::AgentReportKind::Note, text, None),
+                RunAction::Blocked { text } => (offdesk_protocol::AgentReportKind::Blocked, text, None),
+                RunAction::Done { summary, link } => (offdesk_protocol::AgentReportKind::Finished, summary, link.as_deref()),
+            };
+            return agents::run_report(kind, &text.join(" "), link);
+        }
+        Commands::Agents { action: AgentsAction::Hooks { action } } => {
+            return match action {
+                HooksAction::Install { print } => agents::hooks(true, *print),
+                HooksAction::Uninstall { print } => agents::hooks(false, *print),
+            };
+        }
+        _ => {}
+    }
     // Purely local: needs neither a config file nor a hub.
     if let Commands::Fetch { paths, plain } = &cli.command {
         return commands::fetch::run(paths, *plain);
@@ -669,6 +762,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
     let result = match cli.command {
         // Handled before the hub client existed; it needs no token.
         Commands::Link { .. } => unreachable!("link returns early"),
+        Commands::Hook { .. } | Commands::Run { .. } | Commands::Agents { .. } => {
+            unreachable!("agent commands return early")
+        }
         Commands::Fetch { .. } => unreachable!("fetch returns early"),
         Commands::Mcp => unreachable!("mcp returns early"),
         Commands::Browser { action } => match action {

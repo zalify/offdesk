@@ -47,6 +47,25 @@ rename mapping is at the bottom.
 - `offdesk runs` lists open runs; `--all` adds those ended in the last day and
   `--waiting` keeps only waiting ones (`crates/cli/src/commands/runs.rs`).
 
+## Agent hooks and reports (implementation added 2026-10-15)
+
+- `offdesk hook claude <event>` reads a Claude Code hook's JSON on stdin and sends
+  a signal (working, idle, waiting with its text, progress) to the node's agent
+  socket; it needs no config or token, prints nothing and always exits 0
+  (`crates/cli/src/agents.rs`, `crates/cli/src/main.rs` `run`).
+- `offdesk run note|blocked|done` reports an agent's own progress, that it's
+  blocked, or that it finished (with `--link`), the same way.
+- The node listens on `<config dir>/agent.sock` (mode 0600; a temp-dir fallback when
+  that path is too long), accepts reports only from panes of its own tmux server,
+  and passes them to the hub as `MachineToHub::AgentSignal`
+  (`crates/machine/src/agent_socket.rs`, `crates/protocol/src/lib.rs`
+  `agent_socket_path`).
+- `offdesk agents hooks install|uninstall [--print]` adds or removes only Offdesk's
+  hooks in Claude Code's user settings, keeping the rest and backing the file up
+  first.
+- Runs carry `progress` and the latest `report`; `GET /api/agent-runs/{id}/events`
+  lists requests, reports and status changes (`crates/hub/src/db/agent_runs.rs`).
+
 ## Terminals opened by an agent (implementation added 2026-10-13)
 
 - A terminal created with an API token (the `offdesk` CLI) records

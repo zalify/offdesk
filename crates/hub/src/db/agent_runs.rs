@@ -4,7 +4,8 @@
 //! and machine lifecycle). Runs belong to a machine, so they're visible to its owner.
 
 use offdesk_protocol::{
-    AgentQuestionOption, AgentRequestKind, AgentRunInfo, AgentRunRequest, AgentRunStatus, RunAgent,
+    AgentQuestionOption, AgentReportKind, AgentRequestKind, AgentRunInfo, AgentRunProgress,
+    AgentRunReport, AgentRunRequest, AgentRunStatus, RunAgent,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -21,10 +22,26 @@ pub struct AgentRunRow {
     pub started_at: i64,
     pub updated_at: i64,
     pub ended_at: Option<i64>,
+    pub progress: Option<AgentRunProgress>,
+    pub report: Option<AgentRunReport>,
 }
 
-const COLUMNS: &str =
-    "id, machine_id, terminal_id, agent, cwd, status, started_at, updated_at, ended_at";
+const COLUMNS: &str = "id, machine_id, terminal_id, agent, cwd, status, started_at, updated_at, \
+     ended_at, progress_done, progress_total, progress_current, report_kind, report_text, \
+     report_link, report_at";
+/// Events kept per run; older ones are trimmed on insert.
+const EVENTS_PER_RUN: i64 = 500;
+/// Prompts, notes and current steps are cut to this many characters.
+const MAX_TEXT: usize = 2000;
+
+/// Text from an agent, trimmed and cut to `MAX_TEXT` characters.
+pub fn clip(text: &str) -> String {
+    let text = text.trim();
+    match text.char_indices().nth(MAX_TEXT) {
+        Some((at, _)) => format!("{}…", &text[..at]),
+        None => text.to_string(),
+    }
+}
 
 fn map_row(row: &rusqlite::Row) -> rusqlite::Result<AgentRunRow> {
     Ok(AgentRunRow {
@@ -37,6 +54,29 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<AgentRunRow> {
         started_at: row.get(6)?,
         updated_at: row.get(7)?,
         ended_at: row.get(8)?,
+        progress: match (
+            row.get::<_, Option<i64>>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+        ) {
+            (Some(done), Some(total)) => Some(AgentRunProgress {
+                done: done.max(0) as u32,
+                total: total.max(0) as u32,
+                current: row.get(11)?,
+            }),
+            _ => None,
+        },
+        report: match (
+            row.get::<_, Option<String>>(12)?,
+            row.get::<_, Option<String>>(13)?,
+        ) {
+            (Some(kind), Some(text)) => Some(AgentRunReport {
+                kind: AgentReportKind::from_name(&kind),
+                text,
+                link: row.get(14)?,
+                at_ms: row.get::<_, Option<i64>>(15)?.unwrap_or_default(),
+            }),
+            _ => None,
+        },
     })
 }
 
@@ -84,9 +124,13 @@ pub fn insert(
         started_at: now,
         updated_at: now,
         ended_at: status.ends_run().then_some(now),
+        progress: None,
+        report: None,
     };
     conn.execute(
-        &format!("INSERT INTO agent_runs ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"),
+        "INSERT INTO agent_runs
+            (id, machine_id, terminal_id, agent, cwd, status, started_at, updated_at, ended_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             row.id,
             row.machine_id,
@@ -120,6 +164,91 @@ pub fn set_status(
         resolve_open_request(conn, id, "ended")?;
     }
     find(conn, id)
+}
+
+/// Records how far along the run is (from the agent's task list).
+pub fn set_progress(
+    conn: &Connection,
+    id: &str,
+    progress: &AgentRunProgress,
+) -> rusqlite::Result<Option<AgentRunRow>> {
+    conn.execute(
+        "UPDATE agent_runs SET progress_done = ?1, progress_total = ?2, progress_current = ?3,
+             updated_at = ?4 WHERE id = ?5",
+        params![
+            progress.done,
+            progress.total,
+            progress.current.as_deref().map(clip),
+            now_ms(),
+            id
+        ],
+    )?;
+    find(conn, id)
+}
+
+/// Records the agent's latest report about itself.
+pub fn set_report(
+    conn: &Connection,
+    id: &str,
+    kind: AgentReportKind,
+    text: &str,
+    link: Option<&str>,
+) -> rusqlite::Result<Option<AgentRunRow>> {
+    let now = now_ms();
+    conn.execute(
+        "UPDATE agent_runs SET report_kind = ?1, report_text = ?2, report_link = ?3, report_at = ?4,
+             updated_at = ?4 WHERE id = ?5",
+        params![kind.as_str(), clip(text), link.map(clip), now, id],
+    )?;
+    find(conn, id)
+}
+
+/// Appends to a run's history (requests, reports, status changes); keeps the newest
+/// `EVENTS_PER_RUN`.
+pub fn insert_event(
+    conn: &Connection,
+    run_id: &str,
+    kind: &str,
+    event: &serde_json::Value,
+) -> rusqlite::Result<i64> {
+    let seq: i64 = conn.query_row(
+        "SELECT coalesce(max(seq), 0) + 1 FROM agent_run_events WHERE run_id = ?1",
+        params![run_id],
+        |row| row.get(0),
+    )?;
+    conn.execute(
+        "INSERT INTO agent_run_events (run_id, seq, kind, event_json, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![run_id, seq, kind, event.to_string(), now_ms()],
+    )?;
+    conn.execute(
+        "DELETE FROM agent_run_events WHERE run_id = ?1 AND seq <= ?2",
+        params![run_id, seq - EVENTS_PER_RUN],
+    )?;
+    Ok(seq)
+}
+
+/// A run's history after `after_seq`, oldest first.
+pub fn list_events(
+    conn: &Connection,
+    run_id: &str,
+    after_seq: i64,
+    limit: i64,
+) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT seq, kind, event_json, created_at FROM agent_run_events
+         WHERE run_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3",
+    )?;
+    let rows = stmt.query_map(params![run_id, after_seq, limit], |row| {
+        let event: String = row.get(2)?;
+        Ok(serde_json::json!({
+            "seq": row.get::<_, i64>(0)?,
+            "kind": row.get::<_, String>(1)?,
+            "event": serde_json::from_str::<serde_json::Value>(&event).unwrap_or_default(),
+            "created_at_ms": row.get::<_, i64>(3)?,
+        }))
+    })?;
+    rows.collect()
 }
 
 /// Ends every open run on a machine with `status`; returns the runs it ended.
@@ -210,16 +339,29 @@ pub fn insert_request(
     conn: &Connection,
     run_id: &str,
     kind: AgentRequestKind,
+    prompt: Option<&str>,
+    options: &[AgentQuestionOption],
     source: &str,
 ) -> rusqlite::Result<()> {
     resolve_open_request(conn, run_id, "superseded")?;
+    let options: Vec<AgentQuestionOption> = options
+        .iter()
+        .take(10)
+        .map(|option| AgentQuestionOption {
+            id: clip(&option.id),
+            label: clip(&option.label),
+            detail: option.detail.as_deref().map(clip),
+        })
+        .collect();
     conn.execute(
-        "INSERT INTO agent_run_requests (id, run_id, kind, source, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO agent_run_requests (id, run_id, kind, prompt, options, source, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             uuid::Uuid::new_v4().to_string(),
             run_id,
             kind.as_str(),
+            prompt.map(clip),
+            serde_json::to_string(&options).unwrap_or_else(|_| "[]".to_string()),
             source,
             now_ms()
         ],
@@ -255,6 +397,8 @@ pub fn to_info(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<AgentRu
         cwd: row.cwd.clone(),
         status: row.status,
         request,
+        progress: row.progress.clone(),
+        report: row.report.clone(),
         started_at_ms: row.started_at,
         updated_at_ms: row.updated_at,
         ended_at_ms: row.ended_at,
@@ -301,7 +445,15 @@ mod tests {
             run.id
         );
 
-        insert_request(&conn, &run.id, AgentRequestKind::Approval, "screen").unwrap();
+        insert_request(
+            &conn,
+            &run.id,
+            AgentRequestKind::Approval,
+            None,
+            &[],
+            "screen",
+        )
+        .unwrap();
         let waiting = set_status(&conn, &run.id, AgentRunStatus::Waiting)
             .unwrap()
             .unwrap();
