@@ -22,6 +22,10 @@ pub enum AuthError {
     #[error("Invalid token")]
     InvalidToken,
 
+    /// A scoped token asked for something outside its scopes.
+    #[error("{0}")]
+    Forbidden(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -30,6 +34,7 @@ impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         let status = match &self {
             AuthError::MissingAuth | AuthError::InvalidToken => StatusCode::UNAUTHORIZED,
+            AuthError::Forbidden(_) => StatusCode::FORBIDDEN,
             AuthError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
         let body = serde_json::json!({ "error": self.to_string() });
@@ -151,13 +156,19 @@ pub const API_TOKEN_PREFIX: &str = "odk_";
 const API_TOKEN_PREFIX_LEGACY: &str = "wmx_";
 
 /// Verify a bearer token — either an API token or a JWT.
-/// Returns the user_id on success.
+/// Returns the user_id on success. For the paths that take a token outside the HTTP
+/// routes (WebSockets, the release beacon): full access only. A scoped token reaches
+/// agent runs over HTTP only.
 pub fn verify_bearer_token(
     token: &str,
     db: &db::DbPool,
     jwt_secret: &str,
 ) -> Result<String, AuthError> {
-    verify_bearer(token, db, jwt_secret).map(|auth| auth.user_id)
+    let auth = verify_bearer(token, db, jwt_secret)?;
+    if !auth.is_full() {
+        return Err(AuthError::InvalidToken);
+    }
+    Ok(auth.user_id)
 }
 
 /// Verify a bearer token and say how the caller authenticated: API tokens are
@@ -187,12 +198,16 @@ fn verify_bearer(token: &str, db: &db::DbPool, jwt_secret: &str) -> Result<AuthU
         Ok(AuthUser {
             user_id: row.user_id,
             api_token_name: Some(row.name),
+            api_token_id: Some(row.id),
+            access: row.access.filter(|access| !access.is_full()),
         })
     } else {
         // JWT path
         verify_jwt(token, jwt_secret).map(|user_id| AuthUser {
             user_id,
             api_token_name: None,
+            api_token_id: None,
+            access: None,
         })
     }
 }
@@ -202,12 +217,84 @@ fn verify_bearer(token: &str, db: &db::DbPool, jwt_secret: &str) -> Result<AuthU
 // ---------------------------------------------------------------------------
 
 /// Authenticated user extracted from the `Authorization: Bearer <token>` header.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AuthUser {
     pub user_id: String,
     /// Name of the API token the request carried; `None` for app sessions (JWT).
     /// Only the name is kept, never the token.
     pub api_token_name: Option<String>,
+    pub api_token_id: Option<String>,
+    /// A scoped token's access; None for full access (app sessions, full tokens).
+    pub access: Option<offdesk_protocol::TokenAccess>,
+}
+
+impl AuthUser {
+    pub fn is_full(&self) -> bool {
+        self.access.is_none()
+    }
+
+    /// Whether this caller may use `scope` (full access may use any).
+    pub fn allows(&self, scope: offdesk_protocol::TokenScope) -> bool {
+        self.access.as_ref().is_none_or(|access| access.allows(scope))
+    }
+
+    /// Whether this caller may reach a machine: always with full access; a scoped token
+    /// only its machines (production ones only when it says so).
+    pub fn may_reach_machine(&self, db: &db::DbPool, machine_id: &str) -> bool {
+        let Some(access) = &self.access else {
+            return true;
+        };
+        db.get()
+            .ok()
+            .and_then(|conn| db::machines::find_machine_by_id(&conn, machine_id).ok().flatten())
+            .is_some_and(|machine| access.allows_machine(machine_id, machine.production))
+    }
+
+    /// Records what an API token did or was refused; app sessions aren't recorded.
+    pub fn audit(&self, db: &db::DbPool, action: &str, target: &str, result: &str) {
+        let (Some(id), Some(name)) = (&self.api_token_id, &self.api_token_name) else {
+            return;
+        };
+        match db.get() {
+            Ok(conn) => {
+                if let Err(e) =
+                    db::tokens::insert_audit(&conn, &self.user_id, id, name, action, target, result)
+                {
+                    tracing::warn!("token audit: {}", e);
+                }
+            }
+            Err(e) => tracing::warn!("token audit: {}", e),
+        }
+    }
+}
+
+/// The routes a scoped token may reach, with the scopes that open each. Everything
+/// else (terminals, input, files, previews, machine settings, tokens) is refused, so a
+/// new route stays closed to scoped tokens until it's added here.
+fn scoped_route(
+    method: &http::Method,
+    path: &str,
+) -> Option<&'static [offdesk_protocol::TokenScope]> {
+    use offdesk_protocol::TokenScope::{self, *};
+    const SEE_RUNS: &[TokenScope] = &[RunsRead, RunsAnswer, RunsApprove];
+    const ANSWER: &[TokenScope] = &[RunsAnswer, RunsApprove];
+    const START: &[TokenScope] = &[RunsStart];
+    const CONTROL: &[TokenScope] = &[RunsAnswer, RunsApprove, RunsStart];
+    const ANY: &[TokenScope] = &[RunsRead, RunsAnswer, RunsApprove, RunsStart, RunsMessage];
+    match (method.as_str(), path) {
+        (
+            "GET",
+            "/api/agent-runs" | "/api/agent-runs/{run_id}" | "/api/agent-runs/{run_id}/events",
+        ) => Some(SEE_RUNS),
+        ("POST", "/api/agent-runs/{run_id}/answer") => Some(ANSWER),
+        ("POST", "/api/agent-runs") => Some(START),
+        ("GET", "/api/machines/{machine_id}/agents") => Some(START),
+        // Answering and starting take the machine's control lease, as the CLI does
+        ("POST", "/api/mode/control" | "/api/mode/release") => Some(CONTROL),
+        // Listed only as far as the token's machines go
+        ("GET", "/api/machines") => Some(ANY),
+        _ => None,
+    }
 }
 
 impl FromRequestParts<crate::AppState> for AuthUser {
@@ -227,7 +314,26 @@ impl FromRequestParts<crate::AppState> for AuthUser {
             .strip_prefix("Bearer ")
             .ok_or(AuthError::MissingAuth)?;
 
-        verify_bearer(token, &state.db, &state.jwt_secret)
+        let auth = verify_bearer(token, &state.db, &state.jwt_secret)?;
+        if let Some(access) = &auth.access {
+            let path = parts
+                .extensions
+                .get::<axum::extract::MatchedPath>()
+                .map(|matched| matched.as_str().to_string())
+                .unwrap_or_else(|| parts.uri.path().to_string());
+            let opened = scoped_route(&parts.method, &path)
+                .is_some_and(|scopes| scopes.iter().any(|scope| access.allows(*scope)));
+            if !opened {
+                let target = format!("{} {}", parts.method, parts.uri.path());
+                auth.audit(&state.db, "denied", &target, "outside its scopes");
+                let scopes: Vec<&str> = access.scopes.iter().map(|s| s.as_str()).collect();
+                return Err(AuthError::Forbidden(format!(
+                    "This token can't do that; it may only: {}",
+                    scopes.join(", ")
+                )));
+            }
+        }
+        Ok(auth)
     }
 }
 

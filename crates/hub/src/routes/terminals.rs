@@ -203,7 +203,7 @@ async fn list_machines(
     auth_user: AuthUser,
     Query(query): Query<ListMachinesQuery>,
 ) -> Json<Vec<MachineInfo>> {
-    Json(if query.include_offline {
+    let machines = if query.include_offline {
         state
             .manager
             .list_known_machines_for_user(&auth_user.user_id)
@@ -213,6 +213,14 @@ async fn list_machines(
             .manager
             .list_machines_for_user(&auth_user.user_id)
             .await
+    };
+    // A scoped token sees only its machines
+    Json(match &auth_user.access {
+        Some(access) => machines
+            .into_iter()
+            .filter(|machine| access.allows_machine(&machine.id, machine.production))
+            .collect(),
+        None => machines,
     })
 }
 
@@ -1565,6 +1573,7 @@ mod tests {
                 AuthUser {
                     user_id: "user-a".to_string(),
                     api_token_name: None,
+                    ..Default::default()
                 },
                 Path("machine-a".to_string()),
                 Json(CreateTerminalRequest {
@@ -1608,6 +1617,7 @@ mod tests {
                 AuthUser {
                     user_id: "user-a".to_string(),
                     api_token_name,
+                    ..Default::default()
                 },
                 Path("machine-a".to_string()),
                 Json(CreateTerminalRequest {
@@ -1641,6 +1651,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
         )
         .await
@@ -1713,6 +1724,7 @@ mod tests {
                 AuthUser {
                     user_id: "user-a".to_string(),
                     api_token_name: None,
+                    ..Default::default()
                 },
                 Path("machine-a".to_string()),
                 Json(CreateTerminalRequest {
@@ -2236,6 +2248,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path("machine-a".to_string()),
             Json(CreateWorkspaceGroupRequest {
@@ -2283,6 +2296,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path("machine-a".to_string()),
             Json(CreateTerminalRequest {
@@ -2310,6 +2324,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path(("machine-a".to_string(), "terminal-loose".to_string())),
             Json(AssignWorkspaceGroupRequest {
@@ -2331,6 +2346,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path(("machine-a".to_string(), "terminal-0".to_string())),
             Json(AssignWorkspaceGroupRequest {
@@ -2373,6 +2389,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path(("machine-a".to_string(), "group-a".to_string())),
             Json(RenameWorkspaceGroupRequest {
@@ -2424,6 +2441,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path(("machine-a".to_string(), "group-a".to_string())),
             Json(RenameWorkspaceGroupRequest {
@@ -2439,6 +2457,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
             Path(("machine-a".to_string(), "group-missing".to_string())),
             Json(RenameWorkspaceGroupRequest {

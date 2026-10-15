@@ -30,6 +30,14 @@ import {
   type CreatedApiToken,
 } from "@/lib/api";
 import {
+  CONTENT_LEVELS,
+  RUN_SCOPES,
+  accessFromForm,
+  defaultTokenAccessForm,
+  describeAccess,
+  type TokenAccessForm,
+} from "@/lib/tokenAccess";
+import {
   DEFAULT_PREFIX_BINDINGS,
   PREFIX_ACTION_DEFINITIONS,
   type PrefixActionId,
@@ -347,6 +355,9 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   const [apiTokensLoaded, setApiTokensLoaded] = useState(false);
   const [apiTokensError, setApiTokensError] = useState<string | null>(null);
   const [newTokenName, setNewTokenName] = useState("");
+  const [tokenForm, setTokenForm] = useState<TokenAccessForm>(
+    defaultTokenAccessForm,
+  );
   const [createdToken, setCreatedToken] = useState<CreatedApiToken | null>(
     null,
   );
@@ -493,11 +504,17 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
   const handleCreateToken = useCallback(() => {
     const name = newTokenName.trim();
     if (!name) return;
+    const { access, error } = accessFromForm(tokenForm);
+    if (error) {
+      setApiTokensError(error);
+      return;
+    }
     setApiTokensError(null);
-    createApiToken(name)
+    createApiToken(name, access)
       .then((created) => {
         setCreatedToken(created);
         setNewTokenName("");
+        setTokenForm(defaultTokenAccessForm());
         setApiTokens((tokens) => [
           {
             id: created.id,
@@ -505,6 +522,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             created_at: created.created_at,
             last_used_at: null,
             expires_at: null,
+            access: created.access ?? null,
           },
           ...tokens,
         ]);
@@ -514,7 +532,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           `Failed to create token: ${err instanceof Error ? err.message : String(err)}`,
         ),
       );
-  }, [newTokenName]);
+  }, [newTokenName, tokenForm]);
 
   const handleDeleteToken = useCallback(
     (id: string) => {
@@ -1163,7 +1181,9 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               marginBottom: 12,
             }}
           >
-            Tokens (odk_…) used to authenticate the offdesk CLI
+            Tokens (odk_…) for the offdesk CLI and other programs. Give a
+            program only what it needs: a token with full access can type
+            into every terminal on every machine.
           </div>
 
           {/* Create */}
@@ -1202,6 +1222,150 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             >
               Create
             </button>
+          </div>
+
+          {/* What the new token may do */}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              marginBottom: 16,
+              padding: 12,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 4,
+              fontSize: 12,
+              color: colors.foregroundSecondary,
+            }}
+          >
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              {(
+                [
+                  ["runs", "Agent runs only"],
+                  ["full", "Full access"],
+                ] as const
+              ).map(([kind, label]) => (
+                <label
+                  key={kind}
+                  style={{ display: "flex", gap: 6, alignItems: "center" }}
+                >
+                  <input
+                    type="radio"
+                    name="token-kind"
+                    checked={tokenForm.kind === kind}
+                    onChange={() => setTokenForm({ ...tokenForm, kind })}
+                  />
+                  <span
+                    style={{
+                      color:
+                        kind === "full" ? colors.danger : colors.foreground,
+                    }}
+                  >
+                    {label}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {tokenForm.kind === "full" ? (
+              <div style={{ color: colors.danger }}>
+                Terminals, input and machines: remote code execution on every
+                machine. Use it for your own CLI only.
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                  {RUN_SCOPES.map(({ scope, label }) => (
+                    <label
+                      key={scope}
+                      style={{ display: "flex", gap: 6, alignItems: "center" }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={tokenForm.scopes.includes(scope)}
+                        onChange={(e) =>
+                          setTokenForm({
+                            ...tokenForm,
+                            scopes: e.target.checked
+                              ? [...tokenForm.scopes, scope]
+                              : tokenForm.scopes.filter((s) => s !== scope),
+                          })
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <label
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <span style={{ whiteSpace: "nowrap" }}>It sees</span>
+                  <select
+                    value={tokenForm.content}
+                    onChange={(e) =>
+                      setTokenForm({
+                        ...tokenForm,
+                        content: e.target.value as TokenAccessForm["content"],
+                      })
+                    }
+                    style={{ ...inputStyle, width: "auto", padding: "4px 8px" }}
+                  >
+                    {CONTENT_LEVELS.map(({ level, label }) => (
+                      <option key={level} value={level}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                  <span
+                    style={{
+                      color: colors.foregroundMuted,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    never terminal output
+                  </span>
+                </label>
+                {tokenForm.scopes.includes("runs:start") && (
+                  <label
+                    style={{ display: "flex", flexDirection: "column", gap: 6 }}
+                  >
+                    Folders it may start agents in, one per line
+                    <textarea
+                      value={tokenForm.dirs}
+                      onChange={(e) =>
+                        setTokenForm({ ...tokenForm, dirs: e.target.value })
+                      }
+                      rows={2}
+                      placeholder="~/work"
+                      style={{
+                        ...inputStyle,
+                        fontFamily: "var(--font-mono)",
+                        fontSize: 12,
+                      }}
+                    />
+                  </label>
+                )}
+                <label
+                  style={{ display: "flex", gap: 6, alignItems: "center" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={tokenForm.includeProduction}
+                    onChange={(e) =>
+                      setTokenForm({
+                        ...tokenForm,
+                        includeProduction: e.target.checked,
+                      })
+                    }
+                  />
+                  Production machines too
+                </label>
+              </>
+            )}
           </div>
 
           {/* Newly created token — shown once */}
@@ -1295,6 +1459,16 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, color: colors.foreground }}>
                       {token.name}
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: token.access
+                          ? colors.foregroundSecondary
+                          : colors.danger,
+                      }}
+                    >
+                      {describeAccess(token.access)}
                     </div>
                     <div
                       style={{ fontSize: 11, color: colors.foregroundMuted }}

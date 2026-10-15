@@ -105,6 +105,32 @@ rename mapping is at the bottom.
 - `offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt|--prompt-file]
   [--label] [--ref] [--mode]` (`crates/cli/src/commands/runs.rs` `start`).
 
+## Scoped API tokens (implementation added 2026-10-15)
+
+- A token may carry `access` (`TokenAccess`: scopes `runs:read`, `runs:answer`,
+  `runs:approve`, `runs:start`, `runs:message`; machines; production; folders;
+  agents; content level; hourly limits). Tokens without it, every older one and the
+  CLI's login token, have full access (`crates/hub/src/db/tokens.rs`,
+  `crates/protocol/src/lib.rs` `TokenAccess`).
+- The auth extractor lets a scoped token reach only the agent-run routes, the
+  machine list (its machines only) and the control lease; everything else is 403,
+  and WebSockets and the release beacon take full access only
+  (`crates/hub/src/auth.rs` `scoped_route`, `verify_bearer_token`). Stored access
+  this hub can't read allows nothing.
+- Approving needs `runs:approve`, other answers `runs:answer`. Runs are trimmed to
+  the content level: `metadata` drops request text and options, `requests` keeps
+  them, `notes` also keeps reports and the current step
+  (`crates/hub/src/routes/agent_runs.rs` `shown_run`, `shown_event`).
+- `runs:start` needs folders: the hub checks the path's text (absolute or `~/…`,
+  no `..`); nodes with `agent-start-dirs-v1` refuse a `cwd` whose real path isn't
+  inside one (`crates/machine/src/agent_start.rs` `cwd_allowed`).
+- Answers, approvals, starts and refusals by API tokens go to `api_token_audit`
+  (newest 10,000 per user), listed at `GET /api/auth/api-tokens/audit`; hourly
+  limits count it.
+- Settings › API tokens creates agent-runs-only tokens by default and shows each
+  token's access (`packages/app/components/SettingsPage.tsx`,
+  `packages/app/lib/tokenAccess.ts`).
+
 ## Terminals opened by an agent (implementation added 2026-10-13)
 
 - A terminal created with an API token (the `offdesk` CLI) records

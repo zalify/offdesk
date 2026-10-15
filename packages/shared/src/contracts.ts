@@ -268,6 +268,26 @@ export interface StartedAgentRun {
   terminal: TerminalInfo
 }
 
+/** What an API token may do; `full` is everything, the `runs:*` scopes reach agent runs only. */
+export type TokenScope = 'runs:read' | 'runs:answer' | 'runs:approve' | 'runs:start' | 'runs:message' | 'full'
+
+/** How much of a run a scoped token sees; terminal output never. */
+export type ContentLevel = 'metadata' | 'requests' | 'notes'
+
+/** A scoped token's scopes and limits (none on a token: full access). */
+export interface TokenAccess {
+  scopes: TokenScope[]
+  /** Omitted: every machine except production ones. */
+  machines?: string[]
+  include_production?: boolean
+  /** Where `runs:start` may start agents; required with it. */
+  dirs?: string[]
+  agents?: RunAgent[]
+  content?: ContentLevel
+  max_starts_per_hour?: number
+  max_answers_per_hour?: number
+}
+
 /** `GET /api/machines/{id}/agents`: the coding agent CLIs a machine found. */
 export interface InstalledAgent {
   agent: RunAgent

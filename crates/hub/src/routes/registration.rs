@@ -202,6 +202,7 @@ mod tests {
             AuthUser {
                 user_id: "user-a".to_string(),
                 api_token_name: None,
+                ..Default::default()
             },
         )
         .await

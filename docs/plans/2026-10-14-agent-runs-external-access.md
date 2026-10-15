@@ -161,6 +161,18 @@ Hub → 服务端
 - token 的权限范围、约束和内容级别；现有 token 迁移为 `full`；审计日志；设置页显示。
 - 完成标准：只有 `runs:read` 的 token 调用终端或输入接口时返回 403；目录约束无法用 `..` 或符号链接绕过；现有 token 和 CLI 行为不变。
 
+#### B1 实现说明（2026-10-15）
+
+- **存储**：`api_tokens` 加一列 `access`（JSON 的 `TokenAccess`），空就是 `full`。所以“迁移为 full”不需要改数据：现有 token 和 CLI 登录产生的 token 都是空，行为不变。读不懂的 `access`（比如新版 Hub 写的未知范围）当成什么都不允许，绝不当成 full。创建接口不带 `access` 仍然是 full（CLI 登录靠这个），设置页默认建“只限 agent 运行”的 token。
+- **默认拒绝**：不在每个接口里判断，而是在 `AuthUser` 提取器里按匹配到的路由放行（`auth.rs` 的 `scoped_route`）。窄范围 token 只能访问：读运行和事件、回答、启动、列已安装的 agent、机器列表（只列它能碰的机器）和控制权（CLI 回答和启动前要先取得）。其他接口一律 403 并记审计；以后新增的接口默认也对它关闭。WebSocket 和 release beacon 不走提取器，`verify_bearer_token` 直接只接受 full。
+- **约束**：机器列表为空时排除 `production` 机器（除非 `include_production`）；`approve` 和 `answer` 按请求类型分开判断；`agents` 限制能启动的 agent；`dirs` 是 `runs:start` 的必填项。
+- **目录两层检查**：Hub 先按文本检查（绝对路径或 `~/…`，没有 `.`/`..`，在某个目录之下），再把 `dirs` 放进 `AgentStart.allowed_dirs` 发给 node；node（新能力 `agent-start-dirs-v1`，旧 node 503）对 `cwd` 和每个目录做 `canonicalize` 后比较前缀，所以目录里指向外面的符号链接也会被拒。
+- **内容级别**：`metadata` 去掉请求的原文和选项、回答的文字；`requests` 保留它们；`notes` 再保留进展说明、交接摘要和当前步骤。运行和事件历史都按这个裁剪。
+- **审计和频率**：API token 的回答、批准、启动（含失败原因）和被拒的请求写进 `api_token_audit`（每个用户保留最近 1 万条），`GET /api/auth/api-tokens/audit` 查看；每小时上限按审计里成功的次数算，超出返回 429。审计只记 API token，不记 App 会话。
+- **设置页**：新建 token 时选“只限 agent 运行”（默认，勾选看/回答/批准/启动、内容级别、启动目录、是否含生产机器）或“完全访问”（红字说明等于远程执行）；列表里每个 token 一行写明它能做什么，full 用红色。
+- **没做**：`runs:message` 只定义了范围，还没有对应接口；按机器选择的 UI（API 支持 `machines`）；审计的界面（B4）；`offdesk-hub integrations log`（B2 的集成）。
+- **验证**：路由测试走完整路由表：`runs:read` 访问终端、文件、token、回答、启动都是 403，WebSocket 校验拒绝；生产机器上的运行看不到；`metadata` 看不到问题原文、`requests` 看得到；`runs:answer` 不能批准；`..`、同前缀目录、相对路径、不允许的 agent 都被拒；频率上限 429；读不懂的 `access` 什么都不允许；审计里有每一条。node 测试覆盖符号链接和 `..`。隔离环境里用 CLI 实测：只读 token 能 `offdesk runs`，`ls`/`open`/`start` 都 403；启动 token 在允许目录里能启动，目录外被 Hub 拒，目录内指向外面的符号链接被 node 拒。
+
 ### B2 Webhook
 
 - 集成记录、发件箱、签名、重试、过滤、ntfy 示例。

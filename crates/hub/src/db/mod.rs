@@ -277,6 +277,29 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         }
     }
 
+    // API tokens: what each may do (B1); NULL is full access, as every older token
+    if !column_exists(conn, "api_tokens", "access")? {
+        conn.execute("ALTER TABLE api_tokens ADD COLUMN access TEXT", [])?;
+    }
+    conn.execute_batch(
+        "
+        -- What API tokens did (answers, approvals, starts) or were refused
+        CREATE TABLE IF NOT EXISTS api_token_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_id TEXT NOT NULL,
+            token_name TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL,
+            result TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_api_token_audit_token
+            ON api_token_audit(token_id, action, created_at);
+        CREATE INDEX IF NOT EXISTS idx_api_token_audit_user ON api_token_audit(user_id, id);
+    ",
+    )?;
+
     // Agent runs: the name and reference a run was started with (A4)
     for column in ["label", "external_ref"] {
         if !column_exists(conn, "agent_runs", column)? {

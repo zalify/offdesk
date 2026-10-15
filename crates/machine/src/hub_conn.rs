@@ -184,6 +184,7 @@ impl HubConnection {
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_CAPABILITY.to_string(),
+                offdesk_protocol::AGENT_START_DIRS_CAPABILITY.to_string(),
             ],
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
@@ -726,6 +727,20 @@ async fn handle_hub_message(
                         .send(OutboundHubMessage::Json(MachineToHub::TerminalCreateError {
                             request_id,
                             error: format!("There's no folder {cwd} on this machine"),
+                        }))
+                        .await;
+                    return;
+                }
+                // A scoped token's folders, by real path (symlinks can't lead out)
+                Some(start)
+                    if start.allowed_dirs.as_deref().is_some_and(|dirs| {
+                        !crate::agent_start::cwd_allowed(&cwd, dirs)
+                    }) =>
+                {
+                    let _ = send_tx
+                        .send(OutboundHubMessage::Json(MachineToHub::TerminalCreateError {
+                            request_id,
+                            error: format!("{cwd} isn't inside the folders this token may start in"),
                         }))
                         .await;
                     return;
