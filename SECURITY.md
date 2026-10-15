@@ -29,7 +29,7 @@ authenticated. Mint one per agent or per script. Then a leak is one revoke, and
 ### Agent-runs-only tokens
 
 A token can instead be limited to agent runs (Settings › API tokens, the
-default there): seeing runs (`runs:read`), answering their questions
+default there, or `offdesk tokens create <name> --scope …`): seeing runs (`runs:read`), answering their questions
 (`runs:answer`), approving commands (`runs:approve`) and starting Claude Code or
 Codex (`runs:start`). It reaches nothing else: terminals, input, files,
 previews, machine settings, other tokens and the event stream refuse it (403),

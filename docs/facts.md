@@ -105,6 +105,15 @@ rename mapping is at the bottom.
 - `offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt|--prompt-file]
   [--label] [--ref] [--mode]` (`crates/cli/src/commands/runs.rs` `start`).
 
+## Tokens and webhooks in the CLI (implementation added 2026-10-15)
+
+- `offdesk tokens [create|rm|audit]` and `offdesk webhooks [add|test|on|off|rm|deliveries]`
+  manage scoped tokens and webhooks over the same API as Settings, each with `--json`
+  (`crates/cli/src/commands/tokens.rs`, `crates/cli/src/commands/webhooks.rs`).
+  `tokens create` makes a `runs:read` token unless `--scope` or `--full` says otherwise.
+- Their positional arguments aren't named `token` or `url`: those are the global
+  `--token`/`--url` flags, and clap would let a positional replace them.
+
 ## Webhooks (implementation added 2026-10-15)
 
 - Integrations of kind `webhook` (URL, `whsec_` secret, event types, machines,

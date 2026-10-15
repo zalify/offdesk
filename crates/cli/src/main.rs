@@ -210,6 +210,24 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// API tokens: list them, make one limited to agent runs (or with full access),
+    /// delete one, or see what tokens did. Needs a full-access token
+    Tokens {
+        #[command(subcommand)]
+        action: Option<TokensAction>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Webhooks: agent run events POSTed to a URL, signed (docs/webhooks.md). Needs a
+    /// full-access token
+    Webhooks {
+        #[command(subcommand)]
+        action: Option<WebhooksAction>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a new terminal on a machine
     Open {
         /// Machine id or unique prefix
@@ -595,6 +613,107 @@ enum BrowserAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TokensAction {
+    /// Make a token. Without --full it reaches agent runs only: what it may do comes
+    /// from --scope (default runs:read), and it never touches terminals. Prints the
+    /// token once
+    Create {
+        name: String,
+        /// Full access: every terminal and machine, like the CLI's own token
+        #[arg(long, conflicts_with_all = ["scope", "content", "dir", "agent", "machine", "production", "max_starts", "max_answers"])]
+        full: bool,
+        /// runs:read, runs:answer, runs:approve, runs:start (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        scope: Vec<String>,
+        /// What it sees of a run (default metadata: status only; never terminal output)
+        #[arg(long, value_enum)]
+        content: Option<ContentArg>,
+        /// A folder runs:start may start agents in (and below); repeat for more
+        #[arg(long)]
+        dir: Vec<String>,
+        /// An agent runs:start may start; repeat for both. Default: any
+        #[arg(long, value_enum)]
+        agent: Vec<StartAgent>,
+        /// Only this machine (id, prefix or name); repeat for more. Default: every
+        /// machine except production ones
+        #[arg(long)]
+        machine: Vec<String>,
+        /// Production machines too
+        #[arg(long)]
+        production: bool,
+        /// At most this many agent starts an hour
+        #[arg(long)]
+        max_starts: Option<u32>,
+        /// At most this many answers and approvals an hour
+        #[arg(long)]
+        max_answers: Option<u32>,
+    },
+    /// Delete a token (id, prefix or name); whatever uses it stops working at once
+    Rm {
+        /// The token to delete (id, prefix or name)
+        #[arg(value_name = "TOKEN")]
+        which: String,
+    },
+    /// What tokens did (answers, approvals, starts) and what they were refused
+    Audit {
+        /// Only this token (id, prefix or name)
+        #[arg(value_name = "TOKEN")]
+        which: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum WebhooksAction {
+    /// Add a webhook. Prints its signing secret once
+    Add {
+        name: String,
+        /// Where events are POSTed (https://…, or http:// on your own network)
+        target: String,
+        /// The events it gets: run.request, run.ended, run.started,
+        /// run.request_resolved, run.report, run.status, run.progress
+        /// (comma-separated or repeated). Default: all
+        #[arg(long, value_delimiter = ',')]
+        event: Vec<String>,
+        /// What it sees of a run (default metadata: status only; never terminal output)
+        #[arg(long, value_enum)]
+        content: Option<ContentArg>,
+        /// Only this machine (id, prefix or name); repeat for more
+        #[arg(long)]
+        machine: Vec<String>,
+        /// Production machines too
+        #[arg(long)]
+        production: bool,
+    },
+    /// Send a test event (id, prefix or name)
+    Test { webhook: String },
+    /// Turn it on again
+    On { webhook: String },
+    /// Turn it off: no new events (what waits is kept)
+    Off { webhook: String },
+    /// Remove it and what waits for it
+    Rm { webhook: String },
+    /// Its recent deliveries: delivered, waiting for a retry, or given up on
+    Deliveries { webhook: String },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ContentArg {
+    Metadata,
+    Requests,
+    Notes,
+}
+
+impl From<ContentArg> for offdesk_protocol::ContentLevel {
+    fn from(content: ContentArg) -> Self {
+        match content {
+            ContentArg::Metadata => offdesk_protocol::ContentLevel::Metadata,
+            ContentArg::Requests => offdesk_protocol::ContentLevel::Requests,
+            ContentArg::Notes => offdesk_protocol::ContentLevel::Notes,
+        }
+    }
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum StartAgent {
     Claude,
@@ -942,6 +1061,61 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Commands::Runs { machine, all, waiting, json } => {
             commands::runs::run(&hub_client, machine, all, waiting, json).await
         }
+        Commands::Tokens { action, json } => match action {
+            None => commands::tokens::list(&hub_client, json).await,
+            Some(TokensAction::Create { name, full, scope, content, dir, agent, machine, production, max_starts, max_answers }) => {
+                commands::tokens::create(
+                    &hub_client,
+                    commands::tokens::CreateOptions {
+                        name,
+                        full,
+                        scopes: scope,
+                        content: content.map(Into::into),
+                        dirs: dir,
+                        agents: agent
+                            .into_iter()
+                            .map(|a| match a {
+                                StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
+                                StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
+                            })
+                            .collect(),
+                        machines: machine,
+                        production,
+                        max_starts_per_hour: max_starts,
+                        max_answers_per_hour: max_answers,
+                        json,
+                    },
+                )
+                .await
+            }
+            Some(TokensAction::Rm { which }) => commands::tokens::rm(&hub_client, &which).await,
+            Some(TokensAction::Audit { which }) => commands::tokens::audit(&hub_client, which.as_deref(), json).await,
+        },
+        Commands::Webhooks { action, json } => match action {
+            None => commands::webhooks::list(&hub_client, json).await,
+            Some(WebhooksAction::Add { name, target, event, content, machine, production }) => {
+                commands::webhooks::add(
+                    &hub_client,
+                    commands::webhooks::AddOptions {
+                        name,
+                        url: target,
+                        events: event,
+                        content: content.map(Into::into),
+                        machines: machine,
+                        production,
+                        json,
+                    },
+                )
+                .await
+            }
+            Some(WebhooksAction::Test { webhook }) => commands::webhooks::test(&hub_client, &webhook).await,
+            Some(WebhooksAction::On { webhook }) => commands::webhooks::set_enabled(&hub_client, &webhook, true).await,
+            Some(WebhooksAction::Off { webhook }) => commands::webhooks::set_enabled(&hub_client, &webhook, false).await,
+            Some(WebhooksAction::Rm { webhook }) => commands::webhooks::rm(&hub_client, &webhook).await,
+            Some(WebhooksAction::Deliveries { webhook }) => {
+                commands::webhooks::deliveries(&hub_client, &webhook, json).await
+            }
+        },
         Commands::Start { machine, agent, cwd, prompt, prompt_file, label, external_ref, mode, json } => {
             let prompt = match prompt_file {
                 Some(path) => Some(commands::runs::read_prompt_file(&path)?),
@@ -1061,5 +1235,20 @@ mod tests {
         assert!(parse(&["browser", "logins", "b1", "--json"]).is_ok());
         assert!(parse(&["browser", "login", "b1", "--item", "Aliyun", "--submit"]).is_ok());
         assert!(parse(&["browser", "login", "b1"]).is_err());
+    }
+
+    #[test]
+    fn token_and_webhook_arguments_never_shadow_the_hub_url_or_token() {
+        // A positional named like a global flag would replace the hub's token or URL
+        let cli = parse(&["tokens", "rm", "t3"]).unwrap();
+        assert_eq!(cli.token, None);
+        assert!(matches!(cli.command, Commands::Tokens { action: Some(TokensAction::Rm { ref which }), .. } if which == "t3"));
+        let cli = parse(&["tokens", "audit", "bot"]).unwrap();
+        assert_eq!(cli.token, None);
+        let cli = parse(&["webhooks", "add", "phone", "https://ntfy.example/runs", "--event", "run.request,run.ended"]).unwrap();
+        assert_eq!(cli.url, None);
+        assert!(matches!(cli.command, Commands::Webhooks { action: Some(WebhooksAction::Add { ref target, ref event, .. }), .. }
+            if target == "https://ntfy.example/runs" && event.len() == 2));
+        assert!(parse(&["tokens", "create", "x", "--full", "--scope", "runs:read"]).is_err(), "full is full");
     }
 }

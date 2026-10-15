@@ -11,8 +11,10 @@ pub mod read;
 pub mod read_all;
 pub mod runs;
 pub mod send;
+pub mod tokens;
 pub mod version;
 pub mod wait;
+pub mod webhooks;
 
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
