@@ -3869,6 +3869,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_folder_trust_is_an_approval_answered_by_choosing_its_yes() {
+        use super::agent_runs::AnswerError;
+        use offdesk_protocol::{
+            AgentAnswer, AgentKey, AgentRequestKind, AgentRunStatus, RunAgent, TerminalAttention, AGENT_CHOOSE_CAPABILITY,
+            AGENT_KEYS_CAPABILITY, FOLDER_TRUST_PROMPT, FOLDER_TRUST_SOURCE, FOLDER_TRUST_YES,
+        };
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-a", "machine-old");
+        let manager = MachineManager::new(pool.clone());
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".into()),
+                vec![AGENT_KEYS_CAPABILITY.into(), AGENT_CHOOSE_CAPABILITY.into()],
+            )
+            .await;
+        // A node from before Choose: it types answers, but can't move a highlight
+        manager
+            .register_machine_with_capabilities(machine("machine-old"), Some("user-a".into()), vec![AGENT_KEYS_CAPABILITY.into()])
+            .await;
+        for (machine_id, terminal_id) in [("machine-a", "term-a"), ("machine-old", "term-old")] {
+            manager
+                .handle_machine_message(machine_id, MachineToHub::ExistingTerminals { terminals: vec![terminal(machine_id, terminal_id)] })
+                .await;
+            manager
+                .handle_machine_message(machine_id, MachineToHub::TerminalAgent { terminal_id: terminal_id.into(), agent: Some(RunAgent::Claude) })
+                .await;
+            manager
+                .handle_machine_message(
+                    machine_id,
+                    MachineToHub::TerminalAttention { terminal_id: terminal_id.into(), attention: Some(TerminalAttention::FolderTrust) },
+                )
+                .await;
+        }
+        while commands.try_recv().is_ok() {}
+        let runs = manager.snapshot_for_user("user-a").await.agent_runs;
+        let run_in = |terminal: &str| runs.iter().find(|run| run.terminal_id.as_deref() == Some(terminal)).unwrap().clone();
+        let run = run_in("term-a");
+        let request = run.request.clone().expect("the trust prompt waits on a person");
+        // An approval in Offdesk's words, never the terminal's
+        assert_eq!(run.status, AgentRunStatus::Waiting);
+        assert_eq!(
+            (request.kind, request.prompt.as_deref(), request.source.as_str()),
+            (AgentRequestKind::Approval, Some(FOLDER_TRUST_PROMPT), FOLDER_TRUST_SOURCE)
+        );
+
+        let approve = |request_id: &str, approve| AgentAnswer {
+            request_id: request_id.into(),
+            approve: Some(approve),
+            device_id: Some("phone".into()),
+            ..Default::default()
+        };
+        manager.request_control("user-a", "machine-old", "phone");
+        let old = run_in("term-old");
+        assert_eq!(
+            manager.answer_agent_run("user-a", &old.id, approve(&old.request.unwrap().id, true)).await.unwrap_err(),
+            AnswerError::Unavailable("Update Offdesk on that machine to answer from here")
+        );
+
+        // Yes: the node highlights "Yes, I trust this folder" and presses Enter (a blind Enter is "No, exit")
+        manager.request_control("user-a", "machine-a", "phone");
+        manager.answer_agent_run("user-a", &run.id, approve(&request.id, true)).await.unwrap();
+        match commands.try_recv().unwrap() {
+            HubToMachine::SendAgentKeys { terminal_id, keys } => {
+                assert_eq!((terminal_id.as_str(), keys), ("term-a", vec![AgentKey::Choose(FOLDER_TRUST_YES.into())]))
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // No would be Escape, which exits Claude Code
+        let no = offdesk_protocol::AgentRunRequest { answer_sent_at_ms: None, ..request.clone() };
+        assert_eq!(
+            super::agent_runs::keys_for(&no, &approve(&request.id, false)).unwrap(),
+            vec![AgentKey::Escape]
+        );
+    }
+
+    #[tokio::test]
     async fn answers_are_typed_into_the_terminal_once_by_a_controlling_device() {
         use super::agent_runs::{keys_for, AnswerError};
         use offdesk_protocol::{

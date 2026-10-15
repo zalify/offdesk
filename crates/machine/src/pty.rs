@@ -441,11 +441,17 @@ impl PtyManager {
         let target = format!("{}:0.0", tmux_session_name(id));
         let mut after_text = false;
         for key in keys {
+            if let AgentKey::Choose(label) = key {
+                self.choose(&target, label)?;
+                after_text = false;
+                continue;
+            }
             let (literal, value) = match key {
                 AgentKey::Text(text) => (true, text.clone()),
                 AgentKey::Digit(digit) => (true, digit.to_string()),
                 AgentKey::Enter => (false, "Enter".to_string()),
                 AgentKey::Escape => (false, "Escape".to_string()),
+                AgentKey::Choose(_) => unreachable!(),
             };
             if after_text && matches!(key, AgentKey::Enter) {
                 std::thread::sleep(std::time::Duration::from_millis(150));
@@ -462,6 +468,37 @@ impl PtyManager {
             after_text = matches!(key, AgentKey::Text(_));
         }
         Ok(())
+    }
+
+    /// Highlights the menu option reading `label` on the pane's screen (Up/Down from
+    /// wherever the highlight is: menus wrap, so blind keys could land elsewhere), then
+    /// Enter. Refused when the option isn't on the screen.
+    fn choose(&self, target: &str, label: &str) -> Result<(), String> {
+        let screen = tmux_cmd()
+            .args(["-L", tmux_socket(), "capture-pane", "-p", "-J", "-t", target])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !screen.status.success() {
+            return Err("tmux capture-pane failed".to_string());
+        }
+        let moves = crate::terminal_attention::choose_moves(&String::from_utf8_lossy(&screen.stdout), label)
+            .ok_or_else(|| "that option isn't on the screen".to_string())?;
+        let key = if moves < 0 { "Up" } else { "Down" };
+        for _ in 0..moves.unsigned_abs() {
+            let status = tmux_cmd()
+                .args(["-L", tmux_socket(), "send-keys", "-t", target, key])
+                .status()
+                .map_err(|e| e.to_string())?;
+            if !status.success() {
+                return Err(format!("tmux send-keys failed: {status}"));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(60));
+        }
+        let status = tmux_cmd()
+            .args(["-L", tmux_socket(), "send-keys", "-t", target, "Enter"])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() { Ok(()) } else { Err(format!("tmux send-keys failed: {status}")) }
     }
 
     /// The terminal a tmux pane (`$TMUX_PANE`, e.g. "%12") of this node belongs to.
