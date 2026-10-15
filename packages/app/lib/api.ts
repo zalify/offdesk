@@ -173,6 +173,42 @@ export const testWebhook = (id: string) =>
 export const listWebhookDeliveries = (id: string) =>
   request<WebhookDelivery[]>("GET", `/api/integrations/${id}/deliveries`);
 
+// Bridges: servers the hub keeps a connection to (docs/agent-bridge-protocol.md)
+export interface Bridge extends Webhook {
+  paired: boolean;
+  connection: { connected: boolean; since_ms: number | null; last_error: string | null };
+}
+export interface NewBridge {
+  name: string;
+  url: string;
+  pairing_code: string;
+  scopes: TokenAccess["scopes"];
+  content: "metadata" | "requests" | "notes";
+  include_production: boolean;
+  dirs?: string[];
+}
+export const listBridges = async () =>
+  (await request<Bridge[]>("GET", "/api/integrations")).filter(
+    (integration) => integration.kind === "bridge",
+  );
+export const createBridge = (bridge: NewBridge) =>
+  request<{ integration: Bridge }>("POST", "/api/integrations", {
+    kind: "bridge",
+    ...bridge,
+  });
+
+// What tokens and bridges did, and were refused
+export interface AuditEntry {
+  token_id: string;
+  token_name: string;
+  action: string;
+  target: string;
+  result: string;
+  at_ms: number;
+}
+export const listTokenAudit = () =>
+  request<AuditEntry[]>("GET", "/api/auth/api-tokens/audit");
+
 // Machines
 export const listMachines = () =>
   request<MachineInfo[]>("GET", "/api/machines");
