@@ -28,10 +28,13 @@ pub struct Integration {
     pub created_at: i64,
     pub last_delivery_at: Option<i64>,
     pub last_error: Option<String>,
+    /// A bridge's one-time pairing code, until the server has taken it.
+    #[serde(skip)]
+    pub pairing_code: Option<String>,
 }
 
 const COLUMNS: &str = "id, user_id, kind, name, url, secret, events, access, enabled, created_at, \
-     last_delivery_at, last_error";
+     last_delivery_at, last_error, pairing_code";
 
 fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Integration> {
     Ok(Integration {
@@ -51,13 +54,14 @@ fn map_row(row: &rusqlite::Row) -> rusqlite::Result<Integration> {
         created_at: row.get(9)?,
         last_delivery_at: row.get(10)?,
         last_error: row.get(11)?,
+        pairing_code: row.get(12)?,
     })
 }
 
 pub fn insert(conn: &Connection, integration: &Integration) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO integrations (id, user_id, kind, name, url, secret, events, access, enabled, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO integrations (id, user_id, kind, name, url, secret, events, access, enabled, created_at, pairing_code)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             integration.id,
             integration.user_id,
@@ -69,7 +73,88 @@ pub fn insert(conn: &Connection, integration: &Integration) -> rusqlite::Result<
             serde_json::to_string(&integration.access).unwrap_or_else(|_| "{}".into()),
             integration.enabled as i64,
             integration.created_at,
+            integration.pairing_code,
         ],
+    )?;
+    Ok(())
+}
+
+/// Every enabled bridge, of every user (the hub keeps each connected).
+pub fn enabled_bridges(conn: &Connection) -> rusqlite::Result<Vec<Integration>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {COLUMNS} FROM integrations WHERE kind = 'bridge' AND enabled = 1"
+    ))?;
+    let rows = stmt.query_map([], map_row)?;
+    rows.collect()
+}
+
+/// Finds an integration by id alone (the hub's own tasks; never for a request).
+pub fn find(conn: &Connection, id: &str) -> rusqlite::Result<Option<Integration>> {
+    conn.query_row(
+        &format!("SELECT {COLUMNS} FROM integrations WHERE id = ?1"),
+        params![id],
+        map_row,
+    )
+    .optional()
+}
+
+/// The server took the pairing code: from now on the bridge key alone signs in.
+pub fn paired(conn: &Connection, id: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE integrations SET pairing_code = NULL WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
+}
+
+pub fn record_bridge_error(conn: &Connection, id: &str, error: Option<&str>) -> rusqlite::Result<()> {
+    record_result(conn, id, error)
+}
+
+/// A bridge's events the server hasn't acknowledged, after `after` (an outbox id), oldest first.
+pub fn unacked(conn: &Connection, integration_id: &str, after: i64, limit: i64) -> rusqlite::Result<Vec<Delivery>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {DELIVERY_COLUMNS} FROM webhook_outbox
+         WHERE integration_id = ?1 AND delivered_at IS NULL AND failed_at IS NULL AND id > ?2
+         ORDER BY id LIMIT ?3"
+    ))?;
+    let rows = stmt.query_map(params![integration_id, after, limit], map_delivery)?;
+    rows.collect()
+}
+
+/// The server has everything up to `seq` (an outbox id): those are delivered.
+pub fn ack(conn: &Connection, integration_id: &str, seq: i64) -> rusqlite::Result<usize> {
+    let now = now_ms();
+    let acked = conn.execute(
+        "UPDATE webhook_outbox SET delivered_at = ?1, attempts = attempts + 1
+         WHERE integration_id = ?2 AND id <= ?3 AND delivered_at IS NULL",
+        params![now, integration_id, seq],
+    )?;
+    if acked > 0 {
+        record_result(conn, integration_id, None)?;
+    }
+    Ok(acked)
+}
+
+/// The result a command already got, if it was carried out before.
+pub fn command_result(conn: &Connection, integration_id: &str, command_id: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT result FROM bridge_commands WHERE integration_id = ?1 AND command_id = ?2",
+        params![integration_id, command_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+pub fn save_command_result(conn: &Connection, integration_id: &str, command_id: &str, result: &str) -> rusqlite::Result<()> {
+    let now = now_ms();
+    conn.execute(
+        "INSERT OR REPLACE INTO bridge_commands (integration_id, command_id, result, created_at) VALUES (?1, ?2, ?3, ?4)",
+        params![integration_id, command_id, result, now],
+    )?;
+    conn.execute(
+        "DELETE FROM bridge_commands WHERE created_at < ?1",
+        params![now - 7 * 24 * 3600 * 1000],
     )?;
     Ok(())
 }
@@ -111,6 +196,7 @@ pub fn delete(conn: &Connection, id: &str, user_id: &str) -> rusqlite::Result<bo
     )? > 0;
     if removed {
         conn.execute("DELETE FROM webhook_outbox WHERE integration_id = ?1", params![id])?;
+        conn.execute("DELETE FROM bridge_commands WHERE integration_id = ?1", params![id])?;
     }
     Ok(removed)
 }
@@ -245,12 +331,13 @@ pub fn enqueue(
     Ok(())
 }
 
-/// Deliveries due now, oldest first, for enabled integrations.
+/// Webhook deliveries due now, oldest first, for enabled webhooks (a bridge's events
+/// go over its connection instead).
 pub fn due(conn: &Connection, now: i64, limit: i64) -> rusqlite::Result<Vec<(Delivery, Integration)>> {
     let mut stmt = conn.prepare(
         "SELECT o.id FROM webhook_outbox o JOIN integrations i ON i.id = o.integration_id
          WHERE o.delivered_at IS NULL AND o.failed_at IS NULL AND o.next_attempt_at <= ?1
-           AND i.enabled = 1
+           AND i.enabled = 1 AND i.kind = 'webhook'
          ORDER BY o.id LIMIT ?2",
     )?;
     let ids: Vec<i64> = stmt
@@ -277,7 +364,7 @@ pub fn due(conn: &Connection, now: i64, limit: i64) -> rusqlite::Result<Vec<(Del
 pub fn next_due(conn: &Connection) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
         "SELECT min(o.next_attempt_at) FROM webhook_outbox o JOIN integrations i ON i.id = o.integration_id
-         WHERE o.delivered_at IS NULL AND o.failed_at IS NULL AND i.enabled = 1",
+         WHERE o.delivered_at IS NULL AND o.failed_at IS NULL AND i.enabled = 1 AND i.kind = 'webhook'",
         [],
         |row| row.get(0),
     )

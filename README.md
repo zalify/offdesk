@@ -453,6 +453,9 @@ offdesk webhooks [--json]                       # webhooks: agent run events POS
 offdesk webhooks add <name> <url> [--event run.request,run.ended,...] [--content ...] [--machine <m>]... [--production]
                                                 # prints the signing secret once
 offdesk webhooks test|on|off|rm|deliveries <webhook>
+offdesk bridges [--json]                        # bridges: servers the hub keeps connected, which see runs and act within what you allow
+offdesk bridges add <name> <wss-url> --code <pairing code> [--scope ...] [--content ...] [--dir ...]... (docs/agent-bridge-protocol.md)
+offdesk bridges on|off|rm <bridge>              # off and rm hang up at once
 ```
 
 - Machines and terminals are addressed by **id prefix** (first column of `ls`);

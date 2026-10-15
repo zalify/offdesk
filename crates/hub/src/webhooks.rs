@@ -146,13 +146,21 @@ fn event_id() -> String {
     format!("msg_{}", uuid::Uuid::new_v4().simple())
 }
 
-/// A run changed: an event per change for each enabled webhook that wants it and may
-/// see the run's machine, at that integration's content level. Returns how many went
-/// into the outbox.
+/// What the hub tells integrations about: a run changed, or a machine came or went.
+#[derive(Debug, Clone)]
+pub enum HubUpdate {
+    /// The run's owner, when the update named one (else its machine's owner).
+    Run(Option<String>, AgentRunInfo),
+    Machine { machine_id: String, online: bool },
+}
+
+/// A run changed: an event per change for each enabled webhook that wants it (and every
+/// bridge) that may see the run's machine, at that integration's content level. Returns
+/// how many went into the outbox.
 pub fn on_run(conn: &rusqlite::Connection, user_id: &str, run: &AgentRunInfo) -> rusqlite::Result<usize> {
     let hooks: Vec<Integration> = integrations::list_for_user(conn, user_id)?
         .into_iter()
-        .filter(|i| i.enabled && i.kind == "webhook")
+        .filter(|i| i.enabled && (i.kind == "webhook" || i.kind == "bridge"))
         .collect();
     if hooks.is_empty() {
         return Ok(0);
@@ -177,7 +185,8 @@ pub fn on_run(conn: &rusqlite::Connection, user_id: &str, run: &AgentRunInfo) ->
         }
         let shown = crate::routes::agent_runs::shown_run(run.clone(), Some(hook.access.content));
         for (offset, event_type) in events.iter().enumerate() {
-            if !hook.events.is_empty() && !hook.events.iter().any(|e| e == event_type) {
+            // A bridge gets every event; a webhook the ones it picked
+            if hook.kind == "webhook" && !hook.events.is_empty() && !hook.events.iter().any(|e| e == event_type) {
                 continue;
             }
             let body = body(event_type, first_seq + offset as i64, &shown, &machine_name);
@@ -186,6 +195,35 @@ pub fn on_run(conn: &rusqlite::Connection, user_id: &str, run: &AgentRunInfo) ->
         }
     }
     integrations::save_run_state(conn, &run.id, &next)?;
+    if queued > 0 {
+        crate::bridge::wake();
+    }
+    Ok(queued)
+}
+
+/// A machine came online or went away: an event for each enabled bridge that may see
+/// it (bridges show who's online; webhooks don't get these).
+pub fn on_machine(conn: &rusqlite::Connection, machine_id: &str, online: bool) -> rusqlite::Result<usize> {
+    let Some(machine) = db::machines::find_machine_by_id(conn, machine_id)? else {
+        return Ok(0);
+    };
+    let event_type = if online { "machine.online" } else { "machine.offline" };
+    let body = serde_json::json!({
+        "type": event_type,
+        "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "data": { "machine": { "id": machine.id, "name": machine.name, "online": online } },
+    })
+    .to_string();
+    let mut queued = 0;
+    for bridge in integrations::list_for_user(conn, &machine.user_id)? {
+        if bridge.kind == "bridge" && bridge.enabled && bridge.access.allows_machine(&machine.id, machine.production) {
+            integrations::enqueue(conn, &bridge.id, &event_id(), event_type, &body)?;
+            queued += 1;
+        }
+    }
+    if queued > 0 {
+        crate::bridge::wake();
+    }
     Ok(queued)
 }
 
@@ -281,8 +319,8 @@ pub async fn deliver_due(pool: &DbPool, client: &reqwest::Client) -> usize {
 /// Runs the webhook worker: turns run updates (from the returned sender) into outbox
 /// events, one at a time so each run's events keep their order, and delivers what's
 /// due. Picks up whatever the outbox held when the hub stopped.
-pub fn spawn(pool: DbPool) -> mpsc::UnboundedSender<(Option<String>, AgentRunInfo)> {
-    let (tx, mut rx) = mpsc::unbounded_channel::<(Option<String>, AgentRunInfo)>();
+pub fn spawn(pool: DbPool) -> mpsc::UnboundedSender<HubUpdate> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<HubUpdate>();
     tokio::spawn(async move {
         let client = reqwest::Client::builder()
             .timeout(POST_TIMEOUT)
@@ -301,7 +339,18 @@ pub fn spawn(pool: DbPool) -> mpsc::UnboundedSender<(Option<String>, AgentRunInf
                 });
             tokio::select! {
                 update = rx.recv() => {
-                    let Some((user_id, run)) = update else { break };
+                    let Some(update) = update else { break };
+                    let (user_id, run) = match update {
+                        HubUpdate::Run(user_id, run) => (user_id, run),
+                        HubUpdate::Machine { machine_id, online } => {
+                            if let Ok(conn) = pool.get() {
+                                if let Err(error) = on_machine(&conn, &machine_id, online) {
+                                    tracing::warn!("webhooks: {}", error);
+                                }
+                            }
+                            continue;
+                        }
+                    };
                     if let Ok(conn) = pool.get() {
                         // A run belongs to its machine's owner
                         let owner = match user_id {
@@ -453,7 +502,7 @@ mod tests {
             id: "hook-1".into(), user_id: "user-a".into(), kind: "webhook".into(), name: "phone".into(),
             url, secret, events: vec!["run.request".into(), "run.ended".into()],
             access: offdesk_protocol::TokenAccess { scopes: vec![offdesk_protocol::TokenScope::RunsRead], ..Default::default() },
-            enabled: true, created_at: 0, last_delivery_at: None, last_error: None,
+            enabled: true, created_at: 0, last_delivery_at: None, last_error: None, pairing_code: None,
         };
         integrations::insert(&pool.get().unwrap(), &hook).unwrap();
         let client = reqwest::Client::new();

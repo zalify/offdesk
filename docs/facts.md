@@ -105,6 +105,26 @@ rename mapping is at the bottom.
 - `offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt|--prompt-file]
   [--label] [--ref] [--mode]` (`crates/cli/src/commands/runs.rs` `start`).
 
+## Bridges (implementation added 2026-10-15)
+
+- An integration of kind `bridge` (wss:// URL, or ws:// to this machine; a one-time
+  pairing code; scopes and limits like a scoped token, never `full`) makes the hub keep
+  a WebSocket to that server (`crates/hub/src/bridge.rs`, `docs/agent-bridge-protocol.md`).
+  The hub sends `Authorization: Bearer obk_…`, `X-Offdesk-Hub` and, until a connection
+  succeeds, `X-Offdesk-Pairing-Code`.
+- Each connection sends `hello`, `snapshot` (machines and runs it may see) and every
+  unacknowledged event from the outbox (the event's `seq` is its outbox id); `ack {seq}`
+  marks them delivered. Webhook delivery skips bridges' outbox rows. Machines coming
+  online or going offline are events for bridges.
+- `answer` and `start` commands run through `answer_as` / `start_as`, the same code as
+  `POST /api/agent-runs/{id}/answer` and `POST /api/agent-runs`, as a scoped caller named
+  `bridge:<name>`; results are kept per `command_id` (`bridge_commands`) so repeats get
+  the same result. `message` and `cancel` answer 501.
+- Pings every 30 s, reconnect after 90 s of silence, backoff 1 s to 60 s with jitter;
+  turning a bridge off or removing it cancels its connection at once (`bridge::sync`).
+- `offdesk bridges [add|on|off|rm]`; `examples/bridge-server` is a reference server with
+  an HTTP control endpoint.
+
 ## Tokens and webhooks in the CLI (implementation added 2026-10-15)
 
 - `offdesk tokens [create|rm|audit]` and `offdesk webhooks [add|test|on|off|rm|deliveries]`

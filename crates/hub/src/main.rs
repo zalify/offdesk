@@ -9,6 +9,7 @@ mod cloud_download;
 mod composer;
 mod attach_router;
 mod auth;
+mod bridge;
 mod first_run;
 mod setup_check;
 #[cfg(feature = "embed-ui")]
@@ -499,6 +500,8 @@ async fn main() {
     state
         .manager
         .set_webhook_sink(webhooks::spawn(state.db.clone()));
+    // Bridges the person paired: the hub keeps each connected
+    bridge::start(state.clone());
 
     let pool_for_notice = state.db.clone();
     let base_url_for_notice = state.base_url.clone();

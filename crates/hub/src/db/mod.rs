@@ -348,6 +348,23 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     ",
     )?;
 
+    // Bridges (B3): the one-time pairing code until the server takes it, and the
+    // commands already carried out, so a repeated command gets the same result
+    if !column_exists(conn, "integrations", "pairing_code")? {
+        conn.execute("ALTER TABLE integrations ADD COLUMN pairing_code TEXT", [])?;
+    }
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS bridge_commands (
+            integration_id TEXT NOT NULL,
+            command_id TEXT NOT NULL,
+            result TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (integration_id, command_id)
+        );
+    ",
+    )?;
+
     // Agent runs: the name and reference a run was started with (A4)
     for column in ["label", "external_ref"] {
         if !column_exists(conn, "agent_runs", column)? {

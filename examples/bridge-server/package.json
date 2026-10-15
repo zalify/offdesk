@@ -1,0 +1,12 @@
+{
+  "name": "offdesk-bridge-server-example",
+  "private": true,
+  "type": "module",
+  "description": "A minimal Offdesk bridge server: receives a hub's agent run events and answers them",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

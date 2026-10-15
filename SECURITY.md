@@ -45,6 +45,12 @@ and a new hub route stays closed to it until it is opened on purpose
   permission prompts, and no command line to pass.
 - **Rate**: optional hourly limits on starts and answers.
 
+A **bridge** (`offdesk bridges add`, `docs/agent-bridge-protocol.md`) is the same
+kind of access given to a server the hub keeps a connection to: the scopes and limits
+are chosen on the hub, never full access, and the server sees runs at its content
+level (not end-to-end encrypted: what it may see, it sees). Turning it off or removing
+it hangs up at once.
+
 What it did, and every request it was refused, is recorded
 (`GET /api/auth/api-tokens/audit`). An agent-runs-only token with
 `runs:approve` or `runs:start` still runs code through the agent, inside the
