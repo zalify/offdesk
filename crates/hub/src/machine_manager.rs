@@ -3948,6 +3948,24 @@ mod tests {
         let history = crate::db::agent_runs::list_events(&pool.get().unwrap(), &run.id, 0, 100).unwrap();
         assert!(history.iter().any(|e| e["kind"] == "answer" && e["event"]["answer"]["option_id"] == "2"));
 
+        // Declining ends the agent's turn and no hook says so: the request closes at once
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentSignal {
+                    terminal_id: "term-a".into(),
+                    agent: None,
+                    source: "hooks".into(),
+                    signal: AgentSignal::Waiting { request: AgentRequestKind::Approval, prompt: Some("Bash: rm -rf build".into()), options: vec![] },
+                },
+            )
+            .await;
+        let asking = manager.snapshot_for_user("user-a").await.agent_runs.remove(0);
+        let decline = AgentAnswer { request_id: asking.request.unwrap().id, approve: Some(false), device_id: Some("phone".into()), ..Default::default() };
+        let declined = manager.answer_agent_run("user-a", &run.id, decline).await.unwrap();
+        assert_eq!((declined.status, declined.request), (offdesk_protocol::AgentRunStatus::Idle, None));
+        while commands.try_recv().is_ok() {}
+
         // A node that can't type answers yet
         manager.request_control("user-b", "machine-b", "laptop");
         manager

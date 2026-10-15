@@ -397,6 +397,19 @@ impl MachineManager {
             "answer",
             &serde_json::json!({ "request_id": request.id, "answer": summary }),
         )?;
+        // Declining (Escape) cancels the call and ends the agent's turn, and nothing says
+        // so: Claude Code fires no hook when it's interrupted (seen in a real session). The
+        // request is over and the run waits for its next instruction
+        if request.kind == AgentRequestKind::Approval && answer.approve == Some(false) {
+            agent_runs::resolve_open_request(&db, &run.id, "declined")?;
+            agent_runs::insert_event(
+                &db,
+                &run.id,
+                "status",
+                &serde_json::json!({ "status": AgentRunStatus::Idle, "source": "answer" }),
+            )?;
+            agent_runs::set_status(&db, &run.id, AgentRunStatus::Idle)?;
+        }
         let row = agent_runs::find(&db, &run.id)?.ok_or(AnswerError::NotFound)?;
         let info = agent_runs::to_info(&db, &row)?;
         self.send_event(

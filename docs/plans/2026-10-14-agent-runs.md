@@ -263,6 +263,7 @@ Hub SQLite 新增 `agent_runs`、`agent_run_requests`、`agent_run_events`（按
 - **CLI**：`offdesk answer <run> --approve|--decline|--option <id>|--text <words>`，会先取得控制权；`offdesk runs` 在等待中的运行下面写出它在等什么和怎么回答。
 - **手机注意力条**：除了屏幕识别的确认，等待中的运行（比如钩子报告的提问）也列出来，显示请求内容；approval 有 yes/no，question 有前三个选项，点了就发送并显示 sent，直到 agent 继续。没有运行的屏幕确认仍是原来的 Enter。没有控制权时按钮不可用，提示先取得控制权。
 - **验证**：Hub 测试覆盖别人、无控制权、错选项、过期请求、重复回答、旧 node 和各种按键；容器里的 E2E 覆盖注意力条里回答问题（含原有的注意力条测试）；隔离环境里，钩子报告 input 后用 `offdesk answer --text` 回答，假 agent 读到了 “Team, and keep the old prices”，再次回答得到 409。
+- **真实会话验证（2026-10-15）**：隔离的 Hub 和 node，终端里跑真的 Claude Code（haiku）和 Codex。Claude Code：权限确认“1. Yes … 4. No · Esc to cancel”，`--approve` 打 `1`，命令执行了；`--decline` 打 Esc，显示 “Interrupted”，命令没有执行；AskUserQuestion 的选项 `--option 2` 选中了第二项，agent 回答了它。Codex（`-a on-request -s read-only`，屏幕识别的 approval）：“1. Yes, proceed … 3. No … (esc)”，`--approve` 执行、`--decline` 显示 “You canceled the request”。两个问题在这次验证里修好：Claude Code 对 AskUserQuestion 也会发 PermissionRequest，原来被当成 approval（`--approve` 会选第一项），现在仍算 question；拒绝后 Claude Code 不触发任何钩子，请求一直显示“已发送”，现在发出拒绝后 Hub 直接关掉请求、运行变成 idle。
 
 ### A4 启动 API 和 Codex
 
