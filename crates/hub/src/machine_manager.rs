@@ -4085,13 +4085,13 @@ mod tests {
         let status = |id: &str| crate::db::agent_runs::find(&pool.get().unwrap(), id).unwrap().unwrap().status;
 
         // Bad input is refused before anything reaches the machine
-        let dash = manager.start_agent_run("user-a", start("--dangerously-skip-permissions"), None).await;
+        let dash = manager.start_agent_run("user-a", start("--dangerously-skip-permissions"), None, None).await;
         assert!(matches!(dash, Err(StartError::BadRequest(_))));
         let mut plan = start("Plan it");
         plan.agent = RunAgent::Codex;
         plan.permission_mode = Some(AgentPermissionMode::Plan);
         assert_eq!(
-            manager.start_agent_run("user-a", plan, None).await.unwrap_err(),
+            manager.start_agent_run("user-a", plan, None, None).await.unwrap_err(),
             StartError::BadRequest("Codex has no plan mode".into())
         );
         assert!(commands.try_recv().is_err());
@@ -4115,7 +4115,7 @@ mod tests {
             agent_start.unwrap()
         }
         let (started, agent_start) = tokio::join!(
-            manager.start_agent_run("user-a", start("  Fix the tax $(rm -rf ~)\r\n"), None),
+            manager.start_agent_run("user-a", start("  Fix the tax $(rm -rf ~)\r\n"), None, None),
             reply(&manager, &mut commands, "term-s")
         );
         assert_eq!(agent_start.prompt.as_deref(), Some("Fix the tax $(rm -rf ~)"));
@@ -4138,7 +4138,7 @@ mod tests {
 
         // One whose agent never shows up ends as an Error
         let (started, _) = tokio::join!(
-            manager.start_agent_run("user-a", start("Again"), None),
+            manager.start_agent_run("user-a", start("Again"), None, None),
             reply(&manager, &mut commands, "term-t")
         );
         let lost = started.unwrap().0;
@@ -4149,7 +4149,7 @@ mod tests {
         manager.register_machine(machine("machine-old"), Some("user-a".into())).await;
         let mut old = start("Hi");
         old.machine_id = "machine-old".into();
-        assert!(matches!(manager.start_agent_run("user-a", old, None).await, Err(StartError::Unavailable(_))));
+        assert!(matches!(manager.start_agent_run("user-a", old, None, None).await, Err(StartError::Unavailable(_))));
 
         // What a node found installed
         assert_eq!(manager.installed_agents("machine-a").await, Some(vec![]));

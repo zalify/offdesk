@@ -55,6 +55,9 @@ async fn request_control(
     {
         return Err((StatusCode::NOT_FOUND, "Machine not found".to_string()));
     }
+    if !user.may_reach_machine(&state.db, &body.machine_id) {
+        return Err((StatusCode::FORBIDDEN, "This token can't reach that machine".to_string()));
+    }
 
     state
         .manager
@@ -75,6 +78,9 @@ async fn release_control(
         .await
     {
         return Err((StatusCode::NOT_FOUND, "Machine not found".to_string()));
+    }
+    if !user.may_reach_machine(&state.db, &body.machine_id) {
+        return Err((StatusCode::FORBIDDEN, "This token can't reach that machine".to_string()));
     }
 
     state

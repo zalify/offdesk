@@ -260,6 +260,20 @@ fn startup_command_in(
     Ok(words.join(" "))
 }
 
+/// Whether `cwd` is inside one of `allowed`, comparing real paths (`~` expanded,
+/// symlinks resolved), so a link inside an allowed folder can't lead out of it. A
+/// folder that doesn't exist is never allowed.
+pub fn cwd_allowed(cwd: &str, allowed: &[String]) -> bool {
+    let real = |path: &str| std::fs::canonicalize(crate::pty::resolve_cwd(path)).ok();
+    let Some(cwd) = real(cwd) else {
+        return false;
+    };
+    allowed
+        .iter()
+        .filter_map(|dir| real(dir))
+        .any(|dir| cwd.starts_with(dir))
+}
+
 /// `$CLAUDE_CONFIG_DIR/settings.json`, else `~/.claude/settings.json`.
 fn claude_settings_path() -> Option<PathBuf> {
     match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|dir| !dir.is_empty()) {
@@ -387,6 +401,7 @@ mod tests {
             prompt: prompt.map(str::to_string),
             permission_mode: None,
             external_ref: None,
+            allowed_dirs: None,
         }
     }
 
@@ -567,6 +582,26 @@ mod tests {
         assert_eq!(codex_notify("/bin/offdesk", Some(&config)), None);
         std::fs::write(&config, "notify = [").unwrap();
         assert_eq!(codex_notify("/bin/offdesk", Some(&config)), None);
+    }
+
+    #[test]
+    fn allowed_folders_compare_real_paths() {
+        let root = temp_dir("dirs");
+        let allowed = root.join("work");
+        std::fs::create_dir_all(allowed.join("shop")).unwrap();
+        std::fs::create_dir_all(root.join("secret")).unwrap();
+        std::os::unix::fs::symlink(root.join("secret"), allowed.join("link")).unwrap();
+        let dirs = vec![allowed.to_string_lossy().into_owned()];
+        let path = |p: &Path| p.to_string_lossy().into_owned();
+        assert!(cwd_allowed(&path(&allowed), &dirs));
+        assert!(cwd_allowed(&path(&allowed.join("shop")), &dirs));
+        // A link inside the folder that leads out of it, `..`, a sibling with the same
+        // prefix, or a folder that isn't there
+        assert!(!cwd_allowed(&path(&allowed.join("link")), &dirs));
+        assert!(!cwd_allowed(&format!("{}/shop/../../secret", allowed.display()), &dirs));
+        std::fs::create_dir_all(root.join("work-other")).unwrap();
+        assert!(!cwd_allowed(&path(&root.join("work-other")), &dirs));
+        assert!(!cwd_allowed(&path(&allowed.join("missing")), &dirs));
     }
 
     #[test]

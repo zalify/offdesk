@@ -2,11 +2,12 @@
 
 ## The one sentence that matters
 
-**A token is remote code execution on every registered machine.** offdesk opens
-terminals and types into them, and a terminal runs whatever your shell runs.
-Anyone holding a valid token can open a terminal on any machine on your hub and
-run anything as you. Treat a token like an SSH private key, not like an API
-key.
+**A full-access token is remote code execution on every registered machine.**
+offdesk opens terminals and types into them, and a terminal runs whatever your
+shell runs. Anyone holding a valid full-access token can open a terminal on any
+machine on your hub and run anything as you. Treat one like an SSH private key,
+not like an API key. Every token made before scoped tokens, and every token the
+CLI's login makes, has full access.
 
 The same is true of a session cookie, a hub URL that signs people in, and
 physical access to a logged-in browser tab.
@@ -15,7 +16,8 @@ physical access to a logged-in browser tab.
 
 | Credential | Where it lives | What it opens | Revoke by |
 |---|---|---|---|
-| API token (`odk_…`) | you keep it; hub stores a SHA-256 hash | every machine on that account | deleting it in Settings |
+| API token (`odk_…`), full access | you keep it; hub stores a SHA-256 hash | every machine on that account | deleting it in Settings |
+| API token (`odk_…`), agent runs only | same | only the agent-run actions it was given (below) | deleting it in Settings |
 | Session JWT | browser localStorage | same | rotating `JWT_SECRET` (invalidates all sessions) |
 | Machine registration token | one-time, from Settings | registering one new machine | expires after 24 hours, single-use |
 | Machine secret | `machine.json` on the machine | that machine's connection to the hub | forgetting the machine in the UI or `offdesk machines rm` |
@@ -23,6 +25,30 @@ physical access to a logged-in browser tab.
 Tokens you mint are named, and every one records the last time it
 authenticated. Mint one per agent or per script. Then a leak is one revoke, and
 "last used" tells you which token was live.
+
+### Agent-runs-only tokens
+
+A token can instead be limited to agent runs (Settings › API tokens, the
+default there): seeing runs (`runs:read`), answering their questions
+(`runs:answer`), approving commands (`runs:approve`) and starting Claude Code or
+Codex (`runs:start`). It reaches nothing else: terminals, input, files,
+previews, machine settings, other tokens and the event stream refuse it (403),
+and a new hub route stays closed to it until it is opened on purpose
+(`crates/hub/src/auth.rs` `scoped_route`). Within its scopes:
+
+- **Machines**: every machine except production ones, unless named or let in.
+- **Content**: status only, or also what runs ask, or also their notes. Never
+  terminal output.
+- **Starting**: only in the folders it lists. The hub refuses `..` and paths
+  outside them; the machine then compares real paths, so a symlink inside an
+  allowed folder can't lead out. There is no way to skip the agent's own
+  permission prompts, and no command line to pass.
+- **Rate**: optional hourly limits on starts and answers.
+
+What it did, and every request it was refused, is recorded
+(`GET /api/auth/api-tokens/audit`). An agent-runs-only token with
+`runs:approve` or `runs:start` still runs code through the agent, inside the
+agent's permission mode: give those only to programs you trust.
 
 The session JWT is signed HS256 and valid for **180 days**. There is no
 server-side session list and no per-session logout — the only way to invalidate
@@ -66,7 +92,8 @@ mechanism, not a security boundary:
   participant than your browser.
 - It lives in memory and does not survive a hub restart.
 
-If you would not let someone type on the machine, do not give them a token.
+If you would not let someone type on the machine, do not give them a
+full-access token.
 
 ## What the hub stores
 

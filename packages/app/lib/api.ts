@@ -13,6 +13,7 @@ import type {
   ResourceStats,
   AgentBrowserInfo,
   AgentBrowserControlRequest,
+  TokenAccess,
 } from "@offdesk/shared";
 
 import { generateDeviceId } from "./deviceIdShared";
@@ -103,17 +104,25 @@ export interface ApiToken {
   created_at: number;
   last_used_at: number | null;
   expires_at: number | null;
+  /** Null: full access. */
+  access?: TokenAccess | null;
 }
 export interface CreatedApiToken {
   id: string;
   name: string;
   token: string;
   created_at: number;
+  access?: TokenAccess | null;
 }
 export const listApiTokens = () =>
   request<ApiToken[]>("GET", "/api/auth/api-tokens");
-export const createApiToken = (name: string) =>
-  request<CreatedApiToken>("POST", "/api/auth/api-tokens", { name });
+/** Without `access`, a full-access token (what the CLI uses). */
+export const createApiToken = (name: string, access?: TokenAccess) =>
+  request<CreatedApiToken>(
+    "POST",
+    "/api/auth/api-tokens",
+    access ? { name, access } : { name },
+  );
 export const deleteApiToken = (id: string) =>
   request<void>("DELETE", `/api/auth/api-tokens/${id}`);
 

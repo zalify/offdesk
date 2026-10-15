@@ -481,6 +481,157 @@ pub struct AgentStart {
     pub permission_mode: Option<AgentPermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_ref: Option<String>,
+    /// The folders a scoped token may start in: the node refuses a `cwd` whose real
+    /// path (symlinks resolved) isn't inside one of them. None: anywhere. Needs
+    /// `AGENT_START_DIRS_CAPABILITY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_dirs: Option<Vec<String>>,
+}
+
+/// A node that checks `AgentStart::allowed_dirs` against real paths.
+pub const AGENT_START_DIRS_CAPABILITY: &str = "agent-start-dirs-v1";
+
+/// What an API token may do (docs/plans/2026-10-14-agent-runs-external-access.md, B1).
+/// `Full` is everything a person can do: terminals, input, machines. The `runs:*`
+/// scopes reach only agent runs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum TokenScope {
+    /// Read runs, their requests and history, as far as the content level shows.
+    #[serde(rename = "runs:read")]
+    RunsRead,
+    /// Answer questions and input requests.
+    #[serde(rename = "runs:answer")]
+    RunsAnswer,
+    /// Answer approvals: say yes to a command or tool call.
+    #[serde(rename = "runs:approve")]
+    RunsApprove,
+    /// Start agents in the allowed folders, with a prompt.
+    #[serde(rename = "runs:start")]
+    RunsStart,
+    /// Send a running agent a message (no endpoint yet).
+    #[serde(rename = "runs:message")]
+    RunsMessage,
+    #[serde(rename = "full")]
+    Full,
+}
+
+impl TokenScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TokenScope::RunsRead => "runs:read",
+            TokenScope::RunsAnswer => "runs:answer",
+            TokenScope::RunsApprove => "runs:approve",
+            TokenScope::RunsStart => "runs:start",
+            TokenScope::RunsMessage => "runs:message",
+            TokenScope::Full => "full",
+        }
+    }
+}
+
+/// How much of a run a scoped token sees. Terminal output is never shown at any level.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentLevel {
+    /// Status, progress counts, machine, agent, folder, times, label and reference.
+    #[default]
+    Metadata,
+    /// Also what a request asks: its text, options and command.
+    Requests,
+    /// Also the agent's own notes and handover, and the step it's on.
+    Notes,
+}
+
+/// A scoped token's scopes and limits. A token without one (`None` in storage) is full.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TokenAccess {
+    pub scopes: Vec<TokenScope>,
+    /// The machines it may reach; None: every machine except production ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machines: Option<Vec<String>>,
+    /// Production machines too, when `machines` is None.
+    #[serde(default)]
+    pub include_production: bool,
+    /// Where `runs:start` may start agents (and below); required with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dirs: Option<Vec<String>>,
+    /// The agents it may start; None: any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<RunAgent>>,
+    #[serde(default)]
+    pub content: ContentLevel,
+    /// At most this many starts in any hour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_starts_per_hour: Option<u32>,
+    /// At most this many answers (and approvals) in any hour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_answers_per_hour: Option<u32>,
+}
+
+impl TokenAccess {
+    pub fn is_full(&self) -> bool {
+        self.scopes.contains(&TokenScope::Full)
+    }
+
+    pub fn allows(&self, scope: TokenScope) -> bool {
+        self.is_full() || self.scopes.contains(&scope)
+    }
+
+    pub fn allows_machine(&self, machine_id: &str, production: bool) -> bool {
+        match &self.machines {
+            Some(machines) => machines.iter().any(|m| m == machine_id),
+            None => self.include_production || !production,
+        }
+    }
+
+    pub fn allows_agent(&self, agent: RunAgent) -> bool {
+        self.agents.as_ref().is_none_or(|agents| agents.contains(&agent))
+    }
+
+    /// Checks a token's access as given when it's created: known scopes, and folders
+    /// for `runs:start` that are absolute (or `~/…`) without `..`.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.scopes.is_empty() {
+            return Err("Choose what the token may do");
+        }
+        if self.allows(TokenScope::RunsStart) && !self.is_full() {
+            let dirs = self.dirs.as_deref().unwrap_or_default();
+            if dirs.is_empty() {
+                return Err("A token that starts agents needs the folders it may start in");
+            }
+            if !dirs.iter().all(|dir| is_plain_dir(dir)) {
+                return Err("Folders are absolute paths (or ~/…) without '..'");
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether `cwd` is inside one of the allowed folders, by its text: absolute (or
+    /// `~/…`), no `..`. The node then checks real paths, which catches symlinks.
+    pub fn allows_dir(&self, cwd: &str) -> bool {
+        if !is_plain_dir(cwd) {
+            return false;
+        }
+        let cwd = cwd.trim_end_matches('/');
+        self.dirs.as_deref().unwrap_or_default().iter().any(|dir| {
+            let dir = dir.trim_end_matches('/');
+            dir.is_empty() || cwd == dir || cwd.starts_with(&format!("{dir}/"))
+        })
+    }
+}
+
+/// An absolute path (or `~`, `~/…`) with no `.` or `..` parts.
+fn is_plain_dir(path: &str) -> bool {
+    let rest = if path == "~" {
+        ""
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        rest
+    } else if let Some(rest) = path.strip_prefix('/') {
+        rest
+    } else {
+        return false;
+    };
+    !path.chars().any(char::is_control)
+        && rest.split('/').all(|part| part != ".." && part != ".")
 }
 
 impl AgentStart {
@@ -2718,6 +2869,35 @@ mod tests {
         ));
     }
     #[test]
+    fn token_access_keeps_to_its_machines_and_folders() {
+        use super::{ContentLevel, RunAgent, TokenAccess, TokenScope};
+        let access = TokenAccess {
+            scopes: vec![TokenScope::RunsStart],
+            dirs: Some(vec!["/w/shop/".into(), "~/notes".into()]),
+            agents: Some(vec![RunAgent::Claude]),
+            ..Default::default()
+        };
+        assert_eq!(access.validate(), Ok(()));
+        assert!(access.allows_dir("/w/shop") && access.allows_dir("/w/shop/api") && access.allows_dir("~/notes/x"));
+        for outside in ["/w/shop/../etc", "/w/shopping", "/w", "w/shop", "~/notes/./x", "/w/shop/\u{1b}x"] {
+            assert!(!access.allows_dir(outside), "{outside}");
+        }
+        assert!(access.allows_agent(RunAgent::Claude) && !access.allows_agent(RunAgent::Codex));
+        assert!(access.allows(TokenScope::RunsStart) && !access.allows(TokenScope::RunsApprove));
+        // Production machines only when named or let in
+        assert!(access.allows_machine("m", false) && !access.allows_machine("m", true));
+        let named = TokenAccess { machines: Some(vec!["p".into()]), ..access.clone() };
+        assert!(named.allows_machine("p", true) && !named.allows_machine("m", false));
+        // Starting needs plain folders; content defaults to metadata
+        assert!(TokenAccess { dirs: None, ..access.clone() }.validate().is_err());
+        assert!(TokenAccess { dirs: Some(vec!["/w/../etc".into()]), ..access.clone() }.validate().is_err());
+        assert!(TokenAccess::default().validate().is_err());
+        let parsed: TokenAccess = serde_json::from_str(r#"{"scopes":["runs:read"]}"#).unwrap();
+        assert_eq!(parsed.content, ContentLevel::Metadata);
+        assert!(serde_json::from_str::<TokenAccess>(r#"{"scopes":["runs:all"]}"#).is_err());
+    }
+
+    #[test]
     fn agent_starts_take_a_prompt_never_a_command() {
         use super::{AgentPermissionMode, AgentStart, HubToMachine, InstalledAgent, MachineToHub, RunAgent};
         // Line endings and space are tidied; controls and a leading dash are refused
@@ -2739,6 +2919,7 @@ mod tests {
             prompt: Some("Fix it".into()),
             permission_mode: Some(AgentPermissionMode::Ask),
             external_ref: None,
+            allowed_dirs: None,
         };
         assert_eq!(start.validate(), Ok(()));
         start.prompt = Some(" Fix it".into());

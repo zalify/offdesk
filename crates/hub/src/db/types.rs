@@ -77,6 +77,8 @@ pub struct ApiTokenRow {
     pub created_at: i64,
     pub last_used_at: Option<i64>,
     pub expires_at: Option<i64>,
+    /// What the token may do; None is full access (every token made before scopes).
+    pub access: Option<offdesk_protocol::TokenAccess>,
 }
 
 /// A short, single-use way in: ten characters in a QR code instead of a

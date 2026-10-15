@@ -10,7 +10,7 @@ use offdesk_protocol::{
     AgentAnswer, AgentKey, AgentReportKind, AgentRequestKind, AgentRunInfo, AgentRunRequest,
     AgentRunStatus, AgentSignal, AgentStart, BrowserEvent, HubToMachine, InstalledAgent, RunAgent,
     StartAgentRun, TerminalAttention, TerminalInfo, TerminalOpener, AGENT_KEYS_CAPABILITY,
-    AGENT_START_CAPABILITY,
+    AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY,
 };
 
 use super::MachineManager;
@@ -414,6 +414,7 @@ impl MachineManager {
         user_id: &str,
         start: StartAgentRun,
         opened_by: Option<TerminalOpener>,
+        allowed_dirs: Option<Vec<String>>,
     ) -> Result<(AgentRunInfo, TerminalInfo), StartError> {
         let bad = |reason: &str| StartError::BadRequest(reason.to_string());
         let cwd = start.cwd.trim();
@@ -428,8 +429,19 @@ impl MachineManager {
             permission_mode: start.permission_mode,
             external_ref: AgentStart::normalize_label(start.external_ref.as_deref().unwrap_or(""))
                 .map_err(bad)?,
+            allowed_dirs,
         };
         agent_start.validate().map_err(bad)?;
+        // Only a node that checks real paths can keep a token inside its folders
+        if agent_start.allowed_dirs.is_some()
+            && !self
+                .machine_supports(&start.machine_id, AGENT_START_DIRS_CAPABILITY)
+                .await
+        {
+            return Err(StartError::Unavailable(
+                "Update Offdesk on that machine to start agents with this token".to_string(),
+            ));
+        }
         if !self
             .machine_supports(&start.machine_id, AGENT_START_CAPABILITY)
             .await

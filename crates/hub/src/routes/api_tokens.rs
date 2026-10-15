@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::Json,
     routing::{delete, get},
@@ -14,6 +14,9 @@ use crate::AppState;
 #[derive(Deserialize)]
 struct CreateApiTokenRequest {
     name: String,
+    /// What it may do; omitted: full access, as tokens always had (the CLI's login).
+    #[serde(default)]
+    access: Option<offdesk_protocol::TokenAccess>,
 }
 
 #[derive(Serialize)]
@@ -23,6 +26,8 @@ struct ApiTokenResponse {
     created_at: i64,
     last_used_at: Option<i64>,
     expires_at: Option<i64>,
+    /// None: full access.
+    access: Option<offdesk_protocol::TokenAccess>,
 }
 
 #[derive(Serialize)]
@@ -31,6 +36,7 @@ struct CreateApiTokenResponse {
     name: String,
     token: String,
     created_at: i64,
+    access: Option<offdesk_protocol::TokenAccess>,
 }
 
 async fn list_tokens(
@@ -59,6 +65,7 @@ async fn list_tokens(
             created_at: t.created_at,
             last_used_at: t.last_used_at,
             expires_at: t.expires_at,
+            access: t.access,
         })
         .collect();
 
@@ -70,6 +77,16 @@ async fn create_token(
     auth_user: AuthUser,
     Json(req): Json<CreateApiTokenRequest>,
 ) -> Result<Json<CreateApiTokenResponse>, (StatusCode, Json<serde_json::Value>)> {
+    // `full` among the scopes is full access, stored as none
+    let access = req.access.filter(|access| !access.is_full());
+    if let Some(access) = &access {
+        access.validate().map_err(|reason| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": reason })),
+            )
+        })?;
+    }
     // Generate odk_ + 2 UUIDs
     let raw_token = format!(
         "{}{}{}",
@@ -87,8 +104,16 @@ async fn create_token(
         )
     })?;
 
-    db::tokens::create_api_token(&conn, &id, &auth_user.user_id, &req.name, &token_hash, None)
-        .map_err(|e| {
+    db::tokens::create_scoped_api_token(
+        &conn,
+        &id,
+        &auth_user.user_id,
+        &req.name,
+        &token_hash,
+        None,
+        access.as_ref(),
+    )
+    .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": format!("DB error: {e}")})),
@@ -102,7 +127,36 @@ async fn create_token(
         name: req.name,
         token: raw_token,
         created_at,
+        access,
     }))
+}
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    token_id: Option<String>,
+}
+
+/// What API tokens did (answers, approvals, starts) or were refused, newest first.
+async fn token_audit(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Vec<db::tokens::TokenAuditEntry>>, (StatusCode, Json<serde_json::Value>)> {
+    let internal = |e: rusqlite::Error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("DB error: {e}")})),
+        )
+    };
+    let conn = state.db.get().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("DB error: {e}")})),
+        )
+    })?;
+    db::tokens::list_audit(&conn, &auth_user.user_id, query.token_id.as_deref(), 500)
+        .map(Json)
+        .map_err(internal)
 }
 
 async fn delete_token(
@@ -130,5 +184,6 @@ async fn delete_token(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/auth/api-tokens", get(list_tokens).post(create_token))
+        .route("/api/auth/api-tokens/audit", get(token_audit))
         .route("/api/auth/api-tokens/{id}", delete(delete_token))
 }
