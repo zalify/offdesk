@@ -1499,6 +1499,7 @@ dependencies = [
  "dirs",
  "futures",
  "hostname",
+ "libc",
  "mime_guess",
  "offdesk-preview-transport",
  "offdesk-protocol",

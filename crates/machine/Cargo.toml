@@ -34,3 +34,6 @@ base64 = "0.22"
 mime_guess = "2"
 toml = "0.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
