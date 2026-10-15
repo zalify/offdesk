@@ -4,8 +4,15 @@ A webhook sends agent run events (a run started, it waits on you, it ended…) a
 signed JSON POSTs to a URL you choose: your own service, a notifier such as ntfy,
 or a task system. It only tells; it can't answer or start anything.
 
-Add one in **Settings › Webhooks** (name, URL, events, what it sees) or with the API
-below. The signing secret (`whsec_…`) is shown once, when you add it.
+Add one in **Settings › Webhooks** (name, URL, events, what it sees), with the CLI, or
+with the API below. The signing secret (`whsec_…`) is shown once, when you add it.
+
+```
+offdesk webhooks add phone https://ntfy.example/runs --event run.request,run.ended --content requests
+offdesk webhooks test phone
+offdesk webhooks deliveries phone
+offdesk webhooks off phone | on phone | rm phone
+```
 
 ## Events
 

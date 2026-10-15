@@ -444,6 +444,15 @@ offdesk answer <run> --approve | --decline | --option <id> | --text <words>
 offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt <text> | --prompt-file <path>]
         [--label <name>] [--ref <id>] [--mode ask|accept-edits|plan]
                                                 # start an agent in a new terminal with its first message; it still asks for permissions
+offdesk tokens [--json]                         # API tokens and what each may do
+offdesk tokens create <name> [--scope runs:read,runs:answer,runs:approve,runs:start] [--content metadata|requests|notes]
+        [--dir <folder>]... [--agent claude|codex]... [--machine <m>]... [--production] [--max-starts N] [--max-answers N] | --full
+                                                # a token for a program: agent runs only (default runs:read), or --full; printed once
+offdesk tokens rm <token>                       # delete one; offdesk tokens audit [<token>] shows what tokens did and were refused
+offdesk webhooks [--json]                       # webhooks: agent run events POSTed to a URL (docs/webhooks.md)
+offdesk webhooks add <name> <url> [--event run.request,run.ended,...] [--content ...] [--machine <m>]... [--production]
+                                                # prints the signing secret once
+offdesk webhooks test|on|off|rm|deliveries <webhook>
 ```
 
 - Machines and terminals are addressed by **id prefix** (first column of `ls`);

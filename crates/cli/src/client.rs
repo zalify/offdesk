@@ -411,6 +411,39 @@ impl HubClient {
         parse_json(response).await
     }
 
+    /// A JSON request to `/api{path}`, with an optional JSON body, read as `T`.
+    pub async fn call<T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<T, CliError> {
+        let mut request = self.http.request(method, self.url(path));
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        parse_json(request.send().await.map_err(network_error)?).await
+    }
+
+    /// `call` for routes that answer with no body (204, 202).
+    pub async fn call_empty(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+    ) -> Result<(), CliError> {
+        let mut request = self.http.request(method, self.url(path));
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let response = request.send().await.map_err(network_error)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(status_error(response.status(), response).await)
+        }
+    }
+
     pub async fn delete_machine(&self, machine_id: &str) -> Result<(), CliError> {
         let response = self
             .http
