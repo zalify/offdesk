@@ -154,6 +154,9 @@ pub fn hook_signal(event: &str, input: &Value) -> Option<AgentSignal> {
             "TodoWrite" => todo_progress(&tool_input).or(Some(AgentSignal::Working)),
             _ => Some(AgentSignal::Working),
         },
+        // Claude Code asks permission for AskUserQuestion too, right after PreToolUse: it's
+        // still the question, not an approval (answering "yes" would pick option 1)
+        "PermissionRequest" if tool == "AskUserQuestion" => Some(question(&tool_input)),
         "PermissionRequest" => Some(AgentSignal::Waiting {
             request: AgentRequestKind::Approval,
             prompt: Some(tool_summary(tool, &tool_input)),
@@ -477,10 +480,10 @@ mod tests {
 
     #[test]
     fn questions_and_task_lists_are_read_as_far_as_they_go() {
-        let asked = hook_signal(
-            "PreToolUse",
-            &json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which plan?", "options": [{"label": "Pro"}, {"label": "Team"}]}]}}),
-        );
+        let input = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which plan?", "options": [{"label": "Pro"}, {"label": "Team"}]}]}});
+        // The permission Claude Code asks for it is the same question (seen in a real session)
+        assert_eq!(hook_signal("PermissionRequest", &input), hook_signal("PreToolUse", &input));
+        let asked = hook_signal("PreToolUse", &input);
         assert_eq!(
             asked,
             Some(AgentSignal::Waiting {
