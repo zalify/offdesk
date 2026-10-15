@@ -228,6 +228,15 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Bridges: servers the hub keeps a connection to, which see agent runs and,
+    /// within what you allow here, answer them and start agents. Needs a full-access token
+    Bridges {
+        #[command(subcommand)]
+        action: Option<BridgesAction>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a new terminal on a machine
     Open {
         /// Machine id or unique prefix
@@ -697,6 +706,59 @@ enum WebhooksAction {
     Deliveries { webhook: String },
 }
 
+#[derive(Subcommand)]
+enum BridgesAction {
+    /// Pair with a bridge server: paste the one-time code it shows. What it may do is
+    /// decided here (default runs:read); it can't ask for more
+    Add {
+        name: String,
+        /// The server's address: wss://… (ws:// only to this machine)
+        target: String,
+        /// The pairing code the server showed
+        #[arg(long)]
+        code: String,
+        /// runs:read, runs:answer, runs:approve, runs:start (comma-separated or repeated)
+        #[arg(long, value_delimiter = ',')]
+        scope: Vec<String>,
+        /// What it sees of a run (default metadata: status only; never terminal output)
+        #[arg(long, value_enum)]
+        content: Option<ContentArg>,
+        /// A folder runs:start may start agents in (and below); repeat for more
+        #[arg(long)]
+        dir: Vec<String>,
+        /// An agent runs:start may start; repeat for both. Default: any
+        #[arg(long, value_enum)]
+        agent: Vec<StartAgent>,
+        /// Only this machine (id, prefix or name); repeat for more
+        #[arg(long)]
+        machine: Vec<String>,
+        /// Production machines too
+        #[arg(long)]
+        production: bool,
+        /// At most this many agent starts an hour
+        #[arg(long)]
+        max_starts: Option<u32>,
+        /// At most this many answers and approvals an hour
+        #[arg(long)]
+        max_answers: Option<u32>,
+    },
+    /// Connect it again
+    On {
+        #[arg(value_name = "BRIDGE")]
+        which: String,
+    },
+    /// Hang up and stay disconnected
+    Off {
+        #[arg(value_name = "BRIDGE")]
+        which: String,
+    },
+    /// Hang up and forget it
+    Rm {
+        #[arg(value_name = "BRIDGE")]
+        which: String,
+    },
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum ContentArg {
     Metadata,
@@ -1091,6 +1153,39 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             Some(TokensAction::Rm { which }) => commands::tokens::rm(&hub_client, &which).await,
             Some(TokensAction::Audit { which }) => commands::tokens::audit(&hub_client, which.as_deref(), json).await,
         },
+        Commands::Bridges { action, json } => match action {
+            None => commands::bridges::list(&hub_client, json).await,
+            Some(BridgesAction::Add { name, target, code, scope, content, dir, agent, machine, production, max_starts, max_answers }) => {
+                commands::bridges::add(
+                    &hub_client,
+                    &target,
+                    &code,
+                    commands::tokens::CreateOptions {
+                        name,
+                        full: false,
+                        scopes: scope,
+                        content: content.map(Into::into),
+                        dirs: dir,
+                        agents: agent
+                            .into_iter()
+                            .map(|a| match a {
+                                StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
+                                StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
+                            })
+                            .collect(),
+                        machines: machine,
+                        production,
+                        max_starts_per_hour: max_starts,
+                        max_answers_per_hour: max_answers,
+                        json,
+                    },
+                )
+                .await
+            }
+            Some(BridgesAction::On { which }) => commands::bridges::set_enabled(&hub_client, &which, true).await,
+            Some(BridgesAction::Off { which }) => commands::bridges::set_enabled(&hub_client, &which, false).await,
+            Some(BridgesAction::Rm { which }) => commands::bridges::rm(&hub_client, &which).await,
+        },
         Commands::Webhooks { action, json } => match action {
             None => commands::webhooks::list(&hub_client, json).await,
             Some(WebhooksAction::Add { name, target, event, content, machine, production }) => {
@@ -1250,5 +1345,9 @@ mod tests {
         assert!(matches!(cli.command, Commands::Webhooks { action: Some(WebhooksAction::Add { ref target, ref event, .. }), .. }
             if target == "https://ntfy.example/runs" && event.len() == 2));
         assert!(parse(&["tokens", "create", "x", "--full", "--scope", "runs:read"]).is_err(), "full is full");
+        let cli = parse(&["bridges", "add", "cloud", "wss://bridge.example/hub", "--code", "AB12-CD34", "--scope", "runs:read,runs:answer"]).unwrap();
+        assert_eq!((cli.url, cli.token), (None, None));
+        assert!(matches!(cli.command, Commands::Bridges { action: Some(BridgesAction::Add { ref target, ref code, .. }), .. }
+            if target == "wss://bridge.example/hub" && code == "AB12-CD34"));
     }
 }

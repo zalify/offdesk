@@ -210,7 +210,7 @@ pub struct MachineManager {
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
     next_event_seq: AtomicU64,
     /// Where run updates go for webhooks (`crate::webhooks::spawn`); none in most tests.
-    webhook_sink: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(Option<String>, offdesk_protocol::AgentRunInfo)>>,
+    webhook_sink: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<crate::webhooks::HubUpdate>>,
     mode: Arc<std::sync::Mutex<HashMap<String, ModeState>>>,
     db: crate::db::DbPool,
     /// Persisted terminals loaded at startup, consumed during machine reconnect reconciliation
@@ -3032,17 +3032,32 @@ impl MachineManager {
     /// Sends every agent run update to the webhook worker from now on.
     pub fn set_webhook_sink(
         &self,
-        sink: tokio::sync::mpsc::UnboundedSender<(Option<String>, offdesk_protocol::AgentRunInfo)>,
+        sink: tokio::sync::mpsc::UnboundedSender<crate::webhooks::HubUpdate>,
     ) {
         let _ = self.webhook_sink.set(sink);
     }
 
     fn send_event(&self, target_user_id: Option<String>, event: BrowserEvent) {
-        // The worker finds the run's owner from its machine when no user is named
-        if let (BrowserEvent::AgentRunUpdated { run }, Some(sink)) =
-            (&event, self.webhook_sink.get())
-        {
-            let _ = sink.send((target_user_id.clone(), run.clone()));
+        // Runs and machines coming and going, for webhooks and bridges (the worker finds a
+        // run's owner from its machine when no user is named)
+        if let Some(sink) = self.webhook_sink.get() {
+            let update = match &event {
+                BrowserEvent::AgentRunUpdated { run } => {
+                    Some(crate::webhooks::HubUpdate::Run(target_user_id.clone(), run.clone()))
+                }
+                BrowserEvent::MachineOnline { machine } => Some(crate::webhooks::HubUpdate::Machine {
+                    machine_id: machine.id.clone(),
+                    online: true,
+                }),
+                BrowserEvent::MachineOffline { machine_id } => Some(crate::webhooks::HubUpdate::Machine {
+                    machine_id: machine_id.clone(),
+                    online: false,
+                }),
+                _ => None,
+            };
+            if let Some(update) = update {
+                let _ = sink.send(update);
+            }
         }
         if matches!(
             event,
@@ -4092,7 +4107,14 @@ mod tests {
         manager
             .handle_machine_message("machine-a", MachineToHub::TerminalAgent { terminal_id: "term-a".into(), agent: Some(RunAgent::Claude) })
             .await;
-        let (user, run) = updates.try_recv().expect("a run update for webhooks");
+        // First the machine coming online, then the run
+        let mut run_update = None;
+        while let Ok(update) = updates.try_recv() {
+            if let crate::webhooks::HubUpdate::Run(user, run) = update {
+                run_update = Some((user, run));
+            }
+        }
+        let (user, run) = run_update.expect("a run update for webhooks");
         assert_eq!((user, run.machine_id.as_str()), (None, "machine-a"));
     }
 

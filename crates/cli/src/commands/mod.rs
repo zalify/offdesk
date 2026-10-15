@@ -1,3 +1,4 @@
+pub mod bridges;
 pub mod browser;
 pub mod fetch;
 pub mod key;

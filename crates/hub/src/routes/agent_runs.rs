@@ -86,11 +86,6 @@ fn shown_event(mut event: Value, level: Option<ContentLevel>) -> Value {
     event
 }
 
-fn forbidden(auth_user: &AuthUser, state: &AppState, action: &str, target: &str, reason: &str) -> Response {
-    auth_user.audit(&state.db, action, target, reason);
-    (StatusCode::FORBIDDEN, reason.to_string()).into_response()
-}
-
 /// A token's hourly limit for `actions`: refused once it did that many in the last hour.
 fn over_limit(state: &AppState, auth_user: &AuthUser, actions: &[&str], limit: Option<u32>) -> bool {
     let (Some(limit), Some(token_id)) = (limit, auth_user.api_token_id.as_deref()) else {
@@ -210,23 +205,42 @@ async fn run_events(
     ))
 }
 
-/// Answer the run's open request: the node types it into the terminal. 202 means it was
-/// sent, not that the agent took it; the run's next update says that.
-async fn answer_run(
-    State(state): State<AppState>,
-    auth_user: AuthUser,
-    Path(run_id): Path<String>,
-    Json(answer): Json<AgentAnswer>,
-) -> Result<(StatusCode, Json<AgentRunInfo>), Response> {
+/// Why an answer or a start was refused: the HTTP status and the reason.
+pub(crate) type Refusal = (StatusCode, String);
+
+fn refused(status: StatusCode, reason: impl Into<String>) -> Refusal {
+    (status, reason.into())
+}
+
+fn failed(error: impl std::fmt::Display) -> Refusal {
+    tracing::warn!("agent runs: {}", error);
+    refused(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+}
+
+fn refuse(auth_user: &AuthUser, state: &AppState, action: &str, target: &str, reason: &str) -> Refusal {
+    auth_user.audit(&state.db, action, target, reason);
+    refused(StatusCode::FORBIDDEN, reason)
+}
+
+/// Answers a run's open request as `auth_user` (a person, a token, or a bridge acting
+/// with its integration's access): approvals need runs:approve, other answers
+/// runs:answer; the hourly limit and the audit apply. The node types the answer; the
+/// run's next update says whether the agent took it.
+pub(crate) async fn answer_as(
+    state: &AppState,
+    auth_user: &AuthUser,
+    run_id: &str,
+    answer: AgentAnswer,
+) -> Result<AgentRunInfo, Refusal> {
     use crate::machine_manager::AnswerError;
     // Approvals and answers are separate scopes: saying yes to a command is another thing
     let kind = {
-        let db = state.db.get().map_err(internal)?;
-        let Some(run) = visible_run(&db, &auth_user, &run_id).map_err(internal)? else {
-            return Err((StatusCode::NOT_FOUND, "Agent run not found").into_response());
+        let db = state.db.get().map_err(failed)?;
+        let Some(run) = visible_run(&db, auth_user, run_id).map_err(failed)? else {
+            return Err(refused(StatusCode::NOT_FOUND, "Agent run not found"));
         };
         agent_runs::open_request(&db, &run.id)
-            .map_err(internal)?
+            .map_err(failed)?
             .filter(|request| request.id == answer.request_id)
             .map(|request| request.kind)
     };
@@ -234,22 +248,22 @@ async fn answer_run(
     let scope = if action == "approve" { TokenScope::RunsApprove } else { TokenScope::RunsAnswer };
     if !auth_user.allows(scope) {
         let reason = format!("This token can't {action}; it needs {}", scope.as_str());
-        return Err(forbidden(&auth_user, &state, action, &run_id, &reason));
+        return Err(refuse(auth_user, state, action, run_id, &reason));
     }
     let limit = auth_user.access.as_ref().and_then(|access| access.max_answers_per_hour);
-    if over_limit(&state, &auth_user, &["answer", "approve"], limit) {
-        auth_user.audit(&state.db, action, &run_id, "hourly limit reached");
-        return Err((StatusCode::TOO_MANY_REQUESTS, "This token reached its hourly limit of answers").into_response());
+    if over_limit(state, auth_user, &["answer", "approve"], limit) {
+        auth_user.audit(&state.db, action, run_id, "hourly limit reached");
+        return Err(refused(StatusCode::TOO_MANY_REQUESTS, "This token reached its hourly limit of answers"));
     }
     let level = auth_user.access.as_ref().map(|access| access.content);
     let result = state
         .manager
-        .answer_agent_run(&auth_user.user_id, &run_id, answer)
+        .answer_agent_run(&auth_user.user_id, run_id, answer)
         .await;
     auth_user.audit(
         &state.db,
         action,
-        &run_id,
+        run_id,
         match &result {
             Ok(_) => "ok",
             Err(AnswerError::Conflict(reason) | AnswerError::BadRequest(reason) | AnswerError::Unavailable(reason)) => reason,
@@ -258,30 +272,37 @@ async fn answer_run(
         },
     );
     match result {
-        Ok(run) => Ok((StatusCode::ACCEPTED, Json(shown_run(run, level)))),
-        Err(AnswerError::NotFound) => {
-            Err((StatusCode::NOT_FOUND, "Agent run not found").into_response())
-        }
-        Err(AnswerError::Conflict(reason)) => Err((StatusCode::CONFLICT, reason).into_response()),
-        Err(AnswerError::BadRequest(reason)) => {
-            Err((StatusCode::BAD_REQUEST, reason).into_response())
-        }
-        Err(AnswerError::Unavailable(reason)) => {
-            Err((StatusCode::SERVICE_UNAVAILABLE, reason).into_response())
-        }
-        Err(AnswerError::Internal) => Err(internal("answer failed")),
+        Ok(run) => Ok(shown_run(run, level)),
+        Err(AnswerError::NotFound) => Err(refused(StatusCode::NOT_FOUND, "Agent run not found")),
+        Err(AnswerError::Conflict(reason)) => Err(refused(StatusCode::CONFLICT, reason)),
+        Err(AnswerError::BadRequest(reason)) => Err(refused(StatusCode::BAD_REQUEST, reason)),
+        Err(AnswerError::Unavailable(reason)) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, reason)),
+        Err(AnswerError::Internal) => Err(failed("answer failed")),
     }
 }
 
-/// Start a coding agent (claude or codex) in a new terminal with its first message. The
-/// hub builds the command from the fields; there's no way to pass a command line, nor
-/// to skip the agent's permission prompts. 201: the run is Starting until the agent
-/// shows up in the terminal, and an Error if it hasn't within a minute.
-async fn start_run(
+/// Answer the run's open request: the node types it into the terminal. 202 means it was
+/// sent, not that the agent took it; the run's next update says that.
+async fn answer_run(
     State(state): State<AppState>,
     auth_user: AuthUser,
-    Json(start): Json<StartAgentRun>,
-) -> Result<(StatusCode, Json<StartedAgentRun>), Response> {
+    Path(run_id): Path<String>,
+    Json(answer): Json<AgentAnswer>,
+) -> Result<(StatusCode, Json<AgentRunInfo>), Response> {
+    answer_as(&state, &auth_user, &run_id, answer)
+        .await
+        .map(|run| (StatusCode::ACCEPTED, Json(run)))
+        .map_err(IntoResponse::into_response)
+}
+
+/// Starts an agent as `auth_user`: a scoped caller only on its machines, with its
+/// agents, in its folders and within its hourly limit; the caller's device must hold
+/// the machine's control lease. Audited for tokens and bridges.
+pub(crate) async fn start_as(
+    state: &AppState,
+    auth_user: &AuthUser,
+    start: StartAgentRun,
+) -> Result<StartedAgentRun, Refusal> {
     use crate::machine_manager::StartError;
     let user_id = auth_user.user_id.clone();
     let machine_id = start.machine_id.clone();
@@ -290,26 +311,24 @@ async fn start_run(
         .user_can_access_machine(&user_id, &machine_id)
         .await
     {
-        return Err((StatusCode::NOT_FOUND, "Machine not found").into_response());
+        return Err(refused(StatusCode::NOT_FOUND, "Machine not found"));
     }
-    crate::routes::terminals::ensure_machine_row(&state, &user_id, &machine_id)
-        .await
-        .map_err(IntoResponse::into_response)?;
+    crate::routes::terminals::ensure_machine_row(state, &user_id, &machine_id).await?;
     // A scoped token: its machines, agents and folders, and its hourly limit
     let mut allowed_dirs = None;
     if let Some(access) = &auth_user.access {
         if !auth_user.may_reach_machine(&state.db, &machine_id) {
-            return Err(forbidden(&auth_user, &state, "start", &machine_id, "This token can't reach that machine"));
+            return Err(refuse(auth_user, state, "start", &machine_id, "This token can't reach that machine"));
         }
         if !access.allows_agent(start.agent) {
-            return Err(forbidden(&auth_user, &state, "start", &machine_id, "This token can't start that agent"));
+            return Err(refuse(auth_user, state, "start", &machine_id, "This token can't start that agent"));
         }
         if !access.allows_dir(start.cwd.trim()) {
-            return Err(forbidden(&auth_user, &state, "start", &machine_id, "That folder isn't one this token may start in"));
+            return Err(refuse(auth_user, state, "start", &machine_id, "That folder isn't one this token may start in"));
         }
-        if over_limit(&state, &auth_user, &["start"], access.max_starts_per_hour) {
+        if over_limit(state, auth_user, &["start"], access.max_starts_per_hour) {
             auth_user.audit(&state.db, "start", &machine_id, "hourly limit reached");
-            return Err((StatusCode::TOO_MANY_REQUESTS, "This token reached its hourly limit of starts").into_response());
+            return Err(refused(StatusCode::TOO_MANY_REQUESTS, "This token reached its hourly limit of starts"));
         }
         allowed_dirs = access.dirs.clone();
     }
@@ -318,9 +337,9 @@ async fn start_run(
         controller.as_deref(),
         start.device_id.as_deref(),
     ) {
-        return Err((StatusCode::FORBIDDEN, "Take control of the machine first").into_response());
+        return Err(refused(StatusCode::FORBIDDEN, "Take control of the machine first"));
     }
-    let opened_by = crate::routes::terminals::opener_for(&auth_user, None);
+    let opened_by = crate::routes::terminals::opener_for(auth_user, None);
     let result = state
         .manager
         .start_agent_run(&user_id, start, opened_by, allowed_dirs)
@@ -334,32 +353,25 @@ async fn start_run(
     auth_user.audit(&state.db, "start", &target, if outcome.starts_with("ok") { "ok" } else { &outcome });
     let (run, terminal) = match result {
         Ok(started) => started,
-        Err(StartError::BadRequest(reason)) => {
-            return Err((StatusCode::BAD_REQUEST, reason).into_response())
-        }
-        Err(StartError::Unavailable(reason)) => {
-            return Err((StatusCode::SERVICE_UNAVAILABLE, reason).into_response())
-        }
-        Err(StartError::Machine(reason)) => {
-            return Err((StatusCode::BAD_GATEWAY, reason).into_response())
-        }
-        Err(StartError::Internal) => return Err(internal("start failed")),
+        Err(StartError::BadRequest(reason)) => return Err(refused(StatusCode::BAD_REQUEST, reason)),
+        Err(StartError::Unavailable(reason)) => return Err(refused(StatusCode::SERVICE_UNAVAILABLE, reason)),
+        Err(StartError::Machine(reason)) => return Err(refused(StatusCode::BAD_GATEWAY, reason)),
+        Err(StartError::Internal) => return Err(failed("start failed")),
     };
 
     // Like any new terminal, it gets its own tab
     let group_id = crate::routes::terminals::auto_create_workspace_group(
-        &state,
+        state,
         &user_id,
         &machine_id,
         &terminal.cwd,
     )
-    .await
-    .map_err(IntoResponse::into_response)?;
+    .await?;
     let terminal = state
         .manager
         .set_terminal_workspace_group(&user_id, &machine_id, &terminal.id, Some(group_id))
         .await
-        .map_err(internal)?;
+        .map_err(failed)?;
 
     let manager = state.manager.clone();
     let run_id = run.id.clone();
@@ -367,7 +379,23 @@ async fn start_run(
         tokio::time::sleep(crate::machine_manager::START_TIMEOUT).await;
         manager.expire_start(&user_id, &run_id);
     });
-    Ok((StatusCode::CREATED, Json(StartedAgentRun { run, terminal })))
+    let level = auth_user.access.as_ref().map(|access| access.content);
+    Ok(StartedAgentRun { run: shown_run(run, level), terminal })
+}
+
+/// Start a coding agent (claude or codex) in a new terminal with its first message. The
+/// hub builds the command from the fields; there's no way to pass a command line, nor
+/// to skip the agent's permission prompts. 201: the run is Starting until the agent
+/// shows up in the terminal, and an Error if it hasn't within a minute.
+async fn start_run(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Json(start): Json<StartAgentRun>,
+) -> Result<(StatusCode, Json<StartedAgentRun>), Response> {
+    start_as(&state, &auth_user, start)
+        .await
+        .map(|started| (StatusCode::CREATED, Json(started)))
+        .map_err(IntoResponse::into_response)
 }
 
 /// The coding agents a machine found installed, for choosing what to start. Empty when
