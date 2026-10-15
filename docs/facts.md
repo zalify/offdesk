@@ -105,6 +105,25 @@ rename mapping is at the bottom.
 - `offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt|--prompt-file]
   [--label] [--ref] [--mode]` (`crates/cli/src/commands/runs.rs` `start`).
 
+## Webhooks (implementation added 2026-10-15)
+
+- Integrations of kind `webhook` (URL, `whsec_` secret, event types, machines,
+  content level) live in `integrations`; `GET|POST /api/integrations`,
+  `PATCH|DELETE /api/integrations/{id}`, `POST …/test`, `GET …/deliveries`
+  (`crates/hub/src/routes/integrations.rs`). Scoped tokens can't reach them.
+- Every `agent_run_updated` goes to one webhook worker, which compares the run with
+  what it last said (`webhook_run_state`) and queues `run.started`, `run.request`,
+  `run.request_resolved`, `run.status`, `run.progress`, `run.report` or `run.ended`
+  per enabled webhook that wants it and may see the machine, cut to its content level
+  (`crates/hub/src/webhooks.rs` `changes`, `on_run`). Updates without a user go to
+  the machine's owner.
+- Events wait in `webhook_outbox` and are POSTed with Standard Webhooks headers
+  (HMAC-SHA256 over `id.timestamp.body`); failures retry from 5 s up to an hour apart
+  for 24 hours, and the outbox survives restarts (`deliver_due`, `retry_at`).
+- Settings › Webhooks adds, tests, turns off and removes them
+  (`packages/app/components/WebhooksPanel.tsx`); `docs/webhooks.md` describes the
+  events and checking signatures; `examples/webhooks/ntfy-relay.mjs` relays to ntfy.
+
 ## Scoped API tokens (implementation added 2026-10-15)
 
 - A token may carry `access` (`TokenAccess`: scopes `runs:read`, `runs:answer`,

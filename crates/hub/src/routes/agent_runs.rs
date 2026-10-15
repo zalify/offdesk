@@ -41,7 +41,7 @@ fn reachable_machines(
 
 /// A run as a scoped token sees it: no request text below `requests`, no notes or
 /// current step below `notes`. Full access sees everything.
-fn shown_run(mut run: AgentRunInfo, level: Option<ContentLevel>) -> AgentRunInfo {
+pub(crate) fn shown_run(mut run: AgentRunInfo, level: Option<ContentLevel>) -> AgentRunInfo {
     let Some(level) = level else {
         return run;
     };

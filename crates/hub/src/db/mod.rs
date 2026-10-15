@@ -7,6 +7,7 @@ use serde::Deserialize;
 use offdesk_protocol::{WorkspaceLayoutNode, WorkspaceSplitDirection};
 
 pub mod agent_runs;
+pub mod integrations;
 pub mod agent_sessions;
 pub mod bookmarks;
 pub mod hub_state;
@@ -297,6 +298,53 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_api_token_audit_token
             ON api_token_audit(token_id, action, created_at);
         CREATE INDEX IF NOT EXISTS idx_api_token_audit_user ON api_token_audit(user_id, id);
+    ",
+    )?;
+
+    // Integrations: outside systems that get agent run events, and what waits for them (B2)
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS integrations (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            url TEXT NOT NULL,
+            secret TEXT NOT NULL,
+            events TEXT NOT NULL DEFAULT '[]',
+            access TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL,
+            last_delivery_at INTEGER,
+            last_error TEXT
+        );
+        CREATE TABLE IF NOT EXISTS webhook_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+            event_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            body TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            next_attempt_at INTEGER NOT NULL,
+            delivered_at INTEGER,
+            failed_at INTEGER,
+            last_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due
+            ON webhook_outbox(next_attempt_at) WHERE delivered_at IS NULL AND failed_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_webhook_outbox_integration ON webhook_outbox(integration_id, id);
+        CREATE TABLE IF NOT EXISTS webhook_run_state (
+            run_id TEXT PRIMARY KEY,
+            seq INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            request_id TEXT,
+            report_at INTEGER,
+            progress_done INTEGER,
+            progress_total INTEGER,
+            ended INTEGER NOT NULL DEFAULT 0,
+            updated_at INTEGER NOT NULL
+        );
     ",
     )?;
 

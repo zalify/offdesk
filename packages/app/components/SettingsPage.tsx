@@ -4,6 +4,7 @@ import { HubPickerPanel } from "./HubPickerPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
 import { BUNDLED_TERMINAL_FONTS, BUNDLED_UI_FONTS, DEFAULT_TERMINAL_FONT, availableTerminalFonts, availableUiFonts, resolveTerminalFontFamily } from "@/lib/terminalFonts";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
+import { WebhooksPanel } from "./WebhooksPanel";
 import { isSecureConnection, useSecureConnectionStatus } from "../lib/secureTransport";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
@@ -1510,6 +1511,11 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               {apiTokensError}
             </div>
           )}
+        </section>
+
+        <section style={{ marginBottom: 32 }}>
+          <SectionTitle>Webhooks</SectionTitle>
+          <WebhooksPanel />
         </section>
 
         {/* Versions: the app, the hub, its interface and its nodes */}

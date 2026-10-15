@@ -209,6 +209,8 @@ pub struct MachineManager {
     event_tx: broadcast::Sender<EventEnvelope>,
     event_history: Arc<std::sync::Mutex<VecDeque<EventEnvelope>>>,
     next_event_seq: AtomicU64,
+    /// Where run updates go for webhooks (`crate::webhooks::spawn`); none in most tests.
+    webhook_sink: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<(Option<String>, offdesk_protocol::AgentRunInfo)>>,
     mode: Arc<std::sync::Mutex<HashMap<String, ModeState>>>,
     db: crate::db::DbPool,
     /// Persisted terminals loaded at startup, consumed during machine reconnect reconciliation
@@ -277,6 +279,7 @@ impl MachineManager {
                 EVENT_HISTORY_LIMIT,
             ))),
             next_event_seq: AtomicU64::new(initial_seq),
+            webhook_sink: std::sync::OnceLock::new(),
             mode: Arc::new(std::sync::Mutex::new(HashMap::new())),
             db,
             persisted_terminals: Arc::new(Mutex::new(persisted_terminals)),
@@ -3026,7 +3029,21 @@ impl MachineManager {
         }
     }
 
+    /// Sends every agent run update to the webhook worker from now on.
+    pub fn set_webhook_sink(
+        &self,
+        sink: tokio::sync::mpsc::UnboundedSender<(Option<String>, offdesk_protocol::AgentRunInfo)>,
+    ) {
+        let _ = self.webhook_sink.set(sink);
+    }
+
     fn send_event(&self, target_user_id: Option<String>, event: BrowserEvent) {
+        // The worker finds the run's owner from its machine when no user is named
+        if let (BrowserEvent::AgentRunUpdated { run }, Some(sink)) =
+            (&event, self.webhook_sink.get())
+        {
+            let _ = sink.send((target_user_id.clone(), run.clone()));
+        }
         if matches!(
             event,
             BrowserEvent::AgentBrowserCreated { .. }
@@ -4057,6 +4074,26 @@ mod tests {
                 controller_device_id: Some(_),
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn run_updates_reach_the_webhook_worker_even_without_a_user() {
+        use offdesk_protocol::RunAgent;
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        let manager = MachineManager::new(pool.clone());
+        let (sink, mut updates) = tokio::sync::mpsc::unbounded_channel();
+        manager.set_webhook_sink(sink);
+        // A dev node's connection names no user; the worker looks the owner up
+        manager.register_machine(machine("machine-a"), None).await;
+        manager
+            .handle_machine_message("machine-a", MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-a")] })
+            .await;
+        manager
+            .handle_machine_message("machine-a", MachineToHub::TerminalAgent { terminal_id: "term-a".into(), agent: Some(RunAgent::Claude) })
+            .await;
+        let (user, run) = updates.try_recv().expect("a run update for webhooks");
+        assert_eq!((user, run.machine_id.as_str()), (None, "machine-a"));
     }
 
     #[tokio::test]
