@@ -8,7 +8,7 @@ resolver = "2"
 # packages/desktop/src-tauri/tauri.conf.json before tagging vX.Y.Z, or the
 # Release workflow refuses the tag (docs/releasing.md).
 [workspace.package]
-version = "0.23.0"
+version = "0.24.0"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
