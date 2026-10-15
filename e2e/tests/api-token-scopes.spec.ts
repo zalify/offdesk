@@ -10,19 +10,21 @@ for (const width of [1280, 390]) {
 
     const name = page.getByPlaceholder("Token name (e.g. cli)");
     await name.scrollIntoViewIfNeeded();
+    // The bridge form further down has the same choices: stay in this one
+    const form = page.getByRole("group", { name: "New token access" });
     // Narrow by default: agent runs only, seeing runs
-    await expect(page.getByRole("radio", { name: "Agent runs only" })).toBeChecked();
-    await expect(page.getByRole("checkbox", { name: "See runs" })).toBeChecked();
-    await page.getByRole("checkbox", { name: "Answer questions" }).check();
-    await page.getByLabel("It sees").selectOption("requests");
+    await expect(form.getByRole("radio", { name: "Agent runs only" })).toBeChecked();
+    await expect(form.getByRole("checkbox", { name: "See runs" })).toBeChecked();
+    await form.getByRole("checkbox", { name: "Answer questions" }).check();
+    await form.getByLabel("It sees").selectOption("requests");
     // Starting agents asks for folders
-    await page.getByRole("checkbox", { name: "Start agents" }).check();
-    await expect(page.getByPlaceholder("~/work")).toBeVisible();
-    await page.getByRole("checkbox", { name: "Start agents" }).uncheck();
+    await form.getByRole("checkbox", { name: "Start agents" }).check();
+    await expect(form.getByPlaceholder("~/work")).toBeVisible();
+    await form.getByRole("checkbox", { name: "Start agents" }).uncheck();
     // Full access says what it means
-    await page.getByRole("radio", { name: "Full access" }).check();
+    await form.getByRole("radio", { name: "Full access" }).check();
     await expect(page.getByText("remote code execution on every machine", { exact: false })).toBeVisible();
-    await page.getByRole("radio", { name: "Agent runs only" }).check();
+    await form.getByRole("radio", { name: "Agent runs only" }).check();
 
     await name.fill(`notifier-${width}`);
     await page.getByRole("button", { name: "Create", exact: true }).click();

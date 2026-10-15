@@ -1228,6 +1228,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           {/* What the new token may do */}
           <div
+            role="group"
+            aria-label="New token access"
             style={{
               display: "flex",
               flexDirection: "column",

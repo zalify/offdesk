@@ -138,6 +138,8 @@ export function BridgesPanel() {
       </div>
 
       <div
+        role="group"
+        aria-label="New bridge"
         style={{
           display: "flex",
           flexDirection: "column",

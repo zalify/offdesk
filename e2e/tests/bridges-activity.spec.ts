@@ -31,7 +31,7 @@ for (const width of [1280, 390]) {
     await name.fill(`nowhere-${width}`);
     await page.getByLabel("Bridge URL").fill("ws://127.0.0.1:9/bridge");
     await page.getByLabel("Pairing code").fill("AB12-CD34");
-    await page.getByRole("checkbox", { name: "Answer questions" }).last().check();
+    await page.getByRole("group", { name: "New bridge" }).getByRole("checkbox", { name: "Answer questions" }).check();
     await page.getByRole("button", { name: "Pair bridge" }).click();
     const row = page.getByRole("group", { name: `Bridge nowhere-${width}` });
     await expect(row).toBeVisible();
