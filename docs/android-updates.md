@@ -54,6 +54,10 @@ bridge in the repository's container browser; it does not emulate the Android
 installer. The Android Updater Check CI job builds an ARM64 debug APK and runs
 `:tauri-plugin-offdesk-android-updater:testDebugUnitTest` for native release policy
 and Robolectric tests of confirmation, permission retry and foreground handoff.
+Pull requests run it only when they touch what it depends on (the native app
+under `packages/desktop/`, the crates it links, toolchain locks, the setup and
+pairing screens; the list is in `scripts/ci/changed-scope.mjs`); every runtime
+push to main runs it.
 
 CI also builds x86_64 and runs `scripts/android-startup-smoke.py` on an Android
 emulator. The test requires the real APK to render its setup page, accept input,

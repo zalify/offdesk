@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       runtime: ${{ steps.scope.outputs.runtime }}
+      android: ${{ steps.scope.outputs.android }}
       site: ${{ steps.scope.outputs.site }}
     steps:
       - uses: actions/checkout@v6
@@ -192,9 +193,11 @@ jobs:
           E2E_RUST_BINARIES: prebuilt
           E2E_SHARD: ${{ matrix.shard }}/4
 
+  # Pull requests run this only when they touch what it depends on (see
+  # scripts/ci/changed-scope.mjs); pushes to main run it on every runtime change.
   android-check:
     needs: changes
-    if: needs.changes.outputs.runtime == 'true'
+    if: needs.changes.outputs.android == 'true'
     name: Android Updater Check
     runs-on: ubuntu-22.04
     steps:
@@ -266,13 +269,14 @@ jobs:
           node <<'NODE'
           const jobs = JSON.parse(process.env.RESULTS);
           if (jobs.changes.result !== 'success') throw new Error('Change detection failed');
-          for (const key of ['site', 'runtime']) {
+          for (const key of ['site', 'runtime', 'android']) {
             if (!['true', 'false'].includes(jobs.changes.outputs[key])) throw new Error(`Invalid ${key} scope`);
           }
           const expected = {
             'site-check': jobs.changes.outputs.site === 'true',
-            ...Object.fromEntries(['rust-check', 'native-check', 'frontend-build', 'e2e-binaries', 'e2e', 'android-check']
+            ...Object.fromEntries(['rust-check', 'native-check', 'frontend-build', 'e2e-binaries', 'e2e']
               .map(name => [name, jobs.changes.outputs.runtime === 'true'])),
+            'android-check': jobs.changes.outputs.android === 'true',
           };
           for (const [name, required] of Object.entries(expected)) {
             const wanted = required ? 'success' : 'skipped';
