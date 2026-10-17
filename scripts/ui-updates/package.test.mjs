@@ -22,16 +22,24 @@ test('signed release matches exact asset bytes and injects runtime version',()=>
     assert.equal(manifest.sha256,createHash('sha256').update(bytes).digest('hex'));assert.equal(manifest.size,bytes.length);
     // Every bundle of a channel lives in that channel's one release, under its own name.
     assert.equal(manifest.url,'https://github.com/zalify/offdesk/releases/download/ui-rc/bundle-rc-1.json');
+    // The offdesk.dev pointer: the same manifest, signed, linking the mirror's copy.
+    const mirror=JSON.parse(fs.readFileSync(path.join(output,'mirror-latest.json'))), mirrored=JSON.parse(mirror.payload);
+    assert(verify(null,Buffer.from(mirror.payload),publicKey,Buffer.from(mirror.signature,'base64')));
+    assert.deepEqual({...mirrored,url:manifest.url},manifest);
+    assert.equal(mirrored.url,'https://offdesk.dev/download/ui-rc/bundle-rc-1.json');
     assert.match(Buffer.from(bundle.files['index.html'],'base64').toString(),/__OFFDESK_UI_VERSION__="rc-1"/);
     assert.equal(bundle.files['entry.js.map'],undefined);
     const old=path.join(root,'old.json');fs.copyFileSync(path.join(output,'latest.json'),old);
     packageUi({...options,version:'rc-2',sequence:2});
-    const rollback=path.join(root,'rollback.json');
-    const command=spawnSync(process.execPath,[new URL('./rollback.mjs',import.meta.url).pathname,old,path.join(output,'latest.json'),rollback],{encoding:'utf8',env:{...process.env,OFFDESK_UI_SIGNING_KEY:options.privateKey}});
+    const rollback=path.join(root,'rollback.json'), mirrorRollback=path.join(root,'mirror-rollback.json');
+    const command=spawnSync(process.execPath,[new URL('./rollback.mjs',import.meta.url).pathname,old,path.join(output,'latest.json'),rollback,mirrorRollback],{encoding:'utf8',env:{...process.env,OFFDESK_UI_SIGNING_KEY:options.privateKey}});
     assert.equal(command.status,0,command.stderr);
     const restored=JSON.parse(fs.readFileSync(rollback)), target=JSON.parse(restored.payload);
     assert.equal(target.sequence,3);assert.equal(target.version,'rc-1');
     assert(verify(null,Buffer.from(restored.payload),publicKey,Buffer.from(restored.signature,'base64')));
+    const mirrorRestored=JSON.parse(fs.readFileSync(mirrorRollback)), mirrorTarget=JSON.parse(mirrorRestored.payload);
+    assert(verify(null,Buffer.from(mirrorRestored.payload),publicKey,Buffer.from(mirrorRestored.signature,'base64')));
+    assert.equal(mirrorTarget.sequence,3);assert.equal(mirrorTarget.url,'https://offdesk.dev/download/ui-rc/bundle-rc-1.json');
     assert.throws(()=>packageUi({...options,version:'../evil'}));
     fs.symlinkSync(path.join(dist,'entry.js'),path.join(dist,'link.js'));
     assert.throws(()=>packageUi(options),/symlinks/);

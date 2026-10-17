@@ -1,8 +1,23 @@
 // Produce immutable UI bytes and a signed channel pointer. No native build.
+//
+// Two pointers, identical but for the bundle link: latest.json links GitHub
+// and is what every shell reads; mirror-latest.json links the copy on
+// offdesk.dev (scripts/mirror-release.mjs), for shells that ask there first
+// because github.com is unreliable from mainland China. Older shells accept
+// only GitHub links, so the GitHub pointer stays as it was.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+export const GITHUB_BUNDLES = 'https://github.com/zalify/offdesk/releases/download/';
+export const MIRROR_BUNDLES = 'https://offdesk.dev/download/';
+/** The same signed manifest with its bundle link on the mirror, signed anew. */
+export function mirrorEnvelope(payload, key) {
+  const manifest = JSON.parse(payload);
+  if (!manifest.url.startsWith(GITHUB_BUNDLES)) throw new Error('Manifest does not link a GitHub release');
+  const mirrored = JSON.stringify({...manifest, url: MIRROR_BUNDLES + manifest.url.slice(GITHUB_BUNDLES.length)});
+  return {payload: mirrored, signature: sign(null, Buffer.from(mirrored), key).toString('base64')};
+}
 export function packageUi({ directory, output, version, sequence, channel, privateKey }) {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(version)) throw new Error('Invalid UI version');
   if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error('Invalid release sequence');
@@ -33,7 +48,7 @@ export function packageUi({ directory, output, version, sequence, channel, priva
   const bundle = Buffer.from(JSON.stringify({format:1, version, files}));
   if (bundle.length > 48 * 1024 * 1024) throw new Error('UI bundle too large');
   const payload = JSON.stringify({format:1, sequence, version, channel, minBridge:1, maxBridge:1,
-    platforms:['macos','android','windows','linux','ios'], url:`https://github.com/zalify/offdesk/releases/download/ui-${channel}/bundle-${version}.json`,
+    platforms:['macos','android','windows','linux','ios'], url:`${GITHUB_BUNDLES}ui-${channel}/bundle-${version}.json`,
     sha256:createHash('sha256').update(bundle).digest('hex'), size:bundle.length});
   const key = createPrivateKey(privateKey);
   if (key.asymmetricKeyType !== 'ed25519') throw new Error('Expected Ed25519 release key');
@@ -41,6 +56,7 @@ export function packageUi({ directory, output, version, sequence, channel, priva
   fs.mkdirSync(output,{recursive:true});
   fs.writeFileSync(path.join(output,'bundle.json'), bundle);
   fs.writeFileSync(path.join(output,'latest.json'), JSON.stringify(envelope));
+  fs.writeFileSync(path.join(output,'mirror-latest.json'), JSON.stringify(mirrorEnvelope(payload, key)));
   const jwk=createPublicKey(key).export({format:'jwk'});
   return {version, sequence, channel, size:bundle.length, publicKey:Buffer.from(jwk.x,'base64url').toString('base64')};
 }

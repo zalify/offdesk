@@ -17,7 +17,10 @@ name: Site
 #                          sidebar of Workers & Pages.
 #   CLOUDFLARE_API_TOKEN   My Profile → API Tokens → Create Token → the
 #                          "Edit Cloudflare Workers" template. A custom token
-#                          needs Account → Workers Scripts → Edit.
+#                          needs Account → Workers Scripts → Edit, and
+#                          Account → Workers R2 Storage → Edit for the
+#                          release mirror (worker.js binds its R2 bucket,
+#                          scripts/mirror-release.mjs fills it).
 
 on:
   push:

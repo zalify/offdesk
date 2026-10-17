@@ -61,10 +61,14 @@ Pushing the tag starts the `Release` workflow (`.github/workflows/release.yml`):
 4. **updater-channel** copies this release's `latest.json` into the
    `desktop-latest` prerelease. Installed desktop apps update from
    `releases/download/desktop-latest/latest.json`, which is built into every
-   shipped app, so that pointer stays. `desktop-updater-channel.yml` can be
-   dispatched by hand to retry this step for a published release.
+   shipped app, so that pointer stays. It then copies the release and the
+   manifest to the [offdesk.dev mirror](#the-offdeskdev-mirror).
+   `desktop-updater-channel.yml` can be dispatched by hand to retry this step
+   for a published release.
 5. **android-legacy-release** publishes the transitional `app-vX.Y.Z` copy
    (see below).
+6. **mirror** copies `app-vX.Y.Z` to the mirror as well and writes its
+   release listing again.
 
 The iOS build reaches TestFlight during step 2, before publishing. Offering it
 to external testers is a separate step: dispatch `TestFlight Release
@@ -92,6 +96,70 @@ Each platform workflow can still be dispatched on its own for a manual build.
 It builds on the `rc` Web UI channel, keeps its output as run artifacts, and
 never touches a release. The iOS release-candidate path (`prebuilt_release`,
 `existing_build`) is unchanged; see [Building](building.md#internal-ios-candidates-built-on-a-local-mac).
+
+## The offdesk.dev mirror
+
+github.com, api.github.com and GitHub's download host are unreliable from
+mainland China without a proxy; offdesk.dev is not. So every release is also
+copied into the R2 bucket `offdesk-dev-releases`, which the site's Worker
+(`site/worker.js`, bound as `RELEASES` in `site/wrangler.toml`) serves:
+
+| Path on offdesk.dev | R2 key | What it is |
+|---|---|---|
+| `/download/<tag>/<name>` | `download/<tag>/<name>` | a release asset, byte for byte |
+| `/updates/releases.json` | `updates/releases.json` | GitHub's release listing (100 newest, no drafts), mirrored files linked on offdesk.dev |
+| `/updates/desktop/latest.json` | `updates/desktop/latest.json` | the desktop updater manifest from `desktop-latest`, its links on offdesk.dev; the signatures are the same, since minisign signs the files |
+| `/updates/ui/<channel>/latest.json` | `updates/ui/<channel>/latest.json` | the Web UI pointer, signed with the same key, linking the bundle on offdesk.dev |
+
+Each mirrored tag also has `download/<tag>/.mirrored.json`, the files copied
+so far with their size and digest; the Worker never serves it.
+
+Whatever the bucket lacks falls back to GitHub: a missing file redirects to
+its GitHub download, a missing `desktop/latest.json` to the one in
+`desktop-latest`, a missing `releases.json` is fetched from GitHub's API by
+the Worker, and a missing Web UI pointer is a 404 (the apps then read
+GitHub's). The clients ask offdesk.dev first and GitHub second:
+
+- desktop updater: both endpoints in `tauri.conf.json`, offdesk.dev first;
+  the Tauri updater takes the first that answers;
+- Web UI updates: offdesk.dev's pointer, then GitHub's, also when the mirror
+  says the UI is current (briefly, in case the mirror lags);
+- Android updater, iPhone notice, the Hub's "newer release" check and the
+  installer: both listings, the newest release either names; the APK and the
+  binaries download from offdesk.dev, which redirects to GitHub for what it
+  lacks, and from GitHub when offdesk.dev cannot be reached.
+
+`scripts/mirror-release.mjs` fills the bucket. It downloads with `gh` and
+uploads with `npx wrangler@4 r2 object put … --remote`, skips what was copied
+before, and is safe to re-run. `release.yml` (through
+`desktop-updater-channel.yml`) and `ui-release.yml` run it after publishing.
+They need the repository secrets `CLOUDFLARE_ACCOUNT_ID` and
+`CLOUDFLARE_API_TOKEN`, the ones the site deploys with; the token also needs
+**Account → Workers R2 Storage → Edit**. Without the token the step warns and
+skips, so a release never waits for the mirror; with a token that cannot
+write, the step fails and says so.
+
+### Filling it by hand
+
+To copy what was released before the mirror existed, or to repair it, run
+from a checkout with `gh` signed in and either `npx wrangler@4 login` done or
+`CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` set:
+
+```sh
+# The current release, its transitional Android copy, the listing and the
+# desktop updater manifest:
+node scripts/mirror-release.mjs v0.24.0 app-v0.24.0 --updates
+
+# The Web UI channels' bundles:
+node scripts/mirror-release.mjs ui-stable ui-rc
+```
+
+A Web UI pointer for offdesk.dev has to be signed, so it first goes up with
+the next `Publish Web UI` run of each channel; until then the apps read
+GitHub's. `--force` uploads again what the index says is there already.
+To undo a damaged copy of one file, delete it from the bucket and its entry
+from `download/<tag>/.mirrored.json` (or the whole index), then run the
+script for that tag again.
 
 ## Transitional: the `app-vX.Y.Z` copy
 

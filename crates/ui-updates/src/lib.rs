@@ -79,6 +79,12 @@ pub struct Store {
     state: State,
 }
 
+/// Where a signed manifest may point for its bundle.
+pub const BUNDLE_PREFIXES: [&str; 2] = [
+    "https://github.com/zalify/offdesk/releases/download/ui-",
+    "https://offdesk.dev/download/ui-",
+];
+
 pub fn verify(
     envelope: &Envelope,
     key: &[u8; 32],
@@ -116,11 +122,13 @@ pub fn verify(
         return Err("UI release is incompatible with this shell".into());
     }
     // A signed manifest can select only Web UI assets in the official repository
-    // (`ui-<channel>/bundle-<version>.json`; older releases used `ui-<version>/bundle.json`).
-    // Bundle names are never reused, and the signed sha256 pins the bytes.
-    if !manifest
-        .url
-        .starts_with("https://github.com/zalify/offdesk/releases/download/ui-")
+    // (`ui-<channel>/bundle-<version>.json`; older releases used `ui-<version>/bundle.json`),
+    // or offdesk.dev's copy of them, which the same key signs for places where
+    // github.com is unreliable (mainland China). Bundle names are never reused,
+    // and the signed sha256 pins the bytes.
+    if !BUNDLE_PREFIXES
+        .iter()
+        .any(|prefix| manifest.url.starts_with(prefix))
         || manifest.url.contains(['?', '#', '\\'])
         || manifest.url.contains("..")
     {
@@ -421,6 +429,23 @@ mod tests {
                 1,
                 "https://github.com/zalify/offdesk/releases/download/ui-x/../evil",
             ),
+            (1, 1, "https://offdesk.dev/download/ui-x/../evil"),
+            (1, 1, "https://offdesk.dev/download/ui-x/bundle.json?x=1"),
+            (1, 1, "https://offdesk.dev/download/ui-x/bundle.json#x"),
+            (1, 1, "https://offdesk.dev/download/ui-x\\bundle.json"),
+            // Only the Web UI releases, and only on offdesk.dev itself.
+            (
+                1,
+                1,
+                "https://offdesk.dev/download/v0.24.0/offdesk-hub-linux-x64",
+            ),
+            (1, 1, "https://offdesk.dev/updates/ui/rc/latest.json"),
+            (
+                1,
+                1,
+                "https://offdesk.dev.evil.example/download/ui-x/bundle.json",
+            ),
+            (1, 1, "http://offdesk.dev/download/ui-x/bundle.json"),
         ] {
             let mut env = env.clone();
             resign(&mut env, |m| {
@@ -429,6 +454,20 @@ mod tests {
                 m.url = change.2.into();
             });
             assert!(verify(&env, &key, "rc", "android").is_err());
+        }
+    }
+    #[test]
+    fn bundles_on_github_and_on_the_offdesk_dev_mirror_are_accepted() {
+        let (env, bytes, key) = fixture(1);
+        for url in [
+            "https://github.com/zalify/offdesk/releases/download/ui-rc/bundle-rc-1-1.json",
+            "https://offdesk.dev/download/ui-rc/bundle-rc-1-1.json",
+        ] {
+            let mut env = env.clone();
+            resign(&mut env, |m| m.url = url.into());
+            let manifest = verify(&env, &key, "rc", "android").expect(url);
+            assert_eq!(manifest.url, url);
+            assert!(decode(manifest, &bytes).is_ok());
         }
     }
     #[test]

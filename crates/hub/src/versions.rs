@@ -7,8 +7,13 @@
 //! by default. It is fetched at most every 12 hours, in the background: a request never
 //! waits on GitHub, it gets the last answer (or none yet). Set
 //! `OFFDESK_NO_UPDATE_CHECK` to turn the lookup off.
+//!
+//! The listing is read from offdesk.dev's copy of it as well as from GitHub:
+//! github.com is unreliable from mainland China, offdesk.dev is not, and the
+//! copy may lag a release. The newest version either one names wins.
 
 use std::cmp::Ordering as Order;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -16,7 +21,11 @@ use std::time::{Duration, Instant};
 /// This hub's version, the same one `offdesk-hub --version` prints.
 pub const HUB_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-const RELEASES_URL: &str = "https://api.github.com/repos/zalify/offdesk/releases?per_page=30";
+/// offdesk.dev's copy of the listing (site/worker.js), then GitHub's own.
+const RELEASE_FEEDS: [&str; 2] = [
+    "https://offdesk.dev/updates/releases.json",
+    "https://api.github.com/repos/zalify/offdesk/releases?per_page=30",
+];
 const REFRESH_EVERY: Duration = Duration::from_secs(12 * 60 * 60);
 /// After a failed lookup, try again sooner than a successful one.
 const RETRY_AFTER: Duration = Duration::from_secs(30 * 60);
@@ -71,17 +80,42 @@ async fn fetch_latest() -> Result<String, String> {
         })
         .as_ref()
         .ok_or("no HTTP client")?;
-    let response = client
-        .get(RELEASES_URL)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("GitHub answered {}", response.status()));
+    newest_of(&RELEASE_FEEDS, |url| async move {
+        let response = client
+            .get(url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("{url} answered {}", response.status()));
+        }
+        let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
+        newest_release(&body).ok_or_else(|| format!("no published v* release at {url}"))
+    })
+    .await
+}
+
+/// The newest release any feed names. A feed that fails is skipped; it is an
+/// error only when every one does.
+async fn newest_of<'a, F, Fut>(feeds: &[&'a str], mut fetch: F) -> Result<String, String>
+where
+    F: FnMut(&'a str) -> Fut,
+    Fut: Future<Output = Result<String, String>>,
+{
+    let mut newest: Option<String> = None;
+    let mut errors = Vec::new();
+    for &feed in feeds {
+        match fetch(feed).await {
+            Ok(version) => {
+                if newest.as_deref().is_none_or(|best| is_newer(&version, best)) {
+                    newest = Some(version);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
     }
-    let body: serde_json::Value = response.json().await.map_err(|e| e.to_string())?;
-    newest_release(&body).ok_or_else(|| "no published v* release".to_string())
+    newest.ok_or_else(|| errors.join("; "))
 }
 
 /// The highest published, non-pre-release `v*` version in a GitHub releases
@@ -208,6 +242,33 @@ mod tests {
         assert_eq!(newest_release(&releases).as_deref(), Some("0.23.0"));
         assert_eq!(newest_release(&serde_json::json!([])), None);
         assert_eq!(newest_release(&serde_json::json!({"message": "rate limited"})), None);
+    }
+
+    #[test]
+    fn offdesk_dev_is_asked_and_github_too() {
+        assert_eq!(RELEASE_FEEDS[0], "https://offdesk.dev/updates/releases.json");
+        assert!(RELEASE_FEEDS[1].starts_with("https://api.github.com/repos/zalify/offdesk/releases"));
+    }
+
+    async fn newest(answers: [Result<&str, &str>; 2]) -> Result<String, String> {
+        newest_of(&["mirror", "github"], |feed| {
+            let answer = if feed == "mirror" { answers[0] } else { answers[1] };
+            async move { answer.map(str::to_string).map_err(str::to_string) }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_newest_answer_wins_and_one_feed_is_enough() {
+        assert_eq!(newest([Ok("0.24.0"), Ok("0.24.0")]).await.as_deref(), Ok("0.24.0"));
+        // offdesk.dev's copy lags a release GitHub has:
+        assert_eq!(newest([Ok("0.24.0"), Ok("0.25.0")]).await.as_deref(), Ok("0.25.0"));
+        assert_eq!(newest([Ok("0.25.0"), Ok("0.24.0")]).await.as_deref(), Ok("0.25.0"));
+        // GitHub unreachable, as from mainland China:
+        assert_eq!(newest([Ok("0.25.0"), Err("timed out")]).await.as_deref(), Ok("0.25.0"));
+        // offdesk.dev down:
+        assert_eq!(newest([Err("offline"), Ok("0.25.0")]).await.as_deref(), Ok("0.25.0"));
+        assert_eq!(newest([Err("offline"), Err("rate limited")]).await, Err("offline; rate limited".into()));
     }
 
     #[test]

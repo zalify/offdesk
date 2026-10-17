@@ -50,8 +50,8 @@ jobs:
           cache-dependency-path: site/pnpm-lock.yaml
       - name: Install site dependencies
         run: pnpm --dir site install --frozen-lockfile
-      - name: Check download redirects and installer
-        run: node --test site/worker.test.mjs site/install.test.mjs
+      - name: Check download redirects, the release mirror and installer
+        run: node --test site/worker.test.mjs site/install.test.mjs scripts/mirror-release.test.mjs
       - name: Build website
         run: pnpm --dir site build
 
@@ -96,6 +96,7 @@ jobs:
       - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib bundle_name
       - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib hub_version
       - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib workspace_version
+      - run: cargo test --manifest-path packages/desktop/src-tauri/Cargo.toml --lib ui_updates
       - run: cargo check --manifest-path packages/desktop/src-tauri/Cargo.toml --target aarch64-apple-ios
 
   frontend-build:

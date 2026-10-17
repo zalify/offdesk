@@ -3,9 +3,14 @@
 #   curl -fsSL https://offdesk.dev/install | sh
 #
 # Installs offdesk-hub, the offdesk-node machine agent and the offdesk CLI from
-# the latest GitHub release. Defaults to ~/.local/bin. Pass --system to install to
+# the latest release. Defaults to ~/.local/bin. Pass --system to install to
 # /usr/local/bin instead; that path re-runs the install step under sudo and
 # tells you before it does. Nothing is ever piped into sudo.
+#
+# Releases are read from offdesk.dev, which mirrors GitHub's: github.com is
+# unreliable from mainland China without a proxy, and offdesk.dev is not.
+# GitHub is still asked, briefly, in case the mirror lags a release, and
+# fully when offdesk.dev cannot answer.
 #
 # Flags:
 #   --system            install to /usr/local/bin (asks sudo for that step)
@@ -25,6 +30,8 @@ set -eu
 REPO="zalify/offdesk"
 RELEASES="https://github.com/${REPO}/releases"
 API="https://api.github.com/repos/${REPO}/releases"
+MIRROR="https://offdesk.dev"
+MIRROR_RELEASES="${MIRROR}/updates/releases.json"
 PREFIX="${OFFDESK_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION=""
 USE_SUDO=no
@@ -148,7 +155,7 @@ offdesk installer.
   curl -fsSL https://offdesk.dev/install | sh
 
 Installs offdesk-hub, the offdesk-node machine agent and the offdesk CLI from
-the latest GitHub release. Defaults to ~/.local/bin.
+the latest release (offdesk.dev's mirror, else GitHub). Defaults to ~/.local/bin.
 
   --system            install to /usr/local/bin (asks sudo for that step)
   --prefix <dir>      install to <dir>
@@ -232,6 +239,20 @@ http_status() {
     fi
 }
 
+fetch_quick() {
+    # fetch, but giving up after 15 seconds: for a second opinion that is
+    # fine to go without
+    if [ "$DL" = curl ]; then
+        curl -fsSL --connect-timeout 5 --max-time 15 "$1" 2>/dev/null
+    elif wget --version >/dev/null 2>&1; then
+        # GNU wget tries 20 times by default.
+        wget -qO- -T 15 -t 1 "$1" 2>/dev/null
+    else
+        # BusyBox wget never retries, and knows no -t.
+        wget -qO- -T 15 "$1" 2>/dev/null
+    fi
+}
+
 fetch_to() {
     # fetch_to <url> <dest>; non-zero on any HTTP error
     if [ "$DL" = curl ]; then
@@ -243,15 +264,28 @@ fetch_to() {
 
 latest_version() {
     # Newest vX.Y.Z tag. desktop-v* and app-v* ship the desktop and Android
-    # apps and carry no CLI or node binaries, so they are skipped.
-    body=$(fetch "$API" 2>/dev/null) || api_unreachable
-    version=$(printf '%s' "$body" \
-        | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
-        | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)"/\1/' \
-        | sort -V \
-        | tail -n 1)
+    # apps and carry no CLI or node binaries, so they are skipped. The
+    # mirror's listing has GitHub's shape. With it in hand GitHub's only
+    # confirms, quickly, that no newer release is out; without it GitHub's
+    # answer is the one that counts, and its errors are explained.
+    mirror=$(fetch "$MIRROR_RELEASES" 2>/dev/null | newest_tag) || mirror=""
+    if [ -n "$mirror" ]; then
+        github=$(fetch_quick "$API" 2>/dev/null | newest_tag) || github=""
+    else
+        body=$(fetch "$API" 2>/dev/null) || api_unreachable
+        github=$(printf '%s' "$body" | newest_tag) || github=""
+    fi
+    version=$(printf '%s\n%s\n' "$mirror" "$github" | grep . | sort -V | tail -n 1) || version=""
     [ -n "$version" ] || no_release "no vX.Y.Z release exists yet"
     printf '%s' "$version"
+}
+
+newest_tag() {
+    # A releases listing on stdin -> its highest vX.Y.Z tag, or nothing.
+    grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+"' \
+        | sed -E 's/.*"(v[0-9]+\.[0-9]+\.[0-9]+)"/\1/' \
+        | sort -V \
+        | tail -n 1
 }
 
 api_unreachable() {
@@ -279,8 +313,10 @@ api_unreachable() {
 fetch_binary() {
     name="$1"
     artifact="${name}-${OS}-${ARCH}"
-    url="${RELEASES}/download/${VERSION}/${artifact}"
-    if ! fetch_to "$url" "${TMPDIR_}/${name}"; then
+    # offdesk.dev serves its copy, or redirects to GitHub's when it has none;
+    # GitHub directly is for when offdesk.dev itself cannot be reached.
+    if ! fetch_to "${MIRROR}/download/${VERSION}/${artifact}" "${TMPDIR_}/${name}" \
+        && ! fetch_to "${RELEASES}/download/${VERSION}/${artifact}" "${TMPDIR_}/${name}"; then
         no_release "release ${VERSION} has no ${artifact}"
     fi
     chmod +x "${TMPDIR_}/${name}"

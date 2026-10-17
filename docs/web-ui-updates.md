@@ -66,7 +66,16 @@ first `bundle-<version>.json` and `manifest-<version>.json` (that bundle's
 signed manifest, a rollback target), then it replaces `latest.json`, the
 pointer the apps read. It keeps the ten newest bundles and never removes the
 one the pointer names. Bundle names are never reused, and the signed sha256
-pins the bytes. (Before 0.23.0 each bundle had its own `ui-<version>` release.) Only the UI workflow needs `OFFDESK_UI_SIGNING_KEY`
+pins the bytes. (Before 0.23.0 each bundle had its own `ui-<version>` release.)
+It then copies the channel release to offdesk.dev and uploads a second pointer,
+`https://offdesk.dev/updates/ui/<channel>/latest.json`: the same manifest,
+signed with the same key, whose bundle link is offdesk.dev's copy (see
+[the mirror](releasing.md#the-offdeskdev-mirror)). Shells released after 0.24.0 read it
+first, because github.com is unreliable from mainland China, then GitHub's
+pointer, also when offdesk.dev's says the UI is current, in case it lags.
+They accept bundle links under the GitHub prefix or under
+`https://offdesk.dev/download/ui-`. Older shells accept only GitHub links, so
+GitHub's pointer stays as it is. Only the UI workflow needs `OFFDESK_UI_SIGNING_KEY`
 (Ed25519 PKCS#8 PEM). It verifies that the key matches `OFFDESK_UI_PUBLIC_KEY`
 before publishing. The root private-key backup must remain outside the repo.
 
@@ -89,7 +98,11 @@ A channel rollback must be a newly signed manifest with a **higher sequence**
 that targets a compatible known-good bundle. Re-uploading an older `latest.json`
 will be ignored. Use the rollback manifest helper with a retained
 `manifest-<version>.json` as the known-good input, and upload its output as the
-channel's `latest.json`.
+channel's `latest.json`. Give the helper a fourth path to get the offdesk.dev
+pointer too, and upload that with
+`node scripts/mirror-release.mjs ui-<channel> --ui-pointer <channel>=<file>`
+(shells also check GitHub's pointer after offdesk.dev's, so a rollback that
+reaches only GitHub still applies, but not where GitHub is unreachable).
 
 The first implementation accepts one public key per shell. Rotate it through a
 native shell release and a coordinated new channel manifest; do not replace the
@@ -103,7 +116,9 @@ recovery, never delete pairing data to repair UI state.
 
 - `cargo test -p offdesk-ui-updates --locked`: signatures, integrity, compatibility,
   safe paths, activation, crash recovery, replay resistance and rollback.
-- `node --test scripts/ui-updates/package.test.mjs`: publishing format and signature.
+- `node --test scripts/ui-updates/package.test.mjs`: publishing format and signature,
+  for both pointers.
+- `node --test scripts/mirror-release.test.mjs`: what goes to the offdesk.dev mirror.
 - `pnpm exec vitest run packages/app/lib/uiUpdates.test.ts` and `pnpm typecheck`.
 - `E2E_TEST_GREP='UI updates' pnpm e2e:test` locally; `pnpm e2e:ci` in automation.
   Browser processes run in the `runner` container. No host Chromium is needed.

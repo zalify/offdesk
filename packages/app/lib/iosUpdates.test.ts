@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  IOS_CHECK_INTERVAL_MS, IOS_RELEASE_SETTLE_MS, iosUpdateFor, isIosUpdateDismissed, needsIosCheck, newestIosVersion,
+  IOS_CHECK_INTERVAL_MS, IOS_RELEASE_FEEDS, IOS_RELEASE_SETTLE_MS, fetchReleaseFeeds, iosUpdateFor, isIosUpdateDismissed,
+  needsIosCheck, newestIosVersion,
 } from "./iosUpdates";
 
 const NOW = 1_800_000_000_000;
@@ -59,6 +60,38 @@ describe("iOS update source", () => {
     expect(isIosUpdateDismissed(cache, "0.9.0", now)).toBe(true);
     expect(isIosUpdateDismissed(cache, "0.9.1", now)).toBe(false);
     expect(isIosUpdateDismissed(cache, "0.9.0", now - 1000 + IOS_CHECK_INTERVAL_MS)).toBe(false);
+  });
+});
+
+describe("iOS release listings", () => {
+  const listing = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+  const mirror = [{ tag_name: "ios-v0.9.0", draft: false, prerelease: false, published_at: old }];
+  const github = [{ tag_name: "ios-v0.9.1", draft: false, prerelease: false, published_at: old }];
+
+  it("asks offdesk.dev and GitHub", () => {
+    expect(IOS_RELEASE_FEEDS[0]).toBe("https://offdesk.dev/updates/releases.json");
+    expect(IOS_RELEASE_FEEDS[1]).toMatch(/^https:\/\/api\.github\.com\/repos\/zalify\/offdesk\/releases/);
+  });
+  it("reads both, so a mirror that lags a release still offers it", async () => {
+    const get = vi.fn(async (url: string) => listing(url.includes("offdesk.dev") ? mirror : github));
+    const releases = await fetchReleaseFeeds(get);
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(newestIosVersion(releases, NOW)).toBe("0.9.1");
+  });
+  it("one listing is enough, whichever it is", async () => {
+    const unreachable = async (url: string) => {
+      if (url.includes("github.com")) throw new TypeError("Failed to fetch");
+      return listing(mirror);
+    };
+    expect(newestIosVersion(await fetchReleaseFeeds(unreachable), NOW)).toBe("0.9.0");
+    const mirrorDown = async (url: string) => (url.includes("offdesk.dev") ? listing("down", 502) : listing(github));
+    expect(newestIosVersion(await fetchReleaseFeeds(mirrorDown), NOW)).toBe("0.9.1");
+    // A rate-limit message is not a listing.
+    const limited = async (url: string) => (url.includes("offdesk.dev") ? listing({ message: "API rate limit exceeded" }) : listing(github));
+    expect(newestIosVersion(await fetchReleaseFeeds(limited), NOW)).toBe("0.9.1");
+  });
+  it("fails when neither answers, which the check keeps silent", async () => {
+    await expect(fetchReleaseFeeds(async () => listing("nope", 503))).rejects.toThrow(/No release listing/);
   });
 });
 

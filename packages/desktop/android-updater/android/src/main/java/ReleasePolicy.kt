@@ -7,7 +7,17 @@ internal data class Release(
     val url: String,
     val size: Long,
     val digest: String,
+    /** GitHub's copy, when [url] is offdesk.dev's: tried if the mirror fails. */
+    val fallbackUrl: String? = null,
 )
+
+/** Where release listings are read, in order: offdesk.dev's copy of GitHub's
+ * listing first (github.com is unreliable from mainland China), then GitHub. */
+internal val RELEASE_FEEDS =
+    listOf(
+        "https://offdesk.dev/updates/releases.json",
+        "https://api.github.com/repos/zalify/offdesk/releases?per_page=100",
+    )
 
 /**
  * Releases are `vX.Y.Z` (every component, from 0.23.0) or, before that and as a
@@ -52,18 +62,28 @@ internal object ReleasePolicy {
                         .firstOrNull { it.optString("name") == name }
                 } ?: continue
             val url = asset.optString("browser_download_url")
-            val expected =
-                "https://github.com/zalify/offdesk/releases/download/$tag/${asset.getString("name")}"
+            // The file of this very release, from GitHub or from offdesk.dev's
+            // copy of it; nothing else. The digest pins the bytes either way.
+            val name = asset.getString("name")
+            val github = "https://github.com/zalify/offdesk/releases/download/$tag/$name"
+            val mirror = "https://offdesk.dev/download/$tag/$name"
             val size = asset.optLong("size")
             val digest = asset.optString("digest")
             if (
-                url != expected ||
+                (url != github && url != mirror) ||
                     size !in 1..268435456 ||
                     !Regex("sha256:[0-9a-f]{64}").matches(digest)
             )
                 continue
             if (best == null || compare(version, best.version) > 0)
-                best = Release(version, url, size, digest.removePrefix("sha256:"))
+                best =
+                    Release(
+                        version,
+                        url,
+                        size,
+                        digest.removePrefix("sha256:"),
+                        if (url == mirror) github else null,
+                    )
         }
         return best
     }

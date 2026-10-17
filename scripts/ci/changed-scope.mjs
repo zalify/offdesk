@@ -26,7 +26,8 @@ const ANDROID_PATHS = [
 // Pull requests run the Android check only for the paths above; other events
 // run it whenever the runtime suite runs.
 export function scopeFor(paths, eventName = 'pull_request') {
-  const site = paths.some(p => p.startsWith('site/') || p === '.github/workflows/site.yml' || p === '.github/workflows/ci.yml' || p.startsWith('scripts/ci/'));
+  // The release mirror script shares worker.js's rules, so its tests run with the site's.
+  const site = paths.some(p => p.startsWith('site/') || p === '.github/workflows/site.yml' || p === '.github/workflows/ci.yml' || p.startsWith('scripts/ci/') || p.startsWith('scripts/mirror-release'));
   const runtime = paths.some(p => {
     if (p === 'site/public/install' || p === 'site/install.test.mjs') return true;
     return !(p.startsWith('site/') || p.startsWith('docs/') || /^(README(?:\.[^/]+)?\.md|CHANGELOG(?:\.[^/]+)?\.md|LICENSE|COPYING)$/.test(p) || p === '.github/workflows/site.yml');
