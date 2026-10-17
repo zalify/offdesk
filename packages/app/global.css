@@ -231,6 +231,10 @@ body {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+@keyframes offdeskFadeOut {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
 @keyframes offdeskSlideUp {
   from { transform: translateY(16px); opacity: 0; }
   to   { transform: translateY(0);    opacity: 1; }

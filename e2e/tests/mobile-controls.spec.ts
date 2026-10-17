@@ -223,6 +223,8 @@ test("mobile terminal switch does not focus the new terminal automatically", asy
 });
 
 test("mobile terminal switch never shows a blank terminal", async ({ page }) => {
+  // Reduced motion: the held screen goes without a fade.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await openApp(page);
   await resetMachineState(page);
   await requestMachineControl(page);
@@ -235,6 +237,7 @@ test("mobile terminal switch never shows a blank terminal", async ({ page }) => 
   await page.getByTestId(`mobile-session-row-${secondTerminalId}`).click();
 
   await expectSwitchSettledWithoutBlankFrames(page);
+  expect((await readSwitchFrames(page)).filter((frame) => frame.fading)).toHaveLength(0);
   await expect(page.getByTestId("compact-held-pane")).toHaveCount(0);
   await expect(page.getByTestId(`workspace-pane-${firstTerminalId}`)).toHaveCount(0);
 });
@@ -275,9 +278,15 @@ test("mobile terminal switch over a slow link keeps the previous screen until th
 
   await expectSwitchSettledWithoutBlankFrames(page);
   const frames = await readSwitchFrames(page);
-  // The hold lasted through the slow link rather than giving up early.
+  // The hold lasted through the slow link rather than giving up early,
+  // then the held screen faded out over the new one: held, fading, gone.
   expect(frames.filter((frame) => frame.held).length).toBeGreaterThan(30);
+  const lastHeld = frames.map((frame) => frame.held).lastIndexOf(true);
+  const firstFading = frames.findIndex((frame) => frame.fading);
+  expect(firstFading).toBeGreaterThan(lastHeld);
+  expect(frames.slice(lastHeld + 1).every((frame) => !frame.blank)).toBe(true);
   await expect(page.getByTestId("compact-switch-progress")).toHaveCount(0);
+  await expect(page.getByTestId(`workspace-pane-${firstTerminalId}`)).toHaveCount(0);
 });
 
 test("mobile touch drag sends terminal scroll input", async ({ page }) => {
@@ -1156,7 +1165,7 @@ for (const colorScheme of ["light", "dark"] as const) {
   });
 }
 
-type SwitchFrame = { held: boolean; blank: boolean; settled: boolean };
+type SwitchFrame = { held: boolean; fading: boolean; blank: boolean; settled: boolean };
 
 async function showDrawnTerminal(page: Page, terminalId: string): Promise<void> {
   await page.getByTestId("mobile-title-bar-label").click();
@@ -1168,8 +1177,9 @@ async function showDrawnTerminal(page: Page, terminalId: string): Promise<void> 
 }
 
 // Sample every frame of a switch to `targetId`: once the incoming pane is
-// mounted, it either sits under the held outgoing pane or already shows its
-// attach redraw. A frame with neither is the blank flash.
+// mounted, it either sits under the outgoing pane (held, then fading out)
+// or already shows its attach redraw. A frame with neither is the blank
+// flash. Settled: drawn, with nothing over it.
 async function startSwitchFrameSampler(page: Page, targetId: string): Promise<void> {
   await page.evaluate((target) => {
     type Term = {
@@ -1182,12 +1192,13 @@ async function startSwitchFrameSampler(page: Page, targetId: string): Promise<vo
     };
     const w = window as unknown as {
       __offdeskTerminals?: Map<string, Term>;
-      __switchFrames?: { held: boolean; blank: boolean; settled: boolean }[];
+      __switchFrames?: { held: boolean; fading: boolean; blank: boolean; settled: boolean }[];
     };
-    const frames: { held: boolean; blank: boolean; settled: boolean }[] = [];
+    const frames: { held: boolean; fading: boolean; blank: boolean; settled: boolean }[] = [];
     w.__switchFrames = frames;
     const sample = () => {
       const held = document.querySelector("[data-testid='compact-held-pane']") !== null;
+      const fading = document.querySelector("[data-testid='compact-fading-pane']") !== null;
       const term = w.__offdeskTerminals?.get(target);
       let drawn = false;
       if (term) {
@@ -1196,8 +1207,9 @@ async function startSwitchFrameSampler(page: Page, targetId: string): Promise<vo
           drawn = (buf.getLine(i)?.translateToString(true) ?? "").trim() !== "";
         }
       }
-      const settled = Boolean(term) && drawn && !held;
-      frames.push({ held, blank: Boolean(term) && !held && !drawn, settled });
+      const covered = held || fading;
+      const settled = Boolean(term) && drawn && !covered;
+      frames.push({ held, fading, blank: Boolean(term) && !covered && !drawn, settled });
       if (!settled && frames.length < 3000) requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
