@@ -244,8 +244,12 @@ fetch_quick() {
     # fine to go without
     if [ "$DL" = curl ]; then
         curl -fsSL --connect-timeout 5 --max-time 15 "$1" 2>/dev/null
-    else
+    elif wget --version >/dev/null 2>&1; then
+        # GNU wget tries 20 times by default.
         wget -qO- -T 15 -t 1 "$1" 2>/dev/null
+    else
+        # BusyBox wget never retries, and knows no -t.
+        wget -qO- -T 15 "$1" 2>/dev/null
     fi
 }
 
