@@ -1104,11 +1104,11 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
         await expect(machines).toHaveText("[m]");
         await expect(bar).toHaveCSS("height", "44px");
-        // All header elements — title, control state, [f] (only >= 360px,
-        // below that it lives in the Machines sheet), [b], [m] — must be
+        // All header elements — the title field, [f] (only >= 360px, below
+        // that it lives in the Machines sheet), [b], [m] — must be
         // contained, non-overlapping and in one row; a clipped title is
-        // intentional, clipped controls are not.
-        const expectedChildren = size.width >= 360 ? 5 : 4;
+        // intentional, clipped controls are not. In control shows no chip.
+        const expectedChildren = size.width >= 360 ? 4 : 3;
         await expect.poll(() => bar.evaluate((element, expected) => {
           const outer = element.getBoundingClientRect();
           const children = Array.from(element.children).map(child => child.getBoundingClientRect());
