@@ -63,6 +63,7 @@ import { colors } from "@/lib/colors";
 import { isTauri, isTauriMobile } from "@/lib/platform";
 import { useDisplayMode, useVisualViewport } from "@/lib/hooks";
 import { KeyBarSlotProvider, WorkspaceKeyBarSlot } from "@/lib/keyBarSlot";
+import { ViewOnlyUnlockContext } from "@/lib/viewOnlyUnlock";
 import {
   formatPrefixBinding,
   isEditableShortcutTarget,
@@ -1805,6 +1806,7 @@ function TerminalCanvasInner() {
 
   return (
     <OpenDirectoryContext.Provider value={handleOpenDirectory}>
+    <ViewOnlyUnlockContext.Provider value={handleDisengageViewOnly}>
     <div
       data-testid="terminal-canvas"
       style={{
@@ -2219,6 +2221,7 @@ function TerminalCanvasInner() {
         )}
       </TerminalPreviewMuxProvider>
     </div>
+    </ViewOnlyUnlockContext.Provider>
     </OpenDirectoryContext.Provider>
   );
 }

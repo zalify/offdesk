@@ -72,21 +72,30 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
     "View only",
   );
   await page.getByTestId("mobile-control-toggle").click();
-  await expect(page.getByTitle("Show keyboard")).toBeDisabled();
   await expect(await mobileNewTerminalButton(page)).toBeDisabled();
   await mobileCloseSheet(page);
+  // The keys do nothing in view only: the key bar says so instead, and the
+  // title bar's subtitle names the state.
+  await expect(page.getByTestId("extended-keybar-view-only")).toBeVisible();
+  await expect(page.getByTitle("Show keyboard")).toHaveCount(0);
+  await expect(page.getByTestId("mobile-title-bar-control")).toHaveText("· view only");
 
-  // Unlock without claiming; the existing Take control flow remains explicit.
+  // Unlock from the key bar without claiming; Take control stays explicit.
   await mobileOpenHostSheet(page);
   await expect(page.getByTestId("mobile-control-toggle")).toHaveText(
     "Unlock view only",
   );
-  await page.getByTestId("mobile-control-toggle").click();
+  await mobileCloseSheet(page);
+  await page.getByTestId("extended-keybar-view-only-off").click();
+  await expect(page.getByTitle("Show keyboard")).toBeEnabled();
+  await expect(page.getByTestId("mobile-title-bar-control")).toHaveText("· watching");
 
   // Take control back.
   await mobileTakeControl(page);
   await expect(await mobileNewTerminalButton(page)).toBeEnabled();
   await mobileCloseSheet(page);
+  // In control is the usual state: the title bar shows nothing for it.
+  await expect(page.getByTestId("mobile-title-bar-control")).toHaveCount(0);
 
   // Destroy via API → the shell returns to the empty state.
   const deviceId = await page.evaluate(() => sessionStorage.getItem("tc-device-id"));
@@ -379,7 +388,6 @@ test("mobile title bar swipes between sessions and long-presses the current sess
     page.getByTestId(`workspace-pane-${secondTerminalId}`),
   ).toBeVisible();
   await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 2 of 2");
-  await expect(page.getByTestId("mobile-title-bar-sessions")).toHaveText("2");
 
   // Long-press the bar → sheet → Close terminal (no foreground process, so
   // no confirm dialog). The shell falls back to the remaining terminal.
@@ -387,7 +395,6 @@ test("mobile title bar swipes between sessions and long-presses the current sess
   await page.getByTestId("mobile-chip-close-terminal").click();
   await expect.poll(async () => (await listTerminals(page)).length).toBe(1);
   await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 1 of 1");
-  await expect(page.getByTestId("mobile-title-bar-sessions")).toHaveText("1");
   await expect(
     page.getByTestId(`workspace-pane-${firstTerminalId}`),
   ).toBeVisible();

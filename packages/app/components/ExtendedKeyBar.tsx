@@ -17,6 +17,8 @@ export interface ExtendedKeyBarProps {
   selectMode?: boolean;
   keyboardVisible: boolean;
   isController: boolean;
+  /** Given while view only can be turned off: the bar shows that state in place of the keys. */
+  onUnlockViewOnly?: () => void;
   ctrlArmed?: boolean;
   onToggleCtrl?: () => void;
   shiftArmed?: boolean;
@@ -30,7 +32,7 @@ const MIN_KEY_WIDTH = 48;
 
 export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
-  ctrlArmed = false, onToggleCtrl, shiftArmed = false, onToggleShift, onShiftPress, onShiftRelease }: ExtendedKeyBarProps) {
+  onUnlockViewOnly, ctrlArmed = false, onToggleCtrl, shiftArmed = false, onToggleShift, onShiftPress, onShiftRelease }: ExtendedKeyBarProps) {
   const savedLayout = useKeyBarLayout();
   const layout = layoutOverride ?? savedLayout;
   const [pasteError, setPasteError] = useState<string | null>(null);
@@ -167,7 +169,11 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
     }
   };
   return <div ref={bar} className="offdesk-keybar" data-testid="extended-keybar" style={{ "--key-width": `${keyWidth}px`, "--key-gap": `${KEY_GAP}px` } as CSSProperties}>
-    {selection ? <div className="offdesk-selection-bar" data-testid="extended-keybar-select-mode">
+    {!isController && onUnlockViewOnly ? <div className="offdesk-keybar-view-only" data-testid="extended-keybar-view-only">
+      {/* The keys do nothing in view only, so the bar says so and offers the way out. */}
+      <span><strong>view only</strong><span>Typing is off on this device.</span></span>
+      <button type="button" className="odk-btn odk-btn--secondary" data-testid="extended-keybar-view-only-off" onClick={onUnlockViewOnly}>turn off</button>
+    </div> : selection ? <div className="offdesk-selection-bar" data-testid="extended-keybar-select-mode">
       <button onClick={onExitSelectMode} disabled={copying} data-testid="extended-keybar-select-done">Done</button>
       <span>Drag on the terminal to select text</span>
       <button disabled={copying} data-testid="extended-keybar-copy" onClick={async () => {
