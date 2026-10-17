@@ -466,6 +466,28 @@ export function mountedWorkspaceGroupIds(
   return ids;
 }
 
+// A compact (phone) switch keeps the outgoing pane mounted over the
+// incoming one until the incoming pane has drawn. `from` is the pane on
+// screen: during rapid switches it stays the last one that had drawn, and
+// switching back to it ends the hold, since it is still mounted.
+export interface CompactSwitchHold {
+  from: string;
+  to: string;
+}
+
+export function nextCompactSwitchHold(
+  hold: CompactSwitchHold | null,
+  shownTerminalId: string | null,
+  nextTerminalId: string | null,
+  canHold: boolean,
+): CompactSwitchHold | null {
+  const from = hold?.from ?? shownTerminalId;
+  if (!canHold || !from || !nextTerminalId || from === nextTerminalId) {
+    return null;
+  }
+  return { from, to: nextTerminalId };
+}
+
 export function getMobileWorkspaceTabs(
   workspace: TerminalWorkspace,
 ): MobileWorkspaceTab[] {

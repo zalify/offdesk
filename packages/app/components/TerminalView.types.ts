@@ -52,6 +52,8 @@ export interface TerminalViewProps {
   canResizeTerminal?: boolean;
   onTitleChange?: (title: string) => void;
   onReconnectingChange?: (reconnecting: boolean) => void;
+  /** Called once per mount, when the first attach output is on screen. */
+  onFirstOutput?: () => void;
   /** The terminal's current working directory; relative path links resolve against it. */
   cwd?: string;
   /**

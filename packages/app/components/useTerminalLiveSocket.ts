@@ -21,6 +21,10 @@ interface UseTerminalLiveSocketOptions {
   sessionGeneration: number;
   setSessionGeneration: (next: (value: number) => number) => void;
   onReconnectingChange?: (reconnecting: boolean) => void;
+  // Called once per socket, after its first output has been parsed and the
+  // frames xterm needs to paint it have passed — the attach redraw is on
+  // screen. Must be stable: it is an effect dependency.
+  onFirstOutput?: () => void;
 }
 
 const MAX_PENDING_OUTPUT_BYTES = 128 * 1024;
@@ -47,6 +51,7 @@ export function useTerminalLiveSocket({
   onReconnectingChange,
   onControlMessage,
   onSocketClose,
+  onFirstOutput,
 }: UseTerminalLiveSocketOptions) {
   useEffect(() => {
     const term = termRef.current;
@@ -72,6 +77,22 @@ export function useTerminalLiveSocket({
     let pendingChunks: Uint8Array[] = [];
     let pendingBytes = 0;
     let rafId = 0;
+    let firstOutputSeen = false;
+    let firstOutputFrame = 0;
+
+    // xterm parses a write asynchronously and paints on its next render
+    // frame; chunks of the same tmux redraw that arrive meanwhile are
+    // batched into the rAF flush below. Two frames after the first write is
+    // parsed, the redraw is on screen.
+    const notifyFirstOutput = () => {
+      if (disposed || !onFirstOutput) return;
+      firstOutputFrame = requestAnimationFrame(() => {
+        firstOutputFrame = requestAnimationFrame(() => {
+          firstOutputFrame = 0;
+          if (!disposed) onFirstOutput();
+        });
+      });
+    };
 
     const flushPending = () => {
       if (pendingBytes > 0) {
@@ -125,7 +146,13 @@ export function useTerminalLiveSocket({
         // Interactive path: nothing queued this frame — write immediately so
         // a keystroke echo doesn't wait for the next animation frame. The rAF
         // is a burst marker: chunks arriving before it fires get batched.
-        term.write(chunk);
+        // The first output always takes this path.
+        if (firstOutputSeen) {
+          term.write(chunk);
+        } else {
+          firstOutputSeen = true;
+          term.write(chunk, notifyFirstOutput);
+        }
         rafId = requestAnimationFrame(flushPending);
         return;
       }
@@ -238,6 +265,7 @@ export function useTerminalLiveSocket({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
       if (rafId) cancelAnimationFrame(rafId);
+      if (firstOutputFrame) cancelAnimationFrame(firstOutputFrame);
       if (wsRef.current === ws) {
         wsRef.current = null;
       }
@@ -254,6 +282,7 @@ export function useTerminalLiveSocket({
     onReconnectingChange,
     onControlMessage,
     onSocketClose,
+    onFirstOutput,
     wsRef,
     wsUrl,
   ]);

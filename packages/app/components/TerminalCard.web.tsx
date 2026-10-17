@@ -59,6 +59,8 @@ interface TerminalCardProps {
   onReleaseControl?: (machineId: string) => void;
   /** A path link in this terminal resolved to a directory (file browser hook). */
   onOpenDirectory?: (machineId: string, path: string) => void;
+  /** The live terminal's first attach output is on screen. */
+  onFirstOutput?: () => void;
 }
 
 const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(function TerminalCardComponent({
@@ -78,6 +80,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   onRequestControl,
   onReleaseControl,
   onOpenDirectory: onOpenDirectoryProp,
+  onFirstOutput,
 }, ref) {
   const contextOpenDirectory = useOpenDirectory();
   const onOpenDirectory = onOpenDirectoryProp ?? contextOpenDirectory;
@@ -563,6 +566,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                   canType={canType}
                   canResizeTerminal={isTab && isController}
                   onReconnectingChange={setTerminalReconnecting}
+                  onFirstOutput={onFirstOutput}
                   inputTransformRef={inputTransformRef}
                   cwd={terminal.cwd}
                   onOpenDirectory={onOpenDirectory}
@@ -739,7 +743,8 @@ function areTerminalCardPropsEqual(
     previous.onSelectTab === next.onSelectTab &&
     previous.onDestroy === next.onDestroy &&
     previous.onRequestControl === next.onRequestControl &&
-    previous.onReleaseControl === next.onReleaseControl
+    previous.onReleaseControl === next.onReleaseControl &&
+    previous.onFirstOutput === next.onFirstOutput
   );
 }
 

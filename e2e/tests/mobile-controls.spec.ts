@@ -13,6 +13,7 @@ import {
   mobileOpenHostSheet,
   mobileTakeControl,
   openApp,
+  readTerminalBuffer,
   requestMachineControl,
   resetMachineState,
   swipeTitleBar,
@@ -219,6 +220,70 @@ test("mobile terminal switch does not focus the new terminal automatically", asy
   await expect
     .poll(() => terminalHasKeyboardFocus(page), { timeout: 20_000 })
     .toBe(false);
+});
+
+test("mobile terminal switch never shows a blank terminal", async ({ page }) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  const firstTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  const secondTerminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await page.getByTestId("mobile-title-bar-label").click();
+  await page.getByTestId(`mobile-session-row-${firstTerminalId}`).click();
+  await expect
+    .poll(async () => (await readTerminalBuffer(page, firstTerminalId)).trim())
+    .not.toBe("");
+
+  // Sample every frame of the switch: once the incoming pane is mounted, it
+  // either sits under the held outgoing pane or already shows its attach
+  // redraw. A frame with neither is the blank flash.
+  await page.evaluate((target) => {
+    type Term = {
+      buffer: {
+        active: {
+          length: number;
+          getLine: (i: number) => { translateToString: (trim: boolean) => string } | undefined;
+        };
+      };
+    };
+    const w = window as unknown as {
+      __offdeskTerminals?: Map<string, Term>;
+      __switchFrames?: { blank: boolean; settled: boolean }[];
+    };
+    const frames: { blank: boolean; settled: boolean }[] = [];
+    w.__switchFrames = frames;
+    const sample = () => {
+      const held = document.querySelector("[data-testid='compact-held-pane']") !== null;
+      const term = w.__offdeskTerminals?.get(target);
+      let drawn = false;
+      if (term) {
+        const buf = term.buffer.active;
+        for (let i = 0; i < buf.length && !drawn; i++) {
+          drawn = (buf.getLine(i)?.translateToString(true) ?? "").trim() !== "";
+        }
+      }
+      const settled = Boolean(term) && drawn && !held;
+      frames.push({ blank: Boolean(term) && !held && !drawn, settled });
+      if (!settled && frames.length < 1200) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, secondTerminalId);
+
+  await page.getByTestId("mobile-title-bar-label").click();
+  await page.getByTestId(`mobile-session-row-${secondTerminalId}`).click();
+
+  const readFrames = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __switchFrames: { blank: boolean; settled: boolean }[] })
+          .__switchFrames,
+    );
+  await expect
+    .poll(async () => (await readFrames()).at(-1)?.settled ?? false, { timeout: 20_000 })
+    .toBe(true);
+  expect((await readFrames()).filter((frame) => frame.blank)).toHaveLength(0);
+  await expect(page.getByTestId("compact-held-pane")).toHaveCount(0);
+  await expect(page.getByTestId(`workspace-pane-${firstTerminalId}`)).toHaveCount(0);
 });
 
 test("mobile touch drag sends terminal scroll input", async ({ page }) => {

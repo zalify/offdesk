@@ -3,7 +3,9 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
 } from "react";
@@ -24,6 +26,7 @@ import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { TerminalCard, type TerminalCardRef } from "./TerminalCard.web";
 import { colors, colorAlpha } from "@/lib/colors";
 import {
+  type CompactSwitchHold,
   type WorkspaceGroup,
   type WorkspacePaneFocusDirection,
   type WorkspacePaneNode,
@@ -40,6 +43,7 @@ import {
   getActiveWorkspaceGroup,
   isWorkspaceGroupFull,
   mountedWorkspaceGroupIds,
+  nextCompactSwitchHold,
   reconcileTerminalWorkspace,
   rotateWorkspaceLayout,
   selectWorkspaceGroup,
@@ -128,6 +132,10 @@ type PaneMenuEvent = {
 // Stable no-op so TerminalCard's memo comparator doesn't see a fresh
 // function identity on every parent render (panes never render tab strips).
 const NOOP_SELECT_TAB = () => {};
+const NOOP_ACTIVE_REF = () => {};
+// How long a compact switch keeps the outgoing pane up while the incoming
+// one waits for its first attach redraw.
+const COMPACT_HOLD_MAX_MS = 1000;
 
 // Prefix actions owned by this component (TerminalCanvas owns the rest).
 const WORKSPACE_PREFIX_ACTIONS: PrefixActionId[] = [
@@ -238,7 +246,10 @@ function TerminalWorkspaceComponent({
   const adoptedLayoutGroupIdRef = useRef<string | null>(null);
   const layoutSaveQueuesRef = useRef(new Map<string, Promise<void>>());
   const previousTerminalIdRef = useRef(terminal.id);
-  useEffect(() => {
+  // Layout effect, not a passive one: the shell around the workspace (the
+  // compact title bar) already shows the new terminal in this commit, and a
+  // passive effect would let one frame paint that title over the old pane.
+  useLayoutEffect(() => {
     const externalTerminalChanged = previousTerminalIdRef.current !== terminal.id;
     previousTerminalIdRef.current = terminal.id;
     setWorkspace((prev) => {
@@ -308,6 +319,47 @@ function TerminalWorkspaceComponent({
     ? terminalsById.get(workspace.activeTerminalId) ?? null
     : null;
   const commandMachineId = activeTerminal?.machine_id ?? terminal.machine_id;
+
+  // Compact switch hold: the phone shell shows one pane, and switching
+  // mounts a fresh xterm with a new socket and tmux attach client — blank
+  // until tmux's attach redraw arrives. Keep the outgoing pane over the
+  // incoming one until that redraw is on screen, so a switch goes straight
+  // from one screen to the next. Render-time refs like the keep-alive above:
+  // the outgoing pane must still be in THIS render's tree. During rapid
+  // switches the pane that still shows content stays the one held.
+  const [, rerenderAfterHold] = useReducer((count: number) => count + 1, 0);
+  const compactHoldRef = useRef<CompactSwitchHold | null>(null);
+  const renderedCompactTerminalIdRef = useRef(workspace.activeTerminalId);
+  if (workspace.activeTerminalId !== renderedCompactTerminalIdRef.current) {
+    const to = workspace.activeTerminalId;
+    compactHoldRef.current = nextCompactSwitchHold(
+      compactHoldRef.current,
+      renderedCompactTerminalIdRef.current,
+      to,
+      // An unreachable terminal never attaches, so it has nothing to wait for.
+      isCompact && Boolean(to && terminalsById.get(to)?.reachable),
+    );
+    renderedCompactTerminalIdRef.current = to;
+  }
+  const releaseCompactHold = useCallback((terminalId: string) => {
+    if (compactHoldRef.current?.to !== terminalId) return;
+    compactHoldRef.current = null;
+    rerenderAfterHold();
+  }, []);
+  const compactHoldTo = compactHoldRef.current?.to ?? null;
+  useEffect(() => {
+    // A pane that never draws (socket stuck, attach failing) must not leave
+    // the previous screen standing in for it.
+    if (!compactHoldTo) return;
+    const timer = window.setTimeout(
+      () => releaseCompactHold(compactHoldTo),
+      COMPACT_HOLD_MAX_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [compactHoldTo, releaseCompactHold]);
+  const compactHeldTerminal = compactHoldRef.current
+    ? terminalsById.get(compactHoldRef.current.from) ?? null
+    : null;
   // Panes in the active group — a group with a single pane renders no
   // focused-pane accent border (a lone pane needs no focus indicator).
   const activeGroupPaneCount = activeGroup
@@ -934,35 +986,88 @@ function TerminalWorkspaceComponent({
           overflow: "hidden",
         }}
       >
-        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            position: "relative",
+          }}
+        >
           {activeTerminal ? (
-            <WorkspacePaneLeaf
-              terminal={activeTerminal}
-              isActive
-              isController={isController}
-              canType={canType}
-              eventsReconnecting={eventsReconnecting}
-              deviceId={deviceId}
-              isCompact
-              isTouch={isTouch}
-              focusRing={activeGroupPaneCount > 1}
-              fitRequestNonce={
-                fitRequest?.terminalIds.includes(activeTerminal.id)
-                  ? fitRequest.nonce
-                  : null
-              }
-              fitRequestShouldFocus={
-                fitRequest?.focusTerminalId === activeTerminal.id
-              }
-              onActiveRef={(ref) => {
-                activeCardRef.current = ref;
-              }}
-              onFitRequestHandled={handleFitRequestHandled}
-              onFocus={activateTerminal}
-              onDestroy={handleDestroy}
-              onRequestControl={onRequestControl}
-              onReleaseControl={onReleaseControl}
-            />
+            <>
+              {/* Keyed slots, active first: a switch inserts the incoming pane
+                  before the held one without moving (and remounting or
+                  blurring) it, and the held one only changes style. */}
+              <div
+                key={activeTerminal.id}
+                style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}
+              >
+                <WorkspacePaneLeaf
+                  terminal={activeTerminal}
+                  isActive
+                  isController={isController}
+                  canType={canType}
+                  eventsReconnecting={eventsReconnecting}
+                  deviceId={deviceId}
+                  isCompact
+                  isTouch={isTouch}
+                  focusRing={activeGroupPaneCount > 1}
+                  fitRequestNonce={
+                    fitRequest?.terminalIds.includes(activeTerminal.id)
+                      ? fitRequest.nonce
+                      : null
+                  }
+                  fitRequestShouldFocus={
+                    fitRequest?.focusTerminalId === activeTerminal.id
+                  }
+                  onActiveRef={(ref) => {
+                    activeCardRef.current = ref;
+                  }}
+                  onFitRequestHandled={handleFitRequestHandled}
+                  onFocus={activateTerminal}
+                  onDestroy={handleDestroy}
+                  onRequestControl={onRequestControl}
+                  onReleaseControl={onReleaseControl}
+                  onFirstOutput={releaseCompactHold}
+                />
+              </div>
+              {compactHeldTerminal && (
+                <div
+                  key={compactHeldTerminal.id}
+                  data-testid="compact-held-pane"
+                  inert
+                  aria-hidden
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    zIndex: 1,
+                    display: "flex",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <WorkspacePaneLeaf
+                    terminal={compactHeldTerminal}
+                    isActive={false}
+                    isController={isController}
+                    canType={canType}
+                    eventsReconnecting={eventsReconnecting}
+                    deviceId={deviceId}
+                    isCompact
+                    isTouch={isTouch}
+                    focusRing={false}
+                    fitRequestNonce={null}
+                    fitRequestShouldFocus={false}
+                    onActiveRef={NOOP_ACTIVE_REF}
+                    onFitRequestHandled={handleFitRequestHandled}
+                    onFocus={activateTerminal}
+                    onDestroy={handleDestroy}
+                    onRequestControl={onRequestControl}
+                    onReleaseControl={onReleaseControl}
+                  />
+                </div>
+              )}
+            </>
           ) : (
             <EmptyWorkspaceGroup
               group={activeGroup}
@@ -1379,6 +1484,7 @@ export function WorkspacePaneLeaf({
   onPaneContextMenu,
   onRequestControl,
   onReleaseControl,
+  onFirstOutput,
 }: {
   terminal: TerminalInfo;
   isActive: boolean;
@@ -1403,8 +1509,22 @@ export function WorkspacePaneLeaf({
   ) => void;
   onRequestControl?: (machineId: string) => void;
   onReleaseControl?: (machineId: string) => void;
+  onFirstOutput?: (terminalId: string) => void;
 }) {
   const cardRef = useRef<TerminalCardRef>(null);
+  const terminalId = terminal.id;
+  const handleFirstOutput = useCallback(
+    () => onFirstOutput?.(terminalId),
+    [onFirstOutput, terminalId],
+  );
+
+  // A compact pane only goes inactive while it is held over its successor
+  // (see the compact switch hold): drop its focus so typing and the soft
+  // keyboard leave it, as they did when a switch unmounted it.
+  useEffect(() => {
+    if (isActive || !isCompact) return;
+    cardRef.current?.blur();
+  }, [isActive, isCompact]);
   const longPress = useLongPress((point) => {
     onFocus(terminal.id);
     onPaneContextMenu?.(terminal.id, {
@@ -1518,6 +1638,7 @@ export function WorkspacePaneLeaf({
         onDestroy={onDestroy}
         onRequestControl={onRequestControl}
         onReleaseControl={onReleaseControl}
+        onFirstOutput={onFirstOutput ? handleFirstOutput : undefined}
       />
     </div>
   );

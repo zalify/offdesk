@@ -483,6 +483,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     canResizeTerminal,
     onTitleChange,
     onReconnectingChange,
+    onFirstOutput,
     inputTransformRef,
     cwd,
     onOpenDirectory,
@@ -1510,6 +1511,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       return () => { disposed = true; unsubscribe(); };
     }, [fitToContainer, scheduleMeasure]);
 
+    // Reconnects open new sockets with their own first output; the caller
+    // only hears about the first one this view shows.
+    const onFirstOutputRef = useRef(onFirstOutput);
+    onFirstOutputRef.current = onFirstOutput;
+    const firstOutputReportedRef = useRef(false);
+    const handleFirstOutput = useCallback(() => {
+      if (firstOutputReportedRef.current) return;
+      firstOutputReportedRef.current = true;
+      onFirstOutputRef.current?.();
+    }, []);
+
     useTerminalLiveSocket({
       termRef,
       wsRef,
@@ -1520,6 +1532,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       sessionGeneration,
       setSessionGeneration,
       onReconnectingChange,
+      onFirstOutput: handleFirstOutput,
     });
 
     useEffect(() => {
