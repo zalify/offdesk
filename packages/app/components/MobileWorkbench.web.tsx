@@ -486,7 +486,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           // A picker field (wireframe B, "Phone title bar" canvas): the boxed
           // title and ⇕ say "tap to switch or add a session".
           style={{
-            boxSizing: "border-box", minHeight: 36, margin: "4px 0", padding: "3px 8px 3px 10px",
+            boxSizing: "border-box", minHeight: 36, padding: "3px 8px 3px 10px",
             background: colors.bg2, border: `1px solid ${colors.line}`, borderRadius: 4,
             textAlign: "left", cursor: "pointer",
             flex: 1,
