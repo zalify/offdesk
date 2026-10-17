@@ -222,6 +222,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/desktop/src-tauri
+      # Gradle's distribution, dependencies and compiled build scripts: without
+      # them every run spent ~2 min before Gradle reached the Rust build. Only
+      # main writes this cache; pull requests read it.
+      - uses: gradle/actions/setup-gradle@v4
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Build Android debug APK including native updater

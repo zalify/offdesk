@@ -98,6 +98,66 @@ def check_webview_input():
     raise AssertionError("Update prompts repeatedly interrupted WebView input")
 
 
+def cpu_times():
+    # The aggregate "cpu" line of /proc/stat: (idle incl. iowait, total).
+    fields = [int(v) for v in adb("shell", "head", "-n", "1", "/proc/stat", timeout=5).split()[1:]]
+    return fields[3] + fields[4], sum(fields)
+
+
+def cpu_busy_over_one_second():
+    # Measured across a bare sleep, so the checks below do not count as load.
+    idle_before, total_before = cpu_times()
+    time.sleep(1)
+    idle_after, total_after = cpu_times()
+    total = total_after - total_before
+    return 1 - (idle_after - idle_before) / total if total > 0 else 1
+
+
+def system_settled():
+    # sys.boot_completed precedes first-boot package optimization and launcher
+    # initialization; a cold-booted emulator keeps compiling (dex2oat) and
+    # starting services for a while after it. Those background jobs are not
+    # all visible as processes, so also require the CPU to be mostly idle:
+    # otherwise they compete with the App's 60-second readiness deadline.
+    if cpu_busy_over_one_second() > 0.25:
+        return False
+    if adb("shell", "getprop", "sys.boot_completed", timeout=5).strip() != "1":
+        return False
+    if adb("shell", "getprop", "init.svc.bootanim", timeout=5).strip() != "stopped":
+        return False
+    if "package:" not in adb("shell", "pm", "path", "android", timeout=10, check=False):
+        return False
+    if adb("shell", "pidof", "dex2oat64", "dex2oat32", "dex2oat", timeout=5, check=False).strip():
+        return False
+    home = adb("shell", "cmd", "package", "resolve-activity", "--brief",
+               "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
+               timeout=10, check=False).strip().splitlines()
+    home_package = home[-1].split("/")[0] if home and "/" in home[-1] else None
+    if not home_package:
+        return False
+    resumed = [line for line in adb("shell", "dumpsys", "activity", "activities", timeout=15, check=False).splitlines()
+               if "ResumedActivity" in line]
+    return any(home_package in line for line in resumed)
+
+
+def wait_for_settled_system():
+    # Wait on the system itself rather than a fixed delay: three quiet
+    # one-second windows in a row (CPU at most 25% busy, the checks above
+    # passing). Only then does the App's 60-second readiness deadline start.
+    print("Waiting for first-boot system services to settle", flush=True)
+    started = time.monotonic()
+    quiet = 0
+    while time.monotonic() - started < 180:
+        try:
+            quiet = quiet + 1 if system_settled() else 0
+        except (subprocess.SubprocessError, ValueError, IndexError):
+            quiet = 0
+        if quiet >= 3:
+            print(f"Emulator settled after {time.monotonic() - started:.0f}s", flush=True)
+            return
+    raise AssertionError("Emulator did not settle within 180 seconds (an emulator problem, not the App)")
+
+
 def root_emulator():
     # Restarting adbd can drop its own transport and return nonzero even when
     # root succeeds. Verify the effective UID after reconnection instead.
@@ -115,11 +175,9 @@ def root_emulator():
 
 try:
     assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
-    # sys.boot_completed precedes first-boot package optimization and launcher
-    # initialization. Let the disposable emulator settle BEFORE starting the
-    # App's 60-second readiness deadline. Never dismiss an ANR to pass a test.
-    print("Waiting for first-boot system services to settle", flush=True)
-    time.sleep(45)
+    # Let the disposable emulator settle BEFORE starting the App's 60-second
+    # readiness deadline. Never dismiss an ANR to pass a test.
+    wait_for_settled_system()
     adb("uninstall", "dev.offdesk.desktop", check=False)
     adb("install", str(args.apk.resolve()), timeout=120)
     adb("logcat", "-c")
