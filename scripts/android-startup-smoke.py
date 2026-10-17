@@ -9,16 +9,14 @@ import time
 import xml.etree.ElementTree as ET
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("apk", type=Path, nargs="?")
-parser.add_argument("--settle-only", action="store_true",
-                    help="wait for the booted emulator to settle, then exit (CI snapshots it)")
+parser.add_argument("apk", type=Path)
 parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL", "emulator-5554"))
 parser.add_argument("--output", type=Path, default=Path("/tmp/offdesk-android-startup"))
 args = parser.parse_args()
 # This test deliberately installs fresh. Never let it clear a person's phone.
 if not args.serial.startswith("emulator-"):
     parser.error("startup smoke requires a disposable emulator, never a physical device")
-if not args.settle_only and (args.apk is None or not args.apk.is_file()):
+if not args.apk.is_file():
     parser.error(f"APK does not exist: {args.apk}")
 args.output.mkdir(parents=True, exist_ok=True)
 
@@ -124,10 +122,10 @@ def system_settled():
 
 
 def wait_for_settled_system():
-    # Wait on the system itself rather than a fixed delay: a snapshot restore
-    # is settled at once, a cold boot takes as long as it takes. Only then
-    # does the App's 60-second readiness deadline start. Three quiet checks
-    # in a row, so a dex2oat pass that starts between them is not missed.
+    # Wait on the system itself rather than a fixed delay (a fixed 45 s, while
+    # CI cold boots measured settled in ~3 s). Only then does the App's
+    # 60-second readiness deadline start. Three quiet checks in a row, so a
+    # dex2oat pass that starts between them is not missed.
     print("Waiting for first-boot system services to settle", flush=True)
     started = time.monotonic()
     quiet = 0
@@ -157,11 +155,6 @@ def root_emulator():
         time.sleep(1)
     raise AssertionError("Emulator did not reconnect as root; use a rooted disposable emulator")
 
-
-if args.settle_only:
-    assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
-    wait_for_settled_system()
-    raise SystemExit(0)
 
 try:
     assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"

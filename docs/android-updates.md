@@ -66,9 +66,9 @@ performs a fresh installation on a disposable emulator.
 
 Before installing, the script waits until the emulator has settled (boot
 animation stopped, package manager up, no `dex2oat` running, home screen in
-front, three checks in a row) rather than sleeping a fixed time. CI boots from
-a cached snapshot taken after that settling (`--settle-only`), so it starts
-almost at once; the release workflow cold boots and waits as long as needed.
+front, three checks in a row) rather than sleeping a fixed time; a cold boot
+in CI settles in a few seconds. It gives up after 180 seconds and says the
+emulator, not the App, failed.
 
 This covers the startup deadlock found in v0.6.3: the encrypted navigation guard
 resolved an Android path from the UI-thread navigation callback, then waited for
