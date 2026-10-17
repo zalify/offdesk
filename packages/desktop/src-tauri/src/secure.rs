@@ -645,8 +645,8 @@ pub async fn secure_routes<R: Runtime>(
     let discovery_available = advertised.is_some();
     let verified: Vec<&str> = results
         .iter()
-        .filter(|(_, client)| client.is_some())
-        .map(|(route, _)| route.hub_url.as_str())
+        .filter(|(_, client, _)| client.is_some())
+        .map(|(route, _, _)| route.hub_url.as_str())
         .collect();
     status.routes = merge_routes(advertised, saved, &verified, &status.endpoint.hub_url);
     // Newly discovered addresses need their own identity check too.
