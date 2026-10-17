@@ -151,6 +151,8 @@ jobs:
         with:
           name: e2e-rust-binaries
           path: e2e/.prebuilt/
+          # upload-artifact skips dot-directories unless told otherwise.
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
