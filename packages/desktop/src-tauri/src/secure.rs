@@ -119,6 +119,14 @@ fn load_hubs(
 fn save_hubs<R: Runtime>(app: &AppHandle<R>, hubs: &[SavedHub]) -> Result<(), String> {
     atomic_json(&registry(app)?, &hubs)
 }
+/// A saved Hub's name after pairing it again: a name the person gave stays; the default one,
+/// its address, follows the new address (a Hub that moved, e.g. from a tunnel to the relay).
+fn name_after_pairing(old: Option<&SavedHub>, hub_url: &str) -> String {
+    match old {
+        Some(old) if old.name != old.status.endpoint.hub_url => old.name.clone(),
+        _ => hub_url.to_string(),
+    }
+}
 fn find_hub(hubs: &[SavedHub], public_key: &str) -> Result<Status, String> {
     hubs.iter()
         .find(|h| h.status.endpoint.public_key == public_key)
@@ -438,10 +446,7 @@ pub async fn secure_pair<R: Runtime>(
         .iter()
         .find(|h| h.status.endpoint.public_key == status.endpoint.public_key)
         .cloned();
-    let name = old
-        .as_ref()
-        .map(|h| h.name.clone())
-        .unwrap_or_else(|| status.endpoint.hub_url.clone());
+    let name = name_after_pairing(old.as_ref(), &status.endpoint.hub_url);
     if let Err(error) = save_hubs(&app, &hubs)
         .and_then(|_| store_write(&app, &status.credential_slot, Some(&credential)))
         .and_then(|_| save_status(&app, &status))
@@ -1065,6 +1070,15 @@ mod route_tests {
         assert!(find_hub(&restored, "not-paired").is_err());
         assert!(!valid_slot("hub-../../connection"));
         assert!(!valid_slot("another-application-secret"));
+    }
+    #[test]
+    fn pairing_again_moves_a_default_name_with_the_address_and_keeps_a_given_one() {
+        let (status, _) = original();
+        let saved = |name: &str| SavedHub { name: name.into(), status: status.clone() };
+        let relay = "https://ryanz.relay.offdesk.cloud";
+        assert_eq!(name_after_pairing(Some(&saved("https://remote.example")), relay), relay);
+        assert_eq!(name_after_pairing(Some(&saved("Home")), relay), "Home");
+        assert_eq!(name_after_pairing(None, relay), relay);
     }
     #[test]
     fn identity_confirmation_does_not_return_pairing_secrets() {
