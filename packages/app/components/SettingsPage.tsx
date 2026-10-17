@@ -774,6 +774,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           overflow: "auto",
           minHeight: 0,
           minWidth: 0,
+          // Keep headings clear of the pinned section bar when jumping.
+          scrollPaddingTop: wideSettings ? 0 : NARROW_NAV_HEIGHT,
         }}
       >
         <div data-testid="settings-column" style={{ width: "100%", maxWidth: 736, padding: wideSettings ? "32px 48px 48px" : "24px 16px 48px", boxSizing: "border-box" }}>
@@ -784,7 +786,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           <SectionTitle>Appearance</SectionTitle>
 
           <SettingRow label="Theme" description="Saved on this device. The terminal follows the theme." stacked>
-            <ThemeGrid columns={wideSettings ? 4 : 2} />
+            <ThemeGrid />
           </SettingRow>
           <SettingRow label="Follow the system" description="Switch between two themes when your device switches between light and dark." stacked>
             <FollowSystem />
@@ -1587,17 +1589,21 @@ interface NavSection {
   behind: number;
 }
 
+/** Height of the narrow layout's pinned section bar. */
+const NARROW_NAV_HEIGHT = 48;
+
 function SettingsNav({ wide, sections, scroller }: {
   wide: boolean;
   sections: NavSection[];
   scroller: React.RefObject<HTMLDivElement | null>;
 }) {
   const [current, setCurrent] = useState(sections[0]?.title ?? "");
+  const bar = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const root = scroller.current;
-    if (!root || !wide) return;
+    if (!root) return;
     const update = () => {
-      const top = root.getBoundingClientRect().top + 48;
+      const top = root.getBoundingClientRect().top + 48 + (wide ? 0 : NARROW_NAV_HEIGHT);
       let active = sections[0]?.title ?? "";
       for (const { title } of sections) {
         const el = document.getElementById(sectionId(title));
@@ -1609,48 +1615,86 @@ function SettingsNav({ wide, sections, scroller }: {
     root.addEventListener("scroll", update, { passive: true });
     return () => root.removeEventListener("scroll", update);
   }, [scroller, sections, wide]);
-  return (
-    <nav
-      aria-label="Settings sections"
-      style={wide
-        ? { width: 240, flexShrink: 0, boxSizing: "border-box", overflowY: "auto", padding: "24px 12px", display: "flex", flexDirection: "column", gap: 2, background: colors.bg1, borderRight: `1px solid ${colors.lineSoft}`, fontFamily: "var(--font-display)" }
-        : { display: "flex", flexDirection: "column", gap: 2, marginBottom: 8, fontFamily: "var(--font-display)" }}
-    >
-      <div style={{ margin: "0 12px 6px", fontSize: 12, color: colors.fg3 }}>
+  // Narrow: keep the current section's link in view in the sideways bar.
+  useEffect(() => {
+    if (wide) return;
+    const link = bar.current?.querySelector<HTMLElement>("[aria-current='true']");
+    const row = bar.current;
+    if (!link || !row) return;
+    const left = link.offsetLeft - row.offsetLeft;
+    if (left < row.scrollLeft || left + link.offsetWidth > row.scrollLeft + row.clientWidth) {
+      row.scrollTo({ left: left - 16, behavior: "smooth" });
+    }
+  }, [current, wide]);
+  const heading = (
+    <>
+      <div style={{ margin: wide ? "0 12px 6px" : "0 0 6px", fontSize: 12, color: colors.fg3, fontFamily: "var(--font-display)" }}>
         <span aria-hidden="true" style={{ color: colors.accent }}>~</span> $ settings
       </div>
-      <h1 style={{ margin: "0 12px 16px", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em", color: colors.fg0 }}>Settings</h1>
-      {wide && sections.map(({ title, behind }) => (
-        <button
-          aria-label={behind ? `${title}, ${behind} behind` : undefined}
-          key={title}
-          type="button"
-          aria-current={title === current ? "true" : undefined}
-          onClick={() => {
-            document.getElementById(sectionId(title))?.scrollIntoView({ block: "start", behavior: "smooth" });
-            setCurrent(title);
-          }}
-          style={{
-            textAlign: "left",
-            padding: "8px 12px",
-            border: 0,
-            borderRadius: 3,
-            background: title === current ? colors.primary : "transparent",
-            color: title === current ? colors.onPrimary : colors.fg2,
-            fontFamily: "var(--font-display)",
-            fontSize: 13,
-            fontWeight: title === current ? 600 : 400,
-            textTransform: "lowercase",
-            cursor: "pointer",
-            display: "flex",
-            gap: 8,
-          }}
+      <h1 style={{ margin: wide ? "0 12px 16px" : "0 0 12px", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em", color: colors.fg0, fontFamily: "var(--font-display)" }}>Settings</h1>
+    </>
+  );
+  const links = sections.map(({ title, behind }) => (
+    <button
+      aria-label={behind ? `${title}, ${behind} behind` : undefined}
+      key={title}
+      type="button"
+      aria-current={title === current ? "true" : undefined}
+      onClick={() => {
+        document.getElementById(sectionId(title))?.scrollIntoView({ block: "start", behavior: "smooth" });
+        setCurrent(title);
+      }}
+      style={{
+        textAlign: "left",
+        padding: wide ? "8px 12px" : "6px 10px",
+        border: 0,
+        borderRadius: 3,
+        background: title === current ? colors.primary : "transparent",
+        color: title === current ? colors.onPrimary : colors.fg2,
+        fontFamily: "var(--font-display)",
+        fontSize: wide ? 13 : 12.5,
+        fontWeight: title === current ? 600 : 400,
+        textTransform: "lowercase",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+        cursor: "pointer",
+        display: "flex",
+        gap: 8,
+      }}
+    >
+      <span style={{ flex: 1 }}>{title}</span>
+      {behind ? <span aria-hidden="true" style={{ color: title === current ? colors.onPrimary : colors.err }}>{behind} ↑</span> : null}
+    </button>
+  ));
+  if (wide) {
+    return (
+      <nav
+        aria-label="Settings sections"
+        style={{ width: 240, flexShrink: 0, boxSizing: "border-box", overflowY: "auto", padding: "24px 12px", display: "flex", flexDirection: "column", gap: 2, background: colors.bg1, borderRight: `1px solid ${colors.lineSoft}`, fontFamily: "var(--font-display)" }}
+      >
+        {heading}
+        {links}
+      </nav>
+    );
+  }
+  // Narrow (phones, unfolded foldables): the title, then the sections as one
+  // row that scrolls sideways and stays pinned while the settings scroll.
+  return (
+    <>
+      {heading}
+      <nav
+        aria-label="Settings sections"
+        style={{ position: "sticky", top: 0, zIndex: 1, margin: "0 -16px 8px", background: colors.background, borderBottom: `1px solid ${colors.lineSoft}` }}
+      >
+        <div
+          ref={bar}
+          data-testid="settings-section-bar"
+          style={{ height: NARROW_NAV_HEIGHT, boxSizing: "border-box", display: "flex", alignItems: "center", gap: 4, padding: "0 16px", overflowX: "auto", scrollbarWidth: "none" }}
         >
-          <span style={{ flex: 1 }}>{title}</span>
-          {behind ? <span aria-hidden="true" style={{ color: title === current ? colors.onPrimary : colors.err }}>{behind} ↑</span> : null}
-        </button>
-      ))}
-    </nav>
+          {links}
+        </div>
+      </nav>
+    </>
   );
 }
 

@@ -544,7 +544,9 @@ test("settings keeps the section nav and the scrollbar at the window edges", asy
   await desktopBridge(page, "hub");
   await openApp(page);
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  for (const width of [1440, 800, 390]) {
+  // 690 is an unfolded foldable phone: narrow layout, but room for four themes.
+  const themeColumns: Record<number, number> = { 1440: 4, 800: 4, 690: 4, 390: 2 };
+  for (const width of [1440, 800, 690, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const scroller = page.getByTestId("settings-content");
     const column = page.getByTestId("settings-column");
@@ -560,7 +562,19 @@ test("settings keeps the section nav and the scrollbar at the window edges", asy
       expect(inner.x).toBeLessThan(outer.x + 2);
     } else {
       expect(outer.width).toBeGreaterThan(width - 30);
+      // The sections stay reachable: a sideways bar pinned under the back bar.
+      const bar = page.getByTestId("settings-section-bar");
+      await expect(bar).toBeVisible();
+      await scroller.evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expect.poll(async () => Math.abs((await bar.boundingBox())!.y - (await scroller.boundingBox())!.y)).toBeLessThan(2);
+      await nav.getByRole("button").first().click();
+      await expect(nav.getByRole("button").first()).toHaveAttribute("aria-current", "true");
+      await expect.poll(() => scroller.evaluate(el => el.scrollTop)).toBeLessThan(200);
     }
+    // Theme cards fill the column: as many per row as fit.
+    const cardTops = await page.getByRole("group", { name: "dark themes" }).getByRole("button")
+      .evaluateAll(cards => cards.map(card => Math.round(card.getBoundingClientRect().top)));
+    expect(cardTops.filter(top => top === cardTops[0])).toHaveLength(themeColumns[width]);
     await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`settings-${width}.png`) });
   }

@@ -71,14 +71,16 @@ function ThemeCard({ id, pressed, onPick, compact }: { id: ThemeId; pressed: boo
 }
 
 // Settings: every theme, grouped, as cards in a grid.
-export function ThemeGrid({ columns }: { columns: number }) {
+// As many columns as fit, so a foldable or tablet gets four, a phone two.
+// auto-fill keeps empty tracks, so cards line up across the groups.
+export function ThemeGrid() {
   const { theme, setTheme } = useTheme();
   return (
-    <div role="group" aria-label="Theme" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+    <div role="group" aria-label="Theme" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
       {GROUPS.map((group) => (
         <div key={group.label} role="group" aria-label={`${group.label} themes`} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <span style={{ fontFamily: "var(--font-display)", fontSize: 12, color: colors.fg3 }}>{group.label}</span>
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, gap: 10 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
             {group.ids.map((id) => <ThemeCard key={id} id={id} pressed={theme === id} onPick={() => setTheme(id)} />)}
           </div>
         </div>
