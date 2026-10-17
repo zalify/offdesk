@@ -18,6 +18,14 @@
 
 Do not use `playwright test` directly for normal verification. That bypasses the container browser contract.
 
+Optional environment for `pnpm e2e:test` / `pnpm e2e:ci`:
+
+- `E2E_TEST_GREP='…'` runs only the matching tests.
+- `E2E_SHARD=2/4` runs one slice of the suite (Playwright `--shard`); default `1/1`.
+- `E2E_RUST_BINARIES=prebuilt` takes `offdesk-hub` and `offdesk-node` from `e2e/.prebuilt/` instead of compiling them in the hub and node images (default `build`).
+
+CI (`.github/workflows/ci.yml`) compiles both binaries once in the `E2E Rust Binaries` job — the `rust-binaries` target of `e2e/Dockerfile.hub`, cached by the content of `crates/`, `Cargo.*` and that Dockerfile — and runs the suite as four shards on separate runners, each with `E2E_RUST_BINARIES=prebuilt` and its own hub and node.
+
 ## Data Access
 
 Methods available for test data setup:

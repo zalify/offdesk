@@ -14,6 +14,7 @@ client/dist/
 .superpowers/
 .claude/
 e2e/.generated-certs/
+e2e/.prebuilt/
 .DS_Store
 
 # Local production operations contain infrastructure-specific details.

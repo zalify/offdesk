@@ -120,11 +120,51 @@ jobs:
 
       - run: cd packages/app && npx expo export --platform web
 
-  e2e:
+  # The Rust binaries the E2E images run, compiled once per change to the
+  # Rust sources (or their build stage) and cached by that content: a change
+  # that leaves crates/ alone reuses them instead of compiling for minutes.
+  e2e-binaries:
     needs: changes
     if: needs.changes.outputs.runtime == 'true'
-    name: E2E
+    name: E2E Rust Binaries
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: e2e/.prebuilt
+          key: e2e-rust-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'crates/**', 'e2e/Dockerfile.hub', 'e2e/Dockerfile.hub.dockerignore') }}
+
+      # The same Dockerfile stage `pnpm e2e:test` compiles in, for both
+      # binaries in one cargo build.
+      - name: Compile hub and node
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          docker buildx build -f e2e/Dockerfile.hub --target rust-binaries \
+            --build-arg E2E_CARGO_BINS="--bin offdesk-hub --bin offdesk-node" \
+            --output type=local,dest=e2e/.prebuilt .
+          test -x e2e/.prebuilt/offdesk-hub && test -x e2e/.prebuilt/offdesk-node
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-rust-binaries
+          path: e2e/.prebuilt/
+          if-no-files-found: error
+          retention-days: 1
+
+  # The suite in four slices on separate runners, each with its own hub and
+  # node (the tests share one machine, so a single stack runs them serially).
+  e2e:
+    needs: [changes, e2e-binaries]
+    if: needs.changes.outputs.runtime == 'true'
+    name: E2E (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v6
 
@@ -137,7 +177,18 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-rust-binaries
+          path: e2e/.prebuilt
+
+      # Artifacts drop the executable bit.
+      - run: chmod +x e2e/.prebuilt/offdesk-hub e2e/.prebuilt/offdesk-node
+
       - run: pnpm e2e:ci
+        env:
+          E2E_RUST_BINARIES: prebuilt
+          E2E_SHARD: ${{ matrix.shard }}/4
 
   android-check:
     needs: changes
@@ -199,7 +250,7 @@ jobs:
   ci-result:
     name: CI Result
     if: always()
-    needs: [changes, site-check, rust-check, native-check, frontend-build, e2e, android-check]
+    needs: [changes, site-check, rust-check, native-check, frontend-build, e2e-binaries, e2e, android-check]
     runs-on: ubuntu-latest
     steps:
       - name: Require every applicable check to pass
@@ -214,7 +265,7 @@ jobs:
           }
           const expected = {
             'site-check': jobs.changes.outputs.site === 'true',
-            ...Object.fromEntries(['rust-check', 'native-check', 'frontend-build', 'e2e', 'android-check']
+            ...Object.fromEntries(['rust-check', 'native-check', 'frontend-build', 'e2e-binaries', 'e2e', 'android-check']
               .map(name => [name, jobs.changes.outputs.runtime === 'true'])),
           };
           for (const [name, required] of Object.entries(expected)) {

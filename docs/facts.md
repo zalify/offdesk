@@ -592,6 +592,10 @@ terminals — those live only in tmux on the machine.
   brings up `hub`, `node`, and `runner` from `e2e/docker-compose.yml`. It is
   headless and needs no host browser. Host-browser runs
   (`pnpm e2e:test:debug-host`) are debug-only per `AGENTS.md`.
+- CI compiles the E2E Rust binaries once per change to `crates/` (cached) and
+  runs the suite in four shards (`E2E_SHARD`), each on its own runner with its
+  own stack and the prebuilt binaries (`E2E_RUST_BINARIES=prebuilt`). See
+  `e2e/env-playbook.md`.
 - Unit tests: `vitest run` for TypeScript, `cargo test` for Rust.
 - 28 Playwright spec files in `e2e/tests/`.
 
