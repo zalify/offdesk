@@ -110,6 +110,11 @@ export interface RowPathMatch {
   end: CellPosition;
   /** For a path joined across rows: the part on its first row alone. */
   fallback?: string;
+  /**
+   * The cells the path covers on each row, first to last. A joined path skips
+   * the indent its continuation rows start with.
+   */
+  segments: { row: number; start: number; end: number }[];
 }
 
 // The text ends inside a path that may go on: a path start at a word
@@ -196,7 +201,19 @@ export function findPathsAcrossRows(
     const start = cellAt(m.start);
     const end = cellAt(m.end - 1);
     if (start.row > row || end.row < row) continue;
-    const match: RowPathMatch = { path: m.path, start, end };
+    const segments: RowPathMatch["segments"] = [];
+    for (let i = pieceAt(m.start); i <= pieceAt(m.end - 1); i++) {
+      const piece = pieces[i];
+      const columns = getRow(piece.row)!.columns;
+      const first = Math.max(m.start, piece.base);
+      const last = Math.min(m.end, pieces[i + 1]?.base ?? m.end) - 1;
+      segments.push({
+        row: piece.row,
+        start: columns[piece.from + first - piece.base],
+        end: columns[piece.from + last - piece.base],
+      });
+    }
+    const match: RowPathMatch = { path: m.path, start, end, segments };
     if (start.row !== end.row) {
       const head = text.slice(m.start, pieces[pieceAt(m.start) + 1].base);
       const [alone] = findPathsInLine(head);

@@ -21,7 +21,7 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
     let status = JSON.parse(sessionStorage.getItem("test:status") || "null") ?? { endpoint: { hub_url: "https://encrypted.example", public_key: "pinned" }, device_id: "phone" };
     const routes = [
       { kind: "local", hub_url: "http://192.168.1.2:4317", available: initial !== "offline" },
-      { kind: "remote", hub_url: "https://encrypted.example", available: true },
+      { kind: "remote", hub_url: "https://encrypted.example", available: true, latency_ms: 61 },
     ];
     if (initial === "offline") status.endpoint.hub_url = routes[0].hub_url;
     const other = { endpoint: { hub_url: "https://office.example", public_key: "office-pinned" }, device_id: "office-phone" };
@@ -51,7 +51,7 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
         if (command === "secure_routes") {
           if (state.damaged) throw new Error("Cannot read saved connection routes");
           const target = args?.publicKey === "office-pinned" ? other : status;
-          return structuredClone({ status: target, routes: args?.publicKey === "office-pinned" ? [{ kind: "local", hub_url: "http://192.168.3.2:4317", available: false }, { kind: "remote", hub_url: other.endpoint.hub_url, available: true }] : state.routes, discovery_available: true, machines: [{ name: "Mac Mini", os: "macos" }] });
+          return structuredClone({ status: target, routes: args?.publicKey === "office-pinned" ? [{ kind: "local", hub_url: "http://192.168.3.2:4317", available: false }, { kind: "remote", hub_url: other.endpoint.hub_url, available: true, latency_ms: 38 }, { kind: "remote", hub_url: "https://kr-relay.example", available: true, latency_ms: 112 }] : state.routes, discovery_available: true, machines: [{ name: "Mac Mini", os: "macos" }] });
         }
         if (command === "secure_switch_route") {
           if (state.switchError) throw new Error(state.switchError);
@@ -137,6 +137,8 @@ test("a saved remote route recovers an offline LAN connection without another QR
   const remote = panel.getByRole("button", { name: "Remote connection: https://encrypted.example", exact: true });
   await expect(lan).toBeDisabled();
   await expect(remote).toBeEnabled();
+  await expect(remote.getByTestId("route-latency")).toHaveText("61 ms");
+  await expect(lan.getByTestId("route-latency")).toHaveCount(0);
   await remote.click();
   await expect(page.getByTestId("mobile-workbench")).toBeVisible();
   const calls = await page.evaluate(() => (window as any).__secureTest.calls as string[]);
@@ -156,6 +158,8 @@ test("compact Hub menu checks availability and keeps the source Hub on failure",
   const panel = page.getByTestId("hub-picker");
   await panel.getByRole("button", { name: /Office Hub/ }).click();
   await expect(panel.getByRole("button", { name: /192.168.3.2/ })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: /office.example/ }).getByTestId("route-latency")).toHaveText("38 ms · fastest");
+  await expect(panel.getByRole("button", { name: /kr-relay.example/ }).getByTestId("route-latency")).toHaveText("112 ms");
   await expect(panel.getByText("Mac Mini · macos")).toBeVisible();
   await page.evaluate(() => { (window as any).__secureTest.switchError = "Hub identity could not be verified"; });
   await panel.getByRole("button", { name: /office.example/ }).click();

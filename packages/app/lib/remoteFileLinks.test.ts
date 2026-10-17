@@ -118,6 +118,11 @@ describe("findPathsAcrossRows", () => {
       start: { row: 0, column: 23 },
       end: { row: 1, column: 47 },
       fallback: "/Users/zourenyuan/workspace",
+      // The indent on the second row is not part of the link.
+      segments: [
+        { row: 0, start: 23, end: 49 },
+        { row: 1, start: 2, end: 47 },
+      ],
     };
     expect(findPathsAcrossRows(claude, 0)).toEqual([joined]);
     expect(findPathsAcrossRows(claude, 1)).toEqual([joined]);
@@ -128,6 +133,10 @@ describe("findPathsAcrossRows", () => {
         start: { row: 4, column: 2 },
         end: { row: 5, column: 37 },
         fallback: "/Users/zourenyuan/workspaces/Zalify/Eng/output/a",
+        segments: [
+          { row: 4, start: 2, end: 49 },
+          { row: 5, start: 2, end: 37 },
+        ],
       },
     ]);
   });
@@ -138,17 +147,31 @@ describe("findPathsAcrossRows", () => {
       "/tmp/aaaaabbbbb/ccccc.txt",
     ]);
     expect(findPathsAcrossRows(rows, 2)[0].start).toEqual({ row: 0, column: 2 });
+    expect(findPathsAcrossRows(rows, 0)[0].segments).toEqual([
+      { row: 0, start: 2, end: 11 },
+      { row: 1, start: 2, end: 11 },
+      { row: 2, start: 2, end: 6 },
+    ]);
   });
 
   it("joins soft-wrapped rows as they are", () => {
     const rows = screen(10, ["ls /tmp/ab", "c/d.txt"], [1]);
     expect(findPathsAcrossRows(rows, 1).map((m) => m.path)).toEqual(["/tmp/abc/d.txt"]);
+    expect(findPathsAcrossRows(rows, 0)[0].segments).toEqual([
+      { row: 0, start: 3, end: 9 },
+      { row: 1, start: 0, end: 6 },
+    ]);
   });
 
   it("leaves rows that stop short of the edge alone", () => {
     const rows = screen(30, ["  see /tmp/a/b.txt", "  and more"]);
     expect(findPathsAcrossRows(rows, 0)).toEqual([
-      { path: "/tmp/a/b.txt", start: { row: 0, column: 6 }, end: { row: 0, column: 17 } },
+      {
+        path: "/tmp/a/b.txt",
+        start: { row: 0, column: 6 },
+        end: { row: 0, column: 17 },
+        segments: [{ row: 0, start: 6, end: 17 }],
+      },
     ]);
   });
 

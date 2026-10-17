@@ -82,6 +82,39 @@ for (const [half, needle] of [
   });
 }
 
+test("a path broken over two rows underlines its own cells, not the next row's indent", async ({ page }) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await mobileTakeControl(page);
+  await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    startupCommand: `(draw() { clear; ${DRAW}; }; trap draw WINCH; draw; while :; do sleep 1; done)`,
+  });
+  await expect
+    .poll(
+      async () => {
+        const { cols, rows } = await screenRows(page);
+        return rows.some((line) => line.endsWith(HEAD) && line.length === cols);
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+
+  const { x, y } = await locate(page, TAIL);
+  await page.mouse.move(x, y);
+  const bars = page.getByTestId("terminal-link-underline").locator("div");
+  await expect(bars).toHaveCount(2);
+  const [head, tail] = await bars.evaluateAll((els) =>
+    els.map((el) => ({ left: el.offsetLeft, width: el.offsetWidth })),
+  );
+  // Both halves are 20 cells; the tail starts after the two-cell indent.
+  const cell = tail.width / 20;
+  expect(Math.round(tail.left / cell)).toBe(2);
+  expect(Math.round(head.width / cell)).toBe(20);
+  const { cols } = await screenRows(page);
+  expect(Math.round((head.left + head.width) / cell)).toBe(cols);
+});
+
 async function screenRows(page: Page) {
   return page.evaluate(() => {
     const term = (

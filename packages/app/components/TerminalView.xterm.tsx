@@ -986,6 +986,36 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           },
         ),
       );
+      // xterm underlines a link's range row by row, from its first cell to the
+      // right edge and from the left edge to its last cell, so a path joined
+      // across indented rows would underline the indent too. Those links
+      // draw their own underline instead: one bar per row the path covers.
+      let linkUnderline: HTMLDivElement | null = null;
+      const showLinkUnderline = (segments: { row: number; start: number; end: number }[]) => {
+        const cell = term.dimensions?.css.cell;
+        const screen = term.element?.querySelector<HTMLElement>(".xterm-screen");
+        if (!cell || !screen) return;
+        if (linkUnderline?.parentElement !== screen) {
+          linkUnderline = document.createElement("div");
+          linkUnderline.setAttribute("aria-hidden", "true");
+          linkUnderline.dataset.testid = "terminal-link-underline";
+          linkUnderline.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:7";
+          screen.appendChild(linkUnderline);
+        }
+        const top = term.buffer.active.viewportY;
+        const color = terminalColorsRef.current.theme.foreground ?? "currentColor";
+        linkUnderline.replaceChildren(
+          ...segments.map((segment) => {
+            const bar = document.createElement("div");
+            bar.style.cssText = `position:absolute;height:1px;background:${color}`;
+            bar.style.left = `${segment.start * cell.width}px`;
+            bar.style.top = `${(segment.row - top + 1) * cell.height - 1}px`;
+            bar.style.width = `${(segment.end - segment.start + 1) * cell.width}px`;
+            return bar;
+          }),
+        );
+      };
+      const hideLinkUnderline = () => linkUnderline?.replaceChildren();
       // Bare paths in output (`/a/b`, `~/x`, `./y`, `../z`, optionally with a
       // `:line:col` suffix) become fetch links too, including ones split over
       // rows. Hover/leave feed the same hoveredLink slot as the other link
@@ -1001,19 +1031,22 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           callback(
             matches.map((m) => {
               const uri = pathLinkUri(m.path, m.fallback);
+              const ownUnderline = m.segments.length > 1;
               return {
                 range: {
                   start: { x: m.start.column + 1, y: m.start.row + 1 },
                   end: { x: m.end.column + 1, y: m.end.row + 1 },
                 },
                 text: m.path,
-                decorations: { underline: true, pointerCursor: true },
+                decorations: { underline: !ownUnderline, pointerCursor: true },
                 activate: () => openTerminalLink(uri),
                 hover: () => {
                   hoveredLink = uri;
+                  if (ownUnderline) showLinkUnderline(m.segments);
                 },
                 leave: () => {
                   hoveredLink = null;
+                  if (ownUnderline) hideLinkUnderline();
                 },
               };
             }),
