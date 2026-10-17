@@ -1,7 +1,10 @@
 # Official managed connections (invitation beta)
 
-Offdesk Cloud uses `https://<hub-id>.cloud.offdesk.dev` for encrypted remote
-connections. `https://cloud.offdesk.dev` is the control API. **Deployment and
+Offdesk Cloud reaches a Hub through Offdesk Relay at `https://<slug>.relay.offdesk.cloud`
+(your username by default), for encrypted remote connections only.
+`https://cloud.offdesk.dev` is the control API. Hubs set up before the relay used
+`https://<hub-id>.cloud.offdesk.dev` (a Cloudflare tunnel); running `install` again moves
+them to the relay, and they pair again with its address. **Deployment and
 invitation availability are separate from installing this client code.** This is
 an invitation beta. Updated desktop builds include browser sign-in and setup.
 
@@ -16,10 +19,10 @@ Standard Hubs on port 4317 also offer an encrypted-only listener at
 `--secure-listen`. If the default loopback port is occupied, local access continues
 and Cloud verification fails until the conflict is resolved.
 
-Setup uses an existing `cloudflared` or downloads official release 2026.8.3 from
-Cloudflare's GitHub repository, checking a SHA-256 digest pinned in the public
-client. The service cannot choose the download URL or executable. Automatic
-downloads support macOS and Linux on arm64/x86-64.
+The relay connector is part of `offdesk-hub`: nothing else is downloaded or run. It
+dials out to the relay over WebSockets (nothing has to reach the Mac) and joins each
+phone's connection to the encrypted-only listener, passing Noise records it cannot
+read.
 
 An encrypted pairing trusts the existing Hub key. None of these commands resets
 that key, replaces an existing personal tunnel, or reinstalls the Hub service.
@@ -75,7 +78,17 @@ offdesk-hub cloud check
 ```
 
 `install` enables an independent `offdesk-cloud` user service. It requires a
-working, identity-verified encrypted-only local listener first. Provisioning may
+working, identity-verified encrypted-only local listener first. It picks a home
+relay region and a backup by measuring each region from this machine, directly
+rather than through a proxy, and keeps a connection to those two. Your address
+points at the home region. To see the measurements or choose:
+
+```
+offdesk-hub cloud regions
+offdesk-hub cloud install --home hk --backup kr     # or --backup none, --home auto
+```
+
+Later `install` runs keep the chosen regions unless told otherwise. Provisioning may
 still be pending; `check` can be retried once `status` reports `active`.
 `active` means provider resources exist; it does **not** prove the connector,
 certificate or network is working. Only a successful `check` marks the URL
@@ -85,10 +98,12 @@ A missing certificate, wrong Hub key, or reachable ordinary API fails the check.
 Create an encrypted pairing code using that verified public URL:
 
 ```
-OFFDESK_SECURE_BASE_URL=https://<hub-id>.cloud.offdesk.dev offdesk-hub pair --check
+OFFDESK_SECURE_BASE_URL=https://<slug>.relay.offdesk.cloud offdesk-hub pair --check
 ```
 
-Replace `<hub-id>` with the hostname printed by `status`. Scan from an updated
+Use the `url` printed by `status`. The Hub also advertises its home and backup
+regions' own addresses (`<slug>.<region>.relay.offdesk.cloud`) to paired Apps, as
+other routes to the same Hub. Scan from an updated
 Offdesk App. The App can discover local and remote routes after authenticating;
 its terminals remain on the same Hub when switching networks. A public remote
 address serves only encrypted WebSockets, so opening it as an ordinary web page
@@ -102,8 +117,13 @@ encrypted connection before reporting `verified: true`; `active` alone still
 refers to provisioning. The desktop panel refreshes while it is visible and
 marks a failed refresh as unconfirmed.
 
-The local Cloud service probes every 30 seconds, after each previous probe
-finishes. Three consecutive failures with a reachable local Hub restart only
+On the relay, the connector redials a lost connection with backoff (1 second up
+to a minute), at once after a relay restart, and every minute while Cloud refuses
+it (a disabled connection). The relay pings it every 20 seconds; a minute of
+silence counts as lost.
+
+On a Cloudflare tunnel (older setups), the local Cloud service probes every 30
+seconds, after each previous probe finishes. Three consecutive failures with a reachable local Hub restart only
 its connector, refreshing edge discovery. Repeated restarts back off from 15
 seconds to 10 minutes; five minutes of healthy probes reset the delay. A stopped
 local Hub does not trigger relay restart loops. Existing paired devices and the
@@ -134,7 +154,13 @@ requests. Hub private keys, device pairing secrets, terminal content and files
 never enter management requests. The provider can observe network metadata and
 ciphertext; this is not an anonymity service.
 
-The client constructs a **locally managed** cloudflared config with exactly one
+The relay connector sends only the Hub's management credential, only to
+`<slug>.<region>.relay.offdesk.cloud` addresses it checks itself, and forwards each
+relay stream only to the encrypted-only listener's `/ws/secure`. The relay serves
+nothing else on a Hub's address (404). Phones still verify the pinned Hub key, so a
+relay can neither read nor impersonate a Hub.
+
+On a tunnel, the client constructs a **locally managed** cloudflared config with exactly one
 route: the assigned hostname's `/ws/secure` to `http://127.0.0.1:4318`, followed by
 a 404 rule. It rejects remote ingress configuration, unexpected config fields,
 out-of-scope hostnames and redirects. The service cannot tell the client to
@@ -148,4 +174,5 @@ recovery, not deletion of the Hub's trusted encryption key.
 
 The beta has one connector service per OS user. Do not install it for multiple
 Hub databases under the same OS account. Windows, automatic cloudflared updates,
-GUI enrollment, billing and region selection are outside this first milestone.
+GUI enrollment, billing and region selection in the desktop app are outside this
+milestone.
