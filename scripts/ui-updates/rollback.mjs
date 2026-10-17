@@ -1,8 +1,11 @@
 // Prepare a newer signed pointer to a known-good immutable UI. Does not publish.
-// Usage: OFFDESK_UI_SIGNING_KEY=<PEM> node rollback.mjs <known-good.json> <current-channel.json> <output.json>
+// Usage: OFFDESK_UI_SIGNING_KEY=<PEM> node rollback.mjs <known-good.json> <current-channel.json> <output.json> [<mirror-output.json>]
+// The optional fourth file is the same pointer linking offdesk.dev's copy of
+// the bundle, for updates/ui/<channel>/latest.json in the mirror.
 import fs from 'node:fs';
 import {createPrivateKey,createPublicKey,sign,verify} from 'node:crypto';
-const [source,current,output]=process.argv.slice(2);
+import {mirrorEnvelope} from './package.mjs';
+const [source,current,output,mirrorOutput]=process.argv.slice(2);
 if (!source || !current || !output) throw new Error('Pass known-good manifest, current channel manifest and a new output path');
 const key=createPrivateKey(process.env.OFFDESK_UI_SIGNING_KEY ?? '');
 function verified(file) {
@@ -16,4 +19,5 @@ const sequence=Math.max(good.sequence,latest.sequence)+1;
 if(!Number.isSafeInteger(sequence))throw new Error('Invalid release sequence');
 const payload=JSON.stringify({...good,sequence});
 fs.writeFileSync(output,JSON.stringify({payload,signature:sign(null,Buffer.from(payload),key).toString('base64')}),{flag:'wx'});
+if(mirrorOutput)fs.writeFileSync(mirrorOutput,JSON.stringify(mirrorEnvelope(payload,key)),{flag:'wx'});
 console.log(`Prepared rollback to ${good.version} at sequence ${sequence}; upload the signed pointer to ${good.channel} after verification.`);

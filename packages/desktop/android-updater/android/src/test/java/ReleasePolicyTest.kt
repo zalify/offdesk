@@ -106,6 +106,97 @@ class ReleasePolicyTest {
     }
 
     @Test
+    fun takesOffdeskDevCopiesOfThisReleaseWithGitHubAsTheFallback() {
+        val mirrored = release("0.25.0", "arm64-v8a").put("tag_name", "v0.25.0")
+        mirrored
+            .getJSONArray("assets")
+            .getJSONObject(0)
+            .put(
+                "browser_download_url",
+                "https://offdesk.dev/download/v0.25.0/offdesk-0.25.0-arm64-v8a.apk",
+            )
+        val picked = select(mirrored)!!
+        assertEquals("https://offdesk.dev/download/v0.25.0/offdesk-0.25.0-arm64-v8a.apk", picked.url)
+        assertEquals(
+            "https://github.com/zalify/offdesk/releases/download/v0.25.0/offdesk-0.25.0-arm64-v8a.apk",
+            picked.fallbackUrl,
+        )
+        // A GitHub link needs no fallback.
+        assertNull(select(release("0.25.0", "arm64-v8a"))!!.fallbackUrl)
+    }
+
+    @Test
+    fun rejectsOffdeskDevLinksToAnyOtherFile() {
+        for (url in
+            listOf(
+                "https://offdesk.dev/download/v0.24.0/offdesk-0.25.0-arm64-v8a.apk",
+                "https://offdesk.dev/download/app-v0.25.0/offdesk-0.25.0-universal.apk",
+                "https://offdesk.dev/updates/offdesk-0.25.0-arm64-v8a.apk",
+                "http://offdesk.dev/download/app-v0.25.0/offdesk-0.25.0-arm64-v8a.apk",
+                "https://offdesk.dev.evil.example/download/app-v0.25.0/offdesk-0.25.0-arm64-v8a.apk",
+            )) {
+            val bad = release("0.25.0", "arm64-v8a")
+            bad.getJSONArray("assets").getJSONObject(0).put("browser_download_url", url)
+            assertNull(url, select(bad))
+        }
+    }
+
+    @Test
+    fun readsOffdeskDevFirstAndGitHubSecond() {
+        assertEquals("https://offdesk.dev/updates/releases.json", RELEASE_FEEDS[0])
+        assertTrue(RELEASE_FEEDS[1].startsWith("https://api.github.com/repos/zalify/offdesk/releases"))
+    }
+
+    private val update = Release("0.25.0", "https://offdesk.dev/download/v0.25.0/a.apk", 1, "a")
+
+    @Test
+    fun theFirstFeedOfferingAnUpdateWins() {
+        val asked = mutableListOf<String>()
+        val found = newestFromFeeds(listOf("mirror", "github")) { asked.add(it); update }
+        assertEquals(update, found)
+        assertEquals(listOf("mirror"), asked)
+    }
+
+    @Test
+    fun aFailingMirrorFallsBackToGitHub() {
+        val found =
+            newestFromFeeds(listOf("mirror", "github")) {
+                if (it == "mirror") error("offline") else update
+            }
+        assertEquals(update, found)
+    }
+
+    @Test
+    fun aMirrorWithNothingNewerIsCheckedAgainstGitHubWhoseFailureIsNoError() {
+        // offdesk.dev lags a release GitHub has:
+        assertEquals(
+            update,
+            newestFromFeeds(listOf("mirror", "github")) { if (it == "mirror") null else update },
+        )
+        // GitHub unreachable, as in mainland China: simply no update.
+        assertNull(
+            newestFromFeeds(listOf("mirror", "github")) {
+                if (it == "mirror") null else error("unreachable")
+            }
+        )
+    }
+
+    @Test
+    fun noFeedAnsweringIsAnError() {
+        val error =
+            assertThrows(IllegalStateException::class.java) {
+                newestFromFeeds(listOf("mirror", "github")) { error("down: $it") }
+            }
+        assertEquals("down: github", error.message)
+    }
+
+    @Test
+    fun downloadsTryTheMirrorThenGitHub() {
+        assertEquals("github", firstAnswer(listOf("mirror", "github")) { if (it == "mirror") error("x") else it })
+        assertEquals("mirror", firstAnswer(listOf("mirror", "github")) { it })
+    }
+
+    @Test
     fun rejectsMalformedAndPrereleaseVersionTags() {
         assertNull(
             select(release("0.7.0-rc.1", "arm64-v8a"), release("999999999999.0.0", "arm64-v8a"))

@@ -74,6 +74,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
+        "https://offdesk.dev/updates/desktop/latest.json",
         "https://github.com/zalify/offdesk/releases/download/desktop-latest/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI5RkZERjcwNUQ4MzFDRkIKUldUN0hJTmRjTi8vS2NsTi80WWg0MDJoK2pmT3AxTE5TWFVMOUhvRVdYd2tvR1M1WnNHSExLbTIK"

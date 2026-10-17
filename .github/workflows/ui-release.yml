@@ -6,6 +6,7 @@ on:
       - '.github/workflows/ui-release.yml'
       - 'scripts/ui-updates/package*'
       - 'scripts/ui-updates/rollback.mjs'
+      - 'scripts/mirror-release*'
   workflow_dispatch:
     inputs:
       channel:
@@ -40,7 +41,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
       - run: cargo test -p offdesk-ui-updates --locked
-      - run: node --test scripts/ui-updates/package.test.mjs
+      - run: node --test scripts/ui-updates/package.test.mjs scripts/mirror-release.test.mjs
       - name: Container browser regression
         env:
           E2E_TEST_GREP: 'UI updates'
@@ -88,3 +89,15 @@ jobs:
               gh release delete-asset "$release" "$bundle" --yes
               gh release delete-asset "$release" "manifest-$version.json" --yes || true
             done
+      # offdesk.dev keeps a copy of the channel release and its own signed
+      # pointer, updates/ui/<channel>/latest.json, which links the copy:
+      # shells released after 0.24.0 ask there first (github.com is unreliable from
+      # mainland China) and GitHub second. The pointer goes up only once its
+      # bundle has. Without the CLOUDFLARE_API_TOKEN secret this warns and
+      # skips; a failed upload fails the run.
+      - name: Mirror the bundle and its pointer to offdesk.dev
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/mirror-release.mjs "ui-$UI_CHANNEL" --ui-pointer "$UI_CHANNEL=ui-release/mirror-latest.json"

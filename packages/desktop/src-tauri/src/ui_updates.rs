@@ -4,6 +4,7 @@ use offdesk_ui_updates::{Envelope, Loaded, Store, MAX_BUNDLE, MAX_MANIFEST};
 use serde::Serialize;
 use std::{
     borrow::Cow,
+    future::Future,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -229,10 +230,17 @@ pub async fn ui_check<R: Runtime>(app: AppHandle<R>) -> Result<Status, String> {
     result?;
     state.status()
 }
-async fn download(client: &reqwest::Client, url: &str, limit: usize) -> Result<Vec<u8>, String> {
-    let mut response = client
-        .get(url)
-        .header("Cache-Control", "no-cache")
+async fn download(
+    client: &reqwest::Client,
+    url: &str,
+    limit: usize,
+    timeout: Option<Duration>,
+) -> Result<Vec<u8>, String> {
+    let mut request = client.get(url).header("Cache-Control", "no-cache");
+    if let Some(timeout) = timeout {
+        request = request.timeout(timeout);
+    }
+    let mut response = request
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -250,6 +258,54 @@ async fn download(client: &reqwest::Client, url: &str, limit: usize) -> Result<V
     }
     Ok(bytes)
 }
+/// The channel pointers, in the order they are asked. offdesk.dev serves its
+/// own pointer, signed with the same key, linking its copy of the bundle
+/// (scripts/mirror-release.mjs): github.com is unreliable from mainland China
+/// and offdesk.dev is not. GitHub's pointer is second, so a mirror that is
+/// down, empty or behind never holds an update back.
+fn pointer_urls() -> [String; 2] {
+    [
+        format!("https://offdesk.dev/updates/ui/{CHANNEL}/latest.json"),
+        format!("https://github.com/zalify/offdesk/releases/download/ui-{CHANNEL}/latest.json"),
+    ]
+}
+
+/// After an earlier pointer said the UI is current, a later one only
+/// confirms it, so it gets less time: where GitHub is unreachable a manual
+/// check should not spin for the full download timeout.
+const CONFIRM_TIMEOUT: Duration = Duration::from_secs(15);
+
+#[derive(Debug, PartialEq)]
+enum Checked {
+    Staged,
+    Current,
+}
+
+/// Asks each pointer in turn. Staging an update ends the check. "Current"
+/// does not: the next pointer may be ahead of a mirror that lags, and its
+/// failure then is no error, since one source already answered. `ask` gets
+/// whether an earlier pointer answered.
+async fn ask_in_turn<F, Fut>(urls: &[String], mut ask: F) -> Result<(), String>
+where
+    F: FnMut(String, bool) -> Fut,
+    Fut: Future<Output = Result<Checked, String>>,
+{
+    let mut answered = false;
+    let mut errors = Vec::new();
+    for url in urls {
+        match ask(url.clone(), answered).await {
+            Ok(Checked::Staged) => return Ok(()),
+            Ok(Checked::Current) => answered = true,
+            Err(error) => errors.push(format!("{url}: {error}")),
+        }
+    }
+    if answered {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
 async fn check(state: &RuntimeState) -> Result<(), String> {
     let client = reqwest::Client::builder()
         .https_only(true)
@@ -258,20 +314,33 @@ async fn check(state: &RuntimeState) -> Result<(), String> {
         .user_agent("Offdesk-UI/1")
         .build()
         .map_err(|e| e.to_string())?;
-    let url =
-        format!("https://github.com/zalify/offdesk/releases/download/ui-{CHANNEL}/latest.json");
-    let bytes = download(&client, &url, MAX_MANIFEST * 2).await?;
+    ask_in_turn(&pointer_urls(), |url, confirming| {
+        let client = client.clone();
+        async move {
+            check_pointer(state, &client, &url, confirming.then_some(CONFIRM_TIMEOUT)).await
+        }
+    })
+    .await
+}
+
+async fn check_pointer(
+    state: &RuntimeState,
+    client: &reqwest::Client,
+    url: &str,
+    timeout: Option<Duration>,
+) -> Result<Checked, String> {
+    let bytes = download(client, url, MAX_MANIFEST * 2, timeout).await?;
     let envelope: Envelope = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     let manifest = {
         let inner = state.inner.lock().map_err(|e| e.to_string())?;
         let store = inner.store.as_ref().ok_or("UI store unavailable")?;
         let manifest = store.verify_manifest(&envelope)?;
         if manifest.sequence <= store.status().highest_sequence {
-            return Ok(());
+            return Ok(Checked::Current);
         }
         manifest
     };
-    let bytes = download(&client, &manifest.url, manifest.size.min(MAX_BUNDLE)).await?;
+    let bytes = download(client, &manifest.url, manifest.size.min(MAX_BUNDLE), None).await?;
     let state = state.clone();
     tauri::async_runtime::spawn_blocking(move || {
         state
@@ -282,8 +351,79 @@ async fn check(state: &RuntimeState) -> Result<(), String> {
             .as_mut()
             .ok_or("UI store unavailable")?
             .stage(envelope, &bytes)
-            .map(|_| ())
+            .map(|_| Checked::Staged)
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    fn urls() -> Vec<String> {
+        vec!["mirror".into(), "github".into()]
+    }
+
+    async fn run(
+        answers: Vec<Result<Checked, String>>,
+    ) -> (Result<(), String>, Vec<(String, bool)>) {
+        let asked = StdMutex::new(Vec::new());
+        let answers = StdMutex::new(answers.into_iter());
+        let result = ask_in_turn(&urls(), |url, confirming| {
+            asked.lock().unwrap().push((url, confirming));
+            let answer = answers.lock().unwrap().next().unwrap();
+            async move { answer }
+        })
+        .await;
+        (result, asked.into_inner().unwrap())
+    }
+
+    #[test]
+    fn offdesk_dev_is_asked_first_and_github_second() {
+        let [mirror, github] = pointer_urls();
+        assert!(mirror.starts_with("https://offdesk.dev/updates/ui/"));
+        assert!(mirror.ends_with(&format!("/{CHANNEL}/latest.json")));
+        assert_eq!(
+            github,
+            format!("https://github.com/zalify/offdesk/releases/download/ui-{CHANNEL}/latest.json")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_update_from_the_mirror_ends_the_check() {
+        let (result, asked) = run(vec![Ok(Checked::Staged)]).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked, vec![("mirror".into(), false)]);
+    }
+
+    #[tokio::test]
+    async fn a_mirror_that_fails_falls_back_to_github() {
+        let (result, asked) = run(vec![Err("offline".into()), Ok(Checked::Staged)]).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            asked,
+            vec![("mirror".into(), false), ("github".into(), false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_current_mirror_is_confirmed_with_github_whose_failure_is_no_error() {
+        let (result, asked) = run(vec![Ok(Checked::Current), Err("unreachable".into())]).await;
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            asked,
+            vec![("mirror".into(), false), ("github".into(), true)]
+        );
+        // A mirror that lags: GitHub's newer release is still staged.
+        let (result, _) = run(vec![Ok(Checked::Current), Ok(Checked::Staged)]).await;
+        assert_eq!(result, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn both_failing_reports_both() {
+        let (result, _) = run(vec![Err("offline".into()), Err("rate limited".into())]).await;
+        assert_eq!(result, Err("mirror: offline; github: rate limited".into()));
+    }
 }

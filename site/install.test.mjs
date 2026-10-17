@@ -4,7 +4,7 @@
 // verbatim, and a test file is not part of the site.
 //
 // The script is driven with a fake `curl` on PATH, so nothing here touches
-// the network or the real GitHub API.
+// the network, offdesk.dev's mirror or the real GitHub API.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -22,10 +22,16 @@ function writeExecutable(path, contents) {
 
 // `apiStatus` is what the fake curl reports for the releases API, and
 // `assets` is the set of release files that exist. Between them they cover
-// every way the installer can fail.
+// every way the installer can fail. `mirror` is offdesk.dev: "up" serves the
+// listing and the files, "down" answers nothing, "no-files" serves the
+// listing only, "empty" serves a listing with no release in it, and
+// `mirrorTags` are the releases its listing names. Every URL the installer
+// asks for is in `calls`.
 function run({
   args = [],
   apiStatus = 200,
+  mirror = "up",
+  mirrorTags = ["desktop-v0.3.14", "v1.2.3", "v1.2.10"],
   assets = [
     "offdesk-darwin-arm64",
     "offdesk-node-darwin-arm64",
@@ -47,9 +53,22 @@ exit 1
   );
   writeExecutable(join(binDir, "tmux"), "#!/bin/sh\nexit 0\n");
 
+  const log = join(tempDir, "calls.log");
   writeExecutable(
     join(binDir, "curl"),
     `#!/bin/sh
+eval "url=\\\${$#}"
+printf '%s\\n' "$url" >> '${log}'
+case "$url" in
+  https://offdesk.dev/*)
+    case '${mirror}' in
+      down) exit 7 ;;
+      no-files) case "$url" in */download/*) exit 22 ;; esac ;;
+      empty) case "$url" in */updates/releases.json) printf '[]'; exit 0 ;; esac ;;
+    esac
+    ;;
+esac
+
 # http_status: curl -sSL -o /dev/null -w %{http_code} <url>
 if [ "$1" = "-sSL" ] && [ "$2" = "-o" ]; then
   printf '%s' '${apiStatus}'
@@ -72,6 +91,9 @@ fi
 
 # fetch: curl -fsSL <api>
 if [ "$1" = "-fsSL" ]; then
+  case "$url" in
+    https://offdesk.dev/*) printf '%s' '${JSON.stringify(mirrorTags.map((tag_name) => ({ tag_name })))}'; exit 0 ;;
+  esac
   [ "${apiStatus}" = "200" ] || exit 22
   printf '%s' '[{"tag_name":"desktop-v0.3.14"},{"tag_name":"v1.2.3"},{"tag_name":"v1.2.10"}]'
   exit 0
@@ -87,7 +109,8 @@ exit 1
     encoding: "utf8",
   });
 
-  return { result, prefix, tempDir };
+  const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
+  return { result, prefix, tempDir, calls };
 }
 
 function cleanup(tempDir) {
@@ -197,7 +220,7 @@ test("--hub-only installs the server alone", () => {
 });
 
 test("a 404 from the API is reported as a moved repository, not as a network failure", () => {
-  const { result, tempDir } = run({ apiStatus: 404 });
+  const { result, tempDir } = run({ apiStatus: 404, mirror: "down" });
   try {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /returned 404 — the repository is gone or renamed/);
@@ -208,7 +231,7 @@ test("a 404 from the API is reported as a moved repository, not as a network fai
 });
 
 test("rate limiting says so instead of blaming the release", () => {
-  const { result, tempDir } = run({ apiStatus: 403 });
+  const { result, tempDir } = run({ apiStatus: 403, mirror: "down" });
   try {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /rate-limited/);
@@ -223,6 +246,87 @@ test("a release without this platform's binary points at building from source", 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /release v1\.2\.10 has no offdesk-darwin-arm64/);
     assert.match(result.stderr, /cargo build --release --bin offdesk --bin offdesk-node/);
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("the release list and the files come from offdesk.dev; GitHub only confirms the version", () => {
+  const { result, prefix, tempDir, calls } = run();
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(calls[0], "https://offdesk.dev/updates/releases.json");
+    assert.ok(calls.includes("https://offdesk.dev/download/v1.2.10/offdesk-darwin-arm64"), calls.join("\n"));
+    assert.deepEqual(calls.filter((url) => url.includes("github.com")), ["https://api.github.com/repos/zalify/offdesk/releases"]);
+    assert.equal(readFileSync(join(prefix, "offdesk"), "utf8"), "binary:offdesk-darwin-arm64");
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("with offdesk.dev unreachable everything comes from GitHub as before", () => {
+  const { result, prefix, tempDir, calls } = run({ mirror: "down" });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Installing offdesk v1\.2\.10/);
+    assert.ok(calls.includes("https://api.github.com/repos/zalify/offdesk/releases"), calls.join("\n"));
+    assert.ok(calls.includes("https://github.com/zalify/offdesk/releases/download/v1.2.10/offdesk-darwin-arm64"));
+    assert.equal(readFileSync(join(prefix, "offdesk"), "utf8"), "binary:offdesk-darwin-arm64");
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("a file offdesk.dev cannot serve is fetched from GitHub", () => {
+  const { result, prefix, tempDir, calls } = run({ mirror: "no-files" });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(calls.includes("https://github.com/zalify/offdesk/releases/download/v1.2.10/offdesk-node-darwin-arm64"));
+    assert.ok(existsSync(join(prefix, "offdesk-node")));
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("an empty mirror listing is not \"no release\": GitHub is asked", () => {
+  const { result, tempDir, calls } = run({ mirror: "empty" });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Installing offdesk v1\.2\.10/);
+    assert.ok(calls.includes("https://api.github.com/repos/zalify/offdesk/releases"));
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("a rate-limited GitHub does not matter while offdesk.dev answers", () => {
+  const { result, tempDir } = run({ apiStatus: 403 });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Installing offdesk v1\.2\.10/);
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("a release the mirror has not caught up with is still found on GitHub", () => {
+  const { result, prefix, tempDir, calls } = run({ mirrorTags: ["v1.2.3"] });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Installing offdesk v1\.2\.10/);
+    // offdesk.dev is asked for the file anyway: it redirects to GitHub for what it lacks.
+    assert.ok(calls.includes("https://offdesk.dev/download/v1.2.10/offdesk-darwin-arm64"));
+    assert.ok(existsSync(join(prefix, "offdesk")));
+  } finally {
+    cleanup(tempDir);
+  }
+});
+
+test("a mirror ahead of an unreachable GitHub is believed", () => {
+  const { result, tempDir } = run({ mirrorTags: ["v1.3.0"], apiStatus: 0, assets: ["offdesk-darwin-arm64", "offdesk-node-darwin-arm64", "offdesk-hub-darwin-arm64"] });
+  try {
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Installing offdesk v1\.3\.0/);
   } finally {
     cleanup(tempDir);
   }

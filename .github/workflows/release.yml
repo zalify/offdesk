@@ -283,6 +283,8 @@ jobs:
     uses: ./.github/workflows/desktop-updater-channel.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
+    # The Cloudflare token, for the copy on offdesk.dev.
+    secrets: inherit
     permissions:
       contents: write
 
@@ -322,3 +324,31 @@ jobs:
               --title "Offdesk Dev Android $VERSION (for Android apps up to 0.9.x)" \
               --notes "This release exists only so Android apps up to 0.9.x, whose updater looks for app-v* releases, can find this update. The full release, with every platform, is [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)."
           fi
+
+  # offdesk.dev mirrors the releases for places where github.com is
+  # unreliable (mainland China). updater-channel copied vX.Y.Z already; the
+  # transitional app-vX.Y.Z copy comes here, then the listing the Android
+  # updater, the iPhone notice, the Hub and the installer read first
+  # (updates/releases.json) is written again with both. Without the
+  # CLOUDFLARE_API_TOKEN secret this warns and skips.
+  mirror:
+    name: Mirror the release to offdesk.dev
+    needs: [prepare, updater-channel, android-legacy-release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Copy the files and write the release listing
+        run: node scripts/mirror-release.mjs "$TAG" "app-v$VERSION" --updates

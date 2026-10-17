@@ -1,4 +1,4 @@
-import { devices, expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page, type Route } from "@playwright/test";
 import { createTerminalViaApi, openApp, requestMachineControl, resetMachineState } from "./helpers";
 
 // P01, P02 on iPhone, and P03, with the native side of the phone app
@@ -110,9 +110,11 @@ async function iosBridge(page: Page) {
       },
     } });
   });
+  // The app reads offdesk.dev's copy of the listing and GitHub's at once;
+  // both answer the same here, and `requests` counts GitHub's.
   let requests = 0;
-  await page.route("https://api.github.com/repos/zalify/offdesk/releases**", async (route) => {
-    requests++;
+  const listing = async (route: Route) => {
+    if (route.request().url().startsWith("https://api.github.com/")) requests++;
     const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
     await route.fulfill({ json: [
       // Too fresh to be on TestFlight for everyone yet.
@@ -121,7 +123,9 @@ async function iosBridge(page: Page) {
       { tag_name: "ios-v0.9.0", draft: false, prerelease: false, published_at: daysAgo(2) },
       { tag_name: "ios-v0.8.0", draft: false, prerelease: false, published_at: daysAgo(9) },
     ] });
-  });
+  };
+  await page.route("https://api.github.com/repos/zalify/offdesk/releases**", listing);
+  await page.route("https://offdesk.dev/updates/releases.json", listing);
   return () => requests;
 }
 

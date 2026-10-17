@@ -99,17 +99,21 @@ class OffdeskUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun lookup(): Release? {
         val current = installed().versionName ?: error("Could not read installed version")
-        val connection =
-            connect("https://api.github.com/repos/zalify/offdesk/releases?per_page=100")
-        val json =
-            try {
-                connection.inputStream.use { input ->
-                    JSONArray(String(input.readBytesLimited(4 * 1024 * 1024), Charsets.UTF_8))
-                }
-            } finally {
-                connection.disconnect()
+        val release =
+            newestFromFeeds(RELEASE_FEEDS) { url ->
+                val connection = connect(url)
+                val json =
+                    try {
+                        connection.inputStream.use { input ->
+                            JSONArray(
+                                String(input.readBytesLimited(4 * 1024 * 1024), Charsets.UTF_8)
+                            )
+                        }
+                    } finally {
+                        connection.disconnect()
+                    }
+                ReleasePolicy.select(json, current, Build.SUPPORTED_ABIS.toList())
             }
-        val release = ReleasePolicy.select(json, current, Build.SUPPORTED_ABIS.toList())
         candidate = release
         deferAutomaticCheck(6 * 60 * 60 * 1000L)
         return release
@@ -212,7 +216,7 @@ class OffdeskUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
                 AlertDialog.Builder(activity)
                     .setTitle("Update Offdesk to ${release.version}?")
                     .setMessage(
-                        "Download the official Android update from GitHub and open the system installer."
+                        "Download the official Android update and open the system installer."
                     )
                     .setNegativeButton("Cancel") { _, _ -> finish(invoke, "cancelled") }
                     .setOnCancelListener { finish(invoke, "cancelled") }
@@ -290,7 +294,8 @@ class OffdeskUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
                 // Keep an already verified APK intact while Android may still be reading it.
                 if (!apk.exists()) {
                     partial.delete()
-                    val connection = connect(release.url)
+                    val connection =
+                        firstAnswer(listOfNotNull(release.url, release.fallbackUrl)) { connect(it) }
                     try {
                         connection.inputStream.use { input ->
                             partial.outputStream().use { output ->
@@ -388,6 +393,42 @@ class OffdeskUpdaterPlugin(private val activity: Activity) : Plugin(activity) {
             }
         }
     }
+}
+
+/**
+ * The update the feeds offer, asked in order. The first to offer one wins. A
+ * feed that offers none does not end the search: offdesk.dev's copy may lag a
+ * release GitHub already has, and where GitHub is unreachable its failure then
+ * just means no update. Fails only when no feed answers at all.
+ */
+internal fun newestFromFeeds(feeds: List<String>, select: (String) -> Release?): Release? {
+    var answered = false
+    var failure: Exception? = null
+    for (feed in feeds) {
+        try {
+            select(feed)?.let {
+                return it
+            }
+            answered = true
+        } catch (e: Exception) {
+            failure = e
+        }
+    }
+    if (answered) return null
+    throw failure ?: IllegalStateException("No update source")
+}
+
+/** The first source that answers, in order; the last failure if none does. */
+internal fun <T> firstAnswer(sources: List<String>, read: (String) -> T): T {
+    var failure: Exception? = null
+    for (source in sources) {
+        try {
+            return read(source)
+        } catch (e: Exception) {
+            failure = e
+        }
+    }
+    throw failure ?: IllegalStateException("No update source")
 }
 
 private fun java.io.InputStream.readBytesLimited(limit: Int): ByteArray {

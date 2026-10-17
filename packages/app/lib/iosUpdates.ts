@@ -3,14 +3,20 @@
 // version from 0.23.0 (with every component, the .ipa among them), `ios-vX.Y.Z`
 // before that. Each holds the build sent to TestFlight. A release counts once
 // it is a day old: TestFlight's external testers get a build only after Beta
-// App Review, which lags the GitHub release. At most one request a day,
-// cached in localStorage; "later" holds the card back for a day too.
+// App Review, which lags the GitHub release. At most one check a day,
+// cached in localStorage; "later" holds the card back for a day too. The
+// listing is read from offdesk.dev's copy of it and from GitHub at once:
+// github.com is unreliable from mainland China, and the copy may lag a
+// release. The newest build either names wins.
 
 import { isTauri } from "./platform";
 import { compareVersions } from "./versions";
 
 export const TESTFLIGHT_URL = "https://testflight.apple.com/join/rV4ktaGv";
-export const IOS_RELEASES_URL = "https://api.github.com/repos/zalify/offdesk/releases?per_page=100";
+export const IOS_RELEASE_FEEDS = [
+  "https://offdesk.dev/updates/releases.json",
+  "https://api.github.com/repos/zalify/offdesk/releases?per_page=100",
+];
 export const IOS_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const CACHE_KEY = "offdesk:ios-update";
 
@@ -50,6 +56,22 @@ export function newestIosVersion(releases: unknown, now: number): string | null 
     if (newest === null || (compareVersions(match[2], newest) ?? 0) > 0) newest = match[2];
   }
   return newest;
+}
+
+/** Every listing that answers, as one; it throws only when none does. */
+export async function fetchReleaseFeeds(
+  get: (url: string, init: RequestInit) => Promise<Response> = (url, init) => fetch(url, init),
+): Promise<unknown[]> {
+  const answers = await Promise.allSettled(IOS_RELEASE_FEEDS.map(async (url) => {
+    const response = await get(url, { headers: { Accept: "application/vnd.github+json" } });
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+    const listing: unknown = await response.json();
+    if (!Array.isArray(listing)) throw new Error(`${url} sent no listing`);
+    return listing as unknown[];
+  }));
+  const listings = answers.flatMap((answer) => (answer.status === "fulfilled" ? [answer.value] : []));
+  if (!listings.length) throw new Error("No release listing answered");
+  return listings.flat();
 }
 
 /** The version to offer, if `newest` is newer than what is installed. */
@@ -97,11 +119,7 @@ function set(next: IosUpdateState) { state = next; listeners.forEach((listener) 
 /** Silent by design: a failed check shows nothing and is retried tomorrow. */
 export async function checkIosUpdate(
   readCurrent: () => Promise<string> = async () => (await import("@tauri-apps/api/app")).getVersion(),
-  fetchReleases: () => Promise<unknown> = async () => {
-    const response = await fetch(IOS_RELEASES_URL, { headers: { Accept: "application/vnd.github+json" } });
-    if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
-    return response.json();
-  },
+  fetchReleases: () => Promise<unknown> = () => fetchReleaseFeeds(),
   now = Date.now(),
 ) {
   if (checking) return;

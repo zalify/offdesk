@@ -6,6 +6,12 @@ name: Desktop Updater Channel
 # (the endpoint in every shipped app), so that pointer and its URL stay put
 # while the releases it points into change.
 #
+# It then copies that release and the rewritten manifest to offdesk.dev's
+# mirror (scripts/mirror-release.mjs): apps released after 0.24.0 ask
+# https://offdesk.dev/updates/desktop/latest.json first, because github.com
+# is unreliable from mainland China. Without the CLOUDFLARE_API_TOKEN secret
+# that step warns and skips; with it, a failed upload fails the job.
+#
 # release.yml calls this right after it publishes a vX.Y.Z release. Dispatch
 # it by hand only to retry that step for a published release.
 
@@ -56,3 +62,17 @@ jobs:
               --notes "$notes" \
               --prerelease
           fi
+
+      # The script itself, from the commit that runs this workflow: a tag
+      # older than the mirror has none.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Mirror the release and the updater manifest to offdesk.dev
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_TAG: ${{ inputs.tag }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node scripts/mirror-release.mjs "$SOURCE_TAG" --updates

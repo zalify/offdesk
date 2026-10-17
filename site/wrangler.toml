@@ -2,12 +2,14 @@
 #
 # Cloudflare's guidance for new projects is Workers rather than Pages; Pages
 # still works but no longer gets the investment. worker.js serves ./dist and
-# answers one path itself, /apk, which redirects to the newest Android build
-# (GitHub's /releases/latest is whichever release was newest, usually the
-# hub's). Paths that match a static file never reach the script.
+# answers a few paths itself: /apk, /mac and friends, which redirect to the
+# newest build (GitHub's /releases/latest is whichever release was newest,
+# usually the hub's), and the release mirror under /updates and /download.
+# Paths that match a static file never reach the script.
 #
 # `wrangler deploy` creates the Worker on first run, so nothing has to be
-# created in the dashboard beforehand.
+# created in the dashboard beforehand. The R2 bucket below does have to
+# exist (it does; scripts/mirror-release.mjs fills it).
 
 name = "offdesk"
 main = "worker.js"
@@ -16,3 +18,10 @@ compatibility_date = "2026-09-01"
 [assets]
 directory = "./dist"
 binding = "ASSETS"
+
+# Release files and update metadata copied from GitHub, so that places where
+# github.com is unreliable (mainland China) can still update. See the mirror
+# section of worker.js and docs/releasing.md.
+[[r2_buckets]]
+binding = "RELEASES"
+bucket_name = "offdesk-dev-releases"

@@ -8,11 +8,17 @@ Hub pages with no updater UI. Successful checks defer that fallback for six
 hours; failures allow another attempt after a minute. A newer release on an old
 Hub is offered in a native confirmation dialog. Browser, iOS and desktop update behavior is unchanged.
 
-Updates come from the public `zalify/offdesk` GitHub Releases API. The native
-updater selects the highest newer stable release among the 100 most recent
-releases, skips drafts and prereleases, and prefers the phone's supported
-ARM64/x86_64 asset, falling back to the universal APK. GitHub's SHA-256 asset
-digest is required. From 0.23.0 it reads `vMAJOR.MINOR.PATCH` releases, which
+Updates come from the public `zalify/offdesk` GitHub releases, read first from
+offdesk.dev's copy of the listing (`https://offdesk.dev/updates/releases.json`,
+see [the mirror](releasing.md#the-offdeskdev-mirror)), because github.com is
+unreliable from mainland China, then from the GitHub Releases API: when the
+copy offers no update, or cannot be read. The native updater selects the
+highest newer stable release among the 100 most recent releases, skips drafts
+and prereleases, and prefers the phone's supported ARM64/x86_64 asset, falling
+back to the universal APK. GitHub's SHA-256 asset digest is required. The APK
+link must be that release's own file on GitHub or on
+`https://offdesk.dev/download/`; an offdesk.dev download that fails is tried
+again from GitHub. From 0.23.0 it reads `vMAJOR.MINOR.PATCH` releases, which
 carry every component, as well as the older `app-vMAJOR.MINOR.PATCH` ones;
 apps up to 0.9.x read only `app-v*`. Other tags are ignored.
 
@@ -28,8 +34,9 @@ installer is opened when the App returns to the foreground.
 
 The updater takes no URL/path parameters from JavaScript. The bundled UI and
 explicitly selected legacy Hub origin have check/install permissions; a native
-confirmation is still required before download. Paired clients check GitHub
-directly rather than forwarding update requests through their Hub.
+confirmation is still required before download. Paired clients check
+offdesk.dev and GitHub directly rather than forwarding update requests through
+their Hub.
 
 ## Release requirements
 

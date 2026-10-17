@@ -35,6 +35,9 @@ test('pushes and other events run the Android check with the runtime suite', () 
   assert.deepEqual(scopeFor(['packages/app/components/TerminalWorkspace.web.tsx'],'push'),{site:false,runtime:true,android:true});
   assert.deepEqual(scopeFor(['docs/setup-lan.md'],'push'),{site:false,runtime:false,android:false});
 });
+test('the release mirror script runs the site checks, which test it, and full CI', () => {
+  assert.deepEqual(scopeFor(['scripts/mirror-release.mjs']), {site:true,runtime:true,android:false});
+});
 test('site deployment workflow runs site validation', () => {
   assert.deepEqual(scopeFor(['.github/workflows/site.yml']), {site:true,runtime:false,android:false});
 });
