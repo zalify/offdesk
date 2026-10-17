@@ -133,6 +133,16 @@ type PaneMenuEvent = {
 // function identity on every parent render (panes never render tab strips).
 const NOOP_SELECT_TAB = () => {};
 const NOOP_ACTIVE_REF = () => {};
+// The held pane of a compact switch fades out over this long once the
+// incoming pane is ready.
+const COMPACT_FADE_MS = 120;
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true
+  );
+}
 
 // Prefix actions owned by this component (TerminalCanvas owns the rest).
 const WORKSPACE_PREFIX_ACTIONS: PrefixActionId[] = [
@@ -328,17 +338,27 @@ function TerminalWorkspaceComponent({
   // Render-time refs like the keep-alive above: the outgoing pane must still
   // be in THIS render's tree. During rapid switches the pane that still
   // shows content stays the one held.
+  //
+  // When the hold ends, the held pane fades out over the incoming one
+  // rather than vanishing (instantly under reduced motion). A new switch
+  // drops a fading pane at once.
   const [, rerenderAfterHold] = useReducer((count: number) => count + 1, 0);
   const compactHoldRef = useRef<CompactSwitchHold | null>(null);
+  const compactFadingIdRef = useRef<string | null>(null);
   const renderedCompactTerminalIdRef = useRef(workspace.activeTerminalId);
   if (workspace.activeTerminalId !== renderedCompactTerminalIdRef.current) {
     const to = workspace.activeTerminalId;
+    // Back to the fading pane: still mounted and drawn, nothing to wait for.
+    const backToFading = to !== null && to === compactFadingIdRef.current;
+    compactFadingIdRef.current = null;
     compactHoldRef.current = nextCompactSwitchHold(
       compactHoldRef.current,
       renderedCompactTerminalIdRef.current,
       to,
       // An unreachable terminal never attaches, so it has nothing to wait for.
-      isCompact && Boolean(to && terminalsById.get(to)?.reachable),
+      isCompact &&
+        !backToFading &&
+        Boolean(to && terminalsById.get(to)?.reachable),
     );
     renderedCompactTerminalIdRef.current = to;
   }
@@ -351,13 +371,27 @@ function TerminalWorkspaceComponent({
     compactHoldRef.current = null;
   }
   const releaseCompactHold = useCallback((terminalId: string) => {
-    if (compactHoldRef.current?.to !== terminalId) return;
+    const hold = compactHoldRef.current;
+    if (hold?.to !== terminalId) return;
     compactHoldRef.current = null;
+    compactFadingIdRef.current = prefersReducedMotion() ? null : hold.from;
+    rerenderAfterHold();
+  }, []);
+  const finishCompactFade = useCallback((terminalId: string) => {
+    if (compactFadingIdRef.current !== terminalId) return;
+    compactFadingIdRef.current = null;
     rerenderAfterHold();
   }, []);
   const compactHeldTerminal = compactHoldRef.current
     ? terminalsById.get(compactHoldRef.current.from) ?? null
     : null;
+  const compactFadingTerminal =
+    compactFadingIdRef.current &&
+    compactFadingIdRef.current !== workspace.activeTerminalId
+      ? terminalsById.get(compactFadingIdRef.current) ?? null
+      : null;
+  // The pane over the incoming one: held while it waits, then fading.
+  const compactCoverTerminal = compactHeldTerminal ?? compactFadingTerminal;
   // Panes in the active group — a group with a single pane renders no
   // focused-pane accent border (a lone pane needs no focus indicator).
   const activeGroupPaneCount = activeGroup
@@ -1030,22 +1064,33 @@ function TerminalWorkspaceComponent({
                   onReady={releaseCompactHold}
                 />
               </div>
-              {compactHeldTerminal && (
+              {compactCoverTerminal && (
                 <div
-                  key={compactHeldTerminal.id}
-                  data-testid="compact-held-pane"
+                  key={compactCoverTerminal.id}
+                  data-testid={
+                    compactHeldTerminal ? "compact-held-pane" : "compact-fading-pane"
+                  }
                   inert
                   aria-hidden
+                  onAnimationEnd={(event) => {
+                    // The dim, bar and cursor animate inside; only the
+                    // pane's own fade ends it.
+                    if (event.target !== event.currentTarget) return;
+                    finishCompactFade(compactCoverTerminal.id);
+                  }}
                   style={{
                     position: "absolute",
                     inset: 0,
                     zIndex: 1,
                     display: "flex",
                     pointerEvents: "none",
+                    animation: compactHeldTerminal
+                      ? undefined
+                      : `offdeskFadeOut ${COMPACT_FADE_MS}ms ease-out both`,
                   }}
                 >
                   <WorkspacePaneLeaf
-                    terminal={compactHeldTerminal}
+                    terminal={compactCoverTerminal}
                     isActive={false}
                     isController={isController}
                     canType={canType}
@@ -1063,7 +1108,9 @@ function TerminalWorkspaceComponent({
                     onRequestControl={onRequestControl}
                     onReleaseControl={onReleaseControl}
                   />
-                  <CompactSwitchProgress />
+                  {/* Frozen while fading, so the dim and bar leave with the
+                      screen instead of jumping away or still fading in. */}
+                  <CompactSwitchProgress paused={!compactHeldTerminal} />
                 </div>
               )}
             </>
@@ -1646,7 +1693,8 @@ export function WorkspacePaneLeaf({
 // Over the held pane of a compact switch: the screen dims under a progress
 // bar. Both fade in only after a moment, so a switch that is ready at once
 // shows neither.
-function CompactSwitchProgress() {
+function CompactSwitchProgress({ paused }: { paused: boolean }) {
+  const playState = paused ? "paused" : "running";
   return (
     <div
       data-testid="compact-switch-progress"
@@ -1655,6 +1703,7 @@ function CompactSwitchProgress() {
         inset: 0,
         background: "rgba(0, 0, 0, 0.35)",
         animation: "offdeskFadeIn 160ms ease-out 150ms both",
+        animationPlayState: playState,
         overflow: "hidden",
       }}
     >
@@ -1665,6 +1714,7 @@ function CompactSwitchProgress() {
           height: 2,
           background: colors.accent,
           animation: "offdeskReconnect 1.1s ease-in-out infinite",
+          animationPlayState: playState,
         }}
       />
     </div>
