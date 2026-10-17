@@ -238,7 +238,7 @@ fn read_status() -> HubStatus {
     let setup = hub_command(&["setup-check"], None)
         .and_then(|command| run(command, "checking this Mac"))
         .and_then(|stdout| serde_json::from_str::<SetupStatus>(stdout.trim()).map_err(|e| e.to_string()))
-        .unwrap_or_else(|_| SetupStatus { error: Some("Could not check this Mac. Try setup again with the latest Offdesk DEV app.".into()), ..Default::default() });
+        .unwrap_or_else(|_| SetupStatus { error: Some("Could not check this Mac. Try setup again with the latest Offdesk Dev app.".into()), ..Default::default() });
     HubStatus {
         supported: cfg!(any(target_os = "macos", target_os = "linux")),
         bundled,

@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
+    <img src="docs/media/logo.svg" alt="Offdesk Dev" height="48">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@
   <a href="README.es.md">Español</a>
 </p>
 
-# Offdesk DEV — selbst gehostetes Remote-Terminal für tmux und KI-Coding-Agents
+# Offdesk Dev — selbst gehostetes Remote-Terminal für tmux und KI-Coding-Agents
 
 > Dies ist eine Übersetzung. Maßgeblich ist das englische [README.md](README.md),
 > falls die beiden voneinander abweichen. Website auf Deutsch:
@@ -37,7 +37,7 @@ Hub mit dauerhaften **tmux-Sessions** auf deinen eigenen macOS- und
 Linux-Rechnern. Befehle laufen auf dem entfernten Rechner; die Clients
 übertragen Terminal-Ein- und -Ausgabe über WebSocket-Verbindungen.
 
-Die App wird als **Offdesk DEV** installiert; dieses README nennt das Projekt
+Die App wird als **Offdesk Dev** installiert; dieses README nennt das Projekt
 kurz Offdesk. Die Kommandozeilenwerkzeuge behalten den Namen `offdesk`: die
 `offdesk` CLI, der Server `offdesk-hub` und der Rechner-Agent `offdesk-node`.
 

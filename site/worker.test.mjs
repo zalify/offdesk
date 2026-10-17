@@ -134,6 +134,16 @@ test("downloads still resolve once the app is named Offdesk DEV (GitHub turns th
   assert.match(desktopTarget(renamed, "linux"), /Offdesk\.DEV_0\.7\.12_amd64\.AppImage$/);
 });
 
+test("downloads resolve after the rename to Offdesk Dev too (Offdesk.Dev_…)", () => {
+  const url = (name) => `https://github.com/zalify/offdesk/releases/download/v0.25.0/${name}`;
+  const release = { tag_name: "v0.25.0", html_url: "https://github.com/zalify/offdesk/releases/tag/v0.25.0",
+    assets: ["Offdesk.Dev_0.25.0_universal.dmg", "Offdesk.Dev_0.25.0_x64_en-US.msi", "Offdesk.Dev_0.25.0_amd64.AppImage"]
+      .map((name) => ({ name, browser_download_url: url(name) })) };
+  assert.match(desktopTarget([release, ...releases], "mac"), /Offdesk\.Dev_0\.25\.0_universal\.dmg$/);
+  assert.match(desktopTarget([release, ...releases], "windows"), /Offdesk\.Dev_0\.25\.0_x64_en-US\.msi$/);
+  assert.match(desktopTarget([release, ...releases], "linux"), /Offdesk\.Dev_0\.25\.0_amd64\.AppImage$/);
+});
+
 test("from 0.23.0 one release carries everything, and it wins over its transitional app-v copy", () => {
   const url = (tag, name) => `https://github.com/zalify/offdesk/releases/download/${tag}/${name}`;
   const files = (tag, version) => [

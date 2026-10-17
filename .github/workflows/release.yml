@@ -103,14 +103,14 @@ jobs:
               done
               notes="$RUNNER_TEMP/notes.md"
               cat > "$notes" <<'EOF'
-          Offdesk DEV __TAG__: every component at __VERSION__, built from the same commit.
+          Offdesk Dev __TAG__: every component at __VERSION__, built from the same commit.
 
           | Component | Assets |
           |---|---|
           | Hub, node and CLI — Linux and macOS, x64 and arm64 | `offdesk-<os>-<arch>`, `offdesk-node-<os>-<arch>`, `offdesk-hub-<os>-<arch>` (`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`) |
-          | Desktop app — macOS (universal) | `Offdesk.DEV___VERSION___universal.dmg`; updater: `Offdesk.DEV_universal.app.tar.gz` |
-          | Desktop app — Windows | `Offdesk.DEV___VERSION___x64_en-US.msi`, `Offdesk.DEV___VERSION___x64-setup.exe` |
-          | Desktop app — Linux | `Offdesk.DEV___VERSION___amd64.AppImage`, `Offdesk.DEV___VERSION___amd64.deb`, `Offdesk.DEV-__VERSION__-1.x86_64.rpm` |
+          | Desktop app — macOS (universal) | `Offdesk.Dev___VERSION___universal.dmg`; updater: `Offdesk.Dev_universal.app.tar.gz` |
+          | Desktop app — Windows | `Offdesk.Dev___VERSION___x64_en-US.msi`, `Offdesk.Dev___VERSION___x64-setup.exe` |
+          | Desktop app — Linux | `Offdesk.Dev___VERSION___amd64.AppImage`, `Offdesk.Dev___VERSION___amd64.deb`, `Offdesk.Dev-__VERSION__-1.x86_64.rpm` |
           | Desktop updater | `latest.json` and the `.sig` beside each updater bundle |
           | Android | `offdesk-__VERSION__-arm64-v8a.apk` (modern phones), `offdesk-__VERSION__-x86_64.apk`, `offdesk-__VERSION__-universal.apk` (any phone, larger) |
           | iOS | `offdesk-__VERSION__.ipa` — install from TestFlight; the .ipa is the same build, for the record |
@@ -128,7 +128,7 @@ jobs:
               fi
               id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
                 -f tag_name="$TAG" \
-                -f name="Offdesk DEV $TAG" \
+                -f name="Offdesk Dev $TAG" \
                 -F body=@"$notes" \
                 -F draft=true \
                 --jq .id)
@@ -319,6 +319,6 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --target "$(git rev-parse HEAD)" \
               --latest=false \
-              --title "Offdesk DEV Android $VERSION (for Android apps up to 0.9.x)" \
+              --title "Offdesk Dev Android $VERSION (for Android apps up to 0.9.x)" \
               --notes "This release exists only so Android apps up to 0.9.x, whose updater looks for app-v* releases, can find this update. The full release, with every platform, is [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)."
           fi

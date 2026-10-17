@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
+    <img src="docs/media/logo.svg" alt="Offdesk Dev" height="48">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@
   <a href="README.es.md">Español</a>
 </p>
 
-# Offdesk DEV — tmux와 AI 코딩 에이전트를 위한 셀프 호스팅 원격 터미널
+# Offdesk Dev — tmux와 AI 코딩 에이전트를 위한 셀프 호스팅 원격 터미널
 
 > 이 문서는 [영어 README](README.md)의 번역본입니다. 두 문서의 내용이 다를 경우
 > 영어 README를 기준으로 합니다. 한국어 웹사이트: <https://offdesk.dev/ko/>
@@ -34,7 +34,7 @@ iPhone, Android 휴대폰, 데스크톱 앱에서 사용할 수 있습니다. Of
 **tmux 세션**에 클라이언트를 연결합니다. 명령은 원격 머신에서 실행되고,
 클라이언트는 WebSocket 연결로 터미널 입출력을 주고받습니다.
 
-설치되는 앱의 이름은 **Offdesk DEV**이며, 이 README에서는 줄여서 Offdesk라고
+설치되는 앱의 이름은 **Offdesk Dev**이며, 이 README에서는 줄여서 Offdesk라고
 부릅니다. 명령줄 도구는 `offdesk`라는 이름을 그대로 씁니다. `offdesk` CLI,
 `offdesk-hub` 서버, `offdesk-node` 머신 에이전트가 그것입니다.
 

@@ -40,7 +40,7 @@ const jsonLd = {
     {
       "@type": "WebSite",
       "@id": `${origin}/#website`,
-      name: "Offdesk DEV",
+      name: "Offdesk Dev",
       url: `${origin}/`,
       inLanguage: locales.map((l) => l.htmlLang),
       publisher: { "@id": org["@id"] },
@@ -48,7 +48,7 @@ const jsonLd = {
     {
       "@type": "SoftwareApplication",
       "@id": `${origin}/#software`,
-      name: "Offdesk DEV",
+      name: "Offdesk Dev",
       alternateName: "Offdesk",
       description: home.description,
       url: pageUrl("home", locale),
@@ -84,7 +84,7 @@ const jsonLd = {
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0c0c0b" />
     <meta property="og:type" content="website" />
-    <meta property="og:site_name" content="Offdesk DEV" />
+    <meta property="og:site_name" content="Offdesk Dev" />
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />

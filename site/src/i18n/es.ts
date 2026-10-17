@@ -8,7 +8,7 @@ const repo = "https://github.com/zalify/offdesk";
 const es: Dict = {
   chrome: {
     skip: "saltar al contenido",
-    homeLabel: "Inicio de Offdesk DEV",
+    homeLabel: "Inicio de Offdesk Dev",
     navLabel: "Principal",
     nav: {
       download: "descargar",
@@ -308,7 +308,7 @@ const es: Dict = {
     steps: {
       install: {
         title: "1. Instala la app de Mac",
-        body: "Descarga la imagen de disco desde la <a href='/mac'>página de descarga para Mac</a>. Abre el DMG, arrastra Offdesk DEV a Aplicaciones y abre la copia instalada. No la sigas ejecutando desde la imagen de disco montada.",
+        body: "Descarga la imagen de disco desde la <a href='/mac'>página de descarga para Mac</a>. Abre el DMG, arrastra Offdesk Dev a Aplicaciones y abre la copia instalada. No la sigas ejecutando desde la imagen de disco montada.",
         extra:
           "Una cuenta estándar de macOS puede necesitar la contraseña de un administrador para escribir en la carpeta Aplicaciones del sistema. También puedes usar una carpeta Aplicaciones dentro de tu carpeta de inicio. La etiqueta RC de la captura identifica nuestra build de prueba.",
         alt: "La ventana de la imagen de disco del Mac con Offdesk RC y un alias de la carpeta Aplicaciones.",
@@ -330,7 +330,7 @@ const es: Dict = {
           "La herramienta de terminal, tmux, está disponible.",
         ],
         extra:
-          "Cuando esté listo, verás <strong>Connect your phone</strong>. Elige <strong>Pair an encrypted device</strong> para generar el código de emparejamiento. Si falla una comprobación, usa la acción de reintentar de la pantalla de configuración. Si macOS pregunta si Offdesk DEV puede aceptar conexiones entrantes, permítelo en el Mac al que quieres que llegue tu teléfono.",
+          "Cuando esté listo, verás <strong>Connect your phone</strong>. Elige <strong>Pair an encrypted device</strong> para generar el código de emparejamiento. Si falla una comprobación, usa la acción de reintentar de la pantalla de configuración. Si macOS pregunta si Offdesk Dev puede aceptar conexiones entrantes, permítelo en el Mac al que quieres que llegue tu teléfono.",
       },
       terminal: {
         title: "4. Abre tu primera terminal",

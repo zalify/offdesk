@@ -14,7 +14,7 @@ const repo = "https://github.com/zalify/offdesk";
 const en = {
   chrome: {
     skip: "skip to content",
-    homeLabel: "Offdesk DEV home",
+    homeLabel: "Offdesk Dev home",
     navLabel: "Main",
     nav: {
       download: "download",
@@ -313,7 +313,7 @@ const en = {
     steps: {
       install: {
         title: "1. Install the Mac app",
-        body: "Get the disk image from the <a href='/mac'>Mac download page</a>. Open the DMG, drag Offdesk DEV into Applications, then open the installed copy. Do not keep running it from the mounted disk image.",
+        body: "Get the disk image from the <a href='/mac'>Mac download page</a>. Open the DMG, drag Offdesk Dev into Applications, then open the installed copy. Do not keep running it from the mounted disk image.",
         extra:
           "A standard macOS account may need an administrator’s password to write to the system Applications folder. You can also use an Applications folder inside your own home directory. RC in the screenshot identifies our test build.",
         alt: "The Mac disk image window containing Offdesk RC and an Applications folder shortcut.",
@@ -335,7 +335,7 @@ const en = {
           "The terminal tool, tmux, is available.",
         ],
         extra:
-          "Once ready, you will see <strong>Connect your phone</strong>. Choose <strong>Pair an encrypted device</strong> to generate the pairing code. If a check fails, use the retry action on the setup screen. If macOS asks whether Offdesk DEV can accept incoming connections, allow it on the Mac you want your phone to reach.",
+          "Once ready, you will see <strong>Connect your phone</strong>. Choose <strong>Pair an encrypted device</strong> to generate the pairing code. If a check fails, use the retry action on the setup screen. If macOS asks whether Offdesk Dev can accept incoming connections, allow it on the Mac you want your phone to reach.",
       },
       terminal: {
         title: "4. Open your first terminal",

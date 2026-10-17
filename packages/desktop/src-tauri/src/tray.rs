@@ -29,11 +29,11 @@ fn show_and_emit<R: Runtime>(app: &AppHandle<R>, event: &str) {
 
 /// The menu, with `restart to update` on top while an update waits.
 fn build_menu<R: Runtime>(app: &AppHandle<R>, update: Option<&str>) -> tauri::Result<Menu<R>> {
-    let open = MenuItem::with_id(app, "open", "Open Offdesk DEV", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Offdesk Dev", true, None::<&str>)?;
     let code = MenuItem::with_id(app, "code", "Show the phone code", true, None::<&str>)?;
     let add = MenuItem::with_id(app, "add", "Add a machine", true, None::<&str>)?;
     let copy = MenuItem::with_id(app, "copy", "Copy hub address", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Offdesk DEV", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Offdesk Dev", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let recover = MenuItem::with_id(
         app,

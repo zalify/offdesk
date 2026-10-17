@@ -40,7 +40,7 @@ Pushing the tag starts the `Release` workflow (`.github/workflows/release.yml`):
 
 1. **prepare** checks that the tag matches both `tauri.conf.json` and the
    Cargo workspace version, and fails otherwise. It then creates the draft
-   release `vX.Y.Z` ("Offdesk DEV vX.Y.Z"): a table of every component and
+   release `vX.Y.Z` ("Offdesk Dev vX.Y.Z"): a table of every component and
    its assets, the install line `curl -fsSL https://offdesk.dev/install | sh`,
    and a link to the release note. Nobody else can see a draft.
 2. **Four builds in parallel**, each running a reusable workflow and

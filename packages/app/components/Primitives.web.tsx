@@ -408,7 +408,7 @@ export function Logo({ size = 28, title }: { size?: number; title?: string }) {
 /** The `offdesk/dev` lockup. */
 export function Wordmark({ size = 18 }: { size?: number }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="img" aria-label="Offdesk DEV">
+    <div style={{ display: "flex", alignItems: "center", gap: 10 }} role="img" aria-label="Offdesk Dev">
       <Logo size={Math.round(size * 2)} />
       <span aria-hidden="true" style={{ fontFamily: fontDisplay, fontSize: size, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>
         offdesk<span className="odk-wordmark-dev">/dev</span>

@@ -5,7 +5,7 @@ const repo = "https://github.com/zalify/offdesk";
 const zh: Dict = {
   chrome: {
     skip: "跳到正文",
-    homeLabel: "Offdesk DEV 首页",
+    homeLabel: "Offdesk Dev 首页",
     navLabel: "主导航",
     nav: {
       download: "下载",
@@ -304,7 +304,7 @@ const zh: Dict = {
     steps: {
       install: {
         title: "1. 下载并安装 Mac App",
-        body: "从官网的 <a href='/mac'>Mac 下载入口</a>获取安装包，打开 DMG，将 Offdesk DEV 拖入 Applications，再从安装位置打开 App。不要一直从磁盘映像中运行它。",
+        body: "从官网的 <a href='/mac'>Mac 下载入口</a>获取安装包，打开 DMG，将 Offdesk Dev 拖入 Applications，再从安装位置打开 App。不要一直从磁盘映像中运行它。",
         extra:
           "如果你使用标准账户，写入系统 Applications 可能需要管理员密码；也可以安装到自己用户目录下的 Applications 文件夹。截图里的 RC 是测试版名称。",
         alt: "Mac 的 DMG 窗口，包含 Offdesk RC App 和 Applications 文件夹入口。",
@@ -326,7 +326,7 @@ const zh: Dict = {
           "终端工具 tmux 可用。",
         ],
         extra:
-          "完成后会出现 <strong>Connect your phone</strong>，再点击 <strong>Pair an encrypted device</strong> 生成配对码。如果检查失败，使用页面上的重试按钮。如果 macOS 询问是否允许 Offdesk DEV 的入站连接，在你要让手机连接的这台 Mac 上允许它。",
+          "完成后会出现 <strong>Connect your phone</strong>，再点击 <strong>Pair an encrypted device</strong> 生成配对码。如果检查失败，使用页面上的重试按钮。如果 macOS 询问是否允许 Offdesk Dev 的入站连接，在你要让手机连接的这台 Mac 上允许它。",
       },
       terminal: {
         title: "4. 打开第一个终端",

@@ -1101,7 +1101,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             >
               <span style={{ fontSize: 13, fontWeight: 600, color: colors.fg0 }}>updates happen on each Mac</span>
               <span style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
-                The phone can't update a Mac. Open Offdesk DEV there, or run the command it shows.
+                The phone can't update a Mac. Open Offdesk Dev there, or run the command it shows.
               </span>
               {updateCopy === "failed" ? (
                 <code role="alert" style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: colors.fg1, overflowWrap: "anywhere" }}>

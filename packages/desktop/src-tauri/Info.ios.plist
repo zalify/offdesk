@@ -7,7 +7,7 @@
   <!-- The name under the icon and in Settings. The Xcode product keeps its
        name (PRODUCT_NAME, tauri.ios.conf.json), so the build is unchanged. -->
   <key>CFBundleDisplayName</key>
-  <string>Offdesk DEV</string>
+  <string>Offdesk Dev</string>
   <key>NSCameraUsageDescription</key>
   <string>offdesk reads the sign-in code your hub shows, so you never type an address or a token on the phone.</string>
   <key>NSLocalNetworkUsageDescription</key>

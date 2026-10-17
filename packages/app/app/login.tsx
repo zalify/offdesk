@@ -460,8 +460,8 @@ export default function LoginScreen({
         {permissionBlocked ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <Body size={14}>Two switches on a phone can block a hub on your own Wi-Fi:</Body>
-            {step("1", "allow local network", "Settings → Apps → Offdesk DEV → Local Network. iOS asks once, and a No sticks until you flip it here.")}
-            {step("2", "allow wi‑fi and mobile data", "On phones sold in China: Settings → Offdesk DEV → Wireless Data → WLAN & Cellular.")}
+            {step("1", "allow local network", "Settings → Apps → Offdesk Dev → Local Network. iOS asks once, and a No sticks until you flip it here.")}
+            {step("2", "allow wi‑fi and mobile data", "On phones sold in China: Settings → Offdesk Dev → Wireless Data → WLAN & Cellular.")}
           </div>
         ) : (
           <Body size={14}>

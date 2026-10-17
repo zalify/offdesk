@@ -31,7 +31,7 @@ test("Android checks for updates before login and supports permission retry", as
   await page.goto("/login");
   const toast = page.getByTestId("android-update-toast");
   // P02: the floating card, with both versions.
-  await expect(toast).toContainText("Offdesk DEV 0.7.0", { timeout: 15000 });
+  await expect(toast).toContainText("Offdesk Dev 0.7.0", { timeout: 15000 });
   await expect(toast).toContainText("you have 0.6.2");
   await toast.getByRole("button", { name: "install", exact: true }).click();
   await expect(toast).toContainText("Allow Offdesk to install apps");
