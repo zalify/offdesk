@@ -13,6 +13,7 @@ import {
   mobileOpenHostSheet,
   mobileTakeControl,
   openApp,
+  readTerminalBuffer,
   requestMachineControl,
   resetMachineState,
   swipeTitleBar,
@@ -219,6 +220,64 @@ test("mobile terminal switch does not focus the new terminal automatically", asy
   await expect
     .poll(() => terminalHasKeyboardFocus(page), { timeout: 20_000 })
     .toBe(false);
+});
+
+test("mobile terminal switch never shows a blank terminal", async ({ page }) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  const firstTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  const secondTerminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await showDrawnTerminal(page, firstTerminalId);
+
+  await startSwitchFrameSampler(page, secondTerminalId);
+  await page.getByTestId("mobile-title-bar-label").click();
+  await page.getByTestId(`mobile-session-row-${secondTerminalId}`).click();
+
+  await expectSwitchSettledWithoutBlankFrames(page);
+  await expect(page.getByTestId("compact-held-pane")).toHaveCount(0);
+  await expect(page.getByTestId(`workspace-pane-${firstTerminalId}`)).toHaveCount(0);
+});
+
+test("mobile terminal switch over a slow link keeps the previous screen until the new one is up", async ({
+  page,
+}) => {
+  // A remote hub: everything the incoming terminal's socket receives arrives
+  // late, longer than any fixed hold timeout would wait.
+  const SLOW_LINK_MS = 1500;
+  let slowTerminalId: string | null = null;
+  await page.routeWebSocket(/\/ws\/terminal\//, (socket) => {
+    const server = socket.connectToServer();
+    if (!slowTerminalId || !socket.url().includes(slowTerminalId)) return;
+    server.onMessage((message) => {
+      setTimeout(() => socket.send(message), SLOW_LINK_MS);
+    });
+  });
+
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  const firstTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
+  const secondTerminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await showDrawnTerminal(page, firstTerminalId);
+  slowTerminalId = secondTerminalId;
+
+  await startSwitchFrameSampler(page, secondTerminalId);
+  await page.getByTestId("mobile-title-bar-label").click();
+  await page.getByTestId(`mobile-session-row-${secondTerminalId}`).click();
+
+  // The old screen stays up, marked as switching, until the new one has
+  // drawn.
+  await expect(page.getByTestId("compact-switch-progress")).toBeVisible();
+  await expect(
+    page.getByTestId("compact-held-pane").getByTestId(`workspace-pane-${firstTerminalId}`),
+  ).toHaveCount(1);
+
+  await expectSwitchSettledWithoutBlankFrames(page);
+  const frames = await readSwitchFrames(page);
+  // The hold lasted through the slow link rather than giving up early.
+  expect(frames.filter((frame) => frame.held).length).toBeGreaterThan(30);
+  await expect(page.getByTestId("compact-switch-progress")).toHaveCount(0);
 });
 
 test("mobile touch drag sends terminal scroll input", async ({ page }) => {
@@ -1095,4 +1154,67 @@ for (const colorScheme of ["light", "dark"] as const) {
       }
     });
   });
+}
+
+type SwitchFrame = { held: boolean; blank: boolean; settled: boolean };
+
+async function showDrawnTerminal(page: Page, terminalId: string): Promise<void> {
+  await page.getByTestId("mobile-title-bar-label").click();
+  await page.getByTestId(`mobile-session-row-${terminalId}`).click();
+  await expect
+    .poll(async () => (await readTerminalBuffer(page, terminalId)).trim())
+    .not.toBe("");
+  await expect(page.getByTestId("compact-held-pane")).toHaveCount(0);
+}
+
+// Sample every frame of a switch to `targetId`: once the incoming pane is
+// mounted, it either sits under the held outgoing pane or already shows its
+// attach redraw. A frame with neither is the blank flash.
+async function startSwitchFrameSampler(page: Page, targetId: string): Promise<void> {
+  await page.evaluate((target) => {
+    type Term = {
+      buffer: {
+        active: {
+          length: number;
+          getLine: (i: number) => { translateToString: (trim: boolean) => string } | undefined;
+        };
+      };
+    };
+    const w = window as unknown as {
+      __offdeskTerminals?: Map<string, Term>;
+      __switchFrames?: { held: boolean; blank: boolean; settled: boolean }[];
+    };
+    const frames: { held: boolean; blank: boolean; settled: boolean }[] = [];
+    w.__switchFrames = frames;
+    const sample = () => {
+      const held = document.querySelector("[data-testid='compact-held-pane']") !== null;
+      const term = w.__offdeskTerminals?.get(target);
+      let drawn = false;
+      if (term) {
+        const buf = term.buffer.active;
+        for (let i = 0; i < buf.length && !drawn; i++) {
+          drawn = (buf.getLine(i)?.translateToString(true) ?? "").trim() !== "";
+        }
+      }
+      const settled = Boolean(term) && drawn && !held;
+      frames.push({ held, blank: Boolean(term) && !held && !drawn, settled });
+      if (!settled && frames.length < 3000) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, targetId);
+}
+
+async function readSwitchFrames(page: Page): Promise<SwitchFrame[]> {
+  return page.evaluate(
+    () => (window as unknown as { __switchFrames: SwitchFrame[] }).__switchFrames,
+  );
+}
+
+async function expectSwitchSettledWithoutBlankFrames(page: Page): Promise<void> {
+  await expect
+    .poll(async () => (await readSwitchFrames(page)).at(-1)?.settled ?? false, {
+      timeout: 20_000,
+    })
+    .toBe(true);
+  expect((await readSwitchFrames(page)).filter((frame) => frame.blank)).toHaveLength(0);
 }

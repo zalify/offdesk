@@ -21,7 +21,16 @@ interface UseTerminalLiveSocketOptions {
   sessionGeneration: number;
   setSessionGeneration: (next: (value: number) => number) => void;
   onReconnectingChange?: (reconnecting: boolean) => void;
+  // Runs in the socket's open handler, before any of its messages. Must be
+  // stable: it is an effect dependency.
+  onSocketOpen?: () => void;
+  // While set, called as each output write is issued; the callback it
+  // returns runs once that write is parsed and painted. TerminalView sets it
+  // only until its first screen is up, so streaming output pays nothing.
+  outputPaintWatcherRef?: RefObject<OutputPaintWatcher | null>;
 }
+
+export type OutputPaintWatcher = () => () => void;
 
 const MAX_PENDING_OUTPUT_BYTES = 128 * 1024;
 // Output arriving later than this after an input send is stream output, not
@@ -47,6 +56,8 @@ export function useTerminalLiveSocket({
   onReconnectingChange,
   onControlMessage,
   onSocketClose,
+  onSocketOpen,
+  outputPaintWatcherRef,
 }: UseTerminalLiveSocketOptions) {
   useEffect(() => {
     const term = termRef.current;
@@ -73,6 +84,23 @@ export function useTerminalLiveSocket({
     let pendingBytes = 0;
     let rafId = 0;
 
+    // xterm parses a write asynchronously and paints it on its next render
+    // frame, so two frames after the parse callback the write is on screen.
+    const writeOutput = (data: Uint8Array) => {
+      const painted = outputPaintWatcherRef?.current?.();
+      if (!painted) {
+        term.write(data);
+        return;
+      }
+      term.write(data, () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!disposed) painted();
+          });
+        });
+      });
+    };
+
     const flushPending = () => {
       if (pendingBytes > 0) {
         const merged = new Uint8Array(pendingBytes);
@@ -81,7 +109,7 @@ export function useTerminalLiveSocket({
           merged.set(chunk, offset);
           offset += chunk.length;
         }
-        term.write(merged);
+        writeOutput(merged);
         pendingChunks = [];
         pendingBytes = 0;
       }
@@ -125,7 +153,7 @@ export function useTerminalLiveSocket({
         // Interactive path: nothing queued this frame — write immediately so
         // a keystroke echo doesn't wait for the next animation frame. The rAF
         // is a burst marker: chunks arriving before it fires get batched.
-        term.write(chunk);
+        writeOutput(chunk);
         rafId = requestAnimationFrame(flushPending);
         return;
       }
@@ -219,6 +247,7 @@ export function useTerminalLiveSocket({
     window.addEventListener("pageshow", handlePageShow);
 
     ws.onopen = () => {
+      onSocketOpen?.();
       reconnectController.handleSocketOpen();
       onReconnectingChange?.(false);
       refreshTerminalSurface();
@@ -254,6 +283,8 @@ export function useTerminalLiveSocket({
     onReconnectingChange,
     onControlMessage,
     onSocketClose,
+    onSocketOpen,
+    outputPaintWatcherRef,
     wsRef,
     wsUrl,
   ]);

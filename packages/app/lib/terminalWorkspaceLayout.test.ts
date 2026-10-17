@@ -17,6 +17,7 @@ import {
   getMobileWorkspaceTabs,
   isWorkspaceGroupFull,
   mountedWorkspaceGroupIds,
+  nextCompactSwitchHold,
   planNewTerminalPlacement,
   reconcileTerminalWorkspace,
   rotateWorkspaceLayout,
@@ -1421,5 +1422,28 @@ describe("layouts saved while browsers were panes", () => {
     expect(ws.groups).toHaveLength(1);
     expect(collectPaneTerminalIds(ws.groups[0].root)).toEqual(["a", "b"]);
     expect(ws.groups[0].paneCount).toBe(2);
+  });
+});
+
+describe("nextCompactSwitchHold", () => {
+  it("holds the shown pane over the incoming one", () => {
+    expect(nextCompactSwitchHold(null, "a", "b", true)).toEqual({ from: "a", to: "b" });
+  });
+
+  it("keeps holding the pane that drew during rapid switches", () => {
+    const hold = nextCompactSwitchHold(null, "a", "b", true);
+    expect(nextCompactSwitchHold(hold, "b", "c", true)).toEqual({ from: "a", to: "c" });
+  });
+
+  it("ends the hold when switching back to the held pane", () => {
+    const hold = nextCompactSwitchHold(null, "a", "b", true);
+    expect(nextCompactSwitchHold(hold, "b", "a", true)).toBeNull();
+  });
+
+  it("does not hold when holding is not allowed or nothing was shown", () => {
+    expect(nextCompactSwitchHold(null, "a", "b", false)).toBeNull();
+    expect(nextCompactSwitchHold({ from: "a", to: "b" }, "b", "c", false)).toBeNull();
+    expect(nextCompactSwitchHold(null, null, "b", true)).toBeNull();
+    expect(nextCompactSwitchHold(null, "a", null, true)).toBeNull();
   });
 });
