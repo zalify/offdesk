@@ -18,7 +18,10 @@ import "@xterm/xterm/css/xterm.css";
 import type { TerminalViewRef, TerminalViewProps } from "./TerminalView.types";
 import { measureTerminalSurface, readXtermCellMetrics } from "./terminalXtermMetrics";
 import { useTerminalFitController } from "./useTerminalFitController";
-import { useTerminalLiveSocket } from "./useTerminalLiveSocket";
+import {
+  useTerminalLiveSocket,
+  type OutputPaintWatcher,
+} from "./useTerminalLiveSocket";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useTerminalTheme } from "@/lib/theme";
 import {
@@ -72,6 +75,11 @@ const TERM_ROWS = 36;
 // overrides tmux's 5-line default), giving finger-true scrolling. The old
 // value of 6 (picked when tmux still jumped 5 lines/report) overshot 2x.
 const TERMINAL_SCROLL_SENSITIVITY = 3;
+// Once a screen is painted but a resize sent before it is still awaiting
+// its redraw, how long to wait before calling that screen ready anyway: a
+// resize the hub drops (control moved meanwhile) never brings a redraw.
+// Generous, since the redraw needs a full round trip over remote links.
+const RESIZE_REDRAW_WAIT_MS = 3000;
 
 // Invoke a Tauri command through the internals global rather than
 // dynamic-importing the plugin's JS package. Metro turns
@@ -483,7 +491,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     canResizeTerminal,
     onTitleChange,
     onReconnectingChange,
-    onFirstOutput,
+    onReady,
     inputTransformRef,
     cwd,
     onOpenDirectory,
@@ -755,16 +763,80 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     }, []);
 
-    const { fitToContainer, resizeLocalTerminal } = useTerminalFitController({
-      termRef,
-      wsRef,
-      fitRef,
-      viewportSizeRef,
-      displayMode,
-      isControllerRef,
-      canResizeTerminalRef,
-      scheduleMeasure,
-    });
+    // Readiness (onReady): the first screen this view shows is painted at
+    // the size it will stay at. A resize sent before then makes earlier
+    // output stale — tmux redraws at the new size — so only writes issued
+    // after the latest resize count. A failed attach is ready too: the view
+    // then shows its own reconnecting state.
+    const onReadyRef = useRef(onReady);
+    onReadyRef.current = onReady;
+    const readyRef = useRef(false);
+    const resizeSeqRef = useRef(0);
+    const outputPaintWatcherRef = useRef<OutputPaintWatcher | null>(null);
+    const resizeRedrawWaitRef = useRef<number | null>(null);
+    const reportReady = useCallback(() => {
+      if (readyRef.current) return;
+      readyRef.current = true;
+      outputPaintWatcherRef.current = null;
+      if (resizeRedrawWaitRef.current !== null) {
+        window.clearTimeout(resizeRedrawWaitRef.current);
+        resizeRedrawWaitRef.current = null;
+      }
+      onReadyRef.current?.();
+    }, []);
+    if (!readyRef.current && !outputPaintWatcherRef.current && onReady) {
+      outputPaintWatcherRef.current = () => {
+        const seq = resizeSeqRef.current;
+        return () => {
+          if (seq === resizeSeqRef.current) {
+            reportReady();
+          } else if (resizeRedrawWaitRef.current === null) {
+            resizeRedrawWaitRef.current = window.setTimeout(
+              reportReady,
+              RESIZE_REDRAW_WAIT_MS,
+            );
+          }
+        };
+      };
+    }
+    useEffect(
+      () => () => {
+        if (resizeRedrawWaitRef.current !== null) {
+          window.clearTimeout(resizeRedrawWaitRef.current);
+        }
+      },
+      [],
+    );
+    const handleResizeSent = useCallback(() => {
+      resizeSeqRef.current += 1;
+    }, []);
+    const onReconnectingChangeRef = useRef(onReconnectingChange);
+    onReconnectingChangeRef.current = onReconnectingChange;
+    const handleReconnectingChange = useCallback(
+      (reconnecting: boolean) => {
+        if (reconnecting) reportReady();
+        onReconnectingChangeRef.current?.(reconnecting);
+      },
+      [reportReady],
+    );
+
+    const { fitToContainer, resizeLocalTerminal, runFitAwaitingOpen } =
+      useTerminalFitController({
+        termRef,
+        wsRef,
+        fitRef,
+        viewportSizeRef,
+        displayMode,
+        isControllerRef,
+        canResizeTerminalRef,
+        scheduleMeasure,
+        onResizeSent: handleResizeSent,
+      });
+    const runFitAwaitingOpenRef = useRef(runFitAwaitingOpen);
+    runFitAwaitingOpenRef.current = runFitAwaitingOpen;
+    const handleSocketOpen = useCallback(() => {
+      runFitAwaitingOpenRef.current();
+    }, []);
 
     // Keep the long-lived ResizeObserver connected to the current fit handler.
     const fitToContainerRef = useRef(fitToContainer);
@@ -1511,17 +1583,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       return () => { disposed = true; unsubscribe(); };
     }, [fitToContainer, scheduleMeasure]);
 
-    // Reconnects open new sockets with their own first output; the caller
-    // only hears about the first one this view shows.
-    const onFirstOutputRef = useRef(onFirstOutput);
-    onFirstOutputRef.current = onFirstOutput;
-    const firstOutputReportedRef = useRef(false);
-    const handleFirstOutput = useCallback(() => {
-      if (firstOutputReportedRef.current) return;
-      firstOutputReportedRef.current = true;
-      onFirstOutputRef.current?.();
-    }, []);
-
     useTerminalLiveSocket({
       termRef,
       wsRef,
@@ -1531,8 +1592,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       scheduleMeasure,
       sessionGeneration,
       setSessionGeneration,
-      onReconnectingChange,
-      onFirstOutput: handleFirstOutput,
+      onReconnectingChange: handleReconnectingChange,
+      onSocketOpen: handleSocketOpen,
+      outputPaintWatcherRef,
     });
 
     useEffect(() => {

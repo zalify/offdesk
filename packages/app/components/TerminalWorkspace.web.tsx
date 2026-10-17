@@ -133,9 +133,6 @@ type PaneMenuEvent = {
 // function identity on every parent render (panes never render tab strips).
 const NOOP_SELECT_TAB = () => {};
 const NOOP_ACTIVE_REF = () => {};
-// How long a compact switch keeps the outgoing pane up while the incoming
-// one waits for its first attach redraw.
-const COMPACT_HOLD_MAX_MS = 1000;
 
 // Prefix actions owned by this component (TerminalCanvas owns the rest).
 const WORKSPACE_PREFIX_ACTIONS: PrefixActionId[] = [
@@ -322,11 +319,15 @@ function TerminalWorkspaceComponent({
 
   // Compact switch hold: the phone shell shows one pane, and switching
   // mounts a fresh xterm with a new socket and tmux attach client — blank
-  // until tmux's attach redraw arrives. Keep the outgoing pane over the
-  // incoming one until that redraw is on screen, so a switch goes straight
-  // from one screen to the next. Render-time refs like the keep-alive above:
-  // the outgoing pane must still be in THIS render's tree. During rapid
-  // switches the pane that still shows content stays the one held.
+  // for a round trip to the machine, which over a remote link can take
+  // seconds. Keep the outgoing pane over the incoming one until the
+  // incoming pane is ready (its first screen is up at its final size, or
+  // its attach failed and it shows reconnecting). The title bar switches at
+  // once; the held screen dims under a progress bar meanwhile. No timer: the
+  // hold ends on what the pane reports, however slow the link is.
+  // Render-time refs like the keep-alive above: the outgoing pane must still
+  // be in THIS render's tree. During rapid switches the pane that still
+  // shows content stays the one held.
   const [, rerenderAfterHold] = useReducer((count: number) => count + 1, 0);
   const compactHoldRef = useRef<CompactSwitchHold | null>(null);
   const renderedCompactTerminalIdRef = useRef(workspace.activeTerminalId);
@@ -341,22 +342,19 @@ function TerminalWorkspaceComponent({
     );
     renderedCompactTerminalIdRef.current = to;
   }
+  // An incoming terminal that went unreachable has no live view to report
+  // ready; it shows its own waiting state instead.
+  if (
+    compactHoldRef.current &&
+    !terminalsById.get(compactHoldRef.current.to)?.reachable
+  ) {
+    compactHoldRef.current = null;
+  }
   const releaseCompactHold = useCallback((terminalId: string) => {
     if (compactHoldRef.current?.to !== terminalId) return;
     compactHoldRef.current = null;
     rerenderAfterHold();
   }, []);
-  const compactHoldTo = compactHoldRef.current?.to ?? null;
-  useEffect(() => {
-    // A pane that never draws (socket stuck, attach failing) must not leave
-    // the previous screen standing in for it.
-    if (!compactHoldTo) return;
-    const timer = window.setTimeout(
-      () => releaseCompactHold(compactHoldTo),
-      COMPACT_HOLD_MAX_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [compactHoldTo, releaseCompactHold]);
   const compactHeldTerminal = compactHoldRef.current
     ? terminalsById.get(compactHoldRef.current.from) ?? null
     : null;
@@ -1029,7 +1027,7 @@ function TerminalWorkspaceComponent({
                   onDestroy={handleDestroy}
                   onRequestControl={onRequestControl}
                   onReleaseControl={onReleaseControl}
-                  onFirstOutput={releaseCompactHold}
+                  onReady={releaseCompactHold}
                 />
               </div>
               {compactHeldTerminal && (
@@ -1065,6 +1063,7 @@ function TerminalWorkspaceComponent({
                     onRequestControl={onRequestControl}
                     onReleaseControl={onReleaseControl}
                   />
+                  <CompactSwitchProgress />
                 </div>
               )}
             </>
@@ -1484,7 +1483,7 @@ export function WorkspacePaneLeaf({
   onPaneContextMenu,
   onRequestControl,
   onReleaseControl,
-  onFirstOutput,
+  onReady,
 }: {
   terminal: TerminalInfo;
   isActive: boolean;
@@ -1509,13 +1508,13 @@ export function WorkspacePaneLeaf({
   ) => void;
   onRequestControl?: (machineId: string) => void;
   onReleaseControl?: (machineId: string) => void;
-  onFirstOutput?: (terminalId: string) => void;
+  onReady?: (terminalId: string) => void;
 }) {
   const cardRef = useRef<TerminalCardRef>(null);
   const terminalId = terminal.id;
-  const handleFirstOutput = useCallback(
-    () => onFirstOutput?.(terminalId),
-    [onFirstOutput, terminalId],
+  const handleReady = useCallback(
+    () => onReady?.(terminalId),
+    [onReady, terminalId],
   );
 
   // A compact pane only goes inactive while it is held over its successor
@@ -1638,7 +1637,35 @@ export function WorkspacePaneLeaf({
         onDestroy={onDestroy}
         onRequestControl={onRequestControl}
         onReleaseControl={onReleaseControl}
-        onFirstOutput={onFirstOutput ? handleFirstOutput : undefined}
+        onReady={onReady ? handleReady : undefined}
+      />
+    </div>
+  );
+}
+
+// Over the held pane of a compact switch: the screen dims under a progress
+// bar. Both fade in only after a moment, so a switch that is ready at once
+// shows neither.
+function CompactSwitchProgress() {
+  return (
+    <div
+      data-testid="compact-switch-progress"
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "rgba(0, 0, 0, 0.35)",
+        animation: "offdeskFadeIn 160ms ease-out 150ms both",
+        overflow: "hidden",
+      }}
+    >
+      <span
+        style={{
+          display: "block",
+          width: "38%",
+          height: 2,
+          background: colors.accent,
+          animation: "offdeskReconnect 1.1s ease-in-out infinite",
+        }}
       />
     </div>
   );

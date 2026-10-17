@@ -21,11 +21,16 @@ interface UseTerminalLiveSocketOptions {
   sessionGeneration: number;
   setSessionGeneration: (next: (value: number) => number) => void;
   onReconnectingChange?: (reconnecting: boolean) => void;
-  // Called once per socket, after its first output has been parsed and the
-  // frames xterm needs to paint it have passed — the attach redraw is on
-  // screen. Must be stable: it is an effect dependency.
-  onFirstOutput?: () => void;
+  // Runs in the socket's open handler, before any of its messages. Must be
+  // stable: it is an effect dependency.
+  onSocketOpen?: () => void;
+  // While set, called as each output write is issued; the callback it
+  // returns runs once that write is parsed and painted. TerminalView sets it
+  // only until its first screen is up, so streaming output pays nothing.
+  outputPaintWatcherRef?: RefObject<OutputPaintWatcher | null>;
 }
+
+export type OutputPaintWatcher = () => () => void;
 
 const MAX_PENDING_OUTPUT_BYTES = 128 * 1024;
 // Output arriving later than this after an input send is stream output, not
@@ -51,7 +56,8 @@ export function useTerminalLiveSocket({
   onReconnectingChange,
   onControlMessage,
   onSocketClose,
-  onFirstOutput,
+  onSocketOpen,
+  outputPaintWatcherRef,
 }: UseTerminalLiveSocketOptions) {
   useEffect(() => {
     const term = termRef.current;
@@ -77,19 +83,20 @@ export function useTerminalLiveSocket({
     let pendingChunks: Uint8Array[] = [];
     let pendingBytes = 0;
     let rafId = 0;
-    let firstOutputSeen = false;
-    let firstOutputFrame = 0;
 
-    // xterm parses a write asynchronously and paints on its next render
-    // frame; chunks of the same tmux redraw that arrive meanwhile are
-    // batched into the rAF flush below. Two frames after the first write is
-    // parsed, the redraw is on screen.
-    const notifyFirstOutput = () => {
-      if (disposed || !onFirstOutput) return;
-      firstOutputFrame = requestAnimationFrame(() => {
-        firstOutputFrame = requestAnimationFrame(() => {
-          firstOutputFrame = 0;
-          if (!disposed) onFirstOutput();
+    // xterm parses a write asynchronously and paints it on its next render
+    // frame, so two frames after the parse callback the write is on screen.
+    const writeOutput = (data: Uint8Array) => {
+      const painted = outputPaintWatcherRef?.current?.();
+      if (!painted) {
+        term.write(data);
+        return;
+      }
+      term.write(data, () => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            if (!disposed) painted();
+          });
         });
       });
     };
@@ -102,7 +109,7 @@ export function useTerminalLiveSocket({
           merged.set(chunk, offset);
           offset += chunk.length;
         }
-        term.write(merged);
+        writeOutput(merged);
         pendingChunks = [];
         pendingBytes = 0;
       }
@@ -146,13 +153,7 @@ export function useTerminalLiveSocket({
         // Interactive path: nothing queued this frame — write immediately so
         // a keystroke echo doesn't wait for the next animation frame. The rAF
         // is a burst marker: chunks arriving before it fires get batched.
-        // The first output always takes this path.
-        if (firstOutputSeen) {
-          term.write(chunk);
-        } else {
-          firstOutputSeen = true;
-          term.write(chunk, notifyFirstOutput);
-        }
+        writeOutput(chunk);
         rafId = requestAnimationFrame(flushPending);
         return;
       }
@@ -246,6 +247,7 @@ export function useTerminalLiveSocket({
     window.addEventListener("pageshow", handlePageShow);
 
     ws.onopen = () => {
+      onSocketOpen?.();
       reconnectController.handleSocketOpen();
       onReconnectingChange?.(false);
       refreshTerminalSurface();
@@ -265,7 +267,6 @@ export function useTerminalLiveSocket({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
       if (rafId) cancelAnimationFrame(rafId);
-      if (firstOutputFrame) cancelAnimationFrame(firstOutputFrame);
       if (wsRef.current === ws) {
         wsRef.current = null;
       }
@@ -282,7 +283,8 @@ export function useTerminalLiveSocket({
     onReconnectingChange,
     onControlMessage,
     onSocketClose,
-    onFirstOutput,
+    onSocketOpen,
+    outputPaintWatcherRef,
     wsRef,
     wsUrl,
   ]);

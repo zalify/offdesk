@@ -27,6 +27,9 @@ interface UseTerminalFitControllerOptions {
   isControllerRef: RefObject<boolean>;
   canResizeTerminalRef: RefObject<boolean>;
   scheduleMeasure: () => void;
+  // A resize frame went out: tmux redraws at the new size, so what is on
+  // screen until that redraw arrives is stale.
+  onResizeSent?: () => void;
 }
 
 export function useTerminalFitController({
@@ -38,8 +41,13 @@ export function useTerminalFitController({
   isControllerRef,
   canResizeTerminalRef,
   scheduleMeasure,
+  onResizeSent,
 }: UseTerminalFitControllerOptions) {
   const fitRetryTimerRef = useRef<number | null>(null);
+  // A fit requested before the socket opened, run by runFitAwaitingOpen.
+  const fitAwaitingOpenRef = useRef<{ skipIfUnchanged: boolean } | null>(null);
+  const onResizeSentRef = useRef(onResizeSent);
+  onResizeSentRef.current = onResizeSent;
 
   const clearFitRetryTimer = useCallback(() => {
     if (fitRetryTimerRef.current !== null) {
@@ -106,9 +114,14 @@ export function useTerminalFitController({
       const liveWs = wsRef.current;
       if (!isControllerRef.current || !canResizeTerminalRef.current) return;
       if (liveWs?.readyState !== WebSocket.OPEN) {
-        scheduleRetry();
+        // Wait for the socket rather than poll: over a remote link it can
+        // take longer to open than the retry budget lasts, and fitting from
+        // its open handler sends the resize before any attach output.
+        clearFitRetryTimer();
+        fitAwaitingOpenRef.current = { skipIfUnchanged };
         return;
       }
+      fitAwaitingOpenRef.current = null;
 
       try {
         const term = termRef.current;
@@ -156,6 +169,7 @@ export function useTerminalFitController({
           }
         }
         liveWs.send(JSON.stringify(resizeMessage));
+        onResizeSentRef.current?.();
         resizeLocalTerminal(resizeMessage.cols, resizeMessage.rows);
       } catch {
         scheduleRetry();
@@ -175,10 +189,18 @@ export function useTerminalFitController({
     ],
   );
 
+  const runFitAwaitingOpen = useCallback(() => {
+    const awaiting = fitAwaitingOpenRef.current;
+    if (!awaiting) return;
+    fitAwaitingOpenRef.current = null;
+    fitToContainer(awaiting);
+  }, [fitToContainer]);
+
   useEffect(() => clearFitRetryTimer, [clearFitRetryTimer]);
 
   return {
     fitToContainer,
+    runFitAwaitingOpen,
     resizeLocalTerminal,
     stabilizeTerminalSurface,
   };
