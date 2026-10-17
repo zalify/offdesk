@@ -53,6 +53,8 @@ Playwright and Chromium inside the `runner` container, via `pnpm e2e:test`
 locally or `pnpm e2e:ci` in automation. Do not run `playwright test` directly
 for routine checks. `pnpm e2e:test:debug-host` uses a host browser and is for
 debugging container startup only — say so explicitly if you use it.
+`E2E_TEST_GREP` and `E2E_SHARD` narrow a run; CI uses the same script in four
+shards (`e2e/env-playbook.md`).
 
 ## Design records
 

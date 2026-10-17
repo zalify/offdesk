@@ -1,3 +1,9 @@
+# Rust binaries: compiled here by default (`pnpm e2e:test`), or taken from
+# e2e/.prebuilt/ with E2E_RUST_BINARIES=prebuilt. CI compiles both once per
+# change to crates/ (the rust-build stage with
+# E2E_CARGO_BINS="--bin offdesk-hub --bin offdesk-node") and hands them to
+# every E2E shard; see .github/workflows/ci.yml.
+ARG E2E_RUST_BINARIES=build
 FROM node:22-bookworm AS frontend
 ARG BUILD_ID
 RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
@@ -14,15 +20,27 @@ RUN pnpm build
 # nested chunk reference so cached chunks can never pin clients to old code.
 RUN node scripts/stamp-build.mjs packages/app/dist "${BUILD_ID:-$(date +%s)}"
 
-FROM rust:bookworm AS builder
+FROM rust:bookworm AS rust-build
+ARG E2E_CARGO_BINS="--bin offdesk-hub"
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
-RUN cargo build --release --bin offdesk-hub
+RUN cargo build --release $E2E_CARGO_BINS \
+    && mkdir /out \
+    && find target/release -maxdepth 1 -type f -name 'offdesk-*' -perm -u+x -exec cp {} /out/ \;
+
+FROM scratch AS rust-prebuilt
+COPY e2e/.prebuilt/ /out/
+
+FROM rust-${E2E_RUST_BINARIES} AS rust
+
+# Just the binaries, for CI: --target rust-binaries --output type=local.
+FROM scratch AS rust-binaries
+COPY --from=rust /out/ /
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/offdesk-hub /usr/local/bin/
+COPY --from=rust /out/offdesk-hub /usr/local/bin/
 COPY --from=frontend /app/packages/app/dist /app/web
 RUN mkdir -p /app/data
 

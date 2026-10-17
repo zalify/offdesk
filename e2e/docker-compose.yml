@@ -8,6 +8,10 @@ services:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.hub
+      args:
+        # build (default) compiles the Rust binaries; prebuilt takes them
+        # from e2e/.prebuilt/ (CI). See the Dockerfile.
+        E2E_RUST_BINARIES: ${E2E_RUST_BINARIES:-build}
     ports:
       # Host-side debug publish only — the runner talks to hub over the compose
       # network. Parameterized so parallel stacks (distinct COMPOSE_PROJECT_NAME
@@ -31,6 +35,8 @@ services:
     build:
       context: ..
       dockerfile: e2e/Dockerfile.node
+      args:
+        E2E_RUST_BINARIES: ${E2E_RUST_BINARIES:-build}
     command:
       - offdesk-node
       - start
@@ -65,7 +71,9 @@ services:
       CI: "true"
       PLAYWRIGHT_BASE_URL: "http://hub:4317"
       PLAYWRIGHT_PREVIEW_EDGE: "preview-edge"
-    command: ["pnpm", "exec", "playwright", "test", "--grep", "${E2E_TEST_GREP:-.*}"]
+    # E2E_SHARD (e.g. 2/4) runs one slice of the suite; CI runs the slices
+    # on separate runners, each with its own hub and node.
+    command: ["pnpm", "exec", "playwright", "test", "--grep", "${E2E_TEST_GREP:-.*}", "--shard", "${E2E_SHARD:-1/1}"]
     depends_on:
       hub:
         condition: service_healthy
