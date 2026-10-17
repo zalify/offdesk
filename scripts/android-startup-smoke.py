@@ -9,14 +9,16 @@ import time
 import xml.etree.ElementTree as ET
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("apk", type=Path)
+parser.add_argument("apk", type=Path, nargs="?")
+parser.add_argument("--settle-only", action="store_true",
+                    help="wait for the booted emulator to settle, then exit (CI snapshots it)")
 parser.add_argument("--serial", default=os.environ.get("ANDROID_SERIAL", "emulator-5554"))
 parser.add_argument("--output", type=Path, default=Path("/tmp/offdesk-android-startup"))
 args = parser.parse_args()
 # This test deliberately installs fresh. Never let it clear a person's phone.
 if not args.serial.startswith("emulator-"):
     parser.error("startup smoke requires a disposable emulator, never a physical device")
-if not args.apk.is_file():
+if not args.settle_only and (args.apk is None or not args.apk.is_file()):
     parser.error(f"APK does not exist: {args.apk}")
 args.output.mkdir(parents=True, exist_ok=True)
 
@@ -98,6 +100,49 @@ def check_webview_input():
     raise AssertionError("Update prompts repeatedly interrupted WebView input")
 
 
+def system_settled():
+    # sys.boot_completed precedes first-boot package optimization and launcher
+    # initialization; a cold-booted emulator keeps compiling (dex2oat) and
+    # starting the launcher for a while after it.
+    if adb("shell", "getprop", "sys.boot_completed", timeout=5).strip() != "1":
+        return False
+    if adb("shell", "getprop", "init.svc.bootanim", timeout=5).strip() != "stopped":
+        return False
+    if "package:" not in adb("shell", "pm", "path", "android", timeout=10, check=False):
+        return False
+    if adb("shell", "pidof", "dex2oat64", "dex2oat32", "dex2oat", timeout=5, check=False).strip():
+        return False
+    home = adb("shell", "cmd", "package", "resolve-activity", "--brief",
+               "-a", "android.intent.action.MAIN", "-c", "android.intent.category.HOME",
+               timeout=10, check=False).strip().splitlines()
+    home_package = home[-1].split("/")[0] if home and "/" in home[-1] else None
+    if not home_package:
+        return False
+    resumed = [line for line in adb("shell", "dumpsys", "activity", "activities", timeout=15, check=False).splitlines()
+               if "ResumedActivity" in line]
+    return any(home_package in line for line in resumed)
+
+
+def wait_for_settled_system():
+    # Wait on the system itself rather than a fixed delay: a snapshot restore
+    # is settled at once, a cold boot takes as long as it takes. Only then
+    # does the App's 60-second readiness deadline start. Three quiet checks
+    # in a row, so a dex2oat pass that starts between them is not missed.
+    print("Waiting for first-boot system services to settle", flush=True)
+    started = time.monotonic()
+    quiet = 0
+    while time.monotonic() - started < 180:
+        try:
+            quiet = quiet + 1 if system_settled() else 0
+        except subprocess.SubprocessError:
+            quiet = 0
+        if quiet >= 3:
+            print(f"Emulator settled after {time.monotonic() - started:.0f}s", flush=True)
+            return
+        time.sleep(1)
+    raise AssertionError("Emulator did not settle within 180 seconds (an emulator problem, not the App)")
+
+
 def root_emulator():
     # Restarting adbd can drop its own transport and return nonzero even when
     # root succeeds. Verify the effective UID after reconnection instead.
@@ -113,13 +158,16 @@ def root_emulator():
     raise AssertionError("Emulator did not reconnect as root; use a rooted disposable emulator")
 
 
+if args.settle_only:
+    assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
+    wait_for_settled_system()
+    raise SystemExit(0)
+
 try:
     assert adb("shell", "getprop", "sys.boot_completed").strip() == "1", "emulator is not booted"
-    # sys.boot_completed precedes first-boot package optimization and launcher
-    # initialization. Let the disposable emulator settle BEFORE starting the
-    # App's 60-second readiness deadline. Never dismiss an ANR to pass a test.
-    print("Waiting for first-boot system services to settle", flush=True)
-    time.sleep(45)
+    # Let the disposable emulator settle BEFORE starting the App's 60-second
+    # readiness deadline. Never dismiss an ANR to pass a test.
+    wait_for_settled_system()
     adb("uninstall", "dev.offdesk.desktop", check=False)
     adb("install", str(args.apk.resolve()), timeout=120)
     adb("logcat", "-c")
