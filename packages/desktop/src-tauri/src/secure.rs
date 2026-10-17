@@ -580,6 +580,20 @@ async fn resume_at(status: &Status, credential: &Credential, url: &str) -> Resul
     Ok(client)
 }
 
+/// The routes kept after asking the Hub for its own: what it advertises, then every saved route
+/// that just proved this Hub's identity. A working address is never dropped because the Hub
+/// doesn't list it (an address the phone was paired with that an older Hub can't advertise,
+/// such as a relay's); unreachable ones it no longer lists go.
+fn merge_routes(advertised: Option<Vec<Route>>, saved: Vec<Route>, verified: &[&str], current: &str) -> Vec<Route> {
+    match advertised {
+        None => normalize(saved, current),
+        Some(advertised) => {
+            let working = saved.into_iter().filter(|route| verified.contains(&route.hub_url.as_str()));
+            normalize(advertised.into_iter().chain(working).collect(), current)
+        }
+    }
+}
+
 /// Available also on the offline recovery screen. Probe saved routes in parallel
 /// and let any verified route refresh stale LAN addresses (e.g. a DHCP change).
 #[tauri::command]
@@ -624,7 +638,12 @@ pub async fn secure_routes<R: Runtime>(
         Vec::new()
     };
     let discovery_available = advertised.is_some();
-    status.routes = normalize(advertised.unwrap_or(saved), &status.endpoint.hub_url);
+    let verified: Vec<&str> = results
+        .iter()
+        .filter(|(_, client)| client.is_some())
+        .map(|(route, _)| route.hub_url.as_str())
+        .collect();
+    status.routes = merge_routes(advertised, saved, &verified, &status.endpoint.hub_url);
     // Newly discovered addresses need their own identity check too.
     let checks = futures::future::join_all(status.routes.iter().map(|route| async {
         let (available, latency_ms) = if let Some((_, client, latency)) =
@@ -980,6 +999,20 @@ mod route_tests {
         assert!(state.1.try_write().is_err());
         drop(mutation);
         assert!(state.1.try_write().is_ok());
+    }
+    #[test]
+    fn refreshing_routes_keeps_working_addresses_the_hub_does_not_list() {
+        let route = |url: &str| Route::from_url(url).unwrap();
+        let lan = "http://192.168.1.2:4317";
+        let relay = "https://ryanz.relay.offdesk.cloud";
+        let gone = "https://old.example";
+        let saved = vec![route(lan), route(relay), route(gone)];
+        // The Hub lists only its LAN address; the relay answered, the old address didn't
+        let merged = merge_routes(Some(vec![route(lan)]), saved.clone(), &[lan, relay], lan);
+        let urls: Vec<_> = merged.iter().map(|r| r.hub_url.as_str()).collect();
+        assert_eq!(urls, [lan, relay]);
+        // Nothing advertised (discovery failed): the saved routes stay as they are
+        assert_eq!(merge_routes(None, saved.clone(), &[], lan).len(), 3);
     }
     #[test]
     fn existing_pairing_migrates_without_replacing_its_keychain_credential() {
