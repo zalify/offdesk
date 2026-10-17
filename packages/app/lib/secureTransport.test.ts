@@ -180,3 +180,16 @@ it("blocks old UI writes during and after a successful Hub switch until a fresh 
   await expect(transport.secureFetch("POST", "/api/terminals", "{}")).rejects.toThrow("Switching Hubs");
   expect(mock.invoke.mock.calls.some(([command]) => command === "secure_request" || command === "secure_forget")).toBe(false);
 });
+
+describe("routeLatencyLabel", () => {
+  it("shows each reachable route's round trip and marks the fastest of its kind", async () => {
+    const { routeLatencyLabel } = await import("./secureTransport");
+    const routes = [
+      { kind: "local" as const, hub_url: "http://192.168.1.2:4317", available: true, latency_ms: 4 },
+      { kind: "remote" as const, hub_url: "https://us.example", available: true, latency_ms: 180 },
+      { kind: "remote" as const, hub_url: "https://hk.example", available: true, latency_ms: 42 },
+      { kind: "remote" as const, hub_url: "https://kr.example", available: false },
+    ];
+    expect(routes.map(route => routeLatencyLabel(route, routes))).toEqual(["4 ms", "180 ms", "42 ms · fastest", null]);
+  });
+});

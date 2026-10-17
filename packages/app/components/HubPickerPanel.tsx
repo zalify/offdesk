@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { colors } from "../lib/colors";
 import { isTauriMobile } from "../lib/platform";
 import { scanWithCleanup } from "../lib/scanLifecycle";
-import { checkSavedHub, openSavedHub, pairAndOpenHub, pairingIdentity, removeSavedHub, renameSavedHub, savedHubs, secureConnectionStatus, type RouteReport, type SavedHub, type SecureStatus } from "../lib/secureTransport";
+import { checkSavedHub, openSavedHub, pairAndOpenHub, pairingIdentity, removeSavedHub, renameSavedHub, routeLatencyLabel, savedHubs, secureConnectionStatus, type RouteReport, type SavedHub, type SecureStatus } from "../lib/secureTransport";
 import { Body, Button } from "./Primitives.web";
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === "string" ? error : "Could not complete this action. Try again.";
@@ -83,9 +83,9 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
           <strong style={{ display: "block", fontSize: 13, fontWeight: 600 }}>{kind === "local" ? "local network" : "remote connection"}</strong>
           <Body size={13}>{kind === "local" ? "Your phone and Hub must share a network." : "Use mobile data or another Wi-Fi network."}</Body>
           {!routes.length && <Body size={13}>{busy ? "Checking…" : !report ? "Check connections to see available addresses." : report.discovery_available ? "Not configured on this Hub." : "No saved address. Reconnect to your Hub to discover one."}</Body>}
-          {routes.map(route => <button type="button" key={route.hub_url} disabled={busy !== null || !route.available} onClick={() => void run("Connecting to Hub…", () => openSavedHub(selected.status.endpoint.public_key, route.hub_url))} style={{ width: "100%", textAlign: "left", minHeight: 48, padding: "12px 0", background: "none", border: 0, color: route.available ? colors.fg0 : colors.fg3, cursor: route.available ? "pointer" : "default" }}>
-            <span style={{ display: "block", overflowWrap: "anywhere", fontSize: 12, color: colors.fg3 }}>{address(route.hub_url)}</span><span style={{ display: "inline-block", marginTop: 6, padding: "2px 8px", borderRadius: 3, fontSize: 11.5, fontWeight: 600, ...(route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg3 }) }}>{route.available ? "connect" : "unreachable on this network"}</span>
-          </button>)}
+          {routes.map(route => { const latency = routeLatencyLabel(route, report?.routes ?? []); return <button type="button" key={route.hub_url} disabled={busy !== null || !route.available} onClick={() => void run("Connecting to Hub…", () => openSavedHub(selected.status.endpoint.public_key, route.hub_url))} style={{ width: "100%", textAlign: "left", minHeight: 48, padding: "12px 0", background: "none", border: 0, color: route.available ? colors.fg0 : colors.fg3, cursor: route.available ? "pointer" : "default" }}>
+            <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontSize: 12 }}><span style={{ minWidth: 0, overflowWrap: "anywhere", color: colors.fg3 }}>{address(route.hub_url)}</span>{latency && <span data-testid="route-latency" style={{ flexShrink: 0, color: colors.fg1, fontVariantNumeric: "tabular-nums" }}>{latency}</span>}</span><span style={{ display: "inline-block", marginTop: 6, padding: "2px 8px", borderRadius: 3, fontSize: 11.5, fontWeight: 600, ...(route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg3 }) }}>{route.available ? "connect" : "unreachable on this network"}</span>
+          </button>; })}
         </div>;
       })}
       {report?.machines?.length ? <div style={card}><strong style={{ fontSize: 12, fontWeight: 500, color: colors.fg3 }}>machines in this hub</strong>{report.machines.map((machine, i) => <Body key={i} size={13}>{machine.name} · {machine.os}</Body>)}<Body size={12}>After connecting, choose a machine in the title menu.</Body></div> : null}

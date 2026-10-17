@@ -492,6 +492,10 @@ pub struct RouteCheck {
     #[serde(flatten)]
     route: Route,
     available: bool,
+    /// Encrypted round trip to the Hub through this route, so it includes the
+    /// relay hop: what typing over it feels like.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_ms: Option<u64>,
 }
 #[derive(Serialize)]
 pub struct RouteReport {
@@ -521,6 +525,25 @@ async fn discover_machines(client: &Client) -> Vec<HubMachine> {
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Median of three encrypted round trips (ms) over a verified connection.
+/// None when any of them fails.
+async fn round_trip(client: &Client) -> Option<u64> {
+    let mut times = Vec::new();
+    for _ in 0..3 {
+        let started = std::time::Instant::now();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            client.request("GET".into(), "/api/connection-routes".into(), None),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        times.push(started.elapsed().as_millis() as u64);
+    }
+    times.sort_unstable();
+    Some(times[1])
 }
 
 fn validate_credential(status: &Status, credential: &Credential) -> Result<(), String> {
@@ -575,12 +598,16 @@ pub async fn secure_routes<R: Runtime>(
     let credential = store_read(&app, &status.credential_slot)?.ok_or("Pair this device first")?;
     let saved = normalize(status.routes.clone(), &status.endpoint.hub_url);
     let results = futures::future::join_all(saved.iter().map(|route| async {
-        let client = resume_at(&status, &credential, &route.hub_url).await;
-        (route.clone(), client.ok())
+        let client = resume_at(&status, &credential, &route.hub_url).await.ok();
+        let latency = match &client {
+            Some(client) => round_trip(client).await,
+            None => None,
+        };
+        (route.clone(), client, latency)
     }))
     .await;
     let mut advertised = None;
-    for (_, client) in &results {
+    for (_, client, _) in &results {
         if let Some(client) = client {
             if let Ok(routes) = discover(client).await {
                 advertised = Some(routes);
@@ -589,7 +616,7 @@ pub async fn secure_routes<R: Runtime>(
         }
     }
     let machines = if include_machines {
-        match results.iter().find_map(|(_, client)| client.as_ref()) {
+        match results.iter().find_map(|(_, client, _)| client.as_ref()) {
             Some(client) => discover_machines(client).await,
             None => Vec::new(),
         }
@@ -600,22 +627,25 @@ pub async fn secure_routes<R: Runtime>(
     status.routes = normalize(advertised.unwrap_or(saved), &status.endpoint.hub_url);
     // Newly discovered addresses need their own identity check too.
     let checks = futures::future::join_all(status.routes.iter().map(|route| async {
-        let available =
-            if let Some((_, client)) = results.iter().find(|(r, _)| r.hub_url == route.hub_url) {
-                client.is_some()
-            } else if let Ok(client) = resume_at(&status, &credential, &route.hub_url).await {
-                client.close();
-                true
-            } else {
-                false
-            };
+        let (available, latency_ms) = if let Some((_, client, latency)) =
+            results.iter().find(|(r, _, _)| r.hub_url == route.hub_url)
+        {
+            (client.is_some(), *latency)
+        } else if let Ok(client) = resume_at(&status, &credential, &route.hub_url).await {
+            let latency = round_trip(&client).await;
+            client.close();
+            (true, latency)
+        } else {
+            (false, None)
+        };
         RouteCheck {
             route: route.clone(),
             available,
+            latency_ms,
         }
     }))
     .await;
-    for (_, client) in results {
+    for (_, client, _) in results {
         if let Some(client) = client {
             client.close();
         }

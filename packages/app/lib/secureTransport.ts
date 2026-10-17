@@ -7,7 +7,16 @@ export interface SecureStatus {
   routes?: ConnectionRoute[];
 }
 export interface ConnectionRoute { kind: "local" | "remote"; hub_url: string }
-export interface RouteReport { machines?: { name: string; os: string }[]; discovery_available: boolean; status: SecureStatus; routes: (ConnectionRoute & { available: boolean })[] }
+/** latency_ms: encrypted round trip to the Hub through this route (relay hop included). */
+export type CheckedRoute = ConnectionRoute & { available: boolean; latency_ms?: number };
+export interface RouteReport { machines?: { name: string; os: string }[]; discovery_available: boolean; status: SecureStatus; routes: CheckedRoute[] }
+/** "38 ms", plus "fastest" for the quickest reachable route of its kind when there is a choice. */
+export function routeLatencyLabel(route: CheckedRoute, routes: CheckedRoute[]): string | null {
+  if (!route.available || route.latency_ms === undefined) return null;
+  const measured = routes.filter(other => other.kind === route.kind && other.available && other.latency_ms !== undefined);
+  const fastest = measured.length > 1 && measured.every(other => other.latency_ms! >= route.latency_ms!);
+  return `${route.latency_ms} ms${fastest ? " · fastest" : ""}`;
+}
 let routeReport: RouteReport | null = null;
 let routeRefresh: Promise<RouteReport> | null = null;
 const routeListeners = new Set<() => void>();
