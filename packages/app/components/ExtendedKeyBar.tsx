@@ -152,7 +152,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
     };
     if (data) return key(data[0], data[1], `extended-keybar-${id}`, shown[id]);
     switch (id) {
-      case "ctrl-c": return <KeyButton key={id} label="Ctrl+C" testid="extended-keybar-ctrl-c" disabled={!isController} accent onPress={() => onKey("\x03")}>^C</KeyButton>;
+      case "ctrl-c": return key("Ctrl+C", "\x03", "extended-keybar-ctrl-c", "^C");
       case "shift-tab": return key("Shift+Tab", "\x1b[Z", "extended-keybar-shift-tab", "⇧tab");
       case "backspace": return key("Backspace", "\x7f", "extended-keybar-backspace", "bksp", "hold");
       case "shift": return onToggleShift && onShiftPress && onShiftRelease && <ShiftButton key={id} disabled={!isController} pressed={shiftArmed}
@@ -183,7 +183,8 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
         <div className="offdesk-keybar-primary">{layout.primary.map(renderKey)}</div>
         {key("Arrow up", "\x1b[A", "extended-keybar-up", "↑", true)}
-        {key("Enter", "\r", "extended-keybar-enter", "enter")}
+        {/* Enter is what you press most: the one key on the accent. */}
+        <KeyButton label="Enter" testid="extended-keybar-enter" disabled={!isController} accent onPress={() => onKey("\r")}>enter</KeyButton>
       </div>
       <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
         <KeyButton label={keyboardVisible ? "Hide keyboard" : "Show keyboard"} disabled={!isController} pressed={keyboardVisible}

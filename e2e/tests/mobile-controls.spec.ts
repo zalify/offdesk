@@ -379,6 +379,7 @@ test("mobile title bar swipes between sessions and long-presses the current sess
     page.getByTestId(`workspace-pane-${secondTerminalId}`),
   ).toBeVisible();
   await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 2 of 2");
+  await expect(page.getByTestId("mobile-title-bar-sessions")).toHaveText("2");
 
   // Long-press the bar → sheet → Close terminal (no foreground process, so
   // no confirm dialog). The shell falls back to the remaining terminal.
@@ -386,6 +387,7 @@ test("mobile title bar swipes between sessions and long-presses the current sess
   await page.getByTestId("mobile-chip-close-terminal").click();
   await expect.poll(async () => (await listTerminals(page)).length).toBe(1);
   await expect(page.getByTestId("mobile-title-bar-label")).toHaveAttribute("aria-description", "Session 1 of 1");
+  await expect(page.getByTestId("mobile-title-bar-sessions")).toHaveText("1");
   await expect(
     page.getByTestId(`workspace-pane-${firstTerminalId}`),
   ).toBeVisible();

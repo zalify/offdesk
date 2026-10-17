@@ -131,10 +131,11 @@ Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
   tab bar's panel buttons are the one exception: unboxed 15px icons (files,
   browser with its count, phone, settings), named by `aria-label` and a
   tooltip, and filled with `bg-3` while their panel is open. Icon buttons
-  in boxes are not part of the system.
+  in boxes are not part of the system; the phone title bar's sessions chip
+  (below) is the one boxed icon.
 - **Keys** (`Key`): the key bar's 36px keys, 1px `line` edge, 3px radius,
-  lowercase labels (`esc`, `tab`, `⇧tab`, `[enter]`, `paste`); `^C` is the
-  accent fill; a latched modifier (`ctrl`) is `aria-pressed` in the accent.
+  lowercase labels (`esc`, `tab`, `⇧tab`, `[enter]`, `paste`); `enter` is
+  the accent fill; a latched modifier (`ctrl`) is `aria-pressed` in the accent.
 - **Badges** (`Badge`): square `waiting` / `2 waiting` blocks on `err`.
 - **Toasts and floating cards** (`Toast`, `FloatCard`): 4px and 6px radii,
   `bg-2` with a `line` edge. Never pills.
@@ -173,10 +174,12 @@ retired large-touch workspace: `docs/plans/2026-08-13-fold-touch-workspace.md`.
   repeated on the status line.
 - **Pane header**: `●` (accent when it has focus), program, cwd, and the
   agent marker on the right.
-- **Phone title bar**: program `▾` over `0:app · machine`, a control chip,
+- **Phone title bar**: program and a sessions chip (layers icon and the
+  session count in a `line`-edged 18px box, the way into the sessions
+  sheet) over `0:app · machine`, a control chip,
   then 44px bracket buttons (`[f]`, `[b]`, `[m]`). Attention strip below it
   on `bg-1`: `n waiting` badge, then chips with `[enter]`.
-- **Key bar**: `bg-1`, 3px keys with `line` edges, `^C` on lime; latched
+- **Key bar**: `bg-1`, 3px keys with `line` edges, `enter` on lime; latched
   `ctrl` in the accent.
 - **Overlays** (palette, cheat sheet, sheets): `bg-2`, `line` edge, 6px.
 - **Transient notices** go to the status line on the desktop workspace;

@@ -18,6 +18,12 @@ describe("ExtendedKeyBar", () => {
     expect(html).toContain("Ctrl+C");
   });
 
+  it("puts enter on the accent, not ^C", () => {
+    const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
+    expect(html).toMatch(/data-testid="extended-keybar-enter"[^>]*data-accent="true"/);
+    expect(html).toMatch(/data-testid="extended-keybar-ctrl-c"[^>]*data-accent="false"/);
+  });
+
   it("hides the attach button when onAttachFile is not provided", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).not.toContain('data-testid="extended-keybar-attach"');

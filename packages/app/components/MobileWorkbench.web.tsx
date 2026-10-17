@@ -40,6 +40,7 @@ import {
   FolderOpen,
   Globe,
   Keyboard as KeyboardIcon,
+  Layers,
   Lock,
   LockOpen,
   Monitor,
@@ -495,11 +496,21 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         >
           {activeChip ? (
             <>
-              <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.1 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.1 }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
                   {displayTerminalTitle(activeChip.terminal)}
                 </span>
-                <span aria-hidden="true" style={{ flexShrink: 0, fontSize: 12 }}>▾</span>
+                {/* The way into the sessions sheet (switch, add, close):
+                    a stack with the session count, edged like a key so it
+                    reads as something to tap. */}
+                <span
+                  aria-hidden="true"
+                  data-testid="mobile-title-bar-sessions"
+                  style={{ flexShrink: 0, boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, height: 18, padding: "0 5px", border: `1px solid ${colors.line}`, borderRadius: 3, color: colors.fg1, fontSize: 11, fontWeight: 500, fontVariantNumeric: "tabular-nums" }}
+                >
+                  <Layers size={11} strokeWidth={2.25} />
+                  {chips.length}
+                </span>
               </span>
               <span
                 style={{
