@@ -530,6 +530,33 @@ test("mobile workspace manager provides full workspace controls", async ({ page 
     manager.getByTestId(`workspace-manager-group-${second.id}`),
   ).toBeVisible();
 
+  // ↑ ↓ rename [x] sit evenly spaced: measure the visible ink of each
+  // action (icon geometry or text), not the button boxes.
+  const gaps = await manager
+    .getByTestId(`workspace-manager-group-${second.id}`)
+    .evaluate((group, id) => {
+      const ink = (testid: string) => {
+        const button = group.querySelector(`[data-testid="${testid}"]`)!;
+        const svg = button.querySelector("svg");
+        if (svg) {
+          const box = svg.getBBox();
+          const rect = svg.getBoundingClientRect();
+          const scale = rect.width / svg.viewBox.baseVal.width;
+          return [rect.left + box.x * scale, rect.left + (box.x + box.width) * scale];
+        }
+        const range = document.createRange();
+        range.selectNodeContents(button);
+        const rect = range.getBoundingClientRect();
+        return [rect.left, rect.right];
+      };
+      const boxes = ["up", "down", "rename", "delete"].map(action =>
+        ink(`workspace-manager-${action}-${id}`),
+      );
+      return boxes.slice(1).map((box, i) => box[0] - boxes[i][1]);
+    }, second.id);
+  expect(Math.min(...gaps)).toBeGreaterThanOrEqual(12);
+  expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(4);
+
   await manager.getByTestId(`workspace-manager-rename-${second.id}`).click();
   const renamed = `Mobile renamed ${Date.now()}`;
   const renameDialog = page.getByRole("dialog", { name: "Rename tab" });
