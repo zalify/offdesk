@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
 import { useOpenDirectory } from "./OpenDirectoryContext";
-import { lazy, memo, Suspense, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
+import { lazy, memo, Suspense, useContext, useRef, useCallback, useEffect, useState, forwardRef, useImperativeHandle } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
 import { X } from "lucide-react";
 import type { TerminalViewRef, SelectionSnapshot } from "./TerminalView.types";
@@ -13,6 +13,7 @@ import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { useVisualViewportHeight } from "@/lib/hooks";
 import { useTerminalKeyboard } from "@/lib/useTerminalKeyboard";
 import { useKeyBarSlot } from "@/lib/keyBarSlot";
+import { ViewOnlyUnlockContext } from "@/lib/viewOnlyUnlock";
 import { getMobileViewportTerminalAction } from "@/lib/mobileViewportTerminal";
 import { isSizedElsewhere } from "@/lib/terminalViewModel";
 import { clearPaneSizeNotice, publishPaneSizeNotice } from "@/lib/paneSizeNotice";
@@ -83,6 +84,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   onReady,
 }, ref) {
   const contextOpenDirectory = useOpenDirectory();
+  const unlockViewOnly = useContext(ViewOnlyUnlockContext);
   const onOpenDirectory = onOpenDirectoryProp ?? contextOpenDirectory;
   const termViewRef = useRef<TerminalViewRef>(null);
   const selectOverlayRef = useRef<HTMLPreElement>(null);
@@ -648,6 +650,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
               }} onAttachFile={handleAttachFile}
               onEnterSelectMode={handleEnterSelectMode} onExitSelectMode={handleExitSelectMode} onCopySelection={handleCopySelection}
               selectMode={selectMode} keyboardVisible={keyboardVisible} isController={canType}
+              onUnlockViewOnly={unlockViewOnly ?? undefined}
               ctrlArmed={modifiers.ctrlArmed} onToggleCtrl={modifiers.toggleCtrl}
               shiftArmed={modifiers.shiftArmed} onToggleShift={modifiers.toggleShift}
               onShiftPress={modifiers.pressShift} onShiftRelease={modifiers.releaseShift} />

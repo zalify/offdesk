@@ -18,6 +18,27 @@ describe("ExtendedKeyBar", () => {
     expect(html).toContain("Ctrl+C");
   });
 
+  it("puts enter on the accent, not ^C", () => {
+    const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
+    expect(html).toMatch(/data-testid="extended-keybar-enter"[^>]*data-accent="true"/);
+    expect(html).toMatch(/data-testid="extended-keybar-ctrl-c"[^>]*data-accent="false"/);
+  });
+
+  it("shows view only with a way out in place of the keys", () => {
+    const html = renderToStaticMarkup(
+      createElement(ExtendedKeyBar, { ...baseProps, isController: false, onUnlockViewOnly: () => {} }),
+    );
+    expect(html).toContain('data-testid="extended-keybar-view-only"');
+    expect(html).toContain('data-testid="extended-keybar-view-only-off"');
+    expect(html).not.toContain('data-testid="extended-keybar-enter"');
+    // In control, the keys are back.
+    const controlling = renderToStaticMarkup(
+      createElement(ExtendedKeyBar, { ...baseProps, onUnlockViewOnly: () => {} }),
+    );
+    expect(controlling).not.toContain('data-testid="extended-keybar-view-only"');
+    expect(controlling).toContain('data-testid="extended-keybar-enter"');
+  });
+
   it("hides the attach button when onAttachFile is not provided", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).not.toContain('data-testid="extended-keybar-attach"');

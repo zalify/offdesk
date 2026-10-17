@@ -72,21 +72,30 @@ test("mobile terminal flow works inside the responsive web shell", async ({ page
     "View only",
   );
   await page.getByTestId("mobile-control-toggle").click();
-  await expect(page.getByTitle("Show keyboard")).toBeDisabled();
   await expect(await mobileNewTerminalButton(page)).toBeDisabled();
   await mobileCloseSheet(page);
+  // The keys do nothing in view only: the key bar says so instead, and the
+  // title bar's subtitle names the state.
+  await expect(page.getByTestId("extended-keybar-view-only")).toBeVisible();
+  await expect(page.getByTitle("Show keyboard")).toHaveCount(0);
+  await expect(page.getByTestId("mobile-title-bar-control")).toHaveText("· view only");
 
-  // Unlock without claiming; the existing Take control flow remains explicit.
+  // Unlock from the key bar without claiming; Take control stays explicit.
   await mobileOpenHostSheet(page);
   await expect(page.getByTestId("mobile-control-toggle")).toHaveText(
     "Unlock view only",
   );
-  await page.getByTestId("mobile-control-toggle").click();
+  await mobileCloseSheet(page);
+  await page.getByTestId("extended-keybar-view-only-off").click();
+  await expect(page.getByTitle("Show keyboard")).toBeEnabled();
+  await expect(page.getByTestId("mobile-title-bar-control")).toHaveText("· watching");
 
   // Take control back.
   await mobileTakeControl(page);
   await expect(await mobileNewTerminalButton(page)).toBeEnabled();
   await mobileCloseSheet(page);
+  // In control is the usual state: the title bar shows nothing for it.
+  await expect(page.getByTestId("mobile-title-bar-control")).toHaveCount(0);
 
   // Destroy via API → the shell returns to the empty state.
   const deviceId = await page.evaluate(() => sessionStorage.getItem("tc-device-id"));
@@ -1095,11 +1104,11 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
         await expect(machines).toHaveText("[m]");
         await expect(bar).toHaveCSS("height", "44px");
-        // All header elements — title, control state, [f] (only >= 360px,
-        // below that it lives in the Machines sheet), [b], [m] — must be
+        // All header elements — the title field, [f] (only >= 360px, below
+        // that it lives in the Machines sheet), [b], [m] — must be
         // contained, non-overlapping and in one row; a clipped title is
-        // intentional, clipped controls are not.
-        const expectedChildren = size.width >= 360 ? 5 : 4;
+        // intentional, clipped controls are not. In control shows no chip.
+        const expectedChildren = size.width >= 360 ? 4 : 3;
         await expect.poll(() => bar.evaluate((element, expected) => {
           const outer = element.getBoundingClientRect();
           const children = Array.from(element.children).map(child => child.getBoundingClientRect());

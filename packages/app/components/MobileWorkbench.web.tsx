@@ -39,6 +39,7 @@ import {
   FolderTree,
   FolderOpen,
   Globe,
+  ChevronsUpDown,
   Keyboard as KeyboardIcon,
   Lock,
   LockOpen,
@@ -234,6 +235,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     activeMachine !== null &&
     deviceId !== null &&
     controlLeases[activeMachine.id] === deviceId;
+  // In control is the usual state and shows nothing; the others are a word
+  // on the subtitle line (view only also takes over the key bar).
+  const controlNote = !activeMachine || isController ? null : viewOnlyLocked ? "view only" : "watching";
 
   // Sessions only cover the active machine; the empty state keys off the
   // same scoped list the canvas uses to decide whether to mount the
@@ -458,7 +462,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           display: "flex",
           alignItems: "center",
           gap: 4,
-          padding: "0 4px 0 16px",
+          padding: "0 4px 0 8px",
           background: colors.bg0,
           borderBottom: `1px solid ${colors.lineSoft}`,
           cursor: "pointer",
@@ -479,27 +483,28 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             if (suppressTitleBarClickRef.current) { suppressTitleBarClickRef.current = false; return; }
             setSessionSwitcherOpen(true);
           }}
+          // A picker field (wireframe B, "Phone title bar" canvas): the boxed
+          // title and ⇕ say "tap to switch or add a session".
           style={{
-            background: "none", border: 0, padding: "5px 0", textAlign: "left", cursor: "pointer", alignSelf: "stretch",
+            boxSizing: "border-box", minHeight: 36, padding: "3px 8px 3px 10px",
+            background: colors.bg2, border: `1px solid ${colors.line}`, borderRadius: 4,
+            textAlign: "left", cursor: "pointer",
             flex: 1,
             minWidth: 0,
             display: "flex",
-            flexDirection: "column",
-            justifyContent: "center",
-            gap: 2,
+            alignItems: "center",
+            gap: 8,
             overflow: "hidden",
             whiteSpace: "nowrap",
             color: colors.fg0,
             fontFamily: fontDisplay,
           }}
         >
+          <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 1, overflow: "hidden" }}>
           {activeChip ? (
             <>
-              <span style={{ display: "flex", alignItems: "baseline", gap: 6, minWidth: 0, fontSize: 15, fontWeight: 600, lineHeight: 1.1 }}>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-                  {displayTerminalTitle(activeChip.terminal)}
-                </span>
-                <span aria-hidden="true" style={{ flexShrink: 0, fontSize: 12 }}>▾</span>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, fontSize: 14, fontWeight: 600, lineHeight: 1.1 }}>
+                {displayTerminalTitle(activeChip.terminal)}
               </span>
               <span
                 style={{
@@ -509,11 +514,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   overflow: "hidden",
                   whiteSpace: "nowrap",
                   color: colors.fg3,
-                  fontSize: 11,
+                  fontSize: 10.5,
                   lineHeight: 1.15,
                 }}
               >
-                {resumeNotice ?? (
+                {resumeNotice ?? (<>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
                     {activeGroupIndex >= 0 ? `${activeGroupIndex}:` : ""}{activeChip.group.label} ·{" "}
                     <span
@@ -526,7 +531,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                     </span>{" "}
                     {activeMachine?.name ?? ""}
                   </span>
-                )}
+                  {/* Kept whole: the machine name gives way first. */}
+                  {controlNote && <span data-testid="mobile-title-bar-control" style={{ flexShrink: 0, whiteSpace: "pre" }}> · {controlNote}</span>}
+                </>)}
               </span>
               {terminalOpenerText(activeChip.terminal) && (
                 // P04: the opener chip on a line of its own.
@@ -542,8 +549,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             </>
           ) : (
             <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <span style={{ color: colors.fg2, fontSize: 15, fontWeight: 600, textTransform: "lowercase" }}>No terminal</span>
-              <span style={{ color: colors.fg3, fontSize: 11 }}>
+              <span style={{ color: colors.fg2, fontSize: 14, fontWeight: 600, textTransform: "lowercase" }}>No terminal</span>
+              <span style={{ color: colors.fg3, fontSize: 10.5 }}>
                 <span
                   data-testid="mobile-title-bar-dot"
                   role="img"
@@ -556,34 +563,10 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               </span>
             </span>
           )}
+          </span>
+          <ChevronsUpDown aria-hidden size={16} style={{ flexShrink: 0, color: colors.fg1 }} />
         </button>
 
-        {activeMachine ? (
-          <span
-            data-testid="mobile-title-bar-control"
-            style={{
-              flexShrink: 0,
-              display: "inline-flex",
-              alignItems: "center",
-              height: 24,
-              padding: "0 8px",
-              borderRadius: 3,
-              boxSizing: "border-box",
-              ...(deviceId !== null && controlLeases[activeMachine.id] === deviceId && !viewOnlyLocked
-                ? { background: colors.primary, color: colors.onPrimary, fontWeight: 600, border: "1px solid transparent" }
-                : { background: "transparent", color: colors.fg2, fontWeight: 500, border: `1px solid ${colors.line}` }),
-              fontFamily: fontDisplay,
-              fontSize: 11,
-              whiteSpace: "nowrap",
-            }}
-          >
-            {viewOnlyLocked
-              ? "view only"
-              : deviceId !== null && controlLeases[activeMachine.id] === deviceId
-                ? "in control"
-                : "watching"}
-          </span>
-        ) : null}
 
         {filesButton && onToggleFiles && wideTitleBar && (
           <span
