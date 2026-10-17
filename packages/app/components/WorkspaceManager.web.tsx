@@ -262,21 +262,23 @@ function WorkspaceManagerComponent({
                         label={`Move ${group.label} up`}
                         testid={`workspace-manager-up-${group.id}`}
                         disabled={!canManage || index === 0}
+                        icon
                         onClick={() =>
                           onReorderGroups(group.id, groups[index - 1].id, "before")
                         }
                       >
-                        ↑
+                        <ArrowUp size={14} aria-hidden />
                       </ManagerIconButton>
                       <ManagerIconButton
                         label={`Move ${group.label} down`}
                         testid={`workspace-manager-down-${group.id}`}
                         disabled={!canManage || index === groups.length - 1}
+                        icon
                         onClick={() =>
                           onReorderGroups(group.id, groups[index + 1].id, "after")
                         }
                       >
-                        ↓
+                        <ArrowDown size={14} aria-hidden />
                       </ManagerIconButton>
                       <ManagerIconButton
                         label={`Rename ${group.label}`}
@@ -430,6 +432,7 @@ function ManagerIconButton({
   testid,
   disabled = false,
   danger = false,
+  icon = false,
   onClick,
   children,
 }: {
@@ -437,6 +440,8 @@ function ManagerIconButton({
   testid: string;
   disabled?: boolean;
   danger?: boolean;
+  /** A 14px icon, whose own inset makes up the rest of the text padding. */
+  icon?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -450,6 +455,7 @@ function ManagerIconButton({
       onClick={onClick}
       style={{
         ...iconButtonStyle,
+        ...(icon && { padding: "0 8px" }),
         color: danger ? colors.danger : colors.fg3,
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.35 : 1,
@@ -628,14 +634,16 @@ const groupActionsStyle: CSSProperties = {
   paddingRight: 4,
 };
 
+// Sized to content so text actions ("rename", "[x]") and 14px icons sit
+// evenly spaced; minWidth keeps the tap target.
 const iconButtonStyle: CSSProperties = {
-  width: 30,
+  minWidth: 30,
   height: 30,
   flexShrink: 0,
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  padding: 0,
+  padding: "0 10px",
   border: "none",
   borderRadius: 3,
   background: "transparent",
