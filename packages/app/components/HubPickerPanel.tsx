@@ -9,6 +9,9 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : t
 const card = { border: `1px solid ${colors.lineSoft}`, borderRadius: 4, padding: "12px 14px", minWidth: 0, background: colors.bg1, fontFamily: "var(--font-display)" };
 const field = { width: "100%", minWidth: 0, boxSizing: "border-box" as const, fontSize: 16, padding: "0 12px", minHeight: 44, color: colors.fg0, background: colors.bg1, border: `1px solid ${colors.line}`, borderRadius: 4, fontFamily: "var(--font-display)" };
 function address(url: string) { try { return new URL(url).host; } catch { return url; } }
+/** A name that's only an address (the default, kept by older pairings after the Hub moved)
+ * shows where the Hub is now; a name the person gave shows as is. */
+function label(hub: SavedHub) { return /^https?:\/\//.test(hub.name) ? address(hub.status.endpoint.hub_url) : hub.name; }
 
 /** Bundled App only. The picker remains usable when the active Hub is offline. */
 export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
@@ -69,7 +72,7 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
       {hubs.length > 0 && <div style={{ border: `1px solid ${colors.lineSoft}`, borderRadius: 6, overflow: "hidden" }}>
       {hubs.map((hub, index) => { const current = hub.status.endpoint.public_key === active; return <button type="button" key={hub.status.endpoint.public_key} disabled={busy !== null} onClick={() => { setSelected(hub); setName(hub.name); void check(hub); }} style={{ width: "100%", minHeight: 60, padding: "12px 16px", textAlign: "left", border: 0, borderTop: index ? `1px solid ${colors.lineSoft}` : 0, borderLeft: `2px solid ${current ? colors.accent : "transparent"}`, background: current ? colors.bg2 : "transparent", color: colors.fg0, display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "var(--font-display)" }}>
         <span aria-label={current ? "Current" : undefined} style={{ color: current ? colors.accent : colors.fg3 }}>{current ? "●" : "○"}</span>
-        <span style={{ minWidth: 0 }}><span style={{ display: "block", overflowWrap: "anywhere", fontSize: 14, fontWeight: current ? 600 : 400 }}>{hub.name === hub.status.endpoint.hub_url ? address(hub.name) : hub.name}</span><span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg2 }}>{current ? "Current Hub · " : "Saved · "}Encrypted pairing</span></span><span aria-hidden="true" style={{ color: colors.fg3 }}>›</span>
+        <span style={{ minWidth: 0 }}><span style={{ display: "block", overflowWrap: "anywhere", fontSize: 14, fontWeight: current ? 600 : 400 }}>{label(hub)}</span><span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg2 }}>{current ? "Current Hub · " : "Saved · "}Encrypted pairing</span></span><span aria-hidden="true" style={{ color: colors.fg3 }}>›</span>
       </button>; })}
       </div>}
       {!hubs.length && !busy && <Body size={13}>No saved Hubs yet. Open Settings → Phone on your Hub’s computer to get its encrypted pairing code.</Body>}
