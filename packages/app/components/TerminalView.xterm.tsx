@@ -1027,8 +1027,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         batcher.push(transformed);
       });
 
-      // 25 MB cap per file — WS frames larger than this regularly choke the
-      // browser and the hub forwarder. Drag-drop a bigger file: we skip it
+      // Per-file cap so the Base64 message fits the 32 MiB WS limit (see
+      // MAX_IMAGE_PASTE_BYTES). Drag-drop a bigger file: we skip it
       // and surface a console.warn so the user knows why it didn't land.
       const MAX_DROP_BYTES = MAX_IMAGE_PASTE_BYTES;
 

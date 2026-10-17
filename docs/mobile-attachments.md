@@ -14,8 +14,8 @@ uploaded file's path; submission does not press Enter or execute that path.
 The sender waits for earlier queued data before reading the next file, keeping
 multiple large Base64 payloads out of the encrypted transport queue. If that wait
 exceeds 30 seconds, let the previous transfer finish and retry the remaining
-selection. Each file keeps the existing 25 MiB limit; the transport can impose a
-smaller effective limit. “Submitted” means queued to the connection, not proof
+selection. Each file is limited to 23 MiB so its Base64 message fits the 32 MiB
+connection limit; the review dialog marks larger files and will not send them. “Submitted” means queued to the connection, not proof
 of durable delivery after a network failure. Check the paths in the terminal.
 
 ## Verification
