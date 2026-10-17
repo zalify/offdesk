@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import type {
   MachineInfo,
   ResourceStats,
@@ -8,9 +9,10 @@ import { Button, fontDisplay } from "./Primitives.web";
 import { colors } from "@/lib/colors";
 import { diskPercent } from "@/lib/resourceStats";
 
-// The machine switcher in the tab bar: `mac-mini ▾` as text, opening a
-// list of machines (● online, name, os, load, terminals), `[x]` to remove
-// one, and `add a machine`.
+// The machine switcher in the tab bar: `mac-mini ▾` as text (in the tab bar,
+// the name and a load glyph instead of ▾), opening a list of machines
+// (● online, name, os, load, terminals), `[x]` to remove one, and
+// `add a machine`.
 
 interface HostSwitcherProps {
   machines: MachineInfo[];
@@ -24,6 +26,10 @@ interface HostSwitcherProps {
   onRemoveHost?: (machineId: string) => void;
   // Chromeless text trigger for the tab bar.
   compact?: boolean;
+  /** Shown after the name in place of ▾ (the tab bar's load glyph). */
+  trailing?: ReactNode;
+  /** What `trailing` says, for the button's name and tooltip. */
+  trailingLabel?: string;
 }
 
 function HostSwitcherComponent({
@@ -37,6 +43,8 @@ function HostSwitcherComponent({
   onAddMachine,
   onRemoveHost,
   compact = false,
+  trailing,
+  trailingLabel,
 }: HostSwitcherProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -79,7 +87,8 @@ function HostSwitcherComponent({
         data-testid="host-switcher-button"
         aria-expanded={open}
         aria-haspopup="listbox"
-        title={`${active.name}${onlineFor(active.id) ? "" : " (offline)"}${controllingActive ? " · you are in control" : ""}`}
+        aria-label={trailingLabel ? `${active.name}, ${trailingLabel}` : undefined}
+        title={`${active.name}${onlineFor(active.id) ? "" : " (offline)"}${controllingActive ? " · you are in control" : ""}${trailingLabel ? `\n${trailingLabel}` : ""}`}
         className="odk-text-btn odk-text-btn--strong"
         style={compact ? { maxWidth: 200 } : { width: "100%", justifyContent: "space-between" }}
       >
@@ -89,7 +98,7 @@ function HostSwitcherComponent({
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {active.name}
         </span>
-        <span aria-hidden="true">▾</span>
+        {trailing ?? <span aria-hidden="true">▾</span>}
       </button>
 
       {open && (

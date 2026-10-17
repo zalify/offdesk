@@ -244,16 +244,57 @@ test("workspace tabs can be reordered by dragging", async ({ page }) => {
 test("tab bar meters report host cpu, memory, and disk", async ({ page }) => {
   await openApp(page);
 
-  await expect(page.getByTestId("tab-bar-meters")).toBeVisible();
-  // Label and value sit in sibling spans with no separator, so "cpu12%".
-  // Wait for a real reading rather than the "—" placeholder, so the assertion
-  // fails if stats stop reaching the meters.
+  // The load glyph sits in the machine switcher: three bars, with the exact
+  // values in the switcher's accessible name. Wait for real readings rather
+  // than "unknown", so this fails if stats stop reaching the tab bar.
+  const switcher = page.getByTestId("host-switcher-button");
+  await expect(switcher.getByTestId("tab-bar-meters")).toBeVisible();
+  await expect(switcher).toHaveAttribute(
+    "aria-label",
+    /, cpu \d+%, memory \d+%, disk \d+%$/,
+    { timeout: 15_000 },
+  );
   for (const label of ["cpu", "mem", "disk"]) {
-    await expect(page.getByTestId(`tab-bar-meter-${label}`)).toHaveText(
-      new RegExp(`^${label}\\s*\\d+%$`),
-      { timeout: 15_000 },
-    );
+    await expect(page.getByTestId(`tab-bar-meter-${label}`)).toHaveAttribute("data-percent", /^\d+$/);
   }
+});
+
+test("tab bar keeps new tab, machine and panel buttons apart from the tabs", async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 700 });
+  await openApp(page);
+  await resetMachineState(page);
+  await takeControlFromHeader(page);
+  const groups = [];
+  for (let i = 0; i < 8; i++) groups.push(await createWorkspaceGroupViaApi(page, `Overflow tab ${i} ${Date.now()}`));
+  const terminalId = await createTerminalViaApi(page, { cwd: "/root", workspaceGroupId: groups[0].id });
+  await expandTerminalById(page, terminalId);
+  await expect(page.getByTestId(`workspace-group-${groups[7].id}`)).toBeAttached();
+
+  const strip = page.getByTestId("group-tab-strip");
+  const newTab = page.getByTestId("tab-bar-new-group");
+  // Many tabs: the strip scrolls and fades; the button stays after it, visible.
+  await expect(strip).toHaveAttribute("data-overflows", "true");
+  await expect(newTab).toBeInViewport();
+  await expect(newTab).toHaveText(/new tab/);
+  const stripBox = (await strip.boundingBox())!;
+  const newTabBox = (await newTab.boundingBox())!;
+  expect(newTabBox.x).toBeGreaterThanOrEqual(stripBox.x + stripBox.width);
+  // A boxed button, unlike the borderless tabs.
+  expect(await newTab.evaluate(el => getComputedStyle(el).borderTopWidth)).not.toBe("0px");
+
+  // Panels are icon buttons named by their labels; an open one looks pressed.
+  for (const name of ["Files", "Settings"]) {
+    await expect(page.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  const files = page.getByTestId("tab-bar-files");
+  if (await files.count()) {
+    await files.click();
+    await expect(files).toHaveAttribute("aria-pressed", "true");
+    expect(await files.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe("rgba(0, 0, 0, 0)");
+  }
+  // The machine's name lives in the switcher only, not again on the status line.
+  const name = (await page.getByTestId("host-switcher-button").getAttribute("aria-label"))!.split(",")[0];
+  await expect(page.getByTestId("tab-bar-rtt")).not.toContainText(name);
 });
 
 test("workspace tabs can be reordered by dragging the tab body", async ({
