@@ -5,7 +5,7 @@ const repo = "https://github.com/zalify/offdesk";
 const de: Dict = {
   chrome: {
     skip: "zum inhalt springen",
-    homeLabel: "Offdesk DEV – Startseite",
+    homeLabel: "Offdesk Dev – Startseite",
     navLabel: "Hauptnavigation",
     nav: {
       download: "download",
@@ -298,7 +298,7 @@ const de: Dict = {
     steps: {
       install: {
         title: "1. Mac-App installieren",
-        body: "Lade das Disk-Image von der <a href='/mac'>Mac-Downloadseite</a>. Öffne die DMG, zieh Offdesk DEV in den Ordner „Programme“ (Applications) und öffne dann die installierte Kopie. Starte die App nicht dauerhaft aus dem eingebundenen Disk-Image.",
+        body: "Lade das Disk-Image von der <a href='/mac'>Mac-Downloadseite</a>. Öffne die DMG, zieh Offdesk Dev in den Ordner „Programme“ (Applications) und öffne dann die installierte Kopie. Starte die App nicht dauerhaft aus dem eingebundenen Disk-Image.",
         extra:
           "Mit einem Standard-Benutzerkonto brauchst du eventuell das Passwort eines Administrators, um in den Ordner „Programme“ des Systems zu schreiben. Du kannst auch einen Programme-Ordner in deinem eigenen Benutzerordner verwenden. „RC“ im Screenshot kennzeichnet unseren Test-Build.",
         alt: "Das Fenster des Mac-Disk-Images mit Offdesk RC und einer Verknüpfung zum Ordner Applications.",
@@ -320,7 +320,7 @@ const de: Dict = {
           "Das Terminal-Tool tmux ist verfügbar.",
         ],
         extra:
-          "Sobald alles bereit ist, siehst du <strong>Connect your phone</strong>. Wähle <strong>Pair an encrypted device</strong>, um den Kopplungscode zu erzeugen. Schlägt eine Prüfung fehl, nutze die Wiederholen-Aktion auf dem Einrichtungsbildschirm. Fragt macOS, ob Offdesk DEV eingehende Verbindungen annehmen darf, erlaube es auf dem Mac, den dein Handy erreichen soll.",
+          "Sobald alles bereit ist, siehst du <strong>Connect your phone</strong>. Wähle <strong>Pair an encrypted device</strong>, um den Kopplungscode zu erzeugen. Schlägt eine Prüfung fehl, nutze die Wiederholen-Aktion auf dem Einrichtungsbildschirm. Fragt macOS, ob Offdesk Dev eingehende Verbindungen annehmen darf, erlaube es auf dem Mac, den dein Handy erreichen soll.",
       },
       terminal: {
         title: "4. Erstes Terminal öffnen",

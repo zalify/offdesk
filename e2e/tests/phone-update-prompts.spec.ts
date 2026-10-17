@@ -129,7 +129,7 @@ test("iPhone offers a newer TestFlight build once a day", async ({ page }) => {
   const requests = await iosBridge(page);
   await page.goto("/login");
   const card = page.getByTestId("ios-update-toast");
-  await expect(card).toContainText("Offdesk DEV 0.9.0", { timeout: 15000 });
+  await expect(card).toContainText("Offdesk Dev 0.9.0", { timeout: 15000 });
   await expect(card).toContainText("you have 0.8.0");
   await card.getByRole("button", { name: "open TestFlight", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__iosUpdateTest.opened)).toEqual(["https://testflight.apple.com/join/rV4ktaGv"]);

@@ -40,7 +40,7 @@ export function UpdateNotification() {
   const installing = update.phase === "installing";
   const installed = update.phase === "installed";
   const sentence = installed
-    ? "Installed. It takes over the next time Offdesk DEV starts."
+    ? "Installed. It takes over the next time Offdesk Dev starts."
     : update.phase === "downloading"
       ? `Downloading in the background${update.progress === null ? "…" : ` · ${Math.round(update.progress * 100)}%`}`
       : update.phase === "idle"

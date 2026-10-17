@@ -70,7 +70,7 @@ async function saveViaTauri({ filename, mime, dataBase64 }: SaveDownloadInput): 
     // "Command save_download not found".
     const text = error instanceof Error ? error.message : String(error);
     if (/save_download/.test(text) && /not found|not allowed|unknown/i.test(text)) {
-      throw new Error("Update the Offdesk DEV app to save files");
+      throw new Error("Update the Offdesk Dev app to save files");
     }
     throw error;
   }

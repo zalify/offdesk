@@ -39,7 +39,7 @@ export interface DesktopUpdateState {
 }
 
 const DISMISSED_KEY = "offdesk:desktop-update-dismissed";
-export const RESTART_TO_FINISH = "Installed. Restart Offdesk DEV to finish.";
+export const RESTART_TO_FINISH = "Installed. Restart Offdesk Dev to finish.";
 
 /** Local midnight after `now`: "until tomorrow". */
 export function startOfNextDay(now: number): number {

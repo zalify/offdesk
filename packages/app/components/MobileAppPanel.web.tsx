@@ -268,7 +268,7 @@ function ClientPhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
         <div style={{ flex: "1 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
           <span style={{ fontFamily: fontDisplay, fontSize: 16, fontWeight: 600, color: colors.fg0 }}>Pair your phone on {hubName}</span>
           <ol style={{ margin: 0, padding: "0 0 0 20px", listStyle: "decimal", display: "flex", flexDirection: "column", gap: 8, fontFamily: fontProse, fontSize: 14, lineHeight: "21px", color: colors.fg1 }}>
-            <li>On {hubName}, open Offdesk DEV › settings › phone.</li>
+            <li>On {hubName}, open Offdesk Dev › settings › phone.</li>
             <li>In the phone app, tap scan and point it at the encrypted code.</li>
             <li>The app keeps its own interface and stays encrypted at home or away.</li>
           </ol>

@@ -12,7 +12,7 @@ const repo = "https://github.com/zalify/offdesk";
 const ja: Dict = {
   chrome: {
     skip: "本文へスキップ",
-    homeLabel: "Offdesk DEV ホーム",
+    homeLabel: "Offdesk Dev ホーム",
     navLabel: "メイン",
     nav: {
       download: "ダウンロード",
@@ -311,7 +311,7 @@ const ja: Dict = {
     steps: {
       install: {
         title: "1. Mac アプリをインストール",
-        body: "<a href='/mac'>Mac のダウンロードページ</a>からディスクイメージを入手します。DMG を開いて Offdesk DEV を「アプリケーション」フォルダにドラッグし、インストールしたほうを開きます。マウントしたディスクイメージから起動したままにしないでください。",
+        body: "<a href='/mac'>Mac のダウンロードページ</a>からディスクイメージを入手します。DMG を開いて Offdesk Dev を「アプリケーション」フォルダにドラッグし、インストールしたほうを開きます。マウントしたディスクイメージから起動したままにしないでください。",
         extra:
           "macOS の標準アカウントでは、システムの「アプリケーション」フォルダへの書き込みに管理者のパスワードが必要な場合があります。自分のホームディレクトリ内の「アプリケーション」フォルダを使うこともできます。スクリーンショットの RC は、テスト用ビルドであることを示しています。",
         alt: "Offdesk RC と「アプリケーション」フォルダへのショートカットが入った、Mac のディスクイメージのウィンドウ。",
@@ -333,7 +333,7 @@ const ja: Dict = {
           "ターミナルツールの tmux が使える。",
         ],
         extra:
-          "準備ができると <strong>Connect your phone</strong> が表示されます。<strong>Pair an encrypted device</strong> を選んでペアリングコードを生成してください。確認に失敗した場合は、セットアップ画面の再試行を使ってください。Offdesk DEV に受信接続を許可するか macOS に聞かれたら、スマホからアクセスしたい Mac では許可してください。",
+          "準備ができると <strong>Connect your phone</strong> が表示されます。<strong>Pair an encrypted device</strong> を選んでペアリングコードを生成してください。確認に失敗した場合は、セットアップ画面の再試行を使ってください。Offdesk Dev に受信接続を許可するか macOS に聞かれたら、スマホからアクセスしたい Mac では許可してください。",
       },
       terminal: {
         title: "4. 最初のターミナルを開く",

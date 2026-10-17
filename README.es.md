@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
+    <img src="docs/media/logo.svg" alt="Offdesk Dev" height="48">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@
   <b>Español</b>
 </p>
 
-# Offdesk DEV — terminal remoto autoalojado para tmux y agentes de programación con IA
+# Offdesk Dev — terminal remoto autoalojado para tmux y agentes de programación con IA
 
 > Esta es una traducción del [README en inglés](README.md). Si difieren, la
 > versión en inglés es la referencia. Web en español:
@@ -36,7 +36,7 @@ propias máquinas macOS y Linux a través de un único Hub autoalojado. Los
 comandos se ejecutan en la máquina remota; los clientes transmiten la entrada y
 la salida del terminal por conexiones WebSocket.
 
-La app se instala como **Offdesk DEV**; en este README llamamos al proyecto
+La app se instala como **Offdesk Dev**; en este README llamamos al proyecto
 Offdesk, para abreviar. Las herramientas de línea de comandos conservan el
 nombre `offdesk`: la CLI `offdesk`, el servidor `offdesk-hub` y el agente de
 máquina `offdesk-node`.

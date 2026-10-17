@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
+    <img src="docs/media/logo.svg" alt="Offdesk Dev" height="48">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@
   <a href="README.es.md">Español</a>
 </p>
 
-# Offdesk DEV — tmux と AI コーディングエージェントのためのセルフホスト型リモートターミナル
+# Offdesk Dev — tmux と AI コーディングエージェントのためのセルフホスト型リモートターミナル
 
 > この文書は [英語版 README](README.md) の翻訳です。内容が食い違う場合は英語版が正となります。日本語のウェブサイト: [offdesk.dev/ja](https://offdesk.dev/ja/)
 
@@ -27,7 +27,7 @@
 
 **Claude Code、Codex、OpenCode をはじめ、あらゆるターミナルプログラム**に、ブラウザ、iPhone、Android スマートフォン、デスクトップアプリからアクセスできます。Offdesk は、自分の macOS / Linux マシン上で動き続ける **tmux セッション**に、セルフホストのハブ（Hub）ひとつを介してクライアントをつなぎます。コマンドはリモートマシン上で実行され、クライアントはターミナルの入出力を WebSocket 接続でやり取りします。
 
-アプリは **Offdesk DEV** という名前でインストールされます。この README ではプロジェクトを略して Offdesk と呼びます。コマンドラインツールは `offdesk` の名前を引き継いでいます。`offdesk` CLI、`offdesk-hub` サーバー、`offdesk-node`
+アプリは **Offdesk Dev** という名前でインストールされます。この README ではプロジェクトを略して Offdesk と呼びます。コマンドラインツールは `offdesk` の名前を引き継いでいます。`offdesk` CLI、`offdesk-hub` サーバー、`offdesk-node`
 マシンエージェントです。
 
 スマートフォンから AI コーディングエージェントの様子を確認したり、ネットワークが切れたあとにシェルを再開したり、Mac、Linux サーバー、NAS、VPS のターミナルをひとつの画面で管理したりできます。Hub とセッションを動かすマシンは起動したままにしておく必要があります。

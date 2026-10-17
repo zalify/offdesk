@@ -167,7 +167,7 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await expect(page.getByTestId("status-update")).toContainText("0.5.4");
   await expect(page.getByTestId("desktop-update-toast")).toHaveCount(0);
   await page.getByTestId("status-update").click();
-  await expect(page.getByTestId("desktop-update-toast")).toContainText("Installed. It takes over the next time Offdesk DEV starts.");
+  await expect(page.getByTestId("desktop-update-toast")).toContainText("Installed. It takes over the next time Offdesk Dev starts.");
   await page.getByTestId("desktop-update-toast").getByRole("button", { name: "Dismiss until tomorrow" }).click();
   expect(await page.evaluate(() => (window as any).__desktopTest.calls.includes("plugin:updater|download"))).toBe(false);
   await page.setViewportSize({ width: 1200, height: 800 });

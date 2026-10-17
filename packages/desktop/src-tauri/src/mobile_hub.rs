@@ -215,7 +215,7 @@ fn reachable(url: &Url) -> Result<(), String> {
     }
     Err(match last {
         Some(error) if local_network_blocked(&error) => format!(
-            "iOS is not letting Offdesk DEV reach {host}:{port}. Under Settings → Apps → Offdesk DEV, \
+            "iOS is not letting Offdesk Dev reach {host}:{port}. Under Settings → Apps → Offdesk Dev, \
              turn on Local Network — and on a phone sold in China, set Wireless Data (无线数据) \
              to WLAN & Cellular, which is off until you answer its prompt. Then try again."
         ),

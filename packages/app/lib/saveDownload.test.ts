@@ -72,7 +72,7 @@ describe("saveDownloadedFile", () => {
     invoke.mockRejectedValueOnce("Command save_download not found");
     await expect(
       saveDownloadedFile(input),
-    ).rejects.toThrow("Update the Offdesk DEV app to save files");
+    ).rejects.toThrow("Update the Offdesk Dev app to save files");
   });
 
   it("invokes the native command inside Tauri and can reveal the file", async () => {

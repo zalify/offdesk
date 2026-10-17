@@ -390,7 +390,7 @@ export function HubSetup({
         </div>
       ) : (
         <div style={{ width: "100%", maxWidth: 600, boxSizing: "border-box", padding: "12px 16px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4 }}>
-          <Body size={13}>macOS may ask whether Offdesk DEV can accept incoming connections. Choose Allow so your phone can reach this Mac.</Body>
+          <Body size={13}>macOS may ask whether Offdesk Dev can accept incoming connections. Choose Allow so your phone can reach this Mac.</Body>
         </div>
       )}
     </Screen>
@@ -619,7 +619,7 @@ export function PhoneCodePanel({
         {(["app", "browser"] as const).map((value) => (
           <button key={value} type="button" aria-pressed={purpose === value} onClick={() => setPurpose(value)}
             data-testid={`phone-purpose-${value}`}
-            aria-label={value === "app" ? "Offdesk DEV app, recommended" : "Browser access"}
+            aria-label={value === "app" ? "Offdesk Dev app, recommended" : "Browser access"}
             style={{ minHeight: 36, padding: "0 10px", border: 0, cursor: "pointer",
               fontFamily: fontDisplay, fontSize: 12, fontWeight: purpose === value ? 600 : 500,
               background: purpose === value ? colors.primary : "transparent",

@@ -418,7 +418,7 @@ async fn check() -> Status {
 mod tests {
     use super::*;
 
-    const DIR: &str = "/Applications/Offdesk DEV.app/Contents/MacOS";
+    const DIR: &str = "/Applications/Offdesk Dev.app/Contents/MacOS";
 
     fn inputs<'a>(hub: Running, node: Running, programs: [Option<&'a Path>; 3]) -> Inputs<'a> {
         Inputs {
@@ -489,10 +489,10 @@ mod tests {
         assert_eq!(parse_version("offdesk-hub 0.23.0\n"), Some("0.23.0".into()));
         assert_eq!(parse_version("offdesk-node 0.24.0-rc.1"), Some("0.24.0-rc.1".into()));
         assert_eq!(parse_version("error: unexpected argument"), None);
-        let plist = "<key>Label</key>\n<string>dev.offdesk.hub</string>\n<key>ProgramArguments</key>\n<array>\n        <string>/Users/a&amp;b/Offdesk DEV.app/Contents/MacOS/offdesk-hub</string>\n        <string>--listen</string>";
-        assert_eq!(plist_program(plist), Some(PathBuf::from("/Users/a&b/Offdesk DEV.app/Contents/MacOS/offdesk-hub")));
-        let unit = "[Service]\nType=simple\nExecStart=\"/opt/Offdesk DEV/offdesk-hub\" \"--listen\" \"0.0.0.0:4317\"\nRestart=always";
-        assert_eq!(unit_program(unit), Some(PathBuf::from("/opt/Offdesk DEV/offdesk-hub")));
+        let plist = "<key>Label</key>\n<string>dev.offdesk.hub</string>\n<key>ProgramArguments</key>\n<array>\n        <string>/Users/a&amp;b/Offdesk Dev.app/Contents/MacOS/offdesk-hub</string>\n        <string>--listen</string>";
+        assert_eq!(plist_program(plist), Some(PathBuf::from("/Users/a&b/Offdesk Dev.app/Contents/MacOS/offdesk-hub")));
+        let unit = "[Service]\nType=simple\nExecStart=\"/opt/Offdesk Dev/offdesk-hub\" \"--listen\" \"0.0.0.0:4317\"\nRestart=always";
+        assert_eq!(unit_program(unit), Some(PathBuf::from("/opt/Offdesk Dev/offdesk-hub")));
         assert_eq!(unit_program("ExecStart=/usr/bin/offdesk-node start"), Some(PathBuf::from("/usr/bin/offdesk-node")));
         assert_eq!(unit_program("ExecStart=\"/a/$$b%%c\\\"d\" x"), Some(PathBuf::from("/a/$b%c\"d")));
         assert_eq!(machine_id(r#"{"machine_id":"m-1","machine_secret":"s","hub_url":"ws://x"}"#), Some("m-1".into()));

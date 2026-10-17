@@ -5,7 +5,7 @@ const repo = "https://github.com/zalify/offdesk";
 const ko: Dict = {
   chrome: {
     skip: "본문으로 건너뛰기",
-    homeLabel: "Offdesk DEV 홈",
+    homeLabel: "Offdesk Dev 홈",
     navLabel: "주 메뉴",
     nav: {
       download: "다운로드",
@@ -297,7 +297,7 @@ const ko: Dict = {
     steps: {
       install: {
         title: "1. Mac 앱 설치하기",
-        body: "<a href='/mac'>Mac 다운로드 페이지</a>에서 디스크 이미지를 받으세요. DMG를 열고 Offdesk DEV를 응용 프로그램 폴더로 드래그한 다음, 설치된 앱을 여세요. 마운트된 디스크 이미지에서 계속 실행하지 마세요.",
+        body: "<a href='/mac'>Mac 다운로드 페이지</a>에서 디스크 이미지를 받으세요. DMG를 열고 Offdesk Dev를 응용 프로그램 폴더로 드래그한 다음, 설치된 앱을 여세요. 마운트된 디스크 이미지에서 계속 실행하지 마세요.",
         extra:
           "표준 macOS 계정에서는 시스템의 응용 프로그램 폴더에 쓰려면 관리자 암호가 필요할 수 있습니다. 내 홈 디렉터리 안의 응용 프로그램 폴더를 써도 됩니다. 스크린샷의 RC는 테스트 빌드라는 표시입니다.",
         alt: "Offdesk RC와 응용 프로그램 폴더 바로가기가 있는 Mac 디스크 이미지 창.",
@@ -319,7 +319,7 @@ const ko: Dict = {
           "터미널 도구인 tmux를 사용할 수 있습니다.",
         ],
         extra:
-          "준비가 끝나면 <strong>Connect your phone</strong>이 표시됩니다. <strong>Pair an encrypted device</strong>를 선택해 페어링 코드를 생성하세요. 확인에 실패하면 설정 화면의 재시도 버튼을 누르세요. macOS가 Offdesk DEV의 수신 연결 허용 여부를 물으면, 휴대폰으로 접속하려는 Mac에서 허용하세요.",
+          "준비가 끝나면 <strong>Connect your phone</strong>이 표시됩니다. <strong>Pair an encrypted device</strong>를 선택해 페어링 코드를 생성하세요. 확인에 실패하면 설정 화면의 재시도 버튼을 누르세요. macOS가 Offdesk Dev의 수신 연결 허용 여부를 물으면, 휴대폰으로 접속하려는 Mac에서 허용하세요.",
       },
       terminal: {
         title: "4. 첫 터미널 열기",

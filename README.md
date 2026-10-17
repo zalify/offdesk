@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
+    <img src="docs/media/logo.svg" alt="Offdesk Dev" height="48">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@
   <a href="README.es.md">Español</a>
 </p>
 
-# Offdesk DEV — self-hosted remote terminal for tmux and AI coding agents
+# Offdesk Dev — self-hosted remote terminal for tmux and AI coding agents
 
 **One terminal, shared by you and your agents.** Agents open, type into and
 read terminals through the `offdesk` CLI; you watch the same terminals from
@@ -31,7 +31,7 @@ iPhone, Android phone, or desktop app. Offdesk connects clients to persistent
 Hub. Commands run on the remote machine; clients stream terminal input and
 output over WebSocket connections.
 
-The app installs as **Offdesk DEV**; this README calls the project Offdesk for
+The app installs as **Offdesk Dev**; this README calls the project Offdesk for
 short. The command-line tools keep the `offdesk` name: the `offdesk` CLI, the
 `offdesk-hub` server and the `offdesk-node` machine agent.
 

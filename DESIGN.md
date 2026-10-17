@@ -1,4 +1,4 @@
-# Offdesk DEV design system
+# Offdesk Dev design system
 
 This documents the system the app actually ships: direction B, "terminal".
 A dark desk, monospace chrome, sans-serif prose, one accent. Every theme is
@@ -9,7 +9,7 @@ in `packages/app/lib/themes.ts` (interface tokens and terminal colours);
 the first paint, and `lib/themePalette.ts` derives the React Native values. The
 primitives are `packages/app/components/Primitives.web.tsx` (+ `.css`).
 
-The wireframes in the Offdesk DEV design canvas (desktop D01–D13 and Main,
+The wireframes in the Offdesk Dev design canvas (desktop D01–D13 and Main,
 phone P01–P08, the B boards and DEV-Tokens) are the spec for layout,
 components and copy, element by element — not only for colour. When a screen
 changes, compare it with its board at the same viewport (1280×800 desktop,
@@ -109,7 +109,7 @@ Focus-visible = 2px `focus` ring, 2px offset. Text selection = primary at
 - Scale: display 36–56 / 600 / −0.035em; heading 20–34 / 600 / −0.02em;
   label 12–13 / 500; terminal 12–13; prose 14–17 at 1.5.
 - **Lowercase chrome.** Buttons, labels, tabs and menus are lowercase.
-  Headings and prose use sentence case. Product name: "Offdesk DEV"; the
+  Headings and prose use sentence case. Product name: "Offdesk Dev"; the
   lockup is `offdesk/dev` with `/dev` in the accent.
 
 ## Shape and space

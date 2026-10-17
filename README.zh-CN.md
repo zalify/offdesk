@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/logo-dark.svg">
-    <img src="docs/media/logo.svg" alt="Offdesk DEV" height="48">
+    <img src="docs/media/logo.svg" alt="Offdesk Dev" height="48">
   </picture>
 </p>
 
@@ -19,7 +19,7 @@
   <a href="README.es.md">Español</a>
 </p>
 
-# Offdesk DEV：面向 tmux 与 AI 编程 agent 的自托管远程终端
+# Offdesk Dev：面向 tmux 与 AI 编程 agent 的自托管远程终端
 
 > 本文是 [英文 README](README.md) 的中文翻译。两者不一致时，以英文版为准。
 > 中文网站：[offdesk.dev/zh](https://offdesk.dev/zh/)
@@ -28,7 +28,7 @@
 
 在浏览器、iPhone、Android 手机或桌面 App 上访问 **Claude Code、Codex、OpenCode 或任何终端程序**。Offdesk 通过一个自托管的 Hub，把客户端连接到你自己的 macOS 和 Linux 机器上持久运行的 **tmux 会话**。命令在远程机器上执行，客户端通过 WebSocket 连接传输终端的输入和输出。
 
-App 安装后的名字是 **Offdesk DEV**，本文简称 Offdesk。命令行工具沿用 `offdesk` 这个名字：`offdesk` CLI、`offdesk-hub` 服务端和 `offdesk-node`
+App 安装后的名字是 **Offdesk Dev**，本文简称 Offdesk。命令行工具沿用 `offdesk` 这个名字：`offdesk` CLI、`offdesk-hub` 服务端和 `offdesk-node`
 机器 agent。
 
 你可以用它在手机上查看 AI 编程 agent 的进度，在网络断开后接着用原来的 shell，或者在一个界面里管理 Mac、Linux 服务器、NAS 和 VPS 上的终端。运行 Hub

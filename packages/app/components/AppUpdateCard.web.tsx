@@ -47,7 +47,7 @@ export function AppUpdateCard({
     >
       <div role="status" aria-live="polite" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
         <span style={{ flexGrow: 1, minWidth: 0, fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, color: colors.fg0 }}>
-          Offdesk DEV {version}
+          Offdesk Dev {version}
         </span>
         {current ? (
           <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>

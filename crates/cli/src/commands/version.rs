@@ -121,7 +121,7 @@ fn update_plan(hub: Option<&HubVersion>, nodes: Option<&[MachineVersion]>, lates
             Some(_) => "The hub doesn't know the newest release yet (it looks it up on GitHub). Try again in a minute.".to_string(),
             None => format!(
                 "The hub is older than 0.23 and can't say what's newest. Update it first:\n  \
-                 on a Mac running Offdesk DEV: menu bar › restart to update\n  \
+                 on a Mac running Offdesk Dev: menu bar › restart to update\n  \
                  anywhere else: {INSTALL} --hub-only"
             ),
         });
@@ -137,7 +137,7 @@ fn update_plan(hub: Option<&HubVersion>, nodes: Option<&[MachineVersion]>, lates
         current = false;
         lines.push(format!(
             "hub {} → {latest}, on the hub's machine:\n  \
-             with Offdesk DEV: menu bar › restart to update (the hub comes with the app)\n  \
+             with Offdesk Dev: menu bar › restart to update (the hub comes with the app)\n  \
              without it: {INSTALL} --hub-only",
             hub.hub
         ));
@@ -147,7 +147,7 @@ fn update_plan(hub: Option<&HubVersion>, nodes: Option<&[MachineVersion]>, lates
         let from = node.version.as_deref().unwrap_or("<0.23");
         lines.push(format!(
             "node {} {from} → {latest}, on that machine:\n  \
-             with Offdesk DEV: open it and restart to update\n  \
+             with Offdesk Dev: open it and restart to update\n  \
              without it: {INSTALL} --node-only",
             node.name
         ));
