@@ -126,9 +126,12 @@ Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
   in `fg-3` and kept out of the accessible name. 40px (32px `sm`), 44px on
   touch.
 - **Text buttons** (`TextButton`): chrome as plain lowercase text, no box —
-  `files`, `settings`, `≡`, `[+]`, `mac-mini ▾`, `browser[2]` with a red `!`
-  when the agent needs you; `square` gives the phone title bar's 44px
-  `[f]` `[b]` `[m]`. Icon buttons in boxes are not part of the system.
+  `settings`, `≡`, `mac-mini ▾`, with a red `!` when something needs you;
+  `square` gives the phone title bar's 44px `[f]` `[b]` `[m]`. The desktop
+  tab bar's panel buttons are the one exception: unboxed 15px icons (files,
+  browser with its count, phone, settings), named by `aria-label` and a
+  tooltip, and filled with `bg-3` while their panel is open. Icon buttons
+  in boxes are not part of the system.
 - **Keys** (`Key`): the key bar's 36px keys, 1px `line` edge, 3px radius,
   lowercase labels (`esc`, `tab`, `⇧tab`, `[enter]`, `paste`); `^C` is the
   accent fill; a latched modifier (`ctrl`) is `aria-pressed` in the accent.
@@ -162,9 +165,12 @@ gets the single-column mobile layout — folding, rotation, or a soft keyboard
 cannot flip chrome); non-touch keeps `innerWidth ≤ 768`. History and the
 retired large-touch workspace: `docs/plans/2026-08-13-fold-touch-workspace.md`.
 
-- **Desktop tab bar** (40px mouse, ≥44px touch): tmux tabs, `[+]`, then on
-  the right the machine switcher (`nas ▾`), cpu/mem as text, and lowercase
-  text buttons (`files`, `browser[2]`, `phone`, `settings`).
+- **Desktop tab bar** (40px mouse, ≥44px touch): tmux tabs filling the free
+  width (fading out under a divider when they overflow), then `+ new tab` as
+  a 26px secondary button that never moves; on the right the machine switcher
+  (`nas` plus a three-bar cpu/mem/disk load glyph; a bar over 85% turns
+  `fg-0`, never `err`) and the panel icons. The machine's name is not
+  repeated on the status line.
 - **Pane header**: `●` (accent when it has focus), program, cwd, and the
   agent marker on the right.
 - **Phone title bar**: program `▾` over `0:app · machine`, a control chip,

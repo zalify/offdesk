@@ -1,11 +1,11 @@
 // The desktop workspace's bottom line, tmux-style. Left: the terminal that is
 // waiting on you (a confirmation prompt), with [enter] to accept the selected
 // option and "open" to go to it; workspace messages (a refused split, a
-// saved download) take this slot for a few seconds. Right: machine, how many
-// are connected, round trip, the ⌃B prefix when armed, and who has the
-// keyboard — "in control" on lime, or "take control" while watching. When
-// the desktop app has an update, `↑ update 0.9.1` sits before the machine and
-// opens the update card.
+// saved download) take this slot for a few seconds. Right: how many machines
+// are connected (the active one is the tab bar's switcher), round trip, the
+// ⌃B prefix when armed, and who has the keyboard — "in control" on lime, or
+// "take control" while watching. When the desktop app has an update,
+// `↑ update 0.9.1` sits before them and opens the update card.
 
 import { useEffect, useRef, useState } from "react";
 import type { MachineInfo, TerminalInfo } from "@offdesk/shared";
@@ -75,8 +75,9 @@ export function WorkspaceStatusLine({
   };
 
   const online = machines.filter((m) => machineOnline[m.id]).length;
+  // The machine's name is the tab bar's switcher; here only how many are
+  // connected and the round trip.
   const where = [
-    activeMachine?.name,
     machines.length > 1 ? `${online} machine${online === 1 ? "" : "s"}` : null,
     rttMs === null ? "—" : `${Math.round(rttMs)}ms`,
   ].filter(Boolean);

@@ -7,6 +7,11 @@
 // `settings`. Who has the keyboard and the round trip moved to the status
 // line (WorkspaceStatusLine).
 //
+// The strip takes the free width and fades out under a divider when tabs
+// overflow, so `+ new tab` after it never moves. On the right the machine
+// switcher carries a three-bar load glyph (cpu, mem, disk), and files,
+// browser, phone and settings are unboxed icons named by their tooltips.
+//
 // The active tab is marked only by a 2px accent rule. Tabs can be reordered
 // by dragging anywhere on the tab (the window number is the handle tests
 // grab) — same mouse-drag protocol the old workspace toolbar strip used, no
@@ -22,6 +27,7 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
+import { Folder, Globe, Settings as SettingsIcon, Smartphone } from "lucide-react";
 import type {
   MachineInfo,
   ResourceStats,
@@ -118,6 +124,24 @@ function TabBarComponent({
   onRemoveHost,
 }: TabBarProps) {
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
+  // The strip fades at its end only while tabs are hidden past it.
+  const stripRef = useRef<HTMLDivElement>(null);
+  const [stripOverflows, setStripOverflows] = useState(false);
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const update = () =>
+      setStripOverflows(strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1);
+    update();
+    strip.addEventListener("scroll", update, { passive: true });
+    const observer = new ResizeObserver(update);
+    observer.observe(strip);
+    for (const child of Array.from(strip.children)) observer.observe(child);
+    return () => {
+      strip.removeEventListener("scroll", update);
+      observer.disconnect();
+    };
+  }, [groups]);
   // ---- tab drag-to-reorder ----
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const groupDragRef = useRef<{ sourceGroupId: string } | null>(null);
@@ -317,7 +341,9 @@ function TabBarComponent({
         ≡
       </TextButton>
       <div
+        ref={stripRef}
         data-testid="group-tab-strip"
+        data-overflows={stripOverflows ? "true" : undefined}
         className="scrollbar-hidden"
         // A vertical wheel scrolls the strip sideways; it has no scrollbar.
         onWheel={(event) => {
@@ -331,7 +357,8 @@ function TabBarComponent({
           overflowX: "auto",
           overflowY: "hidden",
           minWidth: 0,
-          flex: "0 1 auto",
+          flex: "1 1 auto",
+          ...(stripOverflows ? STRIP_FADE : null),
           // Reach over the bar's bottom border, so the active tab's accent
           // rule sits on it, the way tmux marks the current window.
           marginBottom: -1,
@@ -450,17 +477,20 @@ function TabBarComponent({
           );
         })}
       </div>
-      <TextButton
-        testId="tab-bar-new-group"
+      <span aria-hidden="true" style={dividerStyle} />
+      <button
+        type="button"
+        data-testid="tab-bar-new-group"
         onClick={onNewGroup}
         disabled={!isController}
-        label="New tab"
         title={isController ? "New tab" : "Take control to create a terminal"}
-        style={{ alignSelf: "center" }}
+        className="odk-btn odk-btn--secondary"
+        style={newTabStyle}
       >
-        [+]
-      </TextButton>
-      <div style={{ flex: 1, minWidth: 8 }} />
+        <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        new tab
+      </button>
+      <div style={{ width: 20, flexShrink: 0 }} />
 
       {tabMenu && (
         <ContextMenu
@@ -494,12 +524,12 @@ function TabBarComponent({
         onCloseTerminal={onCloseTerminal}
       />
 
-      {/* Right: machine, load, then the places you can open — as text. */}
+      {/* Right: machine and its load, then the places you can open. */}
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: 10,
+          gap: 2,
           flexShrink: 0,
         }}
       >
@@ -514,8 +544,10 @@ function TabBarComponent({
           onSelectMachine={onSelectMachine}
           onAddMachine={onAddMachine}
           onRemoveHost={onRemoveHost}
+          trailing={<LoadGlyph stats={stats} />}
+          trailingLabel={loadLabel(stats)}
         />
-        <MicroMeters stats={stats} />
+        <span style={{ width: 6, flexShrink: 0 }} />
         {filesButton && onToggleFiles && (
           <TextButton
             testId="tab-bar-files"
@@ -523,8 +555,9 @@ function TabBarComponent({
             pressed={filesButton.open}
             open={filesButton.open}
             onClick={onToggleFiles}
+            style={panelButtonStyle(filesButton.open)}
           >
-            files
+            <Folder size={15} aria-hidden />
           </TextButton>
         )}
         {browserButton && onToggleBrowser && (
@@ -535,20 +568,19 @@ function TabBarComponent({
               pressed={browserButton.open}
               open={browserButton.open}
               onClick={onToggleBrowser}
+              style={panelButtonStyle(browserButton.open)}
               alert={
                 browserButton.needsPerson
                   ? { label: "The agent needs you", testId: "tab-bar-browser-attention" }
                   : undefined
               }
             >
-              <span>
-                browser
+              <span style={{ display: "inline-flex", alignItems: "flex-start", gap: 1 }}>
+                <Globe size={15} aria-hidden />
                 {browserButton.count > 0 && (
-                  <>
-                    [<span data-testid="tab-bar-browser-count">
-                      {browserButton.count > 99 ? "99+" : browserButton.count}
-                    </span>]
-                  </>
+                  <span data-testid="tab-bar-browser-count" style={browserCountStyle}>
+                    {browserButton.count > 99 ? "99+" : browserButton.count}
+                  </span>
                 )}
               </span>
             </TextButton>
@@ -558,12 +590,13 @@ function TabBarComponent({
             testId="tab-bar-phone"
             label="Open this hub on your phone"
             onClick={onOpenPhone}
+            style={panelButtonStyle(false)}
           >
-            phone
+            <Smartphone size={15} aria-hidden />
           </TextButton>
         )}
-        <TextButton testId="tab-bar-settings" label="Settings" onClick={onOpenSettings}>
-          settings
+        <TextButton testId="tab-bar-settings" label="Settings" onClick={onOpenSettings} style={panelButtonStyle(false)}>
+          <SettingsIcon size={15} aria-hidden />
         </TextButton>
       </div>
     </div>
@@ -625,52 +658,98 @@ function groupOpenerDescription(
 
 /* ---------- cpu/mem/disk as text ---------- */
 
-function MicroMeters({ stats }: { stats: ResourceStats | undefined }) {
-  const cpu = stats ? Math.round(stats.cpu_percent) : null;
-  const mem =
-    stats && stats.memory_total > 0
-      ? Math.round((stats.memory_used / stats.memory_total) * 100)
-      : null;
-  const disk = diskPercent(stats);
-  return (
-    <div
-      data-testid="tab-bar-meters"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 0,
-        fontFamily: "var(--font-display)",
-        fontSize: 11,
-        color: colors.fg3,
-        whiteSpace: "nowrap",
-      }}
-    >
-      <Meter label="cpu" percent={cpu} />
-      <span aria-hidden="true">&nbsp;·&nbsp;</span>
-      <Meter label="mem" percent={mem} />
-      <span aria-hidden="true">&nbsp;·&nbsp;</span>
-      <Meter label="disk" percent={disk} title={diskTooltip(stats)} />
-    </div>
-  );
+// Over this share a resource reads as busy: its bar goes full strength.
+// Not red: the warn colour stays for a terminal waiting on you.
+const BUSY_PERCENT = 85;
+
+function loadPercents(stats: ResourceStats | undefined) {
+  return [
+    { label: "cpu", name: "cpu", percent: stats ? Math.round(stats.cpu_percent) : null },
+    {
+      label: "mem",
+      name: "memory",
+      percent: stats && stats.memory_total > 0
+        ? Math.round((stats.memory_used / stats.memory_total) * 100)
+        : null,
+    },
+    { label: "disk", name: "disk", percent: diskPercent(stats) },
+  ];
 }
 
-function Meter({
-  label,
-  percent,
-  title,
-}: {
-  label: string;
-  percent: number | null;
-  title?: string;
-}) {
+function loadLabel(stats: ResourceStats | undefined): string {
+  return loadPercents(stats)
+    .map(({ name, percent }) => `${name} ${percent === null ? "unknown" : `${percent}%`}`)
+    .join(", ");
+}
+
+/** cpu, mem and disk as three 3px bars, 12px tall: the machine's load at a
+ *  glance. Exact values are in the switcher's title and its menu. */
+function LoadGlyph({ stats }: { stats: ResourceStats | undefined }) {
   return (
-    <span data-testid={`tab-bar-meter-${label}`} title={title}>
-      {label} {percent === null ? "—" : `${percent}%`}
+    <span
+      data-testid="tab-bar-meters"
+      aria-hidden="true"
+      title={diskTooltip(stats)}
+      style={{ display: "inline-flex", alignItems: "flex-end", gap: 2, height: 12, flexShrink: 0 }}
+    >
+      {loadPercents(stats).map(({ label, percent }) => (
+        <span
+          key={label}
+          data-testid={`tab-bar-meter-${label}`}
+          data-percent={percent ?? undefined}
+          style={{
+            width: 3,
+            height: `${Math.max(percent ?? 0, 8)}%`,
+            background: percent !== null && percent > BUSY_PERCENT ? colors.fg0 : colors.fg3,
+            opacity: percent === null ? 0.4 : 1,
+          }}
+        />
+      ))}
     </span>
   );
 }
 
 /* ---------- styles ---------- */
+
+const STRIP_FADE: CSSProperties = {
+  WebkitMaskImage: "linear-gradient(to right, #000 calc(100% - 40px), transparent)",
+  maskImage: "linear-gradient(to right, #000 calc(100% - 40px), transparent)",
+};
+
+const dividerStyle: CSSProperties = {
+  width: 1,
+  margin: "10px 2px",
+  background: colors.lineSoft,
+  flexShrink: 0,
+};
+
+// The secondary button, at chrome height: a box, unlike the text around it.
+const newTabStyle: CSSProperties = {
+  alignSelf: "center",
+  flexShrink: 0,
+  height: 26,
+  minHeight: 26,
+  gap: 6,
+  padding: "0 9px",
+  fontSize: 12,
+};
+
+// Unboxed icons; an open panel gets the hover fill, so it reads as pressed.
+function panelButtonStyle(open: boolean): CSSProperties {
+  return {
+    alignSelf: "center",
+    minWidth: 30,
+    padding: "0 7px",
+    ...(open ? { background: colors.bg3, color: colors.fg0 } : null),
+  };
+}
+
+const browserCountStyle: CSSProperties = {
+  fontSize: 9.5,
+  lineHeight: 1,
+  marginTop: -2,
+  color: colors.fg1,
+};
 
 const tabButtonStyle: CSSProperties = {
   minWidth: 0,
