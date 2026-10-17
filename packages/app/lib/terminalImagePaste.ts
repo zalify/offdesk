@@ -35,10 +35,10 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-// 25 MB cap mirrors the dragdrop guard in TerminalView.xterm.tsx — WS
-// frames larger than this regularly choke the browser and the hub
-// forwarder.
-export const MAX_IMAGE_PASTE_BYTES = 25 * 1024 * 1024;
+// The file travels Base64-encoded in one JSON message, and the hub, the
+// machine and the encrypted channel all cap a message at 32 MiB. 23 MiB
+// encodes to ~30.7 MiB, leaving room for the envelope; 25 MiB would not fit.
+export const MAX_IMAGE_PASTE_BYTES = 23 * 1024 * 1024;
 
 export interface ImagePasteMessage {
   type: "image_paste";

@@ -200,7 +200,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
         {key("Arrow right", "\x1b[C", "extended-keybar-right", "→", true)}
       </div>
     </>}
-    <input ref={fileInput} type="file" accept="image/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
+    <input ref={fileInput} type="file" accept="image/*,video/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
     <input ref={documentInput} type="file" multiple hidden onChange={attach} data-testid="extended-keybar-document-input" disabled={!onAttachFile} />
     {reviewingAttachments && <AttachmentReview files={pendingFiles} uploading={uploading} error={uploadError}
       canSend={isController && !!onAttachFile} onSend={() => void sendAttachments()}

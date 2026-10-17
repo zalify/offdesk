@@ -24,7 +24,7 @@ describe("ExtendedKeyBar", () => {
     expect(html).toContain('data-testid="extended-keybar-file-input" disabled=""');
   });
 
-  it("renders an attach button + image-only file input when onAttachFile is provided", () => {
+  it("renders an attach button + photo/video file input when onAttachFile is provided", () => {
     const html = renderToStaticMarkup(
       createElement(ExtendedKeyBar, {
         ...baseProps,
@@ -33,7 +33,7 @@ describe("ExtendedKeyBar", () => {
     );
     expect(html).toContain('data-testid="extended-keybar-attach"');
     expect(html).toContain('data-testid="extended-keybar-file-input"');
-    expect(html).toContain('accept="image/*"');
+    expect(html).toContain('accept="image/*,video/*"');
   });
 
   it("disables key buttons when not in control", () => {

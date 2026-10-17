@@ -26,7 +26,7 @@ test("uploads a named document intact through the system file picker", async ({ 
   await expect.poll(() => readTerminalBuffer(page, id)).toContain("FILE_READY");
   await page.getByTestId("extended-keybar-attach").click();
   const dialog = page.getByRole("dialog", { name: "Add attachment" });
-  await expect(dialog.getByRole("button", { name: "Choose photos" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Choose photos or videos" })).toBeVisible();
   const chooserEvent = page.waitForEvent("filechooser");
   await dialog.getByRole("button", { name: "Choose files" }).click();
   const chooser = await chooserEvent;
@@ -65,9 +65,11 @@ for (const source of ["photos", "files"] as const) {
     const pick = async () => {
       await page.getByTestId("extended-keybar-attach").click();
       const chooserEvent = page.waitForEvent("filechooser");
-      await page.getByRole("button", { name: `Choose ${source}`, exact: true }).click();
+      await page.getByRole("button", { name: source === "photos" ? "Choose photos or videos" : "Choose files", exact: true }).click();
       const chooser = await chooserEvent;
       expect(chooser.isMultiple()).toBe(true);
+      // Screen recordings live in the photo library, so it must offer videos.
+      expect(await chooser.element().getAttribute("accept")).toBe(source === "photos" ? "image/*,video/*" : null);
       const ext = source === "photos" ? "png" : "txt";
       await chooser.setFiles([1, 2].map(n => ({ name: `file-${n}.${ext}`, mimeType: source === "photos" ? "image/png" : "text/plain", buffer: Buffer.from(`attachment ${n}`) })));
     };
@@ -114,3 +116,37 @@ for (const source of ["photos", "files"] as const) {
     expect(new Set(sent.map(file => file.filename)).size).toBe(2);
   });
 }
+
+test("marks a screen recording over the size limit and does not send it", async ({ page }) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  const id = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await expandTerminalById(page, id);
+  const sent: string[] = [];
+  page.on("websocket", socket => socket.on("framesent", frame => {
+    if (typeof frame.payload !== "string") return;
+    try { if (JSON.parse(frame.payload).type === "image_paste") sent.push(frame.payload); } catch {}
+  }));
+  await page.reload();
+  await page.getByTestId("extended-keybar-attach").click();
+  const chooserEvent = page.waitForEvent("filechooser");
+  await page.getByRole("button", { name: "Choose photos or videos", exact: true }).click();
+  const chooser = await chooserEvent;
+  // 24 MiB passes the machine's 25 MB check but its Base64 message would not
+  // fit the 32 MiB connection limit.
+  await chooser.setFiles([
+    { name: "recording.mov", mimeType: "video/quicktime", buffer: Buffer.alloc(24 * 1024 * 1024) },
+    { name: "clip.mp4", mimeType: "video/mp4", buffer: Buffer.from("small clip") },
+  ]);
+  const review = page.getByRole("dialog", { name: "Review attachments" });
+  await expect(review).toContainText("over the 23.0 MB limit");
+  const send = review.getByRole("button", { name: "Send attachments", exact: true });
+  await expect(send).toBeDisabled();
+  await review.getByRole("button", { name: "Remove recording.mov", exact: true }).click();
+  await expect(review).not.toContainText("over the 23.0 MB limit");
+  await review.getByRole("button", { name: "Send attachment", exact: true }).click();
+  await expect(review).toHaveCount(0);
+  await expect.poll(() => sent.length).toBe(1);
+  expect(JSON.parse(sent[0])).toMatchObject({ filename: "clip.mp4", mime: "video/mp4" });
+});
