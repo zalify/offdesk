@@ -6,6 +6,7 @@ mod cloud;
 #[cfg(unix)]
 mod cloud_connector;
 mod cloud_download;
+mod cloud_relay;
 mod composer;
 mod attach_router;
 mod auth;

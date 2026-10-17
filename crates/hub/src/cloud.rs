@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 
 const API: &str = "https://cloud.offdesk.dev";
 const ORIGIN: &str = "http://127.0.0.1:4318";
+const RELAY_DOMAIN: &str = "relay.offdesk.cloud";
 const MAX_RESPONSE: usize = 16 * 1024;
 
 #[derive(Subcommand)]
@@ -27,8 +28,21 @@ pub enum Action {
     LoginStatus,
     /// Show managed connection status; never prints credentials
     Status,
-    /// Enable the managed connection and run cloudflared at login
-    Install,
+    /// Enable the managed connection through Offdesk Relay and run its connector at login
+    Install {
+        /// Home region (`hk`, `kr`…; see `regions`), or `auto` to measure again. Default: the
+        /// current one, else the fastest measured
+        #[arg(long)]
+        home: Option<String>,
+        /// Backup region, or `none`. Default: the current one, else the next fastest
+        #[arg(long)]
+        backup: Option<String>,
+        /// Use a Cloudflare tunnel and cloudflared instead of the relay (rollback)
+        #[arg(long, hide = true)]
+        tunnel: bool,
+    },
+    /// Measure the relay regions from this machine (directly, not through a proxy)
+    Regions,
     /// Verify encryption and route isolation, then advertise this address to Apps
     Check,
     /// Stop the local connector and request deletion of its remote resources
@@ -47,6 +61,212 @@ struct Registration {
     public_key: String,
     enabled: bool,
     cloudflared: Option<PathBuf>,
+    /// On the relay: its addresses as Cloud last gave them
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relay: Option<Relay>,
+}
+/// A Hub's relay addresses: `<slug>.relay.offdesk.cloud` (a CNAME to its home region, kept by
+/// Cloud), and the regional routes where it keeps control connections (home, then backup).
+/// Never a host outside `relay.offdesk.cloud`: the control token is sent there.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+struct Relay {
+    slug: String,
+    hostname: String,
+    url: String,
+    home: String,
+    #[serde(default)]
+    backup: Option<String>,
+    connect: Vec<RelayRoute>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+struct RelayRoute {
+    region: String,
+    hostname: String,
+    url: String,
+}
+#[derive(Deserialize)]
+struct RelayStatus {
+    #[serde(flatten)]
+    status: Status,
+    transport: String,
+    relay: Relay,
+}
+#[derive(Clone, Deserialize, Serialize)]
+struct RegionInfo {
+    code: String,
+    label: String,
+    host: String,
+}
+#[derive(Deserialize)]
+struct Regions {
+    regions: Vec<RegionInfo>,
+    default: String,
+}
+/// A relay slug: lower-case letters, digits and single hyphens, 3–40 characters.
+fn valid_slug(slug: &str) -> bool {
+    (3..=40).contains(&slug.len())
+        && slug
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && !slug.starts_with('-')
+        && !slug.ends_with('-')
+        && !slug.contains("--")
+}
+/// A region code: `hk`, `us-west`.
+fn valid_region(code: &str) -> bool {
+    let (head, tail) = match code.split_once('-') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (code, None),
+    };
+    head.len() == 2
+        && head.bytes().all(|b| b.is_ascii_lowercase())
+        && tail.is_none_or(|t| {
+            (1..=16).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_lowercase())
+        })
+}
+/// `<slug>.relay.offdesk.cloud` → (slug, None); `<slug>.<region>.relay.offdesk.cloud` →
+/// (slug, Some(region)).
+fn relay_host(host: &str) -> Option<(&str, Option<&str>)> {
+    let rest = host.strip_suffix(RELAY_DOMAIN)?.strip_suffix('.')?;
+    match rest.split_once('.') {
+        None => valid_slug(rest).then_some((rest, None)),
+        Some((slug, region)) => (valid_slug(slug) && valid_region(region)).then_some((slug, Some(region))),
+    }
+}
+impl Relay {
+    fn validate(&self) -> Result<(), String> {
+        let regions: Vec<&str> = std::iter::once(self.home.as_str())
+            .chain(self.backup.as_deref())
+            .collect();
+        let route = |r: &RelayRoute, region: &str| {
+            r.region == region
+                && r.hostname == format!("{}.{region}.{RELAY_DOMAIN}", self.slug)
+                && r.url == format!("https://{}", r.hostname)
+        };
+        if !valid_slug(&self.slug)
+            || self.hostname != format!("{}.{RELAY_DOMAIN}", self.slug)
+            || self.url != format!("https://{}", self.hostname)
+            || !regions.iter().all(|r| valid_region(r))
+            || self.backup.as_deref() == Some(self.home.as_str())
+            || self.connect.len() != regions.len()
+            || !self.connect.iter().zip(&regions).all(|(r, region)| route(r, region))
+        {
+            return Err("The managed service returned an unsafe relay address".into());
+        }
+        Ok(())
+    }
+    fn regions(&self) -> Vec<crate::cloud_relay::Region> {
+        self.connect
+            .iter()
+            .map(|r| crate::cloud_relay::Region {
+                code: r.region.clone(),
+                hostname: r.hostname.clone(),
+            })
+            .collect()
+    }
+}
+impl Regions {
+    fn validate(&self) -> Result<(), String> {
+        let mut codes = std::collections::HashSet::new();
+        if self.regions.is_empty()
+            || self.regions.len() > 16
+            || !self.regions.iter().all(|r| {
+                valid_region(&r.code)
+                    && codes.insert(r.code.as_str())
+                    && r.host == format!("{}.{RELAY_DOMAIN}", r.code)
+                    && (1..=40).contains(&r.label.chars().count())
+                    && !r.label.chars().any(char::is_control)
+            })
+            || !codes.contains(self.default.as_str())
+        {
+            return Err("The managed service returned invalid relay regions".into());
+        }
+        Ok(())
+    }
+}
+/// Round trips to each region's `/healthz` (ms, the median of three after the connection is
+/// made), directly: a proxy would measure its own exit instead (through a US exit, Asian
+/// regions look 400 ms away). None: unreachable.
+async fn measure(regions: &[RegionInfo]) -> Vec<Option<u64>> {
+    let Ok(client) = Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(5))
+        .build()
+    else {
+        return vec![None; regions.len()];
+    };
+    let get = |url: String| {
+        let client = client.clone();
+        async move {
+            let response = client.get(url).send().await.ok()?;
+            response.status().is_success().then_some(())?;
+            response.bytes().await.ok().map(|_| ())
+        }
+    };
+    futures::future::join_all(regions.iter().map(|region| {
+        let url = format!("https://{}/healthz", region.host);
+        async move {
+            // The first request pays for DNS, TCP and TLS; the next are a round trip each
+            get(url.clone()).await?;
+            let mut times = Vec::new();
+            for _ in 0..3 {
+                let started = std::time::Instant::now();
+                get(url.clone()).await?;
+                times.push(started.elapsed().as_millis() as u64);
+            }
+            times.sort_unstable();
+            Some(times[1])
+        }
+    }))
+    .await
+}
+/// Home and backup: the ones asked for, else the current ones, else (or with `auto`) the
+/// fastest two measured; the default region alone if nothing answered.
+fn choose(
+    regions: &Regions,
+    latency: &[Option<u64>],
+    current: Option<&Relay>,
+    home: Option<&str>,
+    backup: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let known = |code: &str| regions.regions.iter().any(|r| r.code == code);
+    let unknown = || Err("Unknown relay region; see offdesk-hub cloud regions".to_string());
+    let mut ranked: Vec<(u64, &str)> = regions
+        .regions
+        .iter()
+        .zip(latency)
+        .filter_map(|(r, ms)| ms.map(|ms| (ms, r.code.as_str())))
+        .collect();
+    ranked.sort_by_key(|(ms, _)| *ms);
+    let ranked: Vec<&str> = ranked.into_iter().map(|(_, code)| code).collect();
+    let current = current.filter(|c| known(&c.home));
+    let auto = home == Some("auto") || (home.is_none() && current.is_none());
+    let home = match (home, current) {
+        _ if auto => ranked.first().copied().unwrap_or(&regions.default).to_string(),
+        (Some(code), _) => code.to_string(),
+        (None, Some(current)) => current.home.clone(),
+        (None, None) => unreachable!(),
+    };
+    if !known(&home) {
+        return unknown();
+    }
+    let backup = match backup {
+        Some("none") => None,
+        Some(code) if code == home => {
+            return Err("The backup region must differ from the home region".into())
+        }
+        Some(code) if known(code) => Some(code.to_string()),
+        Some(_) => return unknown(),
+        None if auto || current.is_none() => {
+            ranked.iter().find(|c| **c != home).map(|c| c.to_string())
+        }
+        None => current
+            .and_then(|c| c.backup.clone())
+            .filter(|b| *b != home && known(b)),
+    };
+    Ok((home, backup))
 }
 #[derive(Deserialize, Serialize)]
 struct LoginStatus {
@@ -123,6 +343,7 @@ fn load_or_create(store: &Store, public_key: &str) -> Result<Registration, Strin
             public_key: public_key.into(),
             enabled: false,
             cloudflared: None,
+            relay: None,
         };
         store.save(&registration)?;
         registration
@@ -337,6 +558,38 @@ impl Api {
         validate_status(&status, &registration.id)?;
         Ok(status)
     }
+    async fn regions(&self) -> Result<Regions, String> {
+        let regions: Regions = self
+            .request(Method::GET, "/v1/relay/regions", None, None)
+            .await?;
+        regions.validate()?;
+        Ok(regions)
+    }
+    /// Moves the Hub to the relay (or changes its regions); idempotent.
+    async fn relay(
+        &self,
+        registration: &Registration,
+        home: &str,
+        backup: Option<&str>,
+    ) -> Result<(Status, Relay), String> {
+        let answer: RelayStatus = self
+            .request(
+                Method::POST,
+                &format!("/v1/hubs/{}/relay", registration.id),
+                Some(registration),
+                Some(serde_json::json!({ "home": home, "backup": backup })),
+            )
+            .await?;
+        validate_status(&answer.status, &registration.id)?;
+        answer.relay.validate()?;
+        if answer.transport != "relay"
+            || answer.relay.home != home
+            || answer.relay.backup.as_deref() != backup
+        {
+            return Err("The managed service returned an unsafe relay address".into());
+        }
+        Ok((answer.status, answer.relay))
+    }
 }
 async fn decode_response<T: DeserializeOwned>(
     mut response: reqwest::Response,
@@ -364,12 +617,29 @@ async fn decode_response<T: DeserializeOwned>(
     serde_json::from_slice(&bytes)
         .map_err(|_| "The managed service returned an invalid response".into())
 }
-fn status_json(status: &Status, enabled: bool, verified: bool) -> serde_json::Value {
-    serde_json::json!({ "id": status.id, "url": status.url, "state": status.state,
-        "local_enabled": enabled, "verified": verified && enabled && status.state == "active", "needs_attention": status.last_error.is_some() || (enabled && status.state == "active" && !verified) })
+fn status_json(
+    status: &Status,
+    relay: Option<&Relay>,
+    enabled: bool,
+    verified: bool,
+) -> serde_json::Value {
+    let mut json = serde_json::json!({ "id": status.id, "url": relay.map_or(&status.url, |r| &r.url), "state": status.state,
+        "local_enabled": enabled, "verified": verified && enabled && status.state == "active", "needs_attention": status.last_error.is_some() || (enabled && status.state == "active" && !verified) });
+    if let Some(relay) = relay {
+        json["transport"] = "relay".into();
+        json["relay"] = serde_json::json!({ "slug": relay.slug, "home": relay.home, "backup": relay.backup });
+    }
+    json
 }
-fn print_status(status: &Status, enabled: bool, verified: bool) {
-    println!("{}", status_json(status, enabled, verified));
+fn print_status(status: &Status, relay: Option<&Relay>, enabled: bool, verified: bool) {
+    println!("{}", status_json(status, relay, enabled, verified));
+}
+/// Where phones reach this Hub: its relay address, or its tunnel's.
+fn remote_url<'a>(registration: &'a Registration, status: &'a Status) -> &'a str {
+    registration
+        .relay
+        .as_ref()
+        .map_or(status.url.as_str(), |r| r.url.as_str())
 }
 fn service(database: &str, id: &str) -> Result<offdesk_protocol::service::ServiceSpec, String> {
     // Preserve a database symlink's filename: the Hub encryption key and cloud
@@ -452,28 +722,59 @@ fn find_cloudflared() -> Result<PathBuf, String> {
         .ok_or_else(|| "Install cloudflared from Cloudflare's official distribution first, then retry cloud install".into())
 }
 
-/// No credentials are read by the Hub's HTTP request path.
-pub fn advertised_url(database: &str) -> Option<String> {
+fn verified_file(database: &str, name: &str) -> Option<String> {
     let file = Path::new(database).file_name()?.to_string_lossy();
     let path = Path::new(database)
         .parent()?
         .join(format!("{file}.cloud"))
-        .join("verified-url");
-    let value = fs::read_to_string(path).ok()?;
-    let label = value
-        .strip_prefix("https://")?
-        .strip_suffix(".cloud.offdesk.dev")?;
-    hex_token(label, 32).then_some(value)
+        .join(name);
+    fs::read_to_string(path).ok()
+}
+/// No credentials are read by the Hub's HTTP request path.
+pub fn advertised_url(database: &str) -> Option<String> {
+    let value = verified_file(database, "verified-url")?;
+    let host = value.strip_prefix("https://")?;
+    let tunnel = host
+        .strip_suffix(".cloud.offdesk.dev")
+        .is_some_and(|label| hex_token(label, 32));
+    // On the relay: the global address only (regional routes come after it)
+    let relay = matches!(relay_host(host), Some((_, None)));
+    (tunnel || relay).then_some(value)
+}
+/// The advertised address, then the relay's regional routes for the same slug that passed
+/// the check (home, backup), for the app to try when the first stalls.
+pub fn advertised_routes(database: &str) -> Vec<String> {
+    let Some(primary) = advertised_url(database) else {
+        return vec![];
+    };
+    let mut routes = vec![primary.clone()];
+    let Some((slug, None)) = relay_host(&primary["https://".len()..]) else {
+        return routes;
+    };
+    let extra = verified_file(database, "verified-routes").unwrap_or_default();
+    routes.extend(
+        extra
+            .lines()
+            .filter(|url| {
+                url.strip_prefix("https://")
+                    .and_then(relay_host)
+                    .is_some_and(|(s, region)| s == slug && region.is_some())
+            })
+            .take(2)
+            .map(String::from),
+    );
+    routes
 }
 // The advertised address records a previously validated endpoint, not current
 // liveness. Keep it during outages so paired phones can reconnect; never use it
 // alone to label a Cloud connection as ready.
 async fn connection_verified(database: &str, registration: &Registration, status: &Status) -> bool {
+    let url = remote_url(registration, status);
     if !registration.enabled || status.state != "active"
-        || advertised_url(database).as_deref() != Some(status.url.as_str()) {
+        || advertised_url(database).as_deref() != Some(url) {
         return false;
     }
-    let Ok(endpoint) = crate::tunnel_check::local_endpoint(database, &status.url) else {
+    let Ok(endpoint) = crate::tunnel_check::local_endpoint(database, url) else {
         return false;
     };
     endpoint.public_key == registration.public_key
@@ -503,7 +804,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
     let store = Store::new(database)?;
     let _lock = if matches!(
         action,
-        Action::Status | Action::LoginStatus | Action::Run { .. }
+        Action::Status | Action::LoginStatus | Action::Regions | Action::Run { .. }
     ) {
         None
     } else {
@@ -550,6 +851,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
         validate_status(&status, &registration.id)?;
         print_status(
             &status,
+            registration.relay.as_ref(),
             registration.enabled,
             connection_verified(database, &registration, &status).await,
         );
@@ -576,11 +878,49 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             let status = api.status(&registration, "", Method::GET).await?;
             print_status(
                 &status,
+                registration.relay.as_ref(),
                 registration.enabled,
                 connection_verified(database, &registration, &status).await,
             );
         }
-        Action::Install => {
+        Action::Install { home, backup, tunnel: false } => {
+            let spec = service(database, &registration.id)?;
+            let _service_lock = service_operation_lock(&spec)?;
+            service_is_owned(&spec, &registration.id)?;
+            check_local(database, &registration).await?;
+            // Wakes a disabled Hub (a relay Hub is active at once), then moves it to the relay
+            api.status(&registration, "/enable", Method::POST).await?;
+            let current = registration.relay.as_ref();
+            // As choose() needs: for `auto`, or a first choice
+            let measure_needed = home.as_deref() == Some("auto")
+                || (current.is_none() && (home.is_none() || backup.is_none()));
+            let regions = api.regions().await?;
+            let latency = if measure_needed {
+                measure(&regions.regions).await
+            } else {
+                vec![None; regions.regions.len()]
+            };
+            let (home, backup) =
+                choose(&regions, &latency, current, home.as_deref(), backup.as_deref())?;
+            let (status, relay) = api.relay(&registration, &home, backup.as_deref()).await?;
+            // Stop advertising what the relay replaces (a tunnel, other regions) until `check`
+            // verifies the new addresses
+            let stale = advertised_url(database).is_some_and(|url| url != relay.url);
+            for name in ["verified-routes"].into_iter().chain(stale.then_some("verified-url")) {
+                match fs::remove_file(store.dir.join(name)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
+            }
+            registration.relay = Some(relay);
+            registration.enabled = true;
+            store.save(&registration)?;
+            offdesk_protocol::service::install(&spec)?;
+            print_status(&status, registration.relay.as_ref(), true, false);
+            eprintln!("Connector installed. Run offdesk-hub cloud check once the connection is ready; only a successful check advertises it to Apps.");
+        }
+        Action::Install { tunnel: true, .. } => {
             let spec = service(database, &registration.id)?;
             let _service_lock = service_operation_lock(&spec)?;
             service_is_owned(&spec, &registration.id)?;
@@ -589,28 +929,52 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
                 Ok(path) => path,
                 Err(_) => crate::cloud_download::install(&store.dir).await?,
             };
-            let status = api.status(&registration, "/enable", Method::POST).await?;
+            let status = if registration.relay.is_some() {
+                // Back from the relay: Cloud provisions a tunnel again
+                api.status(&registration, "/tunnel", Method::POST).await?
+            } else {
+                api.status(&registration, "/enable", Method::POST).await?
+            };
             registration.cloudflared = Some(binary);
+            registration.relay = None;
             registration.enabled = true;
             store.save(&registration)?;
             offdesk_protocol::service::install(&spec)?;
-            print_status(&status, true, false);
+            print_status(&status, None, true, false);
             eprintln!("Connector installed. Run offdesk-hub cloud check once the connection is ready; only a successful check advertises it to Apps.");
+        }
+        Action::Regions => {
+            let regions = api.regions().await?;
+            let latency = measure(&regions.regions).await;
+            let list: Vec<_> = regions
+                .regions
+                .iter()
+                .zip(&latency)
+                .map(|(r, ms)| serde_json::json!({ "code": r.code, "label": r.label, "latency_ms": ms }))
+                .collect();
+            let relay = registration.relay.as_ref();
+            println!(
+                "{}",
+                serde_json::json!({ "regions": list, "default": regions.default,
+                    "home": relay.map(|r| &r.home), "backup": relay.and_then(|r| r.backup.as_ref()) })
+            );
         }
         Action::Disable => {
             registration.enabled = false;
             store.save(&registration)?;
-            match fs::remove_file(store.dir.join("verified-url")) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.to_string()),
+            for name in ["verified-url", "verified-routes"] {
+                match fs::remove_file(store.dir.join(name)) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.to_string()),
+                }
             }
             let spec = service(database, &registration.id)?;
             let _service_lock = service_operation_lock(&spec)?;
             let stopped = service_is_owned(&spec, &registration.id)
                 .and_then(|()| offdesk_protocol::service::uninstall(&spec));
             let status = api.status(&registration, "/disable", Method::POST).await?;
-            print_status(&status, false, false);
+            print_status(&status, registration.relay.as_ref(), false, false);
             stopped?;
         }
         Action::Check => {
@@ -618,18 +982,29 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
                 return Err("Install the managed connector before checking it".into());
             }
             let status = api.status(&registration, "", Method::GET).await?;
+            let relay = registration.relay.as_ref();
             if status.state != "active" {
-                print_status(&status, true, false);
+                print_status(&status, relay, true, false);
                 return Err("Managed connection provisioning is not complete".into());
             }
-            let endpoint = crate::tunnel_check::local_endpoint(database, &status.url)?;
+            let url = remote_url(&registration, &status);
+            let endpoint = crate::tunnel_check::local_endpoint(database, url)?;
             let report = crate::tunnel_check::check(&endpoint).await;
             if !report.passed(true) {
                 crate::tunnel_check::print_report(&report, true);
                 return Err("Cloud connection is currently unavailable or could not be verified. Keep this Mac online while the connector retries, then check again".into());
             }
-            store.write("verified-url", status.url.as_bytes())?;
-            print_status(&status, true, true);
+            // The relay's regional routes are advertised too, those that pass the same check
+            let mut routes = Vec::new();
+            for route in relay.map(|r| r.connect.as_slice()).unwrap_or_default() {
+                let endpoint = crate::tunnel_check::local_endpoint(database, &route.url)?;
+                if crate::tunnel_check::check(&endpoint).await.passed(true) {
+                    routes.push(route.url.as_str());
+                }
+            }
+            store.write("verified-routes", routes.join("\n").as_bytes())?;
+            store.write("verified-url", url.as_bytes())?;
+            print_status(&status, relay, true, true);
         }
         Action::Run { registration_id } => {
             if registration_id != &registration.id {
@@ -640,6 +1015,9 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             }
             let _runtime_lock = store.lock("connector.lock")?;
             check_local(database, &registration).await?;
+            if let Some(saved) = registration.relay.clone() {
+                return run_relay(&api, &registration, saved).await;
+            }
             let config: Configuration = api
                 .request(
                     Method::GET,
@@ -705,6 +1083,33 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
     }
     Ok(())
 }
+/// The relay connector until a signal. Cloud has the last word on the addresses (a slug or
+/// region changed elsewhere); the saved ones keep the Hub reachable while Cloud isn't. Nothing
+/// is saved here: `disable` may be rewriting the registration meanwhile.
+#[cfg(unix)]
+async fn run_relay(api: &Api, registration: &Registration, saved: Relay) -> Result<(), String> {
+    let relay = match api.relay(registration, &saved.home, saved.backup.as_deref()).await {
+        Ok((_, relay)) => relay,
+        Err(error) => {
+            eprintln!("{error}; using the saved relay addresses");
+            saved
+        }
+    };
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut terminate = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(|e| e.to_string())?;
+    let shutdown = async move {
+        tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {} }
+    };
+    crate::cloud_relay::run(
+        relay.regions(),
+        Zeroizing::new(registration.control_token.clone()),
+        ORIGIN.into(),
+        shutdown,
+    )
+    .await;
+    Ok(())
+}
 #[cfg(not(unix))]
 pub async fn execute(_action: &Action, _database: &str) -> Result<(), String> {
     Err("The managed connection beta currently supports macOS and Linux Hubs".into())
@@ -718,16 +1123,129 @@ mod tests {
         let id = uuid::Uuid::new_v4().to_string();
         let status = Status { hostname: hostname(&id), url: format!("https://{}", hostname(&id)),
             id, state: "active".into(), last_error: None, updated_at: 0, protocol_version: 1 };
-        let failed = status_json(&status, true, false);
+        let failed = status_json(&status, None, true, false);
         assert_eq!(failed["state"], "active");
         assert_eq!(failed["verified"], false);
         assert_eq!(failed["needs_attention"], true);
-        let recovered = status_json(&status, true, true);
+        let recovered = status_json(&status, None, true, true);
         assert_eq!(recovered["verified"], true);
         assert_eq!(recovered["needs_attention"], false);
-        assert_eq!(status_json(&status, false, true)["verified"], false);
+        assert_eq!(status_json(&status, None, false, true)["verified"], false);
     }
 
+
+    fn relay(slug: &str, home: &str, backup: Option<&str>) -> Relay {
+        let route = |region: &str| RelayRoute {
+            region: region.into(),
+            hostname: format!("{slug}.{region}.{RELAY_DOMAIN}"),
+            url: format!("https://{slug}.{region}.{RELAY_DOMAIN}"),
+        };
+        Relay {
+            slug: slug.into(),
+            hostname: format!("{slug}.{RELAY_DOMAIN}"),
+            url: format!("https://{slug}.{RELAY_DOMAIN}"),
+            home: home.into(),
+            backup: backup.map(String::from),
+            connect: std::iter::once(home).chain(backup).map(route).collect(),
+        }
+    }
+    #[test]
+    fn relay_addresses_never_leave_the_relay_domain() {
+        assert!(relay("ryanz", "hk", Some("kr")).validate().is_ok());
+        assert!(relay("ryanz", "hk", None).validate().is_ok());
+        let mut r = relay("ryanz", "hk", Some("kr"));
+        r.connect[0].hostname = "ryanz.hk.relay.offdesk.cloud.evil.example".into();
+        assert!(r.validate().is_err());
+        let mut r = relay("ryanz", "hk", Some("kr"));
+        r.connect.swap(0, 1);
+        assert!(r.validate().is_err());
+        let mut r = relay("ryanz", "hk", Some("kr"));
+        r.url = "https://evil.example".into();
+        assert!(r.validate().is_err());
+        assert!(relay("ryanz", "hk", Some("hk")).validate().is_err());
+        assert!(relay("Ryanz", "hk", None).validate().is_err());
+        assert!(relay("ryanz", "hk/x", None).validate().is_err());
+        assert!(relay("a.b", "hk", None).validate().is_err());
+        let mut r = relay("ryanz", "hk", Some("kr"));
+        r.connect.pop();
+        assert!(r.validate().is_err());
+        assert_eq!(relay_host("ryanz.relay.offdesk.cloud"), Some(("ryanz", None)));
+        assert_eq!(relay_host("ryanz.us-west.relay.offdesk.cloud"), Some(("ryanz", Some("us-west"))));
+        assert_eq!(relay_host("relay.offdesk.cloud"), None);
+        assert_eq!(relay_host("xrelay.offdesk.cloud"), None);
+        assert_eq!(relay_host("a.b.c.relay.offdesk.cloud"), None);
+    }
+    fn regions() -> Regions {
+        let region = |code: &str, label: &str| RegionInfo { code: code.into(), label: label.into(), host: format!("{code}.{RELAY_DOMAIN}") };
+        Regions { regions: vec![region("hk", "Hong Kong"), region("kr", "Seoul"), region("us-west", "Oregon")], default: "hk".into() }
+    }
+    #[test]
+    fn regions_are_checked_before_any_is_measured() {
+        assert!(regions().validate().is_ok());
+        let mut r = regions();
+        r.regions[1].host = "kr.relay.offdesk.cloud.evil.example".into();
+        assert!(r.validate().is_err());
+        let mut r = regions();
+        r.default = "jp".into();
+        assert!(r.validate().is_err());
+        let mut r = regions();
+        r.regions[2].code = "hk".into();
+        r.regions[2].host = format!("hk.{RELAY_DOMAIN}");
+        assert!(r.validate().is_err());
+    }
+    #[test]
+    fn home_is_the_fastest_unless_chosen_and_choices_are_kept() {
+        let r = regions();
+        let fast_kr = [Some(80), Some(40), None];
+        // First install: the fastest two
+        assert_eq!(choose(&r, &fast_kr, None, None, None).unwrap(), ("kr".into(), Some("hk".into())));
+        // Nothing answered: the default alone
+        assert_eq!(choose(&r, &[None, None, None], None, None, None).unwrap(), ("hk".into(), None));
+        // Kept on reinstall, whatever is fastest now
+        let current = relay("ryanz", "hk", Some("us-west"));
+        assert_eq!(choose(&r, &fast_kr, Some(&current), None, None).unwrap(), ("hk".into(), Some("us-west".into())));
+        // Measured again on request
+        assert_eq!(choose(&r, &fast_kr, Some(&current), Some("auto"), None).unwrap(), ("kr".into(), Some("hk".into())));
+        // Chosen; a kept backup that became the home goes
+        let current = relay("ryanz", "hk", Some("kr"));
+        assert_eq!(choose(&r, &fast_kr, Some(&current), Some("kr"), None).unwrap(), ("kr".into(), None));
+        assert_eq!(choose(&r, &fast_kr, Some(&current), Some("us-west"), Some("none")).unwrap(), ("us-west".into(), None));
+        // First install with a home chosen: the backup is still the fastest other
+        assert_eq!(choose(&r, &fast_kr, None, Some("hk"), None).unwrap(), ("hk".into(), Some("kr".into())));
+        assert!(choose(&r, &fast_kr, None, Some("jp"), None).is_err());
+        assert!(choose(&r, &fast_kr, None, Some("hk"), Some("hk")).is_err());
+        assert!(choose(&r, &fast_kr, None, Some("hk"), Some("jp")).is_err());
+    }
+    #[test]
+    fn relay_routes_are_advertised_after_the_verified_global_address() {
+        let temp = std::env::temp_dir().join(format!("offdesk-relay-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&temp).unwrap();
+        let db = temp.join("test.db");
+        let store = Store::new(db.to_str().unwrap()).unwrap();
+        let db = db.to_str().unwrap();
+        assert!(advertised_routes(db).is_empty());
+        store.write("verified-url", b"https://ryanz.relay.offdesk.cloud").unwrap();
+        store.write("verified-routes", b"https://ryanz.hk.relay.offdesk.cloud\nhttps://other.kr.relay.offdesk.cloud\nhttps://evil.example\nhttps://ryanz.kr.relay.offdesk.cloud").unwrap();
+        assert_eq!(advertised_routes(db), ["https://ryanz.relay.offdesk.cloud", "https://ryanz.hk.relay.offdesk.cloud", "https://ryanz.kr.relay.offdesk.cloud"]);
+        // A regional route is never the advertised (pairing) address
+        store.write("verified-url", b"https://ryanz.hk.relay.offdesk.cloud").unwrap();
+        assert!(advertised_url(db).is_none());
+        assert!(advertised_routes(db).is_empty());
+        fs::remove_dir_all(temp).unwrap();
+    }
+    #[test]
+    fn registrations_from_older_versions_load_and_relay_status_names_the_relay_address() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let old = serde_json::json!({ "id": id, "control_token": "a".repeat(64), "public_key": "k", "enabled": true, "cloudflared": null });
+        assert!(serde_json::from_value::<Registration>(old).unwrap().relay.is_none());
+        let status = Status { hostname: hostname(&id), url: format!("https://{}", hostname(&id)),
+            id, state: "active".into(), last_error: None, updated_at: 0, protocol_version: 1 };
+        let r = relay("ryanz", "hk", Some("kr"));
+        let json = status_json(&status, Some(&r), true, true);
+        assert_eq!(json["url"], "https://ryanz.relay.offdesk.cloud");
+        assert_eq!(json["relay"]["home"], "hk");
+        assert_eq!(status_json(&status, None, true, true)["url"], status.url);
+    }
     #[test]
     fn browser_sign_in_never_opens_a_service_supplied_foreign_url() {
         let id = uuid::Uuid::new_v4().to_string();
@@ -937,6 +1455,7 @@ mod tests {
             public_key: "public".into(),
             enabled: false,
             cloudflared: None,
+            relay: None,
         };
         store.save(&r).unwrap();
         assert_eq!(store.load().unwrap().control_token, r.control_token);
