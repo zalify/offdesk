@@ -116,6 +116,7 @@ import { readViewOnlyLock, writeViewOnlyLock } from "@/lib/viewOnlyLock";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 import { claimSamePagePops } from "@/lib/samePagePops";
+import { BootScreen } from "./BootScreen.web";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 const EmptyMachinesView = lazy(() =>
@@ -280,6 +281,13 @@ function TerminalCanvasInner() {
   // empty machine list means "not loaded", not "no machines", so the screen
   // keeps the loading view rather than flashing the empty-Hub screen.
   const [firstBootstrapSettled, setFirstBootstrapSettled] = useState(false);
+  // On the phone the loading screen stays over the terminal area (the title
+  // bar and its menus already usable) until the first terminal has drawn,
+  // then lifts off it: "shown" -> "leaving" -> "gone", once per mount.
+  const [bootCover, setBootCover] = useState<"shown" | "leaving" | "gone">("shown");
+  const liftBootCover = useCallback(() => {
+    setBootCover((state) => (state === "shown" ? "leaving" : state));
+  }, []);
   const [eventsReconnecting, setEventsReconnecting] = useState(false);
   const [rttMs, setRttMs] = useState<number | null>(null);
   const [viewOnlyLocked, setViewOnlyLocked] = useState(() =>
@@ -872,6 +880,27 @@ function TerminalCanvasInner() {
     browserState.lastFocusedTerminalId,
     terminals,
   ]);
+
+  // The loading screen covers the phone's terminal area only while there is
+  // a terminal on its way to the screen. Read at render: whether the landing
+  // above has had its say (it may switch machine or terminal first).
+  const bootLandingDone = handoffLandingHandledRef.current;
+  const bootCoverVisible =
+    bootCover !== "gone" &&
+    firstBootstrapSettled &&
+    isCompact &&
+    !showSettings &&
+    machines.length > 0 &&
+    scopedTerminals.length > 0 &&
+    workspaceTerminal?.machine_id === activeMachine?.id &&
+    workspaceTerminal?.reachable === true;
+  useEffect(() => {
+    // Landed with nothing to draw: the cover is done for good, so a terminal
+    // created or reconnected later never brings it back.
+    if (bootCover === "shown" && bootLandingDone && !bootCoverVisible) {
+      setBootCover("gone");
+    }
+  }, [bootCover, bootCoverVisible, bootLandingDone]);
 
   useEffect(() => {
     if (!bootstrapReady || !deviceId || !workspaceTerminal) return;
@@ -1864,7 +1893,7 @@ function TerminalCanvasInner() {
               <SettingsPage onClose={() => setShowSettings(false)} />
             </Suspense>
           ) : !firstBootstrapSettled ? (
-            <LazyLoadingFallback />
+            <BootScreen step="hub" />
           ) : machines.length === 0 ? (
             <Suspense fallback={<LazyLoadingFallback />}>
               <EmptyMachinesView onOpenSettings={() => setShowSettings(true)} />
@@ -1963,6 +1992,17 @@ function TerminalCanvasInner() {
                   onReleaseControl={handleReleaseControl}
                   commandsRef={workspaceCommandsRef}
                   onActiveGroupChange={setActiveGroupId}
+                  onActivePaneReady={liftBootCover}
+                  compactCover={
+                    bootCoverVisible ? (
+                      <BootScreen
+                        step="terminal"
+                        overlay
+                        leaving={bootCover === "leaving"}
+                        onLeft={() => setBootCover("gone")}
+                      />
+                    ) : null
+                  }
                 />
               ) : null}
             </MobileWorkbench>

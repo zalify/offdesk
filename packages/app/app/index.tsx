@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { LazyLoadingFallback } from "@/components/LazyLoadingFallback";
+import { BootScreen } from "@/components/BootScreen.web";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 
 const WebTerminalCanvas = lazy(() =>
@@ -12,7 +12,7 @@ const WebTerminalCanvas = lazy(() =>
 
 export default function HomeScreen() {
   return (
-    <Suspense fallback={<LazyLoadingFallback />}>
+    <Suspense fallback={<BootScreen step="hub" />}>
       <WebTerminalCanvas />
     </Suspense>
   );
