@@ -51,6 +51,7 @@ import {
   savePrefixBinding,
 } from "@/lib/prefixKey";
 import { ArrowLeft } from "lucide-react";
+import { rem } from "@/lib/rem";
 
 // Frontend build id stamped into index.html by release builds
 // (window.__OFFDESK_BUILD__). "dev" when running unstamped (local dev).
@@ -169,7 +170,7 @@ const compactControl: React.CSSProperties = {
   background: `${colors.bg1} url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238f8d87' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center`,
   color: colors.fg0,
   fontFamily: "var(--font-display)",
-  fontSize: 12.5,
+  fontSize: rem(12.5),
   appearance: "none",
   WebkitAppearance: "none",
   outline: "none",
@@ -189,8 +190,8 @@ function SectionTitle({ children, behind }: { children: React.ReactNode; behind?
       data-nav-behind={behind || undefined}
       style={{
         fontFamily: "var(--font-display)",
-        fontSize: 20,
-        lineHeight: "26px",
+        fontSize: rem(20),
+        lineHeight: rem(26),
         fontWeight: 600,
         letterSpacing: "-0.02em",
         color: colors.fg0,
@@ -233,7 +234,7 @@ function SettingRow({
         <div
           style={{
             fontFamily: "var(--font-display)",
-            fontSize: 14,
+            fontSize: rem(14),
             color: colors.fg0,
             textTransform: "lowercase",
           }}
@@ -245,8 +246,8 @@ function SettingRow({
             style={{
               marginTop: 4,
               fontFamily: "var(--font-sans)",
-              fontSize: 12,
-              lineHeight: "18px",
+              fontSize: rem(12),
+              lineHeight: rem(18),
               color: colors.fg3,
             }}
           >
@@ -722,7 +723,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
     color: colors.fg0,
     padding: "8px 12px",
     fontFamily: "var(--font-display)",
-    fontSize: 13,
+    fontSize: rem(13),
     outline: "none",
     width: 80,
   };
@@ -754,7 +755,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         <button
           onClick={onClose}
           className="odk-text-btn"
-          style={{ fontSize: 12.5, color: colors.fg2 }}
+          style={{ fontSize: rem(12.5), color: colors.fg2 }}
           title="Back"
           aria-label="Back"
         >
@@ -841,7 +842,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               {/* A line in the chosen font, so the difference is visible here. */}
               <span
                 data-testid="terminal-font-preview"
-                style={{ fontFamily: resolveTerminalFontFamily(terminalFont), fontSize: 13, color: colors.fg1, whiteSpace: "nowrap" }}
+                style={{ fontFamily: resolveTerminalFontFamily(terminalFont), fontSize: rem(13), color: colors.fg1, whiteSpace: "nowrap" }}
               >
                 0O 1lI {"{}[]"} =&gt; != -&gt; 中文
               </span>
@@ -890,7 +891,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 color: colors.foregroundSecondary,
                 cursor: "pointer",
                 padding: "6px 10px",
-                fontSize: 12,
+                fontSize: rem(12),
               }}
             >
               Reset all
@@ -898,7 +899,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           </div>
           <div
             style={{
-              fontSize: 11,
+              fontSize: rem(11),
               color: colors.foregroundMuted,
               marginBottom: 12,
             }}
@@ -923,7 +924,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   <div
                     style={{
                       minWidth: 0,
-                      fontSize: 13,
+                      fontSize: rem(13),
                       color: colors.foreground,
                     }}
                   >
@@ -949,7 +950,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                         : colors.foregroundSecondary,
                       cursor: "pointer",
                       padding: "6px 10px",
-                      fontSize: 12,
+                      fontSize: rem(12),
                       fontFamily: "var(--font-mono)",
                       textAlign: "center",
                     }}
@@ -967,7 +968,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                       color: colors.foregroundMuted,
                       cursor: "pointer",
                       padding: "6px 4px",
-                      fontSize: 12,
+                      fontSize: rem(12),
                     }}
                   >
                     Reset
@@ -981,7 +982,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               data-testid="prefix-binding-conflict"
               style={{
                 marginTop: 10,
-                fontSize: 12,
+                fontSize: rem(12),
                 color: colors.danger,
               }}
             >
@@ -995,7 +996,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           <SectionTitle>Quick commands</SectionTitle>
           <div
             style={{
-              fontSize: 11,
+              fontSize: rem(11),
               color: colors.foregroundMuted,
               marginBottom: 12,
             }}
@@ -1042,7 +1043,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     color: colors.foregroundMuted,
                     cursor: "pointer",
                     padding: "4px 6px",
-                    fontSize: 14,
+                    fontSize: rem(14),
                   }}
                 >
                   &times;
@@ -1058,7 +1059,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               color: colors.foregroundMuted,
               cursor: "pointer",
               padding: "8px 16px",
-              fontSize: 12,
+              fontSize: rem(12),
               width: "100%",
             }}
           >
@@ -1087,7 +1088,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 <span
                   style={{
                     flex: 1,
-                    fontSize: 13,
+                    fontSize: rem(13),
                     color: colors.foreground,
                     overflowWrap: "anywhere",
                   }}
@@ -1104,7 +1105,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     color: colors.foreground,
                     cursor: "pointer",
                     padding: "8px 16px",
-                    fontSize: 13,
+                    fontSize: rem(13),
                     fontWeight: 500,
                     whiteSpace: "nowrap",
                   }}
@@ -1113,7 +1114,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 </button>
               </div>
             </SettingRow>
-            {switchHubError && <p role="alert" style={{ color: colors.err, fontSize: 13, margin: "8px 0 0" }}>{switchHubError}</p>}
+            {switchHubError && <p role="alert" style={{ color: colors.err, fontSize: rem(13), margin: "8px 0 0" }}>{switchHubError}</p>}
           </section>
         )}
 
@@ -1163,7 +1164,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     color: colors.onPrimary,
                     cursor: "pointer",
                     padding: "8px 16px",
-                    fontSize: 13,
+                    fontSize: rem(13),
                     fontWeight: 500,
                   }}
                 >
@@ -1171,7 +1172,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 </button>
               </div>
             </SettingRow>
-            {serverUrlError && <div role="alert" style={{ color: colors.err, fontSize: 12 }}>{serverUrlError}</div>}
+            {serverUrlError && <div role="alert" style={{ color: colors.err, fontSize: rem(12) }}>{serverUrlError}</div>}
           </section>
         )}
 
@@ -1180,7 +1181,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           <SectionTitle>API tokens</SectionTitle>
           <div
             style={{
-              fontSize: 11,
+              fontSize: rem(11),
               color: colors.foregroundMuted,
               marginBottom: 12,
             }}
@@ -1220,7 +1221,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                 cursor: newTokenName.trim() ? "pointer" : "default",
                 opacity: newTokenName.trim() ? 1 : 0.5,
                 padding: "8px 16px",
-                fontSize: 13,
+                fontSize: rem(13),
                 fontWeight: 500,
               }}
             >
@@ -1240,7 +1241,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               padding: 12,
               border: `1px solid ${colors.border}`,
               borderRadius: 4,
-              fontSize: 12,
+              fontSize: rem(12),
               color: colors.foregroundSecondary,
             }}
           >
@@ -1350,7 +1351,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                       style={{
                         ...inputStyle,
                         fontFamily: "var(--font-mono)",
-                        fontSize: 12,
+                        fontSize: rem(12),
                       }}
                     />
                   </label>
@@ -1396,7 +1397,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     flex: 1,
                     width: "auto",
                     fontFamily: "var(--font-mono)",
-                    fontSize: 12,
+                    fontSize: rem(12),
                   }}
                 />
                 <button
@@ -1408,7 +1409,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     color: colors.foregroundSecondary,
                     cursor: "pointer",
                     padding: "8px 12px",
-                    fontSize: 12,
+                    fontSize: rem(12),
                   }}
                 >
                   Copy
@@ -1422,7 +1423,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                     color: colors.foregroundSecondary,
                     cursor: "pointer",
                     padding: "8px 12px",
-                    fontSize: 12,
+                    fontSize: rem(12),
                   }}
                 >
                   Done
@@ -1430,7 +1431,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               </div>
               <div
                 style={{
-                  fontSize: 11,
+                  fontSize: rem(11),
                   color: colors.foregroundMuted,
                   marginTop: 8,
                 }}
@@ -1442,11 +1443,11 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
 
           {/* Token list */}
           {!apiTokensLoaded ? (
-            <div style={{ fontSize: 12, color: colors.foregroundMuted }}>
+            <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>
               Loading…
             </div>
           ) : apiTokens.length === 0 ? (
-            <div style={{ fontSize: 12, color: colors.foregroundMuted }}>
+            <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>
               No tokens yet.
             </div>
           ) : (
@@ -1463,12 +1464,12 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                   }}
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, color: colors.foreground }}>
+                    <div style={{ fontSize: rem(13), color: colors.foreground }}>
                       {token.name}
                     </div>
                     <div
                       style={{
-                        fontSize: 11,
+                        fontSize: rem(11),
                         color: token.access
                           ? colors.foregroundSecondary
                           : colors.danger,
@@ -1477,7 +1478,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                       {describeAccess(token.access)}
                     </div>
                     <div
-                      style={{ fontSize: 11, color: colors.foregroundMuted }}
+                      style={{ fontSize: rem(11), color: colors.foregroundMuted }}
                     >
                       created {formatTokenDate(token.created_at)} · last used{" "}
                       {formatTokenDate(token.last_used_at)}
@@ -1495,7 +1496,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
                         : colors.foregroundSecondary,
                       cursor: "pointer",
                       padding: "6px 10px",
-                      fontSize: 12,
+                      fontSize: rem(12),
                     }}
                   >
                     {confirming ? "Confirm?" : "Delete"}
@@ -1509,7 +1510,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             <div
               style={{
                 marginTop: 10,
-                fontSize: 12,
+                fontSize: rem(12),
                 color: colors.danger,
               }}
             >
@@ -1546,7 +1547,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
           <SectionTitle>About</SectionTitle>
           <div
             style={{
-              fontSize: 12,
+              fontSize: rem(12),
               color: colors.foregroundSecondary,
               fontFamily: "monospace",
               lineHeight: 1.8,
@@ -1565,7 +1566,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
         {/* Reload notice */}
         <div
           style={{
-            fontSize: 11,
+            fontSize: rem(11),
             color: colors.foregroundMuted,
             marginTop: 8,
           }}
@@ -1628,10 +1629,10 @@ function SettingsNav({ wide, sections, scroller }: {
   }, [current, wide]);
   const heading = (
     <>
-      <div style={{ margin: wide ? "0 12px 6px" : "0 0 6px", fontSize: 12, color: colors.fg3, fontFamily: "var(--font-display)" }}>
+      <div style={{ margin: wide ? "0 12px 6px" : "0 0 6px", fontSize: rem(12), color: colors.fg3, fontFamily: "var(--font-display)" }}>
         <span aria-hidden="true" style={{ color: colors.accent }}>~</span> $ settings
       </div>
-      <h1 style={{ margin: wide ? "0 12px 16px" : "0 0 12px", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em", color: colors.fg0, fontFamily: "var(--font-display)" }}>Settings</h1>
+      <h1 style={{ margin: wide ? "0 12px 16px" : "0 0 12px", fontSize: rem(28), lineHeight: rem(34), fontWeight: 600, letterSpacing: "-0.035em", color: colors.fg0, fontFamily: "var(--font-display)" }}>Settings</h1>
     </>
   );
   const links = sections.map(({ title, behind }) => (
@@ -1652,7 +1653,7 @@ function SettingsNav({ wide, sections, scroller }: {
         background: title === current ? colors.primary : "transparent",
         color: title === current ? colors.onPrimary : colors.fg2,
         fontFamily: "var(--font-display)",
-        fontSize: wide ? 13 : 12.5,
+        fontSize: rem(wide ? 13 : 12.5),
         fontWeight: title === current ? 600 : 400,
         textTransform: "lowercase",
         whiteSpace: "nowrap",
@@ -1723,7 +1724,7 @@ const pxField: React.CSSProperties = {
   background: colors.bg1,
   color: colors.fg3,
   fontFamily: "var(--font-display)",
-  fontSize: 12.5,
+  fontSize: rem(12.5),
 };
 
 const pxInput: React.CSSProperties = {
@@ -1732,7 +1733,7 @@ const pxInput: React.CSSProperties = {
   background: "transparent",
   color: colors.fg0,
   fontFamily: "var(--font-display)",
-  fontSize: 12.5,
+  fontSize: rem(12.5),
   textAlign: "right",
   outline: "none",
 };

@@ -10,6 +10,7 @@ import {
 } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useAgentBrowserTabs } from "@/lib/useAgentBrowserTabs";
+import { rem } from "@/lib/rem";
 
 const iconButton = {
   background: "none",
@@ -190,7 +191,7 @@ export function AgentBrowserOverlay({
                     boxSizing: "border-box",
                     color: active ? colors.fg0 : colors.fg3,
                     cursor: "pointer",
-                    fontSize: 12.5,
+                    fontSize: rem(12.5),
                     flexShrink: 0,
                     opacity: closing ? 0.5 : 1,
                   }}
@@ -222,7 +223,7 @@ export function AgentBrowserOverlay({
                     <span
                       data-testid={`agent-browser-tab-you-${browser.id}`}
                       style={{
-                        fontSize: 10.5,
+                        fontSize: rem(10.5),
                         padding: "0 5px",
                         border: `1px solid ${colors.line}`,
                         borderRadius: 3,
@@ -244,7 +245,7 @@ export function AgentBrowserOverlay({
                       void closeTab(browser);
                     }}
                     className="odk-text-btn"
-                    style={{ minHeight: 24, padding: "0 4px", fontSize: 12, flexShrink: 0 }}
+                    style={{ minHeight: 24, padding: "0 4px", fontSize: rem(12), flexShrink: 0 }}
                   >
                     [x]
                   </button>
@@ -324,7 +325,7 @@ export function AgentBrowserOverlay({
             data-testid="agent-browser-overlay-error"
             style={{
               padding: "5px 10px",
-              fontSize: 12,
+              fontSize: rem(12),
               color: colors.err,
               borderBottom: `1px solid ${colors.lineSoft}`,
               flexShrink: 0,
@@ -346,7 +347,7 @@ export function AgentBrowserOverlay({
                 alignItems: "center",
                 justifyContent: "center",
                 color: colors.foregroundMuted,
-                fontSize: 13,
+                fontSize: rem(13),
               }}
             >
               {awaitingId !== null || opening

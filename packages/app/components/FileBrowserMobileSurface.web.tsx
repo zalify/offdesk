@@ -1,5 +1,6 @@
 import { FileBrowser } from "./FileBrowser.web";
 import { colors } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 // The phone's file browser: a full-screen surface over the terminal area (the
 // terminals underneath stay mounted) with a back button, sized for touch.
@@ -42,14 +43,14 @@ export function FileBrowserMobileSurface({
           title="Back to terminal"
           onClick={onClose}
           className="odk-text-btn"
-          style={{ height: 44, padding: "0 8px", fontSize: 13, color: colors.fg2 }}
+          style={{ height: 44, padding: "0 8px", fontSize: rem(13), color: colors.fg2 }}
         >
           ← back to terminal
         </button>
       </div>
       <div style={{ flexShrink: 0, padding: "0 16px 10px", display: "flex", flexDirection: "column", gap: 6 }}>
-        <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: 28, lineHeight: "34px", fontWeight: 600, letterSpacing: "-0.035em" }}>Files</h1>
-        <div style={{ fontFamily: "var(--font-display)", fontSize: 12, color: colors.fg3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <h1 style={{ margin: 0, fontFamily: "var(--font-display)", fontSize: rem(28), lineHeight: rem(34), fontWeight: 600, letterSpacing: "-0.035em" }}>Files</h1>
+        <div style={{ fontFamily: "var(--font-display)", fontSize: rem(12), color: colors.fg3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {machineName}
         </div>
       </div>

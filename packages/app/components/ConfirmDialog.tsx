@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
 import "./Primitives.css";
+import { rem } from "@/lib/rem";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -89,7 +90,7 @@ export function ConfirmDialog({
         <div
           id="confirm-dialog-title"
           style={{
-            fontSize: 17,
+            fontSize: rem(17),
             fontWeight: 600,
             letterSpacing: "-0.02em",
             color: colors.fg0,
@@ -100,7 +101,7 @@ export function ConfirmDialog({
         <div
           style={{
             fontFamily: "var(--font-sans)",
-            fontSize: 14,
+            fontSize: rem(14),
             lineHeight: 1.55,
             color: colors.fg2,
             wordBreak: "break-word",

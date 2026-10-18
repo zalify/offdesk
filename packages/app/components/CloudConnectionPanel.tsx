@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Body, Button } from "./Primitives.web";
 import { SecurePairingPanel } from "./SecureConnectionPanel";
 import { colors } from "../lib/colors";
+import { rem } from "../lib/rem";
 
 type CloudStatus = {
   id?: string; state: "unregistered" | "pending" | "approved" | "expired" | "provisioning" | "active" | "revoking" | "revoked";
@@ -116,15 +117,15 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
   const registered = status && status.state !== "unregistered";
   return <section data-testid="cloud-connection-panel" style={{ padding: 16, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6, display: "flex", flexDirection: "column", gap: 10 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      <strong style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600 }}>Offdesk</strong>
-      <span style={{ fontFamily: "var(--font-display)", fontSize: 12, color: colors.fg3 }}>offdesk.so</span>
-      {connected ? <span style={{ fontFamily: "var(--font-display)", fontSize: 11.5, fontWeight: 500, padding: "2px 8px", border: `1px solid ${colors.line}`, borderRadius: 3, color: colors.accent }}>remote access ready</span> : null}
+      <strong style={{ fontFamily: "var(--font-display)", fontSize: rem(14), fontWeight: 600 }}>Offdesk</strong>
+      <span style={{ fontFamily: "var(--font-display)", fontSize: rem(12), color: colors.fg3 }}>offdesk.so</span>
+      {connected ? <span style={{ fontFamily: "var(--font-display)", fontSize: rem(11.5), fontWeight: 500, padding: "2px 8px", border: `1px solid ${colors.line}`, borderRadius: 3, color: colors.accent }}>remote access ready</span> : null}
     </div>
     <Body size={13}>Reach this computer from mobile data or another Wi-Fi network. Your terminal content stays end-to-end encrypted.</Body>
     <ol aria-label="Remote access setup progress" style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px", listStyle: "none", padding: 0, margin: "8px 0" }}>
       {["Sign in", "Verify connection", "Pair phone"].map((label, index) => {
         const step = connected ? 2 : registered ? 1 : 0;
-        return <li key={label} aria-current={step === index ? "step" : undefined} style={{ fontFamily: "var(--font-display)", fontSize: 12.5, fontWeight: step === index ? 600 : 400, color: step === index ? colors.fg0 : colors.fg3 }}>{index < step ? "[✓]" : step === index ? "[~]" : "[ ]"} {label.toLowerCase()}</li>;
+        return <li key={label} aria-current={step === index ? "step" : undefined} style={{ fontFamily: "var(--font-display)", fontSize: rem(12.5), fontWeight: step === index ? 600 : 400, color: step === index ? colors.fg0 : colors.fg3 }}>{index < step ? "[✓]" : step === index ? "[~]" : "[ ]"} {label.toLowerCase()}</li>;
       })}
     </ol>
     {!registered && !login && <Body size={13}>Invitation beta · one Hub per account. Sign in to enable remote access for this Mac. Local network access works without an Offdesk account.</Body>}
@@ -138,7 +139,7 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
     {status?.state === "revoking" ? <Body size={13}>Remote access is being removed. Check again to confirm it has finished.</Body> : null}
     {login?.state === "pending" ? <div style={{ padding: 16, background: colors.bg0, border: `1px solid ${colors.lineSoft}`, borderRadius: 4 }}>
       <Body size={13}>Continue in your browser. Check that it shows this same code before approving:</Body>
-      <p style={{ fontFamily: "var(--font-display)", fontSize: 22, letterSpacing: 3, margin: "12px 0" }}>{login.user_code}</p>
+      <p style={{ fontFamily: "var(--font-display)", fontSize: rem(22), letterSpacing: 3, margin: "12px 0" }}>{login.user_code}</p>
       <Button size="sm" kind="secondary" onClick={() => void openCloud(login.verification_uri!).catch(cause => setError(message(cause)))}>Open sign-in page</Button>
     </div> : null}
     {login?.state === "expired" ? <Body size={13}>Sign-in expired. Start again to get a new code.</Body> : null}

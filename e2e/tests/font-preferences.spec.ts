@@ -133,3 +133,18 @@ test("iOS caps the viewport so focusing a small form field does not zoom", async
     await context.close();
   }
 });
+test("Interface text size scales the interface's text", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await mockTerminal(page);
+  await openApp(page);
+  await settings(page);
+  const title = page.getByRole("heading", { name: "Settings", exact: true });
+  const field = page.getByRole("spinbutton", { name: "UI Font Size", exact: true });
+  await expect(title).toHaveCSS("font-size", "28px");
+  const fieldSize = await field.evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+  await field.fill("20");
+  await expect(title).toHaveCSS("font-size", "40px");
+  await expect.poll(() => field.evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeCloseTo((fieldSize * 20) / 14, 1);
+  await field.fill("");
+  await expect(title).toHaveCSS("font-size", "28px");
+});

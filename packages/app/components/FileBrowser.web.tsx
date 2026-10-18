@@ -24,6 +24,7 @@ import {
   sortEntries,
   splitBreadcrumb,
 } from "@/lib/fileBrowser";
+import { rem } from "@/lib/rem";
 
 type Listing =
   | { status: "loading" }
@@ -251,7 +252,7 @@ export function FileBrowser({
       background: active ? colors.bg3 : "transparent",
       color: colors.fg0,
       fontFamily: "var(--font-display)",
-      fontSize: 13,
+      fontSize: rem(13),
       cursor: "pointer",
       flexShrink: 0,
     }) as const;
@@ -276,7 +277,7 @@ export function FileBrowser({
               minHeight: touch ? 40 : 32,
               padding: "0 12px",
               fontFamily: "var(--font-display)",
-              fontSize: touch ? 16 : 13,
+              fontSize: rem(touch ? 16 : 13),
               color: colors.fg0,
               background: colors.bg0,
               border: `1px solid ${colors.line}`,
@@ -289,7 +290,7 @@ export function FileBrowser({
               display: "inline-flex",
               alignItems: "center",
               gap: 6,
-              fontSize: 12.5,
+              fontSize: rem(12.5),
               color: colors.fg2,
               cursor: "pointer",
               flexShrink: 0,
@@ -379,7 +380,7 @@ export function FileBrowser({
             overflowX: "auto",
             whiteSpace: "nowrap",
             padding: "0 6px",
-            fontSize: 13,
+            fontSize: rem(13),
             scrollbarWidth: "none",
           }}
         >
@@ -403,7 +404,7 @@ export function FileBrowser({
                     borderRadius: 3,
                     cursor: "pointer",
                     fontFamily: "var(--font-display)",
-                    fontSize: 13,
+                    fontSize: rem(13),
                     fontWeight: 400,
                     color: last ? colors.fg0 : colors.fg3,
                   }}
@@ -513,12 +514,12 @@ export function FileBrowser({
                     cursor: tooLarge ? "not-allowed" : "pointer",
                     textAlign: "left",
                     fontFamily: "var(--font-display)",
-                    fontSize: touch ? 14 : 13.5,
+                    fontSize: rem(touch ? 14 : 13.5),
                   }}
                 >
                   <span
                     aria-hidden
-                    style={{ width: 32, flexShrink: 0, fontSize: 11, fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3 }}
+                    style={{ width: 32, flexShrink: 0, fontSize: rem(11), fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3 }}
                   >
                     {entryType(entry)}
                   </span>
@@ -534,14 +535,14 @@ export function FileBrowser({
                     {entry.is_dir ? `${entry.name}/` : entry.name}
                   </span>
                   {tooLarge && (
-                    <span style={{ fontSize: 12, fontWeight: 400, color: colors.fg3, flexShrink: 0 }}>
+                    <span style={{ fontSize: rem(12), fontWeight: 400, color: colors.fg3, flexShrink: 0 }}>
                       {size} · over 20 MB
                     </span>
                   )}
                   {!tooLarge && size && (
                     <span
                       data-testid="file-browser-size"
-                      style={{ fontSize: 12, fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3, flexShrink: 0 }}
+                      style={{ fontSize: rem(12), fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3, flexShrink: 0 }}
                     >
                       {size}
                     </span>
@@ -554,7 +555,7 @@ export function FileBrowser({
                       style={{
                         width: 84,
                         textAlign: "right",
-                        fontSize: 11,
+                        fontSize: rem(11),
                         fontWeight: 400,
                         color: isSelected ? colors.onPrimary : colors.fg3,
                         flexShrink: 0,
@@ -617,7 +618,7 @@ function Centered({
         minHeight: 160,
         padding: 24,
         textAlign: "center",
-        fontSize: 13,
+        fontSize: rem(13),
         color: color ?? colors.fg3,
       }}
     >

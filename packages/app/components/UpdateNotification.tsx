@@ -14,6 +14,7 @@ import {
 } from "@/lib/desktopUpdate";
 import { openSettings } from "@/lib/openSettings";
 import { Button, Chip, FloatCard, fontProse, TextButton } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 const RECHECK_MS = 12 * 60 * 60 * 1000;
 
@@ -49,13 +50,13 @@ export function UpdateNotification() {
   return (
     <FloatCard testId="desktop-update-toast" style={{ width: 380, maxWidth: "calc(100vw - 32px)", padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span role="status" style={{ fontSize: 14, fontWeight: 600 }}>{update.available} {update.phase === "downloading" ? "is downloading" : update.phase === "idle" ? "is out" : "is ready"}</span>
+        <span role="status" style={{ fontSize: rem(14), fontWeight: 600 }}>{update.available} {update.phase === "downloading" ? "is downloading" : update.phase === "idle" ? "is out" : "is ready"}</span>
         {update.current ? <Chip>you have {update.current}</Chip> : null}
         <span style={{ flex: 1 }} />
         <TextButton label="Dismiss until tomorrow" onClick={() => dismissUntilTomorrow()}>×</TextButton>
       </div>
-      <div style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>{sentence}</div>
-      {update.error ? <div role="alert" style={{ overflowWrap: "anywhere", fontFamily: fontProse, fontSize: 12, color: colors.err }}>{update.error}</div> : null}
+      <div style={{ fontFamily: fontProse, fontSize: rem(13), lineHeight: rem(20), color: colors.fg2 }}>{sentence}</div>
+      {update.error ? <div role="alert" style={{ overflowWrap: "anywhere", fontFamily: fontProse, fontSize: rem(12), color: colors.err }}>{update.error}</div> : null}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Button size="sm" disabled={installing} onClick={() => void restartToUpdate()}>{installing ? "installing…" : "restart now"}</Button>
         {installed ? null : <Button size="sm" kind="secondary" disabled={installing} onClick={() => void updateWhenQuitting()}>when I quit</Button>}

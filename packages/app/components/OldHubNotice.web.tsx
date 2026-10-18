@@ -5,6 +5,7 @@
 import { colors } from "@/lib/colors";
 import { hubInterfaceLabel } from "@/lib/hubVersionCheck";
 import { Body, Button, Display, Eyebrow, TextButton, fontDisplay } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 export function OldHubNotice({
   host,
@@ -69,7 +70,7 @@ export function OldHubNotice({
             border: `1px solid ${colors.lineSoft}`,
             borderRadius: 6,
             fontFamily: fontDisplay,
-            fontSize: 13,
+            fontSize: rem(13),
           }}
         >
           {appVersion ? row("this app", appVersion) : null}
@@ -77,7 +78,7 @@ export function OldHubNotice({
           {row("you would see", hub ? `${hub} interface` : "an older interface", true)}
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <span style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, color: colors.fg0 }}>to get the new interface</span>
+          <span style={{ fontFamily: fontDisplay, fontSize: rem(14), fontWeight: 600, color: colors.fg0 }}>to get the new interface</span>
           <Body size={14}>
             Pair encrypted: on {host} open settings › phone and scan the encrypted code. Or update the hub on {host}
             {` to ${target}`}.

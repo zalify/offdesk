@@ -3,6 +3,7 @@ import { memo, useEffect, useState } from "react";
 import { colors } from "@/lib/colors";
 import { TerminalTailBuffer } from "@/lib/terminalTailBuffer";
 import { useTerminalPreviewOutputSource } from "@/lib/terminalPreviewMuxReact";
+import { rem } from "@/lib/rem";
 
 interface TerminalPreviewTextProps {
   machineId: string;
@@ -89,7 +90,7 @@ function TerminalPreviewTextComponent({
           color: colors.fg3,
         }}
       >
-        <span style={{ fontSize: 12, fontWeight: 600 }}>{pausedLabel}</span>
+        <span style={{ fontSize: rem(12), fontWeight: 600 }}>{pausedLabel}</span>
       </div>
     );
   }

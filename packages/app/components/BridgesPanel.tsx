@@ -18,6 +18,7 @@ import {
   describeAccess,
   type TokenAccessForm,
 } from "@/lib/tokenAccess";
+import { rem } from "@/lib/rem";
 
 const inputStyle: React.CSSProperties = {
   background: colors.bg1,
@@ -26,7 +27,8 @@ const inputStyle: React.CSSProperties = {
   color: colors.fg0,
   padding: "8px 12px",
   fontFamily: "var(--font-display)",
-  fontSize: 13,
+  // The same size as the form's labels around it.
+  fontSize: "inherit",
   outline: "none",
 };
 
@@ -37,7 +39,7 @@ const smallButton: React.CSSProperties = {
   color: colors.foregroundSecondary,
   cursor: "pointer",
   padding: "6px 10px",
-  fontSize: 12,
+  fontSize: rem(12),
   whiteSpace: "nowrap",
 };
 
@@ -130,7 +132,7 @@ export function BridgesPanel() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontSize: 11, color: colors.foregroundMuted }}>
+      <div style={{ fontSize: rem(11), color: colors.foregroundMuted }}>
         A server this hub keeps a connection to (it always dials out). It sees
         agent runs at the level you choose, not end-to-end encrypted, and acts
         only within what you allow here. Never terminal output; never your
@@ -147,7 +149,7 @@ export function BridgesPanel() {
           padding: 12,
           border: `1px solid ${colors.border}`,
           borderRadius: 4,
-          fontSize: 12,
+          fontSize: rem(12),
           color: colors.foregroundSecondary,
         }}
       >
@@ -192,7 +194,7 @@ export function BridgesPanel() {
             Folders it may start agents in, one per line
             <textarea aria-label="Bridge start folders" rows={2} placeholder="~/work" value={form.dirs}
               onChange={(e) => setForm({ ...form, dirs: e.target.value })}
-              style={{ ...inputStyle, fontFamily: "var(--font-mono)", fontSize: 12 }} />
+              style={{ ...inputStyle, fontFamily: "var(--font-mono)", fontSize: rem(12) }} />
           </label>
         )}
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -214,7 +216,7 @@ export function BridgesPanel() {
               cursor: ready ? "pointer" : "default",
               opacity: ready ? 1 : 0.5,
               padding: "8px 16px",
-              fontSize: 13,
+              fontSize: rem(13),
               fontWeight: 500,
               whiteSpace: "nowrap",
             }}
@@ -225,9 +227,9 @@ export function BridgesPanel() {
       </div>
 
       {bridges === null ? (
-        <div style={{ fontSize: 12, color: colors.foregroundMuted }}>Loading…</div>
+        <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>Loading…</div>
       ) : bridges.length === 0 ? (
-        <div style={{ fontSize: 12, color: colors.foregroundMuted }}>No bridges yet.</div>
+        <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>No bridges yet.</div>
       ) : (
         bridges.map((bridge) => {
           const state = bridgeState(bridge);
@@ -235,10 +237,10 @@ export function BridgesPanel() {
             <div key={bridge.id} role="group" aria-label={`Bridge ${bridge.name}`}
               style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
               <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-                <div style={{ fontSize: 13, color: bridge.enabled ? colors.foreground : colors.foregroundMuted }}>{bridge.name}</div>
-                <div style={{ fontSize: 11, color: colors.foregroundMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bridge.url}</div>
-                <div style={{ fontSize: 11, color: colors.foregroundSecondary }}>{describeAccess(bridge.access)}</div>
-                <div style={{ fontSize: 11, color: state.bad ? colors.danger : colors.foregroundMuted }}>{state.text}</div>
+                <div style={{ fontSize: rem(13), color: bridge.enabled ? colors.foreground : colors.foregroundMuted }}>{bridge.name}</div>
+                <div style={{ fontSize: rem(11), color: colors.foregroundMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bridge.url}</div>
+                <div style={{ fontSize: rem(11), color: colors.foregroundSecondary }}>{describeAccess(bridge.access)}</div>
+                <div style={{ fontSize: rem(11), color: state.bad ? colors.danger : colors.foregroundMuted }}>{state.text}</div>
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button type="button" style={smallButton}
@@ -262,7 +264,7 @@ export function BridgesPanel() {
           );
         })
       )}
-      {error && <div style={{ fontSize: 12, color: colors.danger }}>{error}</div>}
+      {error && <div style={{ fontSize: rem(12), color: colors.danger }}>{error}</div>}
     </div>
   );
 }
@@ -284,18 +286,18 @@ export function TokenActivityPanel() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <div style={{ fontSize: 11, color: colors.foregroundMuted, flex: 1 }}>
+        <div style={{ fontSize: rem(11), color: colors.foregroundMuted, flex: 1 }}>
           What tokens and bridges did with agent runs, and what they were
           refused. Your own actions in the app aren't listed.
         </div>
         <button type="button" style={smallButton} onClick={load}>Refresh</button>
       </div>
       {entries === null ? (
-        <div style={{ fontSize: 12, color: colors.foregroundMuted }}>Loading…</div>
+        <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>Loading…</div>
       ) : entries.length === 0 ? (
-        <div style={{ fontSize: 12, color: colors.foregroundMuted }}>Nothing yet.</div>
+        <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>Nothing yet.</div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: rem(12) }}>
           {entries.map((entry, i) => {
             const ok = entry.result === "ok";
             return (
@@ -303,7 +305,7 @@ export function TokenActivityPanel() {
                 <span style={{ color: colors.foregroundMuted, minWidth: 36 }}>{ago(entry.at_ms)}</span>
                 <span style={{ color: colors.foreground }}>{entry.token_name}</span>
                 <span style={{ color: ok ? colors.foregroundSecondary : colors.danger }}>{entry.action}</span>
-                <span style={{ color: colors.foregroundMuted, fontFamily: "var(--font-mono)", fontSize: 11, overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
+                <span style={{ color: colors.foregroundMuted, fontFamily: "var(--font-mono)", fontSize: rem(11), overflow: "hidden", textOverflow: "ellipsis", maxWidth: "100%" }}>
                   {entry.target}
                 </span>
                 {!ok && <span style={{ color: colors.danger, flexBasis: "100%", paddingLeft: 44 }}>{entry.result}</span>}
@@ -312,7 +314,7 @@ export function TokenActivityPanel() {
           })}
         </div>
       )}
-      {error && <div style={{ fontSize: 12, color: colors.danger }}>{error}</div>}
+      {error && <div style={{ fontSize: rem(12), color: colors.danger }}>{error}</div>}
     </div>
   );
 }

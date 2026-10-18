@@ -5,6 +5,7 @@ import {
   checkAndroidUpdate, installAndroidUpdate, dismissAndroidUpdate,
 } from "@/lib/androidUpdater";
 import { AppUpdateCard } from "./AppUpdateCard.web";
+import { rem } from "@/lib/rem";
 
 /** Mounted above auth so an outdated App can update even without a working Hub. */
 export function AndroidUpdateNotification({ inline = false }: { inline?: boolean }) {
@@ -34,7 +35,7 @@ export function AndroidUpdateNotification({ inline = false }: { inline?: boolean
       version={state.version}
       current={current}
       note="Signed and checked before it installs; pairing is kept."
-      status={status || state.error ? <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "var(--font-sans)", fontSize: 13, lineHeight: "20px", color: colors.fg1 }}>
+      status={status || state.error ? <div style={{ display: "flex", flexDirection: "column", gap: 4, fontFamily: "var(--font-sans)", fontSize: rem(13), lineHeight: rem(20), color: colors.fg1 }}>
         {status ? <span role="status">{status}</span> : null}
         {state.error ? <span role="alert" style={{ color: colors.err, overflowWrap: "anywhere" }}>{state.error}</span> : null}
       </div> : null}
@@ -45,10 +46,10 @@ export function AndroidUpdateNotification({ inline = false }: { inline?: boolean
     />;
   }
   const button = { border: `1px solid ${colors.line}`, background: "transparent", color: colors.fg0,
-    padding: "0 14px", borderRadius: 4, fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 500, minHeight: 44, cursor: "pointer", textTransform: "lowercase" as const };
+    padding: "0 14px", borderRadius: 4, fontFamily: "var(--font-display)", fontSize: rem(13), fontWeight: 500, minHeight: 44, cursor: "pointer", textTransform: "lowercase" as const };
   const primary = { ...button, border: "none", background: colors.primary, color: colors.onPrimary, fontWeight: 600 };
   return <div data-testid="android-update-settings"
-    style={{ padding: "12px 0", borderRadius: 6, background: "transparent", color: colors.fg0, fontFamily: "var(--font-display)", fontSize: 13 }}>
+    style={{ padding: "12px 0", borderRadius: 6, background: "transparent", color: colors.fg0, fontFamily: "var(--font-display)", fontSize: rem(13) }}>
     <div role="status" aria-live="polite">{state.busy === "checking" ? "Checking for updates…" : progress ?? (state.version ? `offdesk/dev ${state.version} is ready` : "Android app updates")}</div>
     {state.message && <p role="status">{state.message}</p>}
     {state.error && <p role="alert" style={{ overflowWrap: "anywhere" }}>{state.error}</p>}

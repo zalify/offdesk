@@ -54,6 +54,7 @@ import { formatPrefixBinding, type PrefixActionId } from "@/lib/prefixKey";
 import { usePrefixKey } from "@/lib/prefixKeyContext";
 import { useLongPress } from "@/lib/longPress";
 import { showWorkspaceToast } from "@/lib/workspaceToast";
+import { rem } from "@/lib/rem";
 
 interface TerminalWorkspaceProps {
   terminal: TerminalInfo;
@@ -1811,7 +1812,7 @@ function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: bool
         // paper title strip over the (always dark) terminal in the light one.
         background: colors.bg0,
         fontFamily: "var(--font-display)",
-        fontSize: 11.5,
+        fontSize: rem(11.5),
         color: colors.fg3,
         minWidth: 0,
       }}
@@ -1881,7 +1882,7 @@ const drawerNewButtonStyle: CSSProperties = {
   border: `1px solid ${colors.lineSoft}`,
   background: colors.bg2,
   color: colors.fg1,
-  fontSize: 13,
+  fontSize: rem(13),
   fontWeight: 700,
 };
 

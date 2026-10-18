@@ -54,6 +54,7 @@ import {
   AgentBrowserDialogOverlay,
   AgentBrowserLoadingBar,
 } from "./AgentBrowserPageOverlays.web";
+import { rem } from "@/lib/rem";
 
 type WheelInput = Extract<AgentBrowserInputEvent, { kind: "wheel" }>;
 type NavAction = Extract<AgentBrowserInputEvent, { kind: "navigate" }>["action"];
@@ -73,7 +74,7 @@ const SOFT_KEYS: { name: SoftKeyName; label: string; text: string }[] = [
 // readers and the tests that read it.
 const headerButton = {
   fontFamily: "var(--font-display)",
-  fontSize: 13,
+  fontSize: rem(13),
   fontWeight: 600,
   minHeight: 36,
   padding: "0 14px",
@@ -532,7 +533,7 @@ export function AgentBrowserMobileView({
     background: "transparent",
     color: colors.fg0,
     fontFamily: "var(--font-display)",
-    fontSize: 12,
+    fontSize: rem(12),
     fontWeight: 500,
     cursor: "pointer",
   } as const;
@@ -580,7 +581,7 @@ export function AgentBrowserMobileView({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            fontSize: 12,
+            fontSize: rem(12),
             fontWeight: 400,
             color: colors.fg2,
           }}
@@ -591,7 +592,7 @@ export function AgentBrowserMobileView({
           data-testid="mobile-agent-browser-control-state"
           data-controller={mine ? "me" : otherDevice ? "other" : "agent"}
           style={{
-            fontSize: 11,
+            fontSize: rem(11),
             fontWeight: mine ? 600 : 500,
             padding: "3px 8px",
             borderRadius: 3,
@@ -640,7 +641,7 @@ export function AgentBrowserMobileView({
           data-testid="mobile-agent-browser-error"
           style={{
             padding: "6px 16px",
-            fontSize: 12,
+            fontSize: rem(12),
             color: colors.err,
             borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
@@ -659,7 +660,7 @@ export function AgentBrowserMobileView({
             gap: 10,
             padding: "12px 16px",
             fontFamily: "var(--font-display)",
-            fontSize: 13,
+            fontSize: rem(13),
             fontWeight: 600,
             color: colors.err,
             background: "transparent",
@@ -706,7 +707,7 @@ export function AgentBrowserMobileView({
             gap: 10,
             padding: "12px 16px",
             fontFamily: "var(--font-display)",
-            fontSize: 13,
+            fontSize: rem(13),
             fontWeight: 600,
             color: colors.err,
             background: "transparent",
@@ -801,7 +802,7 @@ export function AgentBrowserMobileView({
               padding: 0,
               border: 0,
               opacity: 0,
-              fontSize: 16,
+              fontSize: rem(16),
               resize: "none",
               overflow: "hidden",
               pointerEvents: "none",
@@ -833,7 +834,7 @@ export function AgentBrowserMobileView({
                 alignItems: "center",
                 justifyContent: "center",
                 color: colors.foregroundMuted,
-                fontSize: 13,
+                fontSize: rem(13),
                 pointerEvents: "none",
               }}
             >
@@ -858,7 +859,7 @@ export function AgentBrowserMobileView({
                 border: `1px solid ${colors.line}`,
                 background: colors.bg2,
                 color: colors.fg0,
-                fontSize: 12,
+                fontSize: rem(12),
                 cursor: "pointer",
               }}
             >
@@ -964,7 +965,7 @@ export function AgentBrowserMobileView({
               background: "transparent",
               color: keyboardOn ? colors.accent : colors.fg0,
               fontFamily: "var(--font-display)",
-              fontSize: 12,
+              fontSize: rem(12),
               fontWeight: 500,
               cursor: "pointer",
             }}
@@ -1002,7 +1003,7 @@ export function AgentBrowserMobileView({
                   background: "transparent",
                   color: colors.fg0,
                   fontFamily: "var(--font-display)",
-                  fontSize: 12,
+                  fontSize: rem(12),
                   fontWeight: 500,
                   cursor: "pointer",
                 }}

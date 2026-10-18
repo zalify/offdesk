@@ -10,6 +10,7 @@ import { isRegistrationTokenFresh } from "@/lib/tokenExpiry";
 import { colors, colorAlpha } from "@/lib/colors";
 import { getServerUrl } from "@/lib/serverUrl";
 import { MobileAppPanel } from "./MobileAppPanel.web";
+import { rem } from "@/lib/rem";
 
 // The hub a new machine should dial: in a browser tab the page came from
 // the hub, so its own origin; in the desktop app the page is bundled and
@@ -40,7 +41,7 @@ function CodeBlock({
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 500, color: colors.fg0 }}>
+      <div style={{ fontFamily: fontDisplay, fontSize: rem(12), fontWeight: 500, color: colors.fg0 }}>
         {label}
       </div>
       <div
@@ -56,7 +57,7 @@ function CodeBlock({
           style={{
             margin: 0,
             fontFamily: fontDisplay,
-            fontSize: 13,
+            fontSize: rem(13),
             lineHeight: 1.6,
             color: colors.termFg,
             whiteSpace: "pre-wrap" as const,
@@ -202,13 +203,13 @@ export function OnboardingView({
             </div>
           </div>
         ) : loading ? (
-          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, fontSize: 13, color: colors.fg2 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, fontSize: rem(13), color: colors.fg2 }}>
             <StepMark state="active" />
             generating a registration token…
           </div>
         ) : error ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 12, alignItems: "flex-start" }}>
-            <div role="alert" style={{ padding: "10px 12px", border: `1px solid ${colors.err}`, borderRadius: 4, color: colors.err, fontSize: 12 }}>
+            <div role="alert" style={{ padding: "10px 12px", border: `1px solid ${colors.err}`, borderRadius: 4, color: colors.err, fontSize: rem(12) }}>
               {error}
             </div>
             <Button kind="secondary" size="sm" onClick={handleGenerateClick} ariaLabel="Try again">
@@ -226,12 +227,12 @@ export function OnboardingView({
                 {tokenAction.toLowerCase()}
               </Button>
               <span style={{ flex: 1 }} />
-              <span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg3 }}>
+              <span style={{ fontFamily: "var(--font-sans)", fontSize: rem(12), color: colors.fg3 }}>
                 Works once, expires after 24 hours
               </span>
             </div>
             <div
-              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, fontSize: 13, color: colors.fg2 }}
+              style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", border: `1px solid ${colors.lineSoft}`, borderRadius: 4, fontSize: rem(13), color: colors.fg2 }}
             >
               <StepMark state="active" />
               waiting for the machine to come online… this page updates by itself
@@ -253,7 +254,7 @@ export function OnboardingView({
           >
             <h2
               style={{
-                fontSize: 17,
+                fontSize: rem(17),
                 fontWeight: 600,
                 letterSpacing: "-0.02em",
                 color: colors.fg0,

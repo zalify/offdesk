@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
 import "./Primitives.css";
+import { rem } from "@/lib/rem";
 
 interface RenameGroupDialogProps {
   open: boolean;
@@ -78,7 +79,7 @@ export function RenameGroupDialog({
         <div
           id="rename-group-dialog-title"
           style={{
-            fontSize: 17,
+            fontSize: rem(17),
             fontWeight: 600,
             letterSpacing: "-0.02em",
             color: colors.fg0,

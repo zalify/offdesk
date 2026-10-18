@@ -8,6 +8,7 @@ import type {
 import { Button, fontDisplay } from "./Primitives.web";
 import { colors } from "@/lib/colors";
 import { diskPercent } from "@/lib/resourceStats";
+import { rem } from "@/lib/rem";
 
 // The machine switcher in the tab bar: `mac-mini ▾` as text (in the tab bar,
 // the name and a load glyph instead of ▾), opening a list of machines
@@ -65,7 +66,7 @@ function HostSwitcherComponent({
 
   if (!active) {
     return (
-      <span style={{ fontFamily: fontDisplay, fontSize: 12.5, color: colors.fg3 }}>
+      <span style={{ fontFamily: fontDisplay, fontSize: rem(12.5), color: colors.fg3 }}>
         no machine
       </span>
     );
@@ -118,7 +119,7 @@ function HostSwitcherComponent({
           <div
             style={{
               padding: "4px 12px 6px",
-              fontSize: 11.5,
+              fontSize: rem(11.5),
               fontWeight: 500,
               color: colors.fg3,
             }}
@@ -163,7 +164,7 @@ function HostSwitcherComponent({
                     cursor: "pointer",
                     border: "none",
                     fontFamily: fontDisplay,
-                    fontSize: 13,
+                    fontSize: rem(13),
                   }}
                 >
                   <span
@@ -178,13 +179,13 @@ function HostSwitcherComponent({
                       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                         {m.name}
                       </span>
-                      <span style={{ fontSize: 11, color: colors.fg3 }}>{m.os}</span>
+                      <span style={{ fontSize: rem(11), color: colors.fg3 }}>{m.os}</span>
                     </span>
-                    <span style={{ fontSize: 11, color: colors.fg3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: rem(11), color: colors.fg3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {m.home_dir}
                     </span>
                   </span>
-                  <span style={{ textAlign: "right", fontSize: 11, color: colors.fg3, lineHeight: 1.5 }}>
+                  <span style={{ textAlign: "right", fontSize: rem(11), color: colors.fg3, lineHeight: 1.5 }}>
                     <span style={{ display: "block" }}>
                       {online ? machineRowStatus(machineStats[m.id]) : "offline"}
                     </span>

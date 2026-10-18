@@ -6,6 +6,7 @@ import type { AgentBrowserInfo, AgentRunInfo, MachineInfo, TerminalInfo } from "
 import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { browserLabel } from "@/lib/agentBrowserOverlay";
+import { rem } from "@/lib/rem";
 
 const NO_BROWSERS: AgentBrowserInfo[] = [];
 const NO_RUNS: AgentRunInfo[] = [];
@@ -92,7 +93,7 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
   return (
     <nav aria-label="Sessions needing attention" data-testid="mobile-terminal-attention"
       style={{ flexShrink: 0, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, padding: "6px 12px", borderBottom: `1px solid ${colors.lineSoft}`, background: colors.bg1, minWidth: 0, fontFamily: "var(--font-display)" }}>
-      <span role="status" className="odk-badge" style={{ fontSize: 11.5 }}>
+      <span role="status" className="odk-badge" style={{ fontSize: rem(11.5) }}>
         {waiting} waiting
       </span>
       <div style={{ display: "flex", gap: 6, overflowX: "auto", minWidth: 0, flex: 1, overscrollBehaviorX: "contain" }}>
@@ -127,14 +128,14 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
                 aria-label={`Open ${title}, ${context}, ${asking}${prompt ? `: ${prompt}` : ""}`}
                 title={`${title} · ${context} — ${asking}${prompt ? `: ${prompt}` : ""}`}
                 onClick={() => onPick(terminal.id)}
-                style={{ display: "flex", alignItems: "center", alignSelf: "stretch", maxWidth: 170, padding: "0 8px", border: 0, background: "transparent", color: colors.fg0, font: "inherit", fontSize: 12, fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>
+                style={{ display: "flex", alignItems: "center", alignSelf: "stretch", maxWidth: 170, padding: "0 8px", border: 0, background: "transparent", color: colors.fg0, font: "inherit", fontSize: rem(12), fontWeight: 500, cursor: "pointer", whiteSpace: "nowrap" }}>
                 <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{title} · {group ?? machine}</span>
               </button>
               {prompt && (
-                <span data-testid={`mobile-attention-prompt-${terminal.id}`} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160, color: colors.fg2, fontSize: 11.5 }}>{prompt}</span>
+                <span data-testid={`mobile-attention-prompt-${terminal.id}`} style={{ overflow: "hidden", textOverflow: "ellipsis", maxWidth: 160, color: colors.fg2, fontSize: rem(11.5) }}>{prompt}</span>
               )}
               {run && answered && (
-                <span data-testid={`mobile-attention-sent-${terminal.id}`} style={{ padding: "0 8px", color: colors.fg3, fontSize: 11 }}>sent</span>
+                <span data-testid={`mobile-attention-sent-${terminal.id}`} style={{ padding: "0 8px", color: colors.fg3, fontSize: rem(11) }}>sent</span>
               )}
               {run && !answered && choices.map(choice => {
                 const disabled = !deviceId || !canSend(terminal.machine_id);
@@ -145,7 +146,7 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
                     onPointerDown={event => event.preventDefault()}
                     onClick={() => void answer(run, choice.answer)}
                     className="odk-bracketed"
-                    style={{ minWidth: 40, maxWidth: 110, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: disabled ? "transparent" : colors.primary, color: disabled ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: 11, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer", opacity: disabled ? 0.7 : 1 }}>
+                    style={{ minWidth: 40, maxWidth: 110, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: disabled ? "transparent" : colors.primary, color: disabled ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: rem(11), fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", cursor: "pointer", opacity: disabled ? 0.7 : 1 }}>
                     {choice.label}
                   </button>
                 );
@@ -157,14 +158,14 @@ export function MobileTerminalAttention({ terminals, machines, activeTerminalId,
                 onPointerDown={event => event.preventDefault()}
                 onClick={() => void enter(terminal)}
                 className="odk-bracketed"
-                style={{ minWidth: 52, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: blocked ? "transparent" : colors.primary, color: blocked ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: 11, fontWeight: 600, textTransform: "lowercase", cursor: "pointer", opacity: blocked ? 0.7 : 1 }}>
+                style={{ minWidth: 52, height: 30, padding: "0 8px", border: 0, borderRadius: 3, background: blocked ? "transparent" : colors.primary, color: blocked ? colors.fg3 : colors.onPrimary, font: "inherit", fontSize: rem(11), fontWeight: 600, textTransform: "lowercase", cursor: "pointer", opacity: blocked ? 0.7 : 1 }}>
                 {sent.has(terminal.id) ? result[terminal.id] === "sent" ? "Sent" : result[terminal.id] === "check" ? "Check" : "…" : "Enter"}
               </button>}
             </div>
           );
         })}
       </div>
-      {error && <span role="alert" style={{ flexBasis: "100%", color: colors.err, fontSize: 12 }}>{error}</span>}
+      {error && <span role="alert" style={{ flexBasis: "100%", color: colors.err, fontSize: rem(12) }}>{error}</span>}
     </nav>
   );
 }
@@ -180,7 +181,7 @@ const chip = {
   borderRadius: 3,
   background: "transparent",
   fontFamily: "inherit",
-  fontSize: 12,
+  fontSize: rem(12),
   whiteSpace: "nowrap",
   cursor: "pointer",
 } as const;
@@ -242,7 +243,7 @@ export function MobileWaitingCard({ terminal, deviceId, canSend, isController, o
       style={{ position: "absolute", left: 16, right: 16, bottom, zIndex: 6, display: "flex", flexDirection: "column", gap: 10, padding: 12,
         border: `1px solid ${colors.err}`, borderRadius: 4, background: colors.bg0, fontFamily: "var(--font-display)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 600, color: colors.err, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ flex: 1, minWidth: 0, fontSize: rem(12), fontWeight: 600, color: colors.err, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {title} is waiting for you
         </span>
         <button type="button" aria-label="Hide" onClick={() => setHidden(true)} className="odk-text-btn" style={{ minHeight: 28, minWidth: 28 }}>[x]</button>
@@ -259,7 +260,7 @@ export function MobileWaitingCard({ terminal, deviceId, canSend, isController, o
           </button>
         )}
       </div>
-      {error && <span role="alert" style={{ fontSize: 12, color: colors.err }}>{error}</span>}
+      {error && <span role="alert" style={{ fontSize: rem(12), color: colors.err }}>{error}</span>}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { Body, Button, Card, Display, Eyebrow, Wordmark } from "./Primitives.web
 import { colors } from "@/lib/colors";
 import { HubSetup } from "./DesktopSetup.web";
 import { OnboardingView } from "./OnboardingView.web";
+import { rem } from "@/lib/rem";
 
 /** Empty Hub state is different from deliberately adding another machine. */
 export function EmptyMachinesView({ onOpenSettings }: { onOpenSettings: () => void }) {
@@ -40,7 +41,7 @@ export function EmptyMachinesView({ onOpenSettings }: { onOpenSettings: () => vo
   }, [localHub]);
   if (localHub && !manual && status) return <div style={{ flex: 1, overflowY: "auto" }}>
     <HubSetup status={status} onReady={() => window.location.reload()} onGiveUp={onOpenSettings} />
-    <details style={{ padding: "0 24px 24px", maxWidth: 600, margin: "0 auto", fontFamily: "var(--font-display)", fontSize: 13 }}><summary style={{ cursor: "pointer", padding: "8px 0", color: colors.fg2 }}>advanced setup</summary>
+    <details style={{ padding: "0 24px 24px", maxWidth: 600, margin: "0 auto", fontFamily: "var(--font-display)", fontSize: rem(13) }}><summary style={{ cursor: "pointer", padding: "8px 0", color: colors.fg2 }}>advanced setup</summary>
       <Button kind="secondary" onClick={() => setManual(true)}>Connect a machine manually</Button>
     </details>
   </div>;

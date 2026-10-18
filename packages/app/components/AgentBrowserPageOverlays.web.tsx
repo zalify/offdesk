@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import type { AgentBrowserDialog } from "@offdesk/shared";
 import { dialogText } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 // What the desktop pane and the phone view draw over an agent browser's page:
 // a loading bar, and the page's JavaScript dialogs, which headless Chromium
@@ -87,7 +88,8 @@ export function AgentBrowserDialogOverlay({
     }
   };
 
-  const fontSize = compact ? 14 : 12;
+  const textPx = compact ? 14 : 12;
+  const fontSize = rem(textPx);
   const button = {
     fontSize,
     minHeight: compact ? 36 : 26,
@@ -160,7 +162,7 @@ export function AgentBrowserDialogOverlay({
             autoCorrect="off"
             spellCheck={false}
             style={{
-              fontSize: compact ? 16 : 13,
+              fontSize: rem(compact ? 16 : 13),
               padding: "6px 8px",
               borderRadius: 6,
               border: `1px solid ${colors.border}`,
@@ -181,7 +183,7 @@ export function AgentBrowserDialogOverlay({
           {!canAnswer && (
             <span
               data-testid={`${testId}-hint`}
-              style={{ flex: 1, fontSize: fontSize - 1, color: colors.foregroundMuted }}
+              style={{ flex: 1, fontSize: rem(textPx - 1), color: colors.foregroundMuted }}
             >
               Take over to answer
             </span>

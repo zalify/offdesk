@@ -19,6 +19,7 @@ import { isSizedElsewhere } from "@/lib/terminalViewModel";
 import { clearPaneSizeNotice, publishPaneSizeNotice } from "@/lib/paneSizeNotice";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
+import { rem } from "@/lib/rem";
 
 const LiveTerminalView = lazy(() =>
   lazyWithReload(() =>
@@ -371,7 +372,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             pointerEvents: "all",
           }}
         >
-          <span style={{ color: colors.termFg, fontFamily: "var(--font-display)", fontSize: 13 }}>
+          <span style={{ color: colors.termFg, fontFamily: "var(--font-display)", fontSize: rem(13) }}>
             waiting for the machine to reconnect…
           </span>
         </div>
@@ -417,7 +418,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                 border: `1px solid ${colors.line}`,
                 color: colors.fg1,
                 fontFamily: "var(--font-display)",
-                fontSize: 11,
+                fontSize: rem(11),
               }}
             >
               reconnecting…
@@ -497,7 +498,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             />
             <span
               style={{
-                fontSize: 11,
+                fontSize: rem(11),
                 color: colors.foreground,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -518,7 +519,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
             position: "absolute",
             top: 6,
             left: 8,
-            fontSize: 9,
+            fontSize: rem(9),
             color: colors.foregroundMuted,
             letterSpacing: 0.4,
             textTransform: "uppercase",
@@ -663,7 +664,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
           style={{
             padding: "2px 8px",
             borderTop: `1px solid ${colors.border}`,
-            fontSize: 9,
+            fontSize: rem(9),
             color: colors.foregroundMuted,
             overflow: "hidden",
             textOverflow: "ellipsis",

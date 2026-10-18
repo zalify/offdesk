@@ -19,6 +19,7 @@ import {
   markWeights,
 } from "@/lib/brandMark";
 import "./Primitives.css";
+import { rem } from "@/lib/rem";
 
 /** Geist Mono: chrome, headings, labels. */
 export const fontDisplay = "var(--font-display)";
@@ -256,7 +257,7 @@ export const inputStyle: CSSProperties = {
   background: colors.bg1,
   color: colors.fg0,
   fontFamily: fontDisplay,
-  fontSize: 13,
+  fontSize: rem(13),
   outline: "none",
   boxSizing: "border-box",
 };
@@ -296,7 +297,7 @@ export function Eyebrow({
   prompt?: boolean;
 }) {
   return (
-    <div style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 500, color }}>
+    <div style={{ fontFamily: fontDisplay, fontSize: rem(13), fontWeight: 500, color }}>
       {prompt ? (
         <>
           <span style={{ color: colors.accent }} aria-hidden="true">~</span>
@@ -324,7 +325,7 @@ export function Display({
     <div
       style={{
         fontFamily: fontDisplay,
-        fontSize: size,
+        fontSize: rem(size),
         fontWeight: 600,
         letterSpacing: size >= 28 ? "-0.035em" : "-0.02em",
         lineHeight: 1.15,
@@ -341,7 +342,7 @@ export function Display({
 
 export function Body({ children, size = 15, style }: { children: ReactNode; size?: number; style?: CSSProperties }) {
   return (
-    <div style={{ fontFamily: fontProse, fontSize: size, lineHeight: 1.55, color: colors.fg2, ...style }}>{children}</div>
+    <div style={{ fontFamily: fontProse, fontSize: rem(size), lineHeight: 1.55, color: colors.fg2, ...style }}>{children}</div>
   );
 }
 
@@ -470,7 +471,7 @@ export function Spinner({ label }: { label?: string }) {
         background: colors.bg0,
         color: colors.fg2,
         fontFamily: fontDisplay,
-        fontSize: 13,
+        fontSize: rem(13),
       }}
     >
       <span

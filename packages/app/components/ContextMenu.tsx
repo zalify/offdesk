@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { colors } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 export interface ContextMenuItem {
   label: string;
@@ -121,7 +122,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           color: entry.disabled ? colors.fg3 : colors.fg0,
           cursor: entry.disabled ? "default" : "pointer",
           fontFamily: "var(--font-display)",
-          fontSize: 13,
+          fontSize: rem(13),
           textAlign: "left",
         }}
         onMouseEnter={(e) => {
@@ -143,12 +144,12 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
           }}
         >
           {entry.shortcut && (
-            <span style={{ fontSize: 11.5, color: colors.fg3 }}>
+            <span style={{ fontSize: rem(11.5), color: colors.fg3 }}>
               {entry.shortcut}
             </span>
           )}
           {hasChildren && (
-            <span style={{ fontSize: 11, color: colors.foregroundMuted }}>
+            <span style={{ fontSize: rem(11), color: colors.foregroundMuted }}>
               ▸
             </span>
           )}

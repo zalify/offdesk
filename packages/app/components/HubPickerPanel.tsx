@@ -4,10 +4,11 @@ import { isTauriMobile } from "../lib/platform";
 import { scanWithCleanup } from "../lib/scanLifecycle";
 import { checkSavedHub, openSavedHub, withCheckedRoute, pairAndOpenHub, pairingIdentity, removeSavedHub, renameSavedHub, routeLatencyLabel, savedHubs, secureConnectionStatus, type RouteReport, type SavedHub, type SecureStatus } from "../lib/secureTransport";
 import { Body, Button } from "./Primitives.web";
+import { rem } from "../lib/rem";
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === "string" ? error : "Could not complete this action. Try again.";
 const card = { border: `1px solid ${colors.lineSoft}`, borderRadius: 4, padding: "12px 14px", minWidth: 0, background: colors.bg1, fontFamily: "var(--font-display)" };
-const field = { width: "100%", minWidth: 0, boxSizing: "border-box" as const, fontSize: 16, padding: "0 12px", minHeight: 44, color: colors.fg0, background: colors.bg1, border: `1px solid ${colors.line}`, borderRadius: 4, fontFamily: "var(--font-display)" };
+const field = { width: "100%", minWidth: 0, boxSizing: "border-box" as const, fontSize: rem(16), padding: "0 12px", minHeight: 44, color: colors.fg0, background: colors.bg1, border: `1px solid ${colors.line}`, borderRadius: 4, fontFamily: "var(--font-display)" };
 function address(url: string) { try { return new URL(url).host; } catch { return url; } }
 /** A name that's only an address (the default, kept by older pairings after the Hub moved)
  * shows where the Hub is now; a name the person gave shows as is. */
@@ -74,28 +75,28 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
       {hubs.length > 0 && <div style={{ border: `1px solid ${colors.lineSoft}`, borderRadius: 6, overflow: "hidden" }}>
       {hubs.map((hub, index) => { const current = hub.status.endpoint.public_key === active; return <button type="button" key={hub.status.endpoint.public_key} disabled={busy !== null} onClick={() => { setSelected(hub); setName(hub.name); void check(hub); }} style={{ width: "100%", minHeight: 60, padding: "12px 16px", textAlign: "left", border: 0, borderTop: index ? `1px solid ${colors.lineSoft}` : 0, borderLeft: `2px solid ${current ? colors.accent : "transparent"}`, background: current ? colors.bg2 : "transparent", color: colors.fg0, display: "grid", gridTemplateColumns: "auto 1fr auto", alignItems: "center", gap: 12, cursor: "pointer", fontFamily: "var(--font-display)" }}>
         <span aria-label={current ? "Current" : undefined} style={{ color: current ? colors.accent : colors.fg3 }}>{current ? "●" : "○"}</span>
-        <span style={{ minWidth: 0 }}><span style={{ display: "block", overflowWrap: "anywhere", fontSize: 14, fontWeight: current ? 600 : 400 }}>{label(hub)}</span><span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg2 }}>{current ? "Current Hub · " : "Saved · "}Encrypted pairing</span></span><span aria-hidden="true" style={{ color: colors.fg3 }}>›</span>
+        <span style={{ minWidth: 0 }}><span style={{ display: "block", overflowWrap: "anywhere", fontSize: rem(14), fontWeight: current ? 600 : 400 }}>{label(hub)}</span><span style={{ fontFamily: "var(--font-sans)", fontSize: rem(12), color: colors.fg2 }}>{current ? "Current Hub · " : "Saved · "}Encrypted pairing</span></span><span aria-hidden="true" style={{ color: colors.fg3 }}>›</span>
       </button>; })}
       </div>}
       {!hubs.length && !busy && <Body size={13}>No saved Hubs yet. Open Settings → Phone on your Hub’s computer to get its encrypted pairing code.</Body>}
       <Button kind="secondary" disabled={busy !== null} onClick={() => setAdding(true)}>Add a Hub</Button>
     </>}
     {selected && <>
-      <div><strong style={{ display: "block", fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em", overflowWrap: "anywhere", marginBottom: 6 }}>{selected.name === selected.status.endpoint.hub_url ? address(selected.name) : selected.name}</strong><Body size={13}>Select a reachable connection. We verify the saved Hub identity before switching.</Body></div>
+      <div><strong style={{ display: "block", fontSize: rem(20), fontWeight: 600, letterSpacing: "-0.02em", overflowWrap: "anywhere", marginBottom: 6 }}>{selected.name === selected.status.endpoint.hub_url ? address(selected.name) : selected.name}</strong><Body size={13}>Select a reachable connection. We verify the saved Hub identity before switching.</Body></div>
       {(["local", "remote"] as const).map(kind => {
         const routes = report?.routes.filter(route => route.kind === kind) ?? [];
         return <div key={kind} style={card}>
-          <strong style={{ display: "block", fontSize: 13, fontWeight: 600 }}>{kind === "local" ? "local network" : "remote connection"}</strong>
+          <strong style={{ display: "block", fontSize: rem(13), fontWeight: 600 }}>{kind === "local" ? "local network" : "remote connection"}</strong>
           <Body size={13}>{kind === "local" ? "Your phone and Hub must share a network." : "Use mobile data or another Wi-Fi network."}</Body>
           {!routes.length && <Body size={13}>{busy ? "Checking…" : !report ? "Check connections to see available addresses." : report.discovery_available ? "Not configured on this Hub." : "No saved address. Reconnect to your Hub to discover one."}</Body>}
           {routes.map(route => { const latency = routeLatencyLabel(route, report?.routes ?? []); return <button type="button" key={route.hub_url} disabled={busy !== null || !route.available} onClick={() => void run("Connecting to Hub…", () => openSavedHub(selected.status.endpoint.public_key, route.hub_url))} style={{ width: "100%", textAlign: "left", minHeight: 48, padding: "12px 0", background: "none", border: 0, color: route.available ? colors.fg0 : colors.fg3, cursor: route.available ? "pointer" : "default" }}>
-            <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontSize: 12 }}><span style={{ minWidth: 0, overflowWrap: "anywhere", color: colors.fg3 }}>{address(route.hub_url)}</span>{latency && <span data-testid="route-latency" style={{ flexShrink: 0, color: colors.fg1, fontVariantNumeric: "tabular-nums" }}>{latency}</span>}</span><span style={{ display: "inline-block", marginTop: 6, padding: "2px 8px", borderRadius: 3, fontSize: 11.5, fontWeight: 600, ...(route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg3 }) }}>{route.available ? "connect" : "unreachable on this network"}</span>
+            <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, fontSize: rem(12) }}><span style={{ minWidth: 0, overflowWrap: "anywhere", color: colors.fg3 }}>{address(route.hub_url)}</span>{latency && <span data-testid="route-latency" style={{ flexShrink: 0, color: colors.fg1, fontVariantNumeric: "tabular-nums" }}>{latency}</span>}</span><span style={{ display: "inline-block", marginTop: 6, padding: "2px 8px", borderRadius: 3, fontSize: rem(11.5), fontWeight: 600, ...(route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg3 }) }}>{route.available ? "connect" : "unreachable on this network"}</span>
           </button>; })}
         </div>;
       })}
-      {report?.machines?.length ? <div style={card}><strong style={{ fontSize: 12, fontWeight: 500, color: colors.fg3 }}>machines in this hub</strong>{report.machines.map((machine, i) => <Body key={i} size={13}>{machine.name} · {machine.os}</Body>)}<Body size={12}>After connecting, choose a machine in the title menu.</Body></div> : null}
+      {report?.machines?.length ? <div style={card}><strong style={{ fontSize: rem(12), fontWeight: 500, color: colors.fg3 }}>machines in this hub</strong>{report.machines.map((machine, i) => <Body key={i} size={13}>{machine.name} · {machine.os}</Body>)}<Body size={12}>After connecting, choose a machine in the title menu.</Body></div> : null}
       <Button kind="secondary" disabled={busy !== null} onClick={() => void check(selected)}>Check again</Button>
-      <details><summary style={{ cursor: "pointer", padding: "12px 0", fontFamily: "var(--font-display)", fontSize: 13 }}>hub name and saved pairing</summary><div style={{ display: "grid", gap: 12 }}>
+      <details><summary style={{ cursor: "pointer", padding: "12px 0", fontFamily: "var(--font-display)", fontSize: rem(13) }}>hub name and saved pairing</summary><div style={{ display: "grid", gap: 12 }}>
         <label className="odk-label" style={{ display: "grid", gap: 6 }}>hub name<input value={name} maxLength={60} onChange={e => setName(e.target.value)} style={field} /></label>
         <Button kind="secondary" disabled={busy !== null || !name.trim()} onClick={() => void run("Saving name…", async () => { await renameSavedHub(selected.status.endpoint.public_key, name); const result = await savedHubs(); if (mounted.current) { setHubs(result); setSelected(result.find(h => h.status.endpoint.public_key === selected.status.endpoint.public_key) ?? null); } })}>Save name</Button>
         <Body size={12}>Hub identity: <span style={{ overflowWrap: "anywhere", fontFamily: "var(--font-mono)" }}>{selected.status.endpoint.public_key}</span></Body>
@@ -104,9 +105,9 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
       </div></details>
     </>}
     {adding && <>
-      <strong style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em" }}>{identity ? "Confirm your Hub" : "Add a Hub"}</strong>
+      <strong style={{ fontSize: rem(20), fontWeight: 600, letterSpacing: "-0.02em" }}>{identity ? "Confirm your Hub" : "Add a Hub"}</strong>
       {identity ? <>
-        <div style={card}><Body style={{ overflowWrap: "anywhere" }}>{identity.hub_url}</Body><Body size={12}>Hub identity</Body><code style={{ display: "block", overflowWrap: "anywhere", fontSize: 13 }}>{identity.public_key}</code></div>
+        <div style={card}><Body style={{ overflowWrap: "anywhere" }}>{identity.hub_url}</Body><Body size={12}>Hub identity</Body><code style={{ display: "block", overflowWrap: "anywhere", fontSize: rem(13) }}>{identity.public_key}</code></div>
         <Body size={13}>Check this address and identity against the pairing screen on your computer. Pairing gives this device access to its terminals.</Body>
         {hubs.some(hub => hub.status.endpoint.public_key === identity.public_key) && <Body size={13}>This Hub is already saved. Pairing again replaces its saved pairing on this device.</Body>}
         <Button disabled={busy !== null} onClick={() => void run("Pairing with Hub…", () => pairAndOpenHub(uri))}>Pair and connect</Button>
