@@ -364,7 +364,42 @@ test("mobile back button returns to the previous terminal without reloading the 
     requestAnimationFrame(watch);
   });
   await startSwitchFrameSampler(page, firstTerminalId);
+  await page.evaluate(() => {
+    const w = window as unknown as { __diag?: string[] };
+    w.__diag = [];
+    const mark = (what: string) => w.__diag!.push(`${Math.round(performance.now())} ${what}`);
+    window.addEventListener("popstate", () => mark(`popstate-capture ${location.hash} state=${JSON.stringify(history.state)}`), true);
+    window.addEventListener("popstate", () => mark("popstate-bubble (reached late listeners)"));
+    new MutationObserver((records) => {
+      for (const r of records) {
+        r.removedNodes.forEach((n) => {
+          if (n instanceof Element && (n.matches("[data-testid='mobile-workbench']") || n.querySelector("[data-testid='mobile-workbench']"))) mark("workbench removed");
+        });
+        r.addedNodes.forEach((n) => {
+          if (n instanceof Element && (n.matches("[data-testid='mobile-workbench']") || n.querySelector("[data-testid='mobile-workbench']"))) mark("workbench added");
+          if (n instanceof Element && (n.matches("[data-testid='empty-machines']") || n.querySelector("[data-testid='empty-machines']"))) mark("empty-machines added");
+          if (n instanceof Element && n.querySelector("[data-testid^='workspace-pane-']")) mark(`panes now ${[...document.querySelectorAll("[data-testid^='workspace-pane-']")].map((e) => e.getAttribute("data-testid")).join(",")}`);
+        });
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+  // TEMP diagnostics
   await page.goBack();
+  await page.waitForTimeout(6000);
+  console.log("DIAG url", page.url());
+  console.log("DIAG ids first", firstTerminalId, "second", secondTerminalId);
+  console.log("DIAG events", JSON.stringify(await page.evaluate(() => (window as unknown as { __diag: string[] }).__diag)));
+  const diagFrames = await readSwitchFrames(page);
+  const runs: string[] = [];
+  for (const f of diagFrames) {
+    const k = `${f.held ? "H" : ""}${f.fading ? "F" : ""}${f.blank ? "B" : ""}${f.settled ? "S" : ""}` || "-";
+    const last = runs.at(-1);
+    if (last && last.startsWith(`${k}x`)) runs[runs.length - 1] = `${k}x${Number(last.split("x")[1]) + 1}`;
+    else runs.push(`${k}x1`);
+  }
+  console.log("DIAG frames", diagFrames.length, runs.join(" "));
+  console.log("DIAG panes", JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("[data-testid^='workspace-pane-'],[data-testid^='compact-']")].map((e) => e.getAttribute("data-testid")))));
+  console.log("DIAG xterms", JSON.stringify(await page.evaluate(() => [...((window as unknown as { __offdeskTerminals?: Map<string, unknown> }).__offdeskTerminals?.keys() ?? [])])));
 
   await expectSwitchSettledWithoutBlankFrames(page);
   await expect(page).toHaveURL(new RegExp(`#/t/${firstTerminalId}$`));
