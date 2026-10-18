@@ -312,10 +312,38 @@ function TerminalWorkspaceComponent({
     workspace.activeGroupId,
   );
   const previousActiveGroupIdRef = useRef<string | null>(null);
+  // Desktop group switch hold, the compact switch hold's counterpart for
+  // groups: switching to a group that isn't mounted builds every pane fresh
+  // (xterm, socket, tmux attach), blank for a round trip. Hovering across
+  // the tabs did that for each one. So the group on screen stays over the
+  // incoming one until each reachable pane of the incoming group has drawn,
+  // then they swap in one frame. During rapid switches the group that still
+  // shows content stays the one held, and it is the one kept alive after.
+  const groupReadyRef = useRef(new Set<string>());
+  const groupHoldRef = useRef<CompactSwitchHold | null>(null);
+  const groupWaiting = (groupId: string | null) =>
+    collectIds(
+      workspace.groups.find((group) => group.id === groupId)?.root ?? null,
+    ).some(
+      (id) =>
+        terminalsById.get(id)?.reachable && !groupReadyRef.current.has(id),
+    );
   if (workspace.activeGroupId !== renderedActiveGroupIdRef.current) {
-    previousActiveGroupIdRef.current = renderedActiveGroupIdRef.current;
+    const shown =
+      groupHoldRef.current?.from ?? renderedActiveGroupIdRef.current;
+    groupHoldRef.current = nextCompactSwitchHold(
+      groupHoldRef.current,
+      renderedActiveGroupIdRef.current,
+      workspace.activeGroupId,
+      !isCompact && !isTouch && groupWaiting(workspace.activeGroupId),
+    );
+    previousActiveGroupIdRef.current = shown;
     renderedActiveGroupIdRef.current = workspace.activeGroupId;
   }
+  if (groupHoldRef.current && !groupWaiting(groupHoldRef.current.to)) {
+    groupHoldRef.current = null;
+  }
+  const heldGroupId = groupHoldRef.current?.from ?? null;
   const mountedGroups = mountedWorkspaceGroupIds(
     workspace,
     previousActiveGroupIdRef.current,
@@ -323,6 +351,13 @@ function TerminalWorkspaceComponent({
   )
     .map((id) => workspace.groups.find((group) => group.id === id))
     .filter((group): group is WorkspaceGroup => Boolean(group));
+  // A pane that leaves the mounted groups is built fresh when it returns.
+  const mountedPaneIds = new Set(
+    mountedGroups.flatMap((group) => collectIds(group.root)),
+  );
+  for (const id of groupReadyRef.current) {
+    if (!mountedPaneIds.has(id)) groupReadyRef.current.delete(id);
+  }
   // A terminal mid-move (optimistic split/assign racing reconcile) can
   // transiently sit in BOTH the active and the kept-alive group's tree.
   // Rendering both would mount two xterm + WS instances for one terminal, so
@@ -350,6 +385,10 @@ function TerminalWorkspaceComponent({
   // rather than vanishing (instantly under reduced motion). A new switch
   // drops a fading pane at once.
   const [, rerenderAfterHold] = useReducer((count: number) => count + 1, 0);
+  const markGroupPaneReady = useCallback((terminalId: string) => {
+    groupReadyRef.current.add(terminalId);
+    if (groupHoldRef.current) rerenderAfterHold();
+  }, []);
   const compactHoldRef = useRef<CompactSwitchHold | null>(null);
   const compactFadingIdRef = useRef<string | null>(null);
   const renderedCompactTerminalIdRef = useRef(workspace.activeTerminalId);
@@ -1283,15 +1322,22 @@ function TerminalWorkspaceComponent({
           >
             {mountedGroups.map((group) => {
               const isActiveGroup = group.id === activeGroup.id;
+              // Held over the incoming group until that one has drawn.
+              const isHeldGroup = group.id === heldGroupId;
               return (
                 <div
                   key={group.id}
+                  data-testid={`group-layer-${group.id}`}
+                  data-held={isHeldGroup ? "true" : undefined}
                   style={{
                     position: "absolute",
                     inset: 0,
-                    visibility: isActiveGroup ? "visible" : "hidden",
+                    visibility:
+                      isActiveGroup || isHeldGroup ? "visible" : "hidden",
                     pointerEvents: isActiveGroup ? "auto" : "none",
-                    zIndex: isActiveGroup ? 1 : 0,
+                    zIndex: isHeldGroup ? 2 : isActiveGroup ? 1 : 0,
+                    // Opaque, so the split gaps don't show the group below.
+                    background: isHeldGroup ? colors.lineSoft : undefined,
                   }}
                 >
                   {group.root ? (
@@ -1328,6 +1374,7 @@ function TerminalWorkspaceComponent({
                       }}
                       onFitRequestHandled={handleFitRequestHandled}
                       onFocus={activateTerminal}
+                      onReady={markGroupPaneReady}
                       onDestroy={handleDestroy}
                       onPaneContextMenu={handlePaneContextMenu}
                       onRequestControl={onRequestControl}
@@ -1424,6 +1471,7 @@ function WorkspacePaneTree({
   onActiveRef,
   onFitRequestHandled,
   onFocus,
+  onReady,
   onDestroy,
   onPaneContextMenu,
   onRequestControl,
@@ -1443,6 +1491,8 @@ function WorkspacePaneTree({
   onActiveRef: (ref: TerminalCardRef | null) => void;
   onFitRequestHandled: (nonce: number, terminalId: string) => void;
   onFocus: (id: string) => void;
+  /** A pane's first screen is up, or its attach failed. */
+  onReady?: (terminalId: string) => void;
   onDestroy: (terminal: TerminalInfo) => void;
   onPaneContextMenu: (
     terminalId: string,
@@ -1518,6 +1568,7 @@ function WorkspacePaneTree({
               onActiveRef={onActiveRef}
               onFitRequestHandled={onFitRequestHandled}
               onFocus={onFocus}
+              onReady={onReady}
               onDestroy={onDestroy}
               onPaneContextMenu={onPaneContextMenu}
               onRequestControl={onRequestControl}
