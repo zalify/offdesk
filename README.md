@@ -649,7 +649,7 @@ sign-in for managed remote access.
 
 **Does my traffic go through offdesk.dev?** Direct LAN connections go to your
 Hub. Optional Offdesk Cloud routes encrypted App traffic through a managed
-address under `*.cloud.offdesk.dev`. A self-managed tunnel uses its provider.
+address under `*.relay.offdesk.cloud`. A self-managed tunnel uses its provider.
 [Encrypted pairing](docs/encrypted-connections.md) protects terminal content
 between the App and Hub; an ordinary browser sign-in link is a different mode.
 

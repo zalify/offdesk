@@ -619,7 +619,7 @@ el acceso remoto gestionado.
 
 **¿Mi tráfico pasa por offdesk.dev?** Las conexiones directas en la LAN van a
 tu Hub. El servicio opcional Offdesk Cloud enruta el tráfico cifrado de la App
-a través de una dirección gestionada bajo `*.cloud.offdesk.dev`. Un túnel que
+a través de una dirección gestionada bajo `*.relay.offdesk.cloud`. Un túnel que
 gestiones tú usa su propio proveedor. El
 [emparejamiento cifrado](docs/encrypted-connections.md) protege el contenido
 del terminal entre la App y el Hub; un enlace de inicio de sesión normal en el

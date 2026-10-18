@@ -563,7 +563,7 @@ Hub와 노드에 다시 접근할 수 있게 되면 같은 터미널에 다시 �
 원격 접속을 위해 별도의 로그인을 사용합니다.
 
 **트래픽이 offdesk.dev를 거치나요?** LAN 직접 연결은 내 Hub로 갑니다. 선택
-사항인 Offdesk Cloud는 암호화된 앱 트래픽을 `*.cloud.offdesk.dev` 아래의 관리형
+사항인 Offdesk Cloud는 암호화된 앱 트래픽을 `*.relay.offdesk.cloud` 아래의 관리형
 주소를 통해 전달합니다. 직접 관리하는 터널은 해당 제공업체를 거칩니다.
 [암호화 페어링](docs/encrypted-connections.md)은 앱과 Hub 사이의 터미널 내용을
 보호하며, 일반 브라우저 로그인 링크는 이와 다른 방식입니다.

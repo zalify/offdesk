@@ -348,7 +348,7 @@ const de: Dict = {
       },
       cloud: {
         title: "7. Optional: mit Offdesk Cloud von unterwegs verbinden",
-        body: "Cloud ist derzeit eine Beta nur auf Einladung. Melde dich mit GitHub an und löse deine Einladung in der <a href='https://cloud.offdesk.dev'>Cloud-Konsole</a> ein. Wähle auf dem Mac <strong>Set up remote access</strong>, folge den Anmeldeschritten und bestätige die Autorisierung des Computers. Sobald die Cloud-Adresse bereit ist, koppelst du dein Handy im Modus Offdesk App.",
+        body: "Cloud ist derzeit eine Beta nur auf Einladung. Melde dich an und löse deine Einladung in der <a href='https://offdesk.so'>Cloud-Konsole</a> ein. Wähle auf dem Mac <strong>Set up remote access</strong>, folge den Anmeldeschritten und bestätige die Autorisierung des Computers. Sobald die Cloud-Adresse bereit ist, koppelst du dein Handy im Modus Offdesk App.",
         extra:
           "Für den kompletten Ablauf als neuer Nutzer installierst du die neuesten stabilen macOS- und Android-Apps von dieser Website. iOS wird über TestFlight verteilt; welche Builds verfügbar sind, hängt von deiner Testgruppe ab. Schalte nach der Einrichtung das WLAN des Handys aus und prüfe das Terminal über mobile Daten, während der Mac online bleibt. Ein gekoppeltes Handy öffnet <strong>Hub &amp; connection</strong> über seinen Titel. Im lokalen Netzwerk kannst du Cloud und Einladungen überspringen.",
       },

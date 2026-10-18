@@ -146,7 +146,7 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
       {registered && !status.local_enabled && status.state !== "revoking" ? <Button size="sm" disabled={busy !== null} onClick={() => void run("enable")}>Enable remote connection</Button> : null}
       {registered && status.local_enabled && !connected && status.state !== "revoking" ? <Button size="sm" disabled={busy !== null} onClick={() => void run("check")}>Verify connection</Button> : null}
       <Button size="sm" kind="ghost" disabled={busy !== null} onClick={() => void run("status")}>Check again</Button>
-      <Button size="sm" kind="ghost" onClick={() => void openCloud("https://cloud.offdesk.dev").catch(cause => setError(message(cause)))}>Cloud account</Button>
+      <Button size="sm" kind="ghost" onClick={() => void openCloud("https://offdesk.so").catch(cause => setError(message(cause)))}>Cloud account</Button>
       {status?.local_enabled ? <Button size="sm" kind="danger" disabled={busy !== null} onClick={() => setConfirmDisable(true)}>Turn off remote access</Button> : null}
     </div>
     {confirmDisable ? <div>

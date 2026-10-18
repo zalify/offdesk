@@ -620,7 +620,7 @@ géré.
 
 **Mon trafic passe-t-il par offdesk.dev ?** Les connexions directes sur le
 réseau local vont à votre Hub. Offdesk Cloud, optionnel, fait passer le trafic
-chiffré de l'App par une adresse gérée sous `*.cloud.offdesk.dev`. Un tunnel que
+chiffré de l'App par une adresse gérée sous `*.relay.offdesk.cloud`. Un tunnel que
 vous gérez vous-même passe par son fournisseur.
 [L'appairage chiffré](docs/encrypted-connections.md) protège le contenu du
 terminal entre l'App et le Hub ; un lien de connexion ordinaire dans un

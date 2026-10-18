@@ -13,7 +13,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-const API: &str = "https://cloud.offdesk.dev";
+const API: &str = "https://offdesk.so";
 const ORIGIN: &str = "http://127.0.0.1:4318";
 const RELAY_DOMAIN: &str = "relay.offdesk.cloud";
 const MAX_RESPONSE: usize = 16 * 1024;

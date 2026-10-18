@@ -347,7 +347,7 @@ const fr: Dict = {
       },
       cloud: {
         title: "7. Optionnel : hors de chez vous avec Offdesk Cloud",
-        body: "Cloud est actuellement une bêta sur invitation. Connectez-vous avec GitHub et utilisez votre invitation dans la <a href='https://cloud.offdesk.dev'>console Cloud</a>. Sur le Mac, choisissez <strong>Set up remote access</strong>, suivez les étapes de connexion et vérifiez l’autorisation de l’ordinateur. Une fois l’adresse Cloud prête, appairez votre téléphone avec le mode Offdesk App.",
+        body: "Cloud est actuellement une bêta sur invitation. Connectez-vous et utilisez votre invitation dans la <a href='https://offdesk.so'>console Cloud</a>. Sur le Mac, choisissez <strong>Set up remote access</strong>, suivez les étapes de connexion et vérifiez l’autorisation de l’ordinateur. Une fois l’adresse Cloud prête, appairez votre téléphone avec le mode Offdesk App.",
         extra:
           "Pour le parcours complet d’un nouvel utilisateur, installez les dernières apps stables macOS et Android depuis ce site. iOS est distribué via TestFlight ; les builds disponibles dépendent de votre groupe de test. Après la configuration, coupez le Wi-Fi du téléphone et vérifiez le terminal en données mobiles pendant que le Mac reste en ligne. Un téléphone appairé ouvre <strong>Hub &amp; connection</strong> depuis son titre. En réseau local, vous pouvez vous passer de Cloud et des invitations.",
       },

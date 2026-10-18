@@ -361,7 +361,7 @@ const ja: Dict = {
       },
       cloud: {
         title: "7. オプション：Offdesk Cloud で外出先から接続",
-        body: "Cloud は現在、招待制のベータです。GitHub でサインインし、<a href='https://cloud.offdesk.dev'>Cloud コンソール</a>で招待を使ってください。Mac で <strong>Set up remote access</strong> を選び、サインインの手順に従って、コンピュータの認可を確認します。Cloud のアドレスが準備できたら、Offdesk App モードでスマホをペアリングします。",
+        body: "Cloud は現在、招待制のベータです。サインインし、<a href='https://offdesk.so'>Cloud コンソール</a>で招待を使ってください。Mac で <strong>Set up remote access</strong> を選び、サインインの手順に従って、コンピュータの認可を確認します。Cloud のアドレスが準備できたら、Offdesk App モードでスマホをペアリングします。",
         extra:
           "新規ユーザーとしての一連の流れを試すには、このサイトから最新の安定版の macOS アプリと Android アプリをインストールしてください。iOS は TestFlight で配信しており、利用できるビルドはテストグループによって異なります。セットアップ後、Mac をオンラインにしたままスマホの Wi-Fi をオフにし、モバイルデータ通信でターミナルを確認します。ペアリング済みのスマホでは、タイトルから <strong>Hub &amp; connection</strong> を開けます。ローカルネットワークで使うだけなら、Cloud も招待も不要です。",
       },

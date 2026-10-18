@@ -347,7 +347,7 @@ const ko: Dict = {
       },
       cloud: {
         title: "7. 선택 사항: Offdesk Cloud로 집 밖에서 연결하기",
-        body: "Cloud는 현재 초대 전용 베타입니다. GitHub로 로그인하고 <a href='https://cloud.offdesk.dev'>Cloud 콘솔</a>에서 초대를 등록하세요. Mac에서 <strong>Set up remote access</strong>를 선택하고, 로그인 단계를 따라 진행한 뒤 컴퓨터 인증을 확인하세요. Cloud 주소가 준비되면 Offdesk App 방식으로 휴대폰을 페어링하세요.",
+        body: "Cloud는 현재 초대 전용 베타입니다. 로그인하고 <a href='https://offdesk.so'>Cloud 콘솔</a>에서 초대를 등록하세요. Mac에서 <strong>Set up remote access</strong>를 선택하고, 로그인 단계를 따라 진행한 뒤 컴퓨터 인증을 확인하세요. Cloud 주소가 준비되면 Offdesk App 방식으로 휴대폰을 페어링하세요.",
         extra:
           "처음 사용하는 사람의 전체 과정을 따라 하려면 이 사이트에서 최신 안정 버전의 macOS 앱과 Android 앱을 설치하세요. iOS는 TestFlight로 배포되며, 받을 수 있는 빌드는 테스트 그룹에 따라 다릅니다. 설정을 마친 뒤 Mac은 온라인 상태로 두고 휴대폰의 Wi-Fi를 꺼서 모바일 데이터로 터미널이 열리는지 확인하세요. 페어링된 휴대폰에서는 제목을 눌러 <strong>Hub &amp; connection</strong>을 열 수 있습니다. 로컬 네트워크에서만 쓴다면 Cloud와 초대는 건너뛰어도 됩니다.",
       },

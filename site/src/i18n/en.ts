@@ -363,7 +363,7 @@ const en = {
       },
       cloud: {
         title: "7. Optional: connect away from home with Offdesk Cloud",
-        body: "Cloud is currently an invite-only beta. Sign in with GitHub and redeem your invitation in the <a href='https://cloud.offdesk.dev'>Cloud console</a>. On the Mac, choose <strong>Set up remote access</strong>, follow the sign-in steps and verify the computer authorization. Once the Cloud address is ready, pair your phone using the Offdesk App mode.",
+        body: "Cloud is currently an invite-only beta. Sign in and redeem your invitation in the <a href='https://offdesk.so'>Cloud console</a>. On the Mac, choose <strong>Set up remote access</strong>, follow the sign-in steps and verify the computer authorization. Once the Cloud address is ready, pair your phone using the Offdesk App mode.",
         extra:
           "For the full new-user journey, install the latest stable macOS and Android apps from this site. iOS is distributed through TestFlight; available builds depend on your testing group. After setup, turn off the phone’s Wi-Fi and check the terminal over mobile data while the Mac stays online. A paired phone opens <strong>Hub &amp; connection</strong> from its title. Local-network use can skip Cloud and invitations.",
       },

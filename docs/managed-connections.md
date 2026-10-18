@@ -2,7 +2,7 @@
 
 Offdesk Cloud reaches a Hub through Offdesk Relay at `https://<slug>.relay.offdesk.cloud`
 (your username by default), for encrypted remote connections only.
-`https://cloud.offdesk.dev` is the control API. Hubs set up before the relay used
+`https://offdesk.so` is the control API. Hubs set up before the relay used
 `https://<hub-id>.cloud.offdesk.dev` (a Cloudflare tunnel); running `install` again moves
 them to the relay, and they pair again with its address. **Deployment and
 invitation availability are separate from installing this client code.** This is

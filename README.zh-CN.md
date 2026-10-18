@@ -363,7 +363,7 @@ Hub 打印的登录链接谁拿到谁就能登录，请像对待密码一样对�
 **需要注册账号吗？** 自托管不需要任何厂商账号：安装时会创建一个本地用户和一个登录链接。可选的 Offdesk Cloud 使用单独的登录，提供托管的远程访问。
 
 **我的流量会经过 offdesk.dev 吗？** 局域网直连时流量直达你的 Hub。可选的 Offdesk
-Cloud 会通过 `*.cloud.offdesk.dev` 下的托管地址转发加密的 App 流量。自己管理的隧道则经过对应的服务商。[加密配对](docs/encrypted-connections.md) 保护 App 与 Hub
+Cloud 会通过 `*.relay.offdesk.cloud` 下的托管地址转发加密的 App 流量。自己管理的隧道则经过对应的服务商。[加密配对](docs/encrypted-connections.md) 保护 App 与 Hub
 之间的终端内容；普通的浏览器登录链接是另一种模式。
 
 **只能用于 Claude Code 吗？** 它就是一个终端。Claude Code、Codex、OpenCode、一个要跑一小时的构建，或者 vim——只要能在 tmux 里运行，在这里就能运行，Offdesk 并不知道、也不关心你跑的是什么。
