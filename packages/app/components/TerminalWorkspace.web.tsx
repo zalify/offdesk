@@ -997,8 +997,10 @@ function TerminalWorkspaceComponent({
   // Fold/unfold and inner-screen rotation fire window.resize. Compact chrome
   // refits on mount via the leaf effect; the large workspace must request a
   // fit here because ResizeObserver only remeasures, it does not emit resize
-  // frames. Desktop mouse is left alone so existing fit-stability contracts
-  // stay intact — only touch workspaces subscribe.
+  // frames. The keyboard on iOS moves only the visual viewport, so that is
+  // watched too, or every pane but the active one stays clipped under it.
+  // Desktop mouse is left alone so existing fit-stability contracts stay
+  // intact — only touch workspaces subscribe.
   useEffect(() => {
     if (!isTouch || isCompact || !isController) return;
     const fitVisible = () => {
@@ -1009,7 +1011,11 @@ function TerminalWorkspaceComponent({
     };
     fitVisible();
     window.addEventListener("resize", fitVisible);
-    return () => window.removeEventListener("resize", fitVisible);
+    window.visualViewport?.addEventListener("resize", fitVisible);
+    return () => {
+      window.removeEventListener("resize", fitVisible);
+      window.visualViewport?.removeEventListener("resize", fitVisible);
+    };
   }, [isCompact, isController, isTouch, requestPaneFit]);
 
   if (isCompact) {
