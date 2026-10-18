@@ -6,6 +6,7 @@ import "../lib/legacyStorageMigration";
 import "../lib/samePagePops";
 import { Component, useLayoutEffect, type ErrorInfo, type ReactNode } from "react";
 import { applyUiFontPreferences, subscribeFontPreferences } from "../lib/fontPreferences";
+import { preventIosFocusZoom } from "../lib/iosFocusZoom";
 import { Slot } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Pressable, Text, View } from "react-native";
@@ -23,6 +24,8 @@ import { IosUpdateNotification } from "../components/IosUpdateNotification";
 // and Tauri's bridge is there before any script runs. Reading it per render
 // would let a bridge installed later (a test's stub) swap the whole tree.
 const DESKTOP_SHELL = isDesktopShell();
+
+preventIosFocusZoom();
 
 interface AppErrorBoundaryProps {
   children: ReactNode;

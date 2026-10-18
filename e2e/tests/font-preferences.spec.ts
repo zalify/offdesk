@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 import type { Terminal } from "@xterm/xterm";
 import { mobileOpenHostSheet, openApp } from "./helpers";
 
@@ -120,4 +120,16 @@ test("mobile terminal keeps the default text face and loads its small playback-s
       && render("ABC 012") === render("ABC 012", '40px "JetBrains Mono", monospace');
   });
   expect(different).toBe(true);
+});
+test("iOS caps the viewport so focusing a small form field does not zoom", async ({ browser }) => {
+  for (const [device, capped] of [["iPhone 14", true], ["Pixel 7", false]] as const) {
+    const { defaultBrowserType: _, ...emulation } = devices[device];
+    const context = await browser.newContext(emulation);
+    const page = await context.newPage();
+    await mockTerminal(page);
+    await openApp(page);
+    const viewport = await page.locator('meta[name="viewport"]').getAttribute("content");
+    expect(viewport?.includes("maximum-scale=1"), device).toBe(capped);
+    await context.close();
+  }
 });
