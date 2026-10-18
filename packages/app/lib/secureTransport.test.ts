@@ -181,6 +181,24 @@ it("blocks old UI writes during and after a successful Hub switch until a fresh 
   expect(mock.invoke.mock.calls.some(([command]) => command === "secure_request" || command === "secure_forget")).toBe(false);
 });
 
+describe("route checks", () => {
+  it("show each route as its check lands, then the whole report", async () => {
+    let resolveRoutes: (value: unknown) => void = () => {};
+    mock.invoke.mockImplementation(command => command === "secure_status" ? Promise.resolve(paired) : command === "secure_routes" ? new Promise(resolve => { resolveRoutes = resolve; }) : Promise.resolve());
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    const pending = transport.refreshConnectionRoutes();
+    await tick();
+    const remote = { kind: "remote", hub_url: "https://paired.example", available: true, latency_ms: 40 };
+    mock.channels.at(-1)!.onmessage(remote);
+    expect(transport.connectionRoutesSnapshot()).toMatchObject({ partial: true, routes: [remote] });
+    const local = { kind: "local", hub_url: "http://192.168.1.2:4317", available: false };
+    resolveRoutes({ status: paired, routes: [local, remote], discovery_available: true });
+    await pending;
+    expect(transport.connectionRoutesSnapshot()).toEqual({ status: paired, routes: [local, remote], discovery_available: true });
+  });
+});
+
 describe("routeLatencyLabel", () => {
   it("shows each reachable route's round trip and marks the fastest of its kind", async () => {
     const { routeLatencyLabel } = await import("./secureTransport");

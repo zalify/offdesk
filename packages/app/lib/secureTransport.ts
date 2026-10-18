@@ -9,7 +9,8 @@ export interface SecureStatus {
 export interface ConnectionRoute { kind: "local" | "remote"; hub_url: string }
 /** latency_ms: encrypted round trip to the Hub through this route (relay hop included). */
 export type CheckedRoute = ConnectionRoute & { available: boolean; latency_ms?: number };
-export interface RouteReport { machines?: { name: string; os: string }[]; discovery_available: boolean; status: SecureStatus; routes: CheckedRoute[] }
+/** partial: a check still running; routes holds the ones it has answered so far. */
+export interface RouteReport { machines?: { name: string; os: string }[]; discovery_available: boolean; status: SecureStatus; routes: CheckedRoute[]; partial?: true }
 /** "38 ms", plus "fastest" for the quickest reachable route of its kind when there is a choice. */
 export function routeLatencyLabel(route: CheckedRoute, routes: CheckedRoute[]): string | null {
   if (!route.available || route.latency_ms === undefined) return null;
@@ -26,9 +27,28 @@ const notifyRoutes = () => routeListeners.forEach(listener => listener());
 // Existing reconnect callbacks may retain a socket URL from before a switch.
 // This logical origin remains scoped to this paired Hub for the life of the UI.
 let socketOrigin: string | null = null;
+/** Each route is passed to onRoute as soon as its check lands (an unreachable one
+ * only after its timeout), so a fast route never waits on a dead one. */
+async function checkRoutes(publicKey: string | null, onRoute: (route: CheckedRoute) => void): Promise<RouteReport> {
+  const { Channel } = await import("@tauri-apps/api/core");
+  const channel = new Channel<CheckedRoute>();
+  channel.onmessage = onRoute;
+  return invoke<RouteReport>("secure_routes", publicKey ? { publicKey, onRoute: channel } : { onRoute: channel });
+}
+/** A partial report with route added (or replacing the one at its address). */
+export function withCheckedRoute(report: RouteReport, route: CheckedRoute): RouteReport {
+  return { ...report, partial: true, routes: [...report.routes.filter(other => other.hub_url !== route.hub_url), route] };
+}
 export function refreshConnectionRoutes(): Promise<RouteReport> {
   if (!enabled) return Promise.reject(new Error("Pair this device first"));
-  return routeRefresh ??= invoke<RouteReport>("secure_routes").then(report => {
+  const checked = status?.endpoint.public_key;
+  // The last report stays up until this check's first route lands.
+  let partial: RouteReport | null = null;
+  return routeRefresh ??= checkRoutes(null, route => {
+    if (!enabled || !status || status.endpoint.public_key !== checked) return;
+    partial = withCheckedRoute(partial ?? { status, discovery_available: routeReport?.discovery_available ?? false, routes: [] }, route);
+    routeReport = partial; notifyRoutes();
+  }).then(report => {
     if (!enabled || status?.device_id !== report.status.device_id || status?.endpoint.public_key !== report.status.endpoint.public_key) throw new Error("The paired Hub changed. Check connections again.");
     status = report.status; routeReport = report; notifyRoutes(); return report;
   }).finally(() => { routeRefresh = null; });
@@ -106,7 +126,7 @@ export async function forgetSecureConnection(): Promise<void> {
 }
 export interface SavedHub { name: string; status: SecureStatus }
 export const savedHubs = () => invoke<SavedHub[]>("secure_hubs");
-export const checkSavedHub = (publicKey: string) => invoke<RouteReport>("secure_routes", { publicKey });
+export const checkSavedHub = (publicKey: string, onRoute: (route: CheckedRoute) => void) => checkRoutes(publicKey, onRoute);
 export const renameSavedHub = (publicKey: string, name: string) => invoke<void>("secure_rename_hub", { publicKey, name });
 export const removeSavedHub = (publicKey: string) => invoke<void>("secure_remove_hub", { publicKey });
 export const pairingIdentity = (uri: string) => invoke<SecureStatus["endpoint"]>("secure_pairing_identity", { uri });

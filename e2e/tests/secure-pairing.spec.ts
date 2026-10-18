@@ -28,7 +28,7 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
     const storedHubs = [{ name: "Home Hub", status: { ...status, endpoint: { hub_url: "https://encrypted.example", public_key: "pinned" } } }, { name: "Office Hub", status: other }];
     const firstPairError = sessionStorage.getItem("test:first-pair-error"); sessionStorage.removeItem("test:first-pair-error");
     const sockets: { id: string; events: any }[] = [];
-    const state = { routes, switchError: "", configured: (initial === "paired" || initial === "offline") || sessionStorage.getItem("test:paired") === "true", damaged: initial === "damaged", userError: firstPairError ?? (initial === "offline" ? "Local network is unreachable" : ""), userRequests: 0, calls: JSON.parse(sessionStorage.getItem("test:calls") || "[]") as string[], input: [] as unknown[] };
+    const state = { routes, switchError: "", configured: (initial === "paired" || initial === "offline") || sessionStorage.getItem("test:paired") === "true", damaged: initial === "damaged", userError: firstPairError ?? (initial === "offline" ? "Local network is unreachable" : ""), userRequests: 0, holdOfficeCheck: false, releaseOfficeCheck: (_?: unknown) => {}, calls: JSON.parse(sessionStorage.getItem("test:calls") || "[]") as string[], input: [] as unknown[] };
     Object.assign(window, { __secureTest: state });
     Object.assign(window, { __TAURI_INTERNALS__: {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
@@ -51,7 +51,13 @@ async function bundledPhone(page: Page, initial: "new" | "paired" | "damaged" | 
         if (command === "secure_routes") {
           if (state.damaged) throw new Error("Cannot read saved connection routes");
           const target = args?.publicKey === "office-pinned" ? other : status;
-          return structuredClone({ status: target, routes: args?.publicKey === "office-pinned" ? [{ kind: "local", hub_url: "http://192.168.3.2:4317", available: false }, { kind: "remote", hub_url: other.endpoint.hub_url, available: true, latency_ms: 38 }, { kind: "remote", hub_url: "https://kr-relay.example", available: true, latency_ms: 112 }] : state.routes, discovery_available: true, machines: [{ name: "Mac Mini", os: "macos" }] });
+          const report = structuredClone({ status: target, routes: args?.publicKey === "office-pinned" ? [{ kind: "local", hub_url: "http://192.168.3.2:4317", available: false }, { kind: "remote", hub_url: other.endpoint.hub_url, available: true, latency_ms: 38 }, { kind: "remote", hub_url: "https://kr-relay.example", available: true, latency_ms: 112 }] : state.routes, discovery_available: true, machines: [{ name: "Mac Mini", os: "macos" }] });
+          // A held check has answered its first relay and still waits on the LAN.
+          if (args?.publicKey === "office-pinned" && state.holdOfficeCheck) {
+            args.onRoute.onmessage(report.routes[1]);
+            await new Promise(resolve => { state.releaseOfficeCheck = resolve; });
+          }
+          return report;
         }
         if (command === "secure_switch_route") {
           if (state.switchError) throw new Error(state.switchError);
@@ -146,6 +152,23 @@ test("a saved remote route recovers an offline LAN connection without another QR
   expect(calls).not.toContain("secure_pair");
   expect(calls).not.toContain("secure_forget");
   expect(ordinary).toEqual([]);
+});
+
+test("Hub check shows a route as soon as it answers, not after the slowest", async ({ page }) => {
+  await bundledPhone(page, "paired");
+  await expect(page.getByTestId("mobile-workbench")).toBeVisible();
+  await page.setViewportSize({ width: 320, height: 740 });
+  await page.evaluate(() => { (window as any).__secureTest.holdOfficeCheck = true; });
+  await page.getByRole("button", { name: "Open Machines and Hub menu" }).click();
+  await page.getByRole("button", { name: "Hub & connection", exact: true }).click();
+  const panel = page.getByTestId("hub-picker");
+  await panel.getByRole("button", { name: /Office Hub/ }).click();
+  await expect(panel.getByRole("button", { name: /office.example/ }).getByTestId("route-latency")).toHaveText("38 ms");
+  await expect(panel.getByText("Checking…", { exact: true })).toBeVisible();
+  await page.evaluate(() => (window as any).__secureTest.releaseOfficeCheck());
+  await expect(panel.getByText("Checking…", { exact: true })).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: /192.168.3.2/ })).toBeDisabled();
+  await expect(panel.getByRole("button", { name: /office.example/ }).getByTestId("route-latency")).toHaveText("38 ms · fastest");
 });
 
 test("compact Hub menu checks availability and keeps the source Hub on failure", async ({ page }, testInfo) => {
