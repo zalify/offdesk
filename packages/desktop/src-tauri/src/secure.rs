@@ -5,11 +5,14 @@ use offdesk_secure::{
     client::Client,
     messages::{Authenticate, Response},
     pairing::{Endpoint, PairingDescriptor},
-    routes::{normalize, Route},
+    routes::{normalize, Route, RouteKind},
     Identity,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Channel, AppHandle, Manager, Runtime, State};
+use tauri::{
+    ipc::{Channel, JavaScriptChannelId},
+    AppHandle, Manager, Runtime, State,
+};
 use tokio::sync::{Mutex, RwLock};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -533,22 +536,25 @@ async fn discover_machines(client: &Client) -> Vec<HubMachine> {
 }
 
 /// Median of three encrypted round trips (ms) over a verified connection.
-/// None when any of them fails.
+/// None when any of them fails, or all three take longer than a check waits.
 async fn round_trip(client: &Client) -> Option<u64> {
-    let mut times = Vec::new();
-    for _ in 0..3 {
-        let started = std::time::Instant::now();
-        tokio::time::timeout(
-            std::time::Duration::from_secs(3),
-            client.request("GET".into(), "/api/connection-routes".into(), None),
-        )
+    let trips = async {
+        let mut times = Vec::new();
+        for _ in 0..3 {
+            let started = std::time::Instant::now();
+            client
+                .request("GET".into(), "/api/connection-routes".into(), None)
+                .await
+                .ok()?;
+            times.push(started.elapsed().as_millis() as u64);
+        }
+        times.sort_unstable();
+        Some(times[1])
+    };
+    tokio::time::timeout(CHECK_TIMEOUT, trips)
         .await
-        .ok()?
-        .ok()?;
-        times.push(started.elapsed().as_millis() as u64);
-    }
-    times.sort_unstable();
-    Some(times[1])
+        .ok()
+        .flatten()
 }
 
 fn validate_credential(status: &Status, credential: &Credential) -> Result<(), String> {
@@ -566,14 +572,37 @@ fn saved_route(status: &Status, url: &str) -> Result<Route, String> {
     }
     Ok(route)
 }
+/// How long a connection check waits for one address. A relay across the
+/// region answers well within it, and a LAN address on the same network in
+/// tens of milliseconds; one the phone can't reach (home's LAN, away from
+/// home) never answers, and reads as unreachable after this rather than after
+/// a connection's full wait.
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+const LAN_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+fn check_timeout(route: &Route) -> std::time::Duration {
+    match route.kind {
+        RouteKind::Local => LAN_CHECK_TIMEOUT,
+        RouteKind::Remote => CHECK_TIMEOUT,
+    }
+}
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 async fn resume_at(status: &Status, credential: &Credential, url: &str) -> Result<Client, String> {
+    resume_within(status, credential, url, CONNECT_TIMEOUT).await
+}
+async fn resume_within(
+    status: &Status,
+    credential: &Credential,
+    url: &str,
+    wait: std::time::Duration,
+) -> Result<Client, String> {
     validate_credential(status, credential)?;
     let endpoint = Endpoint {
         hub_url: url.into(),
         public_key: credential.endpoint.public_key.clone(),
     };
     let (client, device_id) = tokio::time::timeout(
-        std::time::Duration::from_secs(8),
+        wait,
         Client::connect(&endpoint, &identity(credential)?, Authenticate::Resume),
     )
     .await
@@ -604,9 +633,18 @@ fn merge_routes(advertised: Option<Vec<Route>>, saved: Vec<Route>, verified: &[&
 #[tauri::command]
 pub async fn secure_routes<R: Runtime>(
     app: AppHandle<R>,
+    webview: tauri::Webview<R>,
     state: State<'_, SecureState>,
     public_key: Option<String>,
+    // Optional: a UI from before streaming checks only reads the final report.
+    on_route: Option<JavaScriptChannelId>,
 ) -> Result<RouteReport, String> {
+    let on_route: Option<Channel<RouteCheck>> = on_route.map(|id| id.channel_on(webview));
+    let landed = |check: RouteCheck| {
+        if let Some(channel) = &on_route {
+            let _ = channel.send(check);
+        }
+    };
     let _discovery = state.2.lock().await;
     let _gate = state.1.read().await;
     let include_machines = public_key.is_some();
@@ -617,31 +655,41 @@ pub async fn secure_routes<R: Runtime>(
     let credential = store_read(&app, &status.credential_slot)?.ok_or("Pair this device first")?;
     let saved = normalize(status.routes.clone(), &status.endpoint.hub_url);
     let results = futures::future::join_all(saved.iter().map(|route| async {
-        let client = resume_at(&status, &credential, &route.hub_url).await.ok();
+        let client = resume_within(&status, &credential, &route.hub_url, check_timeout(route))
+            .await
+            .ok();
         let latency = match &client {
             Some(client) => round_trip(client).await,
             None => None,
         };
+        // Each address shows as soon as it answers (or gives up), not when the slowest does.
+        landed(RouteCheck {
+            route: route.clone(),
+            available: client.is_some(),
+            latency_ms: latency,
+        });
         (route.clone(), client, latency)
     }))
     .await;
-    let mut advertised = None;
-    for (_, client, _) in &results {
-        if let Some(client) = client {
+    let clients: Vec<&Client> = results
+        .iter()
+        .filter_map(|(_, client, _)| client.as_ref())
+        .collect();
+    let advertised = async {
+        for client in &clients {
             if let Ok(routes) = discover(client).await {
-                advertised = Some(routes);
-                break;
+                return Some(routes);
             }
         }
-    }
-    let machines = if include_machines {
-        match results.iter().find_map(|(_, client, _)| client.as_ref()) {
-            Some(client) => discover_machines(client).await,
-            None => Vec::new(),
-        }
-    } else {
-        Vec::new()
+        None
     };
+    let machines = async {
+        match clients.first() {
+            Some(client) if include_machines => discover_machines(client).await,
+            _ => Vec::new(),
+        }
+    };
+    let (advertised, machines) = futures::join!(advertised, machines);
     let discovery_available = advertised.is_some();
     let verified: Vec<&str> = results
         .iter()
@@ -655,12 +703,22 @@ pub async fn secure_routes<R: Runtime>(
             results.iter().find(|(r, _, _)| r.hub_url == route.hub_url)
         {
             (client.is_some(), *latency)
-        } else if let Ok(client) = resume_at(&status, &credential, &route.hub_url).await {
-            let latency = round_trip(&client).await;
-            client.close();
-            (true, latency)
         } else {
-            (false, None)
+            let (available, latency_ms) = if let Ok(client) =
+                resume_within(&status, &credential, &route.hub_url, check_timeout(route)).await
+            {
+                let latency = round_trip(&client).await;
+                client.close();
+                (true, latency)
+            } else {
+                (false, None)
+            };
+            landed(RouteCheck {
+                route: route.clone(),
+                available,
+                latency_ms,
+            });
+            (available, latency_ms)
         };
         RouteCheck {
             route: route.clone(),

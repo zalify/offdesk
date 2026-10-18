@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { colors } from "../lib/colors";
 import { isTauriMobile } from "../lib/platform";
 import { scanWithCleanup } from "../lib/scanLifecycle";
-import { checkSavedHub, openSavedHub, pairAndOpenHub, pairingIdentity, removeSavedHub, renameSavedHub, routeLatencyLabel, savedHubs, secureConnectionStatus, type RouteReport, type SavedHub, type SecureStatus } from "../lib/secureTransport";
+import { checkSavedHub, openSavedHub, withCheckedRoute, pairAndOpenHub, pairingIdentity, removeSavedHub, renameSavedHub, routeLatencyLabel, savedHubs, secureConnectionStatus, type RouteReport, type SavedHub, type SecureStatus } from "../lib/secureTransport";
 import { Body, Button } from "./Primitives.web";
 
 const errorText = (error: unknown) => error instanceof Error ? error.message : typeof error === "string" ? error : "Could not complete this action. Try again.";
@@ -49,7 +49,9 @@ export function HubPickerPanel({ initialUri = "" }: { initialUri?: string }) {
   }, []);
   const check = (hub: SavedHub) => run("Checking connections…", async () => {
     setReport(null);
-    const result = await checkSavedHub(hub.status.endpoint.public_key);
+    const result = await checkSavedHub(hub.status.endpoint.public_key, route => {
+      if (mounted.current) setReport(partial => withCheckedRoute(partial ?? { status: hub.status, discovery_available: false, routes: [] }, route));
+    });
     if (mounted.current) setReport(result);
   });
   const back = () => { setSelected(null); setAdding(false); setIdentity(null); setUri(""); setError(null); setReport(null); setConfirmRemove(false); };

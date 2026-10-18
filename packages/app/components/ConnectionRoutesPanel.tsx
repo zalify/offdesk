@@ -54,7 +54,8 @@ export function ConnectionRoutesPanel({ onSwitched }: { onSwitched?: () => void 
         <p style={{ color: colors.fg3, fontFamily: "var(--font-sans)", fontSize: 12, margin: "6px 0 10px" }}>{kind === "local" ? "Use when your phone and computer are on the same network." : "Use with mobile data or another Wi-Fi network."}</p>
         {candidates.length === 0 ? <span style={{ color: colors.foregroundMuted, fontSize: 13 }}>{checking ? "Checking…" : report?.discovery_available ? "Not configured" : "No saved address"}</span> : candidates.map(route => {
           const active = route.hub_url.replace(/\/$/, "") === current?.replace(/\/$/, "");
-          const latency = checking ? null : routeLatencyLabel(route, routes);
+          // Latency from this check shows as its routes land; the last check's stays hidden meanwhile.
+          const latency = checking && !report?.partial ? null : routeLatencyLabel(route, routes);
           return <button key={route.hub_url} type="button" disabled={checking || switching || !route.available || (active && !onSwitched)} onClick={() => void choose(route.hub_url)} aria-label={`${label}: ${route.hub_url}`} aria-current={active ? "true" : undefined} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", width: "100%", minHeight: 44, textAlign: "left", background: "none", border: 0, color: route.available ? colors.foreground : colors.foregroundMuted, padding: "8px 0", cursor: "pointer" }}>
             <span style={{ overflowWrap: "anywhere", minWidth: 0, fontSize: 13 }}>{route.hub_url}</span>
             {latency && <span data-testid="route-latency" style={{ flexShrink: 0, marginLeft: "auto", fontSize: 12, color: colors.fg2, fontVariantNumeric: "tabular-nums" }}>{latency}</span>}
