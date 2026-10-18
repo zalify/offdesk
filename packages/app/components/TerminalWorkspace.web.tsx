@@ -1327,7 +1327,7 @@ function TerminalWorkspaceComponent({
               return (
                 <div
                   key={group.id}
-                  data-testid={`workspace-group-layer-${group.id}`}
+                  data-testid={`group-layer-${group.id}`}
                   data-held={isHeldGroup ? "true" : undefined}
                   style={{
                     position: "absolute",
