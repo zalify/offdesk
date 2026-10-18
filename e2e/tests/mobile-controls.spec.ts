@@ -360,15 +360,18 @@ test("mobile app load keeps one loading screen from launch to the first drawn te
         __bootFrames: { boot: string | null; tip: boolean; empty: boolean; drawn: boolean }[];
       }).__bootFrames,
   );
-  // Every frame before the terminal drew was the loading screen; it went
-  // forward through its steps (never back), a tip showed during the wait,
-  // and it lifted only once the terminal was drawn under it.
+  // From its first frame (before it, the page is still loading its script)
+  // until the terminal drew, the loading screen was up; it went forward
+  // through its steps (never back), a tip showed during the wait, and it
+  // lifted only once the terminal was drawn under it.
   expect(frames.some((frame) => frame.empty)).toBe(false);
+  const firstBoot = frames.findIndex((frame) => frame.boot !== null);
   const firstDrawn = frames.findIndex((frame) => frame.drawn);
-  expect(firstDrawn).toBeGreaterThan(0);
-  expect(frames.slice(0, firstDrawn).every((frame) => frame.boot !== null)).toBe(true);
+  expect(firstBoot).toBeGreaterThanOrEqual(0);
+  expect(firstDrawn).toBeGreaterThan(firstBoot);
+  expect(frames.slice(firstBoot, firstDrawn).every((frame) => frame.boot !== null)).toBe(true);
   const order = ["signin", "hub", "terminal"];
-  const steps = frames.map((frame) => order.indexOf(frame.boot ?? "terminal"));
+  const steps = frames.slice(firstBoot).map((frame) => order.indexOf(frame.boot ?? "terminal"));
   expect(steps.every((step, i) => i === 0 || step >= steps[i - 1])).toBe(true);
   expect(frames.some((frame) => frame.boot === "terminal")).toBe(true);
   expect(frames.some((frame) => frame.tip)).toBe(true);

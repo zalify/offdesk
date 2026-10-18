@@ -12,6 +12,7 @@ import {
 import type {
   CSSProperties,
   MutableRefObject,
+  ReactNode,
 } from "react";
 import type {
   TerminalInfo,
@@ -108,6 +109,8 @@ interface TerminalWorkspaceProps {
   onActiveGroupChange?: (groupId: string | null) => void;
   /** Compact: the shown pane has drawn its first screen (or given up). */
   onActivePaneReady?: (terminalId: string) => void;
+  /** Compact: drawn over the terminal area (the boot screen while it loads). */
+  compactCover?: ReactNode;
 }
 
 // Handlers the desktop chrome (TabBar, CommandPalette) invokes on the
@@ -206,6 +209,7 @@ function TerminalWorkspaceComponent({
   commandsRef,
   onActiveGroupChange,
   onActivePaneReady,
+  compactCover,
 }: TerminalWorkspaceProps) {
   const [workspace, setWorkspace] = useState(() =>
     createTerminalWorkspace(
@@ -1030,6 +1034,8 @@ function TerminalWorkspaceComponent({
             minHeight: 0,
             display: "flex",
             position: "relative",
+            // The covers stack in here, never over the sheets around it.
+            isolation: "isolate",
           }}
         >
           {activeTerminal ? (
@@ -1119,6 +1125,7 @@ function TerminalWorkspaceComponent({
                   <CompactSwitchProgress paused={!compactHeldTerminal} />
                 </div>
               )}
+              {compactCover}
             </>
           ) : (
             <EmptyWorkspaceGroup

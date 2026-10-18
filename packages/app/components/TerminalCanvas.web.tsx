@@ -281,9 +281,9 @@ function TerminalCanvasInner() {
   // empty machine list means "not loaded", not "no machines", so the screen
   // keeps the loading view rather than flashing the empty-Hub screen.
   const [firstBootstrapSettled, setFirstBootstrapSettled] = useState(false);
-  // The phone's loading screen stays over the workbench until the first
-  // terminal has drawn, then lifts off it: "shown" -> "leaving" -> "gone",
-  // once per mount.
+  // On the phone the loading screen stays over the terminal area (the title
+  // bar and its menus already usable) until the first terminal has drawn,
+  // then lifts off it: "shown" -> "leaving" -> "gone", once per mount.
   const [bootCover, setBootCover] = useState<"shown" | "leaving" | "gone">("shown");
   const liftBootCover = useCallback(() => {
     setBootCover((state) => (state === "shown" ? "leaving" : state));
@@ -881,8 +881,8 @@ function TerminalCanvasInner() {
     terminals,
   ]);
 
-  // The loading screen covers the phone workbench only while there is a
-  // terminal on its way to the screen. Read at render: whether the landing
+  // The loading screen covers the phone's terminal area only while there is
+  // a terminal on its way to the screen. Read at render: whether the landing
   // above has had its say (it may switch machine or terminal first).
   const bootLandingDone = handoffLandingHandledRef.current;
   const bootCoverVisible =
@@ -1888,14 +1888,6 @@ function TerminalCanvasInner() {
             position: "relative",
           }}
         >
-          {bootCoverVisible ? (
-            <BootScreen
-              step="terminal"
-              overlay
-              leaving={bootCover === "leaving"}
-              onLeft={() => setBootCover("gone")}
-            />
-          ) : null}
           {showSettings ? (
             <Suspense fallback={<LazyLoadingFallback />}>
               <SettingsPage onClose={() => setShowSettings(false)} />
@@ -2001,6 +1993,16 @@ function TerminalCanvasInner() {
                   commandsRef={workspaceCommandsRef}
                   onActiveGroupChange={setActiveGroupId}
                   onActivePaneReady={liftBootCover}
+                  compactCover={
+                    bootCoverVisible ? (
+                      <BootScreen
+                        step="terminal"
+                        overlay
+                        leaving={bootCover === "leaving"}
+                        onLeft={() => setBootCover("gone")}
+                      />
+                    ) : null
+                  }
                 />
               ) : null}
             </MobileWorkbench>

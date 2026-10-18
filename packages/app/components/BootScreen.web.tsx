@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { colors } from "@/lib/colors";
 import { fontDisplay } from "./Primitives.web";
 import { BOOT_STEPS, pickBootTips, type BootStep } from "@/lib/bootScreen";
@@ -31,8 +31,18 @@ export function BootScreen({
   /** Fade out (an overlay lifting off the terminal it waited for). */
   leaving?: boolean;
   onLeft?: () => void;
+  /** Cover the terminal area (its parent) rather than fill the screen. */
   overlay?: boolean;
 }) {
+  // Over the terminal area the content keeps the place it had full screen,
+  // so the wordmark stays put while the title bar appears above it.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!overlay || !rootRef.current) return;
+    const rect = rootRef.current.getBoundingClientRect();
+    setShift(document.documentElement.clientHeight / 2 - (rect.top + rect.height / 2));
+  }, [overlay]);
   // Read once per mount: CSS delays below are offset by it, so a remount
   // continues each animation instead of restarting it.
   const [elapsed] = useState(() => Math.round(performance.now()));
@@ -42,6 +52,7 @@ export function BootScreen({
 
   return (
     <div
+      ref={rootRef}
       data-testid="boot-screen"
       data-step={step}
       role="status"
@@ -54,17 +65,26 @@ export function BootScreen({
           ? { position: "absolute", inset: 0, zIndex: 20 }
           : { flex: 1, width: "100%", minHeight: 0 }),
         display: "flex",
-        flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        gap: 22,
-        padding: "0 24px",
-        boxSizing: "border-box",
+        overflow: "hidden",
         background: colors.bg0,
         fontFamily: fontDisplay,
         animation: leaving ? "offdeskFadeOut 200ms ease-out both" : undefined,
       }}
     >
+      <div
+        style={{
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 22,
+          padding: "0 24px",
+          boxSizing: "border-box",
+          transform: shift ? `translateY(${shift}px)` : undefined,
+        }}
+      >
       <div
         aria-label="Offdesk Dev"
         role="img"
@@ -140,6 +160,7 @@ export function BootScreen({
             {tips[1]}
           </p>
         </div>
+      </div>
       </div>
     </div>
   );
