@@ -115,6 +115,7 @@ import { createTerminalReconnectController } from "@/lib/terminalReconnect";
 import { readViewOnlyLock, writeViewOnlyLock } from "@/lib/viewOnlyLock";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
+import { claimSamePagePops } from "@/lib/samePagePops";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 const EmptyMachinesView = lazy(() =>
@@ -191,6 +192,17 @@ function wasRecentlyFocusedByThisSession(terminalId: string): boolean {
   }
 }
 
+// This screen's history entries (#/t/<id>, or its bare path when unzoomed)
+// all sit on Expo Router's one entry for the page, so they carry its state
+// (the id it finds the entry by) rather than wiping it.
+function pushScreenHistory(url: string): void {
+  window.history.pushState(window.history.state, "", url);
+}
+
+function replaceScreenHistory(url: string): void {
+  window.history.replaceState(window.history.state, "", url);
+}
+
 function upsertTerminalInfo(
   terminals: TerminalInfo[],
   terminal: TerminalInfo,
@@ -264,6 +276,10 @@ function TerminalCanvasInner() {
 
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [bootstrapReady, setBootstrapReady] = useState(false);
+  // Whether the Hub has answered the first bootstrap at all. Until then the
+  // empty machine list means "not loaded", not "no machines", so the screen
+  // keeps the loading view rather than flashing the empty-Hub screen.
+  const [firstBootstrapSettled, setFirstBootstrapSettled] = useState(false);
   const [eventsReconnecting, setEventsReconnecting] = useState(false);
   const [rttMs, setRttMs] = useState<number | null>(null);
   const [viewOnlyLocked, setViewOnlyLocked] = useState(() =>
@@ -497,18 +513,22 @@ function TerminalCanvasInner() {
       if (id) dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: id });
     }
   }, []);
-  useEffect(() => {
-    const onPopState = () => {
-      const hash = window.location.hash;
-      if (hash.startsWith("#/t/")) {
-        dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: hash.slice(4) });
-      } else {
-        dispatchLayout({ type: "UNZOOM" });
-      }
-    };
-    window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
-  }, []);
+  // Back/forward between this screen's own #/t/<id> entries (Android's back
+  // button included) is ours alone: left to Expo Router, it remounts this
+  // whole screen (a spinner, the empty-Hub screen while machines reload,
+  // every terminal reattaching). See samePagePops.
+  useEffect(
+    () =>
+      claimSamePagePops(() => {
+        const hash = window.location.hash;
+        if (hash.startsWith("#/t/")) {
+          dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: hash.slice(4) });
+        } else {
+          dispatchLayout({ type: "UNZOOM" });
+        }
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (!deviceId) return;
@@ -523,9 +543,13 @@ function TerminalCanvasInner() {
         lastSeqRef.current = snapshot.snapshot_seq;
         setBrowserState(applyBootstrapSnapshot(snapshot));
         setBootstrapReady(true);
+        setFirstBootstrapSettled(true);
       })
       .catch(() => {
         if (cancelled) return;
+        // Unreachable: show the empty-Hub screen, which carries the ways to
+        // recover (Hub setup on a desktop, connection settings).
+        setFirstBootstrapSettled(true);
         retryTimer = setTimeout(() => {
           setReconnectGeneration((value) => value + 1);
         }, 1000);
@@ -667,7 +691,7 @@ function TerminalCanvasInner() {
             );
           }
           if (zoomedTerminalIdRef.current === envelope.event.terminal_id) {
-            window.history.replaceState(null, "", window.location.pathname);
+            replaceScreenHistory(window.location.pathname);
           }
         }
       } catch {
@@ -838,7 +862,7 @@ function TerminalCanvasInner() {
       setActiveMachineId(terminal.machine_id);
     }
     dispatchLayout({ type: "ZOOM_TERMINAL", terminalId });
-    window.history.replaceState(null, "", `#/t/${terminalId}`);
+    replaceScreenHistory(`#/t/${terminalId}`);
     if (!wasRecentlyFocusedByThisSession(terminalId)) {
       setShowHandoffBanner(true);
     }
@@ -942,7 +966,7 @@ function TerminalCanvasInner() {
               ?.id ?? layout.selectedWorkpathId,
         });
       }
-      window.history.pushState(null, "", `#/t/${newTerminal.id}`);
+      pushScreenHistory(`#/t/${newTerminal.id}`);
       return newTerminal;
     },
     [
@@ -1064,7 +1088,7 @@ function TerminalCanvasInner() {
 
   const handleZoomTerminal = useCallback((id: string) => {
     dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: id });
-    window.history.pushState(null, "", `#/t/${id}`);
+    pushScreenHistory(`#/t/${id}`);
   }, []);
 
   // The agent browser overlay (desktop) / full-screen surface (phone), opened
@@ -1645,7 +1669,7 @@ function TerminalCanvasInner() {
         const target = e.target as HTMLElement | null;
         if (target?.closest(".xterm")) return;
         dispatchLayout({ type: "UNZOOM" });
-        window.history.pushState(null, "", window.location.pathname);
+        pushScreenHistory(window.location.pathname);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1839,6 +1863,8 @@ function TerminalCanvasInner() {
             <Suspense fallback={<LazyLoadingFallback />}>
               <SettingsPage onClose={() => setShowSettings(false)} />
             </Suspense>
+          ) : !firstBootstrapSettled ? (
+            <LazyLoadingFallback />
           ) : machines.length === 0 ? (
             <Suspense fallback={<LazyLoadingFallback />}>
               <EmptyMachinesView onOpenSettings={() => setShowSettings(true)} />

@@ -1,6 +1,5 @@
 import { lazy, Suspense } from "react";
-import { ActivityIndicator, View } from "react-native";
-import { useColors } from "@/lib/theme";
+import { LazyLoadingFallback } from "@/components/LazyLoadingFallback";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 
 const WebTerminalCanvas = lazy(() =>
@@ -12,22 +11,8 @@ const WebTerminalCanvas = lazy(() =>
 );
 
 export default function HomeScreen() {
-  const colors = useColors();
   return (
-    <Suspense
-      fallback={
-        <View
-          style={{
-            flex: 1,
-            alignItems: "center",
-            justifyContent: "center",
-            backgroundColor: colors.background,
-          }}
-        >
-          <ActivityIndicator color={colors.accent} />
-        </View>
-      }
-    >
+    <Suspense fallback={<LazyLoadingFallback />}>
       <WebTerminalCanvas />
     </Suspense>
   );

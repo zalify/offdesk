@@ -2,6 +2,8 @@ import "../global.css";
 import { UiUpdateLifecycle } from "../components/UiUpdateNotification";
 import { getUiUpdateState, recoverUi } from "../lib/uiUpdates";
 import "../lib/legacyStorageMigration";
+// Before Expo Router mounts: its popstate listener must come second.
+import "../lib/samePagePops";
 import { Component, useLayoutEffect, type ErrorInfo, type ReactNode } from "react";
 import { applyUiFontPreferences, subscribeFontPreferences } from "../lib/fontPreferences";
 import { Slot } from "expo-router";
