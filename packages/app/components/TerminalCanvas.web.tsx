@@ -115,6 +115,7 @@ import { createTerminalReconnectController } from "@/lib/terminalReconnect";
 import { readViewOnlyLock, writeViewOnlyLock } from "@/lib/viewOnlyLock";
 import { lazyWithReload } from "@/lib/lazyWithReload";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
+import { claimSamePagePops } from "@/lib/samePagePops";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 const EmptyMachinesView = lazy(() =>
@@ -513,28 +514,21 @@ function TerminalCanvasInner() {
     }
   }, []);
   // Back/forward between this screen's own #/t/<id> entries (Android's back
-  // button included) is ours alone. Expo Router listens for popstate too, and
-  // on an entry it can't match it resets the navigation root, remounting this
-  // whole screen: a spinner, the empty-Hub screen while machines reload, then
-  // every terminal reattaching. So a pop that stays on this page is handled
-  // here, in the capture phase ahead of Expo Router's listener, and kept from
-  // it.
-  useEffect(() => {
-    const screenPath = window.location.pathname + window.location.search;
-    const onPopState = (event: PopStateEvent) => {
-      if (window.location.pathname + window.location.search === screenPath) {
-        event.stopImmediatePropagation();
-      }
-      const hash = window.location.hash;
-      if (hash.startsWith("#/t/")) {
-        dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: hash.slice(4) });
-      } else {
-        dispatchLayout({ type: "UNZOOM" });
-      }
-    };
-    window.addEventListener("popstate", onPopState, true);
-    return () => window.removeEventListener("popstate", onPopState, true);
-  }, []);
+  // button included) is ours alone: left to Expo Router, it remounts this
+  // whole screen (a spinner, the empty-Hub screen while machines reload,
+  // every terminal reattaching). See samePagePops.
+  useEffect(
+    () =>
+      claimSamePagePops(() => {
+        const hash = window.location.hash;
+        if (hash.startsWith("#/t/")) {
+          dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: hash.slice(4) });
+        } else {
+          dispatchLayout({ type: "UNZOOM" });
+        }
+      }),
+    [],
+  );
 
   useEffect(() => {
     if (!deviceId) return;

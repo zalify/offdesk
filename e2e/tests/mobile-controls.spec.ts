@@ -339,41 +339,6 @@ test("mobile back button returns to the previous terminal without reloading the 
   const firstTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
   const secondTerminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
   await showDrawnTerminal(page, secondTerminalId);
-  // TEMP diagnostics: who handles popstate, and what removes the workbench.
-  await page.addInitScript(() => {
-    const w = window as unknown as { __diag2?: string[] };
-    w.__diag2 = [];
-    const log = (m: string) => w.__diag2!.push(`${Math.round(performance.now())} ${m}`);
-    let n = 0;
-    const orig = window.addEventListener.bind(window);
-    (window as unknown as { addEventListener: typeof window.addEventListener }).addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
-      if (type !== "popstate" || typeof listener !== "function") return orig(type, listener, options);
-      const id = ++n;
-      const capture = typeof options === "boolean" ? options : Boolean(options?.capture);
-      log(`add popstate #${id} capture=${capture} ${listener.toString().replace(/\s+/g, " ").slice(0, 70)}`);
-      const wrapped = function (this: unknown, event: Event) {
-        log(`run #${id} path=${location.pathname}${location.search} hash=${location.hash}`);
-        const stop = event.stopImmediatePropagation.bind(event);
-        event.stopImmediatePropagation = () => { log(`#${id} stopImmediatePropagation`); stop(); };
-        return (listener as (e: Event) => unknown).call(this, event);
-      };
-      (listener as unknown as { __wrapped?: unknown }).__wrapped = wrapped;
-      return orig(type, wrapped as EventListener, options);
-    }) as typeof window.addEventListener;
-    const origRemove = window.removeEventListener.bind(window);
-    (window as unknown as { removeEventListener: typeof window.removeEventListener }).removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
-      const wrapped = (listener as unknown as { __wrapped?: EventListener }).__wrapped;
-      if (type === "popstate") log(`remove popstate wrapped=${Boolean(wrapped)}`);
-      return origRemove(type, wrapped ?? listener, options);
-    }) as typeof window.removeEventListener;
-    const origRemoveChild = Node.prototype.removeChild;
-    Node.prototype.removeChild = function <T extends Node>(this: Node, child: T): T {
-      if (child instanceof Element && (child.matches("[data-testid='mobile-workbench']") || child.querySelector("[data-testid='mobile-workbench']"))) {
-        log(`workbench removeChild event=${(window.event as Event | undefined)?.type} stack=${(new Error().stack ?? "").split("\n").slice(2, 9).join(" | ").replace(/\s+/g, " ").slice(0, 600)}`);
-      }
-      return origRemoveChild.call(this, child) as T;
-    };
-  });
   // The app as it usually is: loaded (an update, a Hub switch, a reload) with
   // a terminal already in the URL, which Expo Router keeps in its own record
   // of the entry.
@@ -399,43 +364,7 @@ test("mobile back button returns to the previous terminal without reloading the 
     requestAnimationFrame(watch);
   });
   await startSwitchFrameSampler(page, firstTerminalId);
-  await page.evaluate(() => {
-    const w = window as unknown as { __diag?: string[] };
-    w.__diag = [];
-    const mark = (what: string) => w.__diag!.push(`${Math.round(performance.now())} ${what}`);
-    window.addEventListener("popstate", () => mark(`popstate-capture ${location.hash} state=${JSON.stringify(history.state)}`), true);
-    window.addEventListener("popstate", () => mark("popstate-bubble (reached late listeners)"));
-    new MutationObserver((records) => {
-      for (const r of records) {
-        r.removedNodes.forEach((n) => {
-          if (n instanceof Element && (n.matches("[data-testid='mobile-workbench']") || n.querySelector("[data-testid='mobile-workbench']"))) mark("workbench removed");
-        });
-        r.addedNodes.forEach((n) => {
-          if (n instanceof Element && (n.matches("[data-testid='mobile-workbench']") || n.querySelector("[data-testid='mobile-workbench']"))) mark("workbench added");
-          if (n instanceof Element && (n.matches("[data-testid='empty-machines']") || n.querySelector("[data-testid='empty-machines']"))) mark("empty-machines added");
-          if (n instanceof Element && n.querySelector("[data-testid^='workspace-pane-']")) mark(`panes now ${[...document.querySelectorAll("[data-testid^='workspace-pane-']")].map((e) => e.getAttribute("data-testid")).join(",")}`);
-        });
-      }
-    }).observe(document.body, { childList: true, subtree: true });
-  });
-  // TEMP diagnostics
   await page.goBack();
-  await page.waitForTimeout(6000);
-  console.log("DIAG url", page.url());
-  console.log("DIAG ids first", firstTerminalId, "second", secondTerminalId);
-  console.log("DIAG events", JSON.stringify(await page.evaluate(() => (window as unknown as { __diag: string[] }).__diag)));
-  for (const line of await page.evaluate(() => (window as unknown as { __diag2: string[] }).__diag2)) console.log("DIAG2", line);
-  const diagFrames = await readSwitchFrames(page);
-  const runs: string[] = [];
-  for (const f of diagFrames) {
-    const k = `${f.held ? "H" : ""}${f.fading ? "F" : ""}${f.blank ? "B" : ""}${f.settled ? "S" : ""}` || "-";
-    const last = runs.at(-1);
-    if (last && last.startsWith(`${k}x`)) runs[runs.length - 1] = `${k}x${Number(last.split("x")[1]) + 1}`;
-    else runs.push(`${k}x1`);
-  }
-  console.log("DIAG frames", diagFrames.length, runs.join(" "));
-  console.log("DIAG panes", JSON.stringify(await page.evaluate(() => [...document.querySelectorAll("[data-testid^='workspace-pane-'],[data-testid^='compact-']")].map((e) => e.getAttribute("data-testid")))));
-  console.log("DIAG xterms", JSON.stringify(await page.evaluate(() => [...((window as unknown as { __offdeskTerminals?: Map<string, unknown> }).__offdeskTerminals?.keys() ?? [])])));
 
   await expectSwitchSettledWithoutBlankFrames(page);
   await expect(page).toHaveURL(new RegExp(`#/t/${firstTerminalId}$`));
