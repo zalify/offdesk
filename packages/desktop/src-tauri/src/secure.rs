@@ -9,7 +9,10 @@ use offdesk_secure::{
     Identity,
 };
 use serde::{Deserialize, Serialize};
-use tauri::{ipc::Channel, AppHandle, Manager, Runtime, State};
+use tauri::{
+    ipc::{Channel, JavaScriptChannelId},
+    AppHandle, Manager, Runtime, State,
+};
 use tokio::sync::{Mutex, RwLock};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
@@ -630,10 +633,18 @@ fn merge_routes(advertised: Option<Vec<Route>>, saved: Vec<Route>, verified: &[&
 #[tauri::command]
 pub async fn secure_routes<R: Runtime>(
     app: AppHandle<R>,
+    webview: tauri::Webview<R>,
     state: State<'_, SecureState>,
     public_key: Option<String>,
-    on_route: Channel<RouteCheck>,
+    // Optional: a UI from before streaming checks only reads the final report.
+    on_route: Option<JavaScriptChannelId>,
 ) -> Result<RouteReport, String> {
+    let on_route: Option<Channel<RouteCheck>> = on_route.map(|id| id.channel_on(webview));
+    let landed = |check: RouteCheck| {
+        if let Some(channel) = &on_route {
+            let _ = channel.send(check);
+        }
+    };
     let _discovery = state.2.lock().await;
     let _gate = state.1.read().await;
     let include_machines = public_key.is_some();
@@ -652,7 +663,7 @@ pub async fn secure_routes<R: Runtime>(
             None => None,
         };
         // Each address shows as soon as it answers (or gives up), not when the slowest does.
-        let _ = on_route.send(RouteCheck {
+        landed(RouteCheck {
             route: route.clone(),
             available: client.is_some(),
             latency_ms: latency,
@@ -702,7 +713,7 @@ pub async fn secure_routes<R: Runtime>(
             } else {
                 (false, None)
             };
-            let _ = on_route.send(RouteCheck {
+            landed(RouteCheck {
                 route: route.clone(),
                 available,
                 latency_ms,
