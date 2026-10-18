@@ -48,8 +48,8 @@ test('mobile fixed UI keeps multiline input and footer visible after late keyboa
   await page.setViewportSize({width:390,height:500});
   await expect.poll(async()=> (await state(page,id))?.rows ?? expandedRows).toBeLessThan(expandedRows);
   await expect.poll(async()=> (await state(page,id))?.fits).toBe(true);
-  // Let the existing window-resize debounce finish so it cannot accidentally
-  // satisfy the subsequent container-only resize assertion.
+  // Let the window-resize fit finish so it cannot accidentally satisfy the
+  // subsequent container-only resize assertion.
   await page.waitForTimeout(350);
   const before=(await state(page,id))!.rows;
   // A fixed bar settles after the window/IME event. There is deliberately
@@ -71,6 +71,37 @@ test('mobile fixed UI keeps multiline input and footer visible after late keyboa
   const viewerRows=(await state(page,id))!.rows;
   const viewerFullHeight=await viewportHeight(page);
   expect(await setLateFixedBar(page,80)).toBeLessThanOrEqual(viewerFullHeight-79);
-  await page.waitForTimeout(400); // longer than the debounced fit; viewers must not resize the PTY
+  await page.waitForTimeout(400); // long after a fit would land; viewers must not resize the PTY
   expect((await listTerminals(page)).find(t=>t.id===id)?.rows).toBe(viewerRows);
+});
+
+// Until the refit, the old grid stays on screen: clipped under the opening
+// keyboard (the prompt with it), half blank as it closes. So the refit comes
+// on the frame after the layout moves, not after a debounce.
+test('the terminal refits the frame after the keyboard opens or closes',async({page})=>{
+  await page.setViewportSize({width:390,height:844});
+  await openApp(page);await resetMachineState(page);await requestMachineControl(page);
+  const id=await createTerminalViaApi(page,{startupCommand:`python3 -u -c ${shellQuote(fixture)}`});
+  await expect(getImmersiveTerminal(page)).toBeVisible();
+  await expect.poll(async()=> (await state(page,id))?.lines).toContain('FIXED-STATUS');
+  for(const height of [500,844]){
+    await page.evaluate(id=>{
+      const term=(window as any).__offdeskTerminals.get(id);
+      const viewport=document.querySelector('[data-terminal-display-mode="immersive"]')!;
+      const frames:{height:number;rows:number}[]=[];
+      (window as any).__refitFrames=frames;
+      const sample=()=>{frames.push({height:viewport.clientHeight,rows:term.rows});if(frames.length<600)requestAnimationFrame(sample);};
+      requestAnimationFrame(sample);
+    },id);
+    const rows=(await state(page,id))!.rows;
+    await page.setViewportSize({width:390,height});
+    await expect.poll(async()=> (await state(page,id))?.rows ?? rows).not.toBe(rows);
+    const frames:{height:number;rows:number}[]=await page.evaluate(()=>(window as any).__refitFrames);
+    const moved=frames.findIndex(frame=>frame.height!==frames[0].height);
+    const refit=frames.findIndex(frame=>frame.rows!==frames[0].rows);
+    expect(moved).toBeGreaterThan(-1);
+    expect(refit-moved).toBeLessThanOrEqual(3);
+    await expect.poll(async()=> (await state(page,id))?.fits).toBe(true);
+    await expect.poll(async()=> (await state(page,id))?.lines).toContain('FIXED-STATUS');
+  }
 });
