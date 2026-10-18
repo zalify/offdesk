@@ -1,7 +1,7 @@
 # Trademarks
 
-"Offdesk", "Offdesk Dev" and the Offdesk logos are trademarks of
-Zalify Inc. The code licenses in this repository (MIT and
+"Offdesk", "Offdesk Dev", "Offdesk Cloud" and the Offdesk logos are
+trademarks of Zalify Inc. The code licenses in this repository (MIT and
 FSL-1.1-MIT, see [LICENSE](LICENSE)) cover the code, not these names and
 logos.
 
