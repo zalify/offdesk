@@ -34,7 +34,7 @@ const ko: Dict = {
   home: {
     title: "Offdesk — 에이전트와 내가 함께 쓰는 터미널",
     description:
-      "에이전트와 함께 쓰는 셀프 호스팅 원격 터미널. 에이전트는 CLI로 터미널을 다루고, 나는 휴대폰으로 지켜보다 키보드를 넘겨받습니다. Claude Code, Codex 등 tmux의 모든 것. MIT 라이선스.",
+      "에이전트와 함께 쓰는 셀프 호스팅 원격 터미널. 에이전트는 CLI로 터미널을 다루고, 나는 휴대폰으로 지켜보다 키보드를 넘겨받습니다. Claude Code, Codex 등 tmux의 모든 것. Hub는 MIT 라이선스.",
     hero: {
       title: "에이전트와 내가 함께 쓰는 터미널.",
       lead: "에이전트는 CLI로 터미널을 열고, 입력하고, 읽습니다. 같은 터미널을 휴대폰으로 지켜보다가, 에이전트가 부르면 키보드를 넘겨받으세요.",
@@ -50,7 +50,7 @@ const ko: Dict = {
       { key: "머신", value: "개수 제한 없이, URL 하나로" },
       { key: "트래픽", value: "내 Hub를 거쳐서" },
       { key: "에이전트", value: "open · send · wait · read" },
-      { key: "라이선스", value: "셀프 호스팅, MIT" },
+      { key: "라이선스", value: "셀프 호스팅, Hub MIT" },
     ],
     beats: {
       title: "키보드는 필요한 쪽이 잡습니다.",
@@ -164,7 +164,7 @@ const ko: Dict = {
         "암호화된 App 접속은 App의 스캐너로 암호화 페어링 코드를 스캔하세요. 일반 브라우저 접속은 터널 가이드에 따라 인증을 설정하세요.",
       cloudBadge: "초대 전용 베타",
       cloudBody:
-        "선택 사항인 Offdesk Cloud는 관리형 원격 접속을 제공합니다. 이 서비스는 비공개 소스이지만, 공개 저장소의 Hub, Node, CLI, 클라이언트는 계속 MIT 라이선스입니다. 로컬 커넥터는 암호화된 연결이 닿는지 확인하고, 터널 장애가 계속되면 백오프를 두고 자동으로 재시도합니다. 로컬에서만 쓴다면 Cloud 계정이 필요 없습니다.",
+        "선택 사항인 Offdesk Cloud는 관리형 원격 접속을 제공합니다. 이 서비스는 비공개 소스이지만, 공개 저장소의 Hub, Node, CLI는 MIT 라이선스이고, 웹 UI와 앱은 FSL-1.1-MIT로 소스를 공개합니다. 로컬 커넥터는 암호화된 연결이 닿는지 확인하고, 터널 장애가 계속되면 백오프를 두고 자동으로 재시도합니다. 로컬에서만 쓴다면 Cloud 계정이 필요 없습니다.",
     },
     more: {
       title: "원격 셸, 모바일 코딩 에이전트, CLI 자동화.",
@@ -211,7 +211,7 @@ const ko: Dict = {
         "셀프 호스팅",
       ],
       rows: [
-        ["tmux에서 실행되는 모든 것", "제한 없음, URL 하나", "내 Hub", "open / send / wait / read", "예, MIT"],
+        ["tmux에서 실행되는 모든 것", "제한 없음, URL 하나", "내 Hub", "open / send / wait / read", "예, MIT + FSL"],
         ["아니요 — 터미널이 아닌 Claude Code 세션", "여러 머신의 세션을 한 목록에", "Anthropic 서버, 대화 기록도 그곳에 저장", "문서화되지 않음", "아니요"],
         ["예 — vt &lt;임의의 명령어&gt;, vt --shell", "머신마다 서버 하나", "선택: LAN, Tailscale, ngrok, Cloudflare", "명령 실행만 가능", "예, MIT"],
         ["아니요 — claude와 codex를 감쌈", "여러 대, spawn --machine", "기본은 slopus 클라우드, 종단 간 암호화", "create / send / history / wait", "선택 사항, MIT"],

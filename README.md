@@ -58,7 +58,9 @@ from one interface. The machines running your Hub and sessions must stay online.
   and the Hub. Ordinary browser access uses a separate sign-in flow; public
   browser access needs HTTPS and authentication.
 
-The Hub, node, CLI, and clients in this repository are **MIT licensed**.
+The Hub, node, CLI, and the protocol and encryption crates in this repository
+are **MIT licensed**; the Web UI and the desktop and phone apps are
+source-available under **FSL-1.1-MIT** ([License](#license)).
 Self-hosting needs no vendor account. Optional **Offdesk Cloud** provides
 managed remote access as a separate, closed-source service. Its open-source
 local connector checks encrypted reachability and automatically restarts after
@@ -672,5 +674,12 @@ receiving output, so they watch live instead of being disconnected.
 
 ## License
 
-The code in this repository is MIT. See [LICENSE](LICENSE). The optional
-Offdesk Cloud service is maintained separately and is not included here.
+Everything under `crates/` (the Hub, node, CLI, and the protocol and
+encryption crates) and `packages/shared` is MIT. The Web UI (`packages/app`)
+and the desktop, Android and iOS apps (`packages/desktop`) are under the
+Functional Source License, FSL-1.1-MIT: you can read, audit, build, modify and
+use them, including at work, but not offer them as a competing product, and
+each version becomes MIT two years after its release. Versions up to 0.25.0
+are entirely MIT. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
+The optional Offdesk Cloud service is maintained separately and is not
+included here.

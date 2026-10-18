@@ -41,7 +41,7 @@ const ja: Dict = {
   home: {
     title: "Offdesk — あなたとエージェントで共有するひとつのターミナル",
     description:
-      "エージェントが CLI で開いて操作するターミナルを、スマホから見守り、必要なときに引き継げます。Claude Code や Codex など tmux で動くものすべてに使える、セルフホストのリモートターミナル。MIT ライセンス。",
+      "エージェントが CLI で開いて操作するターミナルを、スマホから見守り、必要なときに引き継げます。Claude Code や Codex など tmux で動くものすべてに使える、セルフホストのリモートターミナル。Hub は MIT ライセンス。",
     hero: {
       title: "ひとつのターミナルを、あなたとエージェントで。",
       lead: "エージェントは CLI でターミナルを開き、入力し、出力を読みます。あなたは同じターミナルをスマホから見守り、呼ばれたらキーボードを引き継ぎます。",
@@ -58,7 +58,7 @@ const ja: Dict = {
       { key: "マシン", value: "台数無制限、URL はひとつ" },
       { key: "通信経路", value: "自分の Hub を経由" },
       { key: "エージェント", value: "open · send · wait · read" },
-      { key: "ライセンス", value: "セルフホスト、MIT" },
+      { key: "ライセンス", value: "セルフホスト、Hub は MIT" },
     ],
     beats: {
       title: "キーボードは、必要な側が握る。",
@@ -172,7 +172,7 @@ const ja: Dict = {
         "App で暗号化アクセスするには、App のスキャナーで暗号化ペアリングコードを読み取ります。通常のブラウザアクセスでは、トンネルガイドのとおりに認証を設定してください。",
       cloudBadge: "招待制ベータ",
       cloudBody:
-        "オプションの Offdesk Cloud は、マネージドなリモートアクセスを提供します。このサービスはクローズドソースですが、公開リポジトリの Hub、Node、CLI、クライアントは引き続き MIT ライセンスです。ローカルコネクタは暗号化された到達性を確認し、トンネルの障害が続くとバックオフしながら自動で再試行します。ローカルで使うだけなら Cloud アカウントは不要です。",
+        "オプションの Offdesk Cloud は、マネージドなリモートアクセスを提供します。このサービスはクローズドソースですが、公開リポジトリの Hub、Node、CLI は MIT ライセンスで、Web UI とアプリは FSL-1.1-MIT でソースを公開しています。ローカルコネクタは暗号化された到達性を確認し、トンネルの障害が続くとバックオフしながら自動で再試行します。ローカルで使うだけなら Cloud アカウントは不要です。",
     },
     more: {
       title: "リモートシェル、モバイルからのコーディングエージェント、CLI 自動化。",
@@ -221,7 +221,7 @@ const ja: Dict = {
       // One row per project, in the order of the table in the template; names
       // stay in English and live in the template.
       rows: [
-        ["tmux で動くものなら何でも", "台数無制限、URL はひとつ", "自分の Hub", "open / send / wait / read", "対応、MIT"],
+        ["tmux で動くものなら何でも", "台数無制限、URL はひとつ", "自分の Hub", "open / send / wait / read", "対応、MIT + FSL"],
         ["非対応 — ターミナルではなく Claude Code のセッション", "複数マシンのセッションをひとつの一覧に", "Anthropic のサーバー。トランスクリプトもそこに保存", "記載なし", "非対応"],
         ["対応 — vt &lt;任意のコマンド&gt;、vt --shell", "マシンごとに 1 サーバー", "LAN、Tailscale、ngrok、Cloudflare から選択", "コマンドの起動のみ", "対応、MIT"],
         ["非対応 — claude と codex をラップ", "複数、spawn --machine", "デフォルトは slopus のクラウド、エンドツーエンド暗号化", "create / send / history / wait", "オプション、MIT"],

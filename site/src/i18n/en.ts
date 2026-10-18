@@ -43,7 +43,7 @@ const en = {
   home: {
     title: "Offdesk — One terminal, shared by you and your agents",
     description:
-      "One terminal, shared by you and your agents. Agents open, type into and read terminals through the CLI; you watch the same ones from your phone and take the keyboard when they need you. Self-hosted remote terminal for Claude Code, Codex and anything in tmux. MIT licensed.",
+      "One terminal, shared by you and your agents. Agents open, type into and read terminals through the CLI; you watch the same ones from your phone and take the keyboard when they need you. Self-hosted remote terminal for Claude Code, Codex and anything in tmux. The Hub is MIT licensed.",
     hero: {
       title: "One terminal, shared by you and your agents.",
       lead: "Agents open, type into and read terminals through the CLI. You watch the same ones from your phone, and take the keyboard when they need you.",
@@ -60,7 +60,7 @@ const en = {
       { key: "machines", value: "any number, one url" },
       { key: "traffic", value: "through your own hub" },
       { key: "agents", value: "open · send · wait · read" },
-      { key: "license", value: "self-hosted, MIT" },
+      { key: "license", value: "self-hosted, MIT Hub" },
     ],
     beats: {
       title: "Whoever needs the keyboard takes it.",
@@ -174,7 +174,7 @@ const en = {
         "For encrypted App access, scan the encrypted pairing code with the App's scanner. For ordinary browser access, configure authentication as described in the tunnel guide.",
       cloudBadge: "invite-only beta",
       cloudBody:
-        "Optional Offdesk Cloud offers managed remote access. Its service is closed source; the Hub, node, CLI, and clients in the public repository remain MIT licensed. The local connector checks encrypted reachability and automatically retries sustained tunnel failures with backoff. Local use needs no Cloud account.",
+        "Optional Offdesk Cloud offers managed remote access. Its service is closed source; in the public repository, the Hub, node and CLI are MIT licensed, and the Web UI and apps are source-available under FSL-1.1-MIT. The local connector checks encrypted reachability and automatically retries sustained tunnel failures with backoff. Local use needs no Cloud account.",
     },
     more: {
       title: "Remote shells, mobile coding agents, and CLI automation.",
@@ -223,7 +223,7 @@ const en = {
       // One row per project, in the order of the table in the template; names
       // stay in English and live in the template.
       rows: [
-        ["Anything that runs in tmux", "Any number, one URL", "Your own hub", "open / send / wait / read", "Yes, MIT"],
+        ["Anything that runs in tmux", "Any number, one URL", "Your own hub", "open / send / wait / read", "Yes, MIT + FSL"],
         ["No — a Claude Code session, not a terminal", "Sessions from several machines in one list", "Anthropic's servers; transcript stored there", "Not documented", "No"],
         ["Yes — vt &lt;any command&gt;, vt --shell", "One server per machine", "Your choice: LAN, Tailscale, ngrok, Cloudflare", "Launches commands only", "Yes, MIT"],
         ["No — wraps claude and codex", "Several; spawn --machine", "slopus cloud by default, end-to-end encrypted", "create / send / history / wait", "Optional, MIT"],

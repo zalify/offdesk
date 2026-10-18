@@ -275,8 +275,10 @@ activation or a published release.
 
 - Cargo workspace members are `crates/*`; `packages/desktop/src-tauri` is
   explicitly **excluded** from the workspace (`Cargo.toml`).
-- Rust edition 2021 on every crate. No `license` field on any Cargo.toml
-  today. No `license` field on any package.json today.
+- Rust edition 2021 on every crate. Licenses are per directory (`LICENSE`):
+  `crates/*` and `packages/shared` are MIT; `packages/app` and
+  `packages/desktop` are FSL-1.1-MIT (their `LICENSE.md`, and the `license`
+  field of their package.json and `src-tauri/Cargo.toml`).
 - Every crate is at version `0.1.0` except the Tauri desktop app, which
   `tauri.conf.json` pins at `0.3.14`.
 - pnpm workspace is `packages/*` only (`pnpm-workspace.yaml`); packageManager

@@ -61,7 +61,9 @@ iPhone, Android 휴대폰, 데스크톱 앱에서 사용할 수 있습니다. Of
   브라우저 접속은 별도의 로그인 흐름을 사용하며, 브라우저로 공개 접속하려면
   HTTPS와 인증이 필요
 
-이 저장소의 Hub, node, CLI, 클라이언트는 모두 **MIT 라이선스**입니다. 셀프
+이 저장소의 Hub, node, CLI, 프로토콜과 암호화 crate는 **MIT 라이선스**이고,
+웹 UI와 데스크톱·휴대폰 앱은 **FSL-1.1-MIT**로 소스를 공개합니다
+([라이선스](#라이선스)). 셀프
 호스팅에는 벤더 계정이 필요 없습니다. 선택 사항인 **Offdesk Cloud**는 관리형
 원격 접속을 제공하는 별도의 비공개 소스 서비스입니다. 이 서비스의 오픈 소스
 로컬 커넥터는 암호화된 연결 가능 여부를 확인하고, 터널 장애가 계속되면 자동으로
@@ -587,6 +589,11 @@ GitHub [issues](https://github.com/zalify/offdesk/issues)에 올려 주세요.
 
 ## 라이선스
 
-이 저장소의 코드는 MIT 라이선스입니다. [LICENSE](LICENSE)를 참고하세요.
+`crates/` 아래 전부(Hub, node, CLI, 프로토콜과 암호화 crate)와 `packages/shared`는
+MIT 라이선스입니다. 웹 UI(`packages/app`)와 데스크톱·Android·iOS 앱
+(`packages/desktop`)은 Functional Source License(FSL-1.1-MIT)입니다. 읽고,
+감사하고, 빌드하고, 수정하고, 업무를 포함해 사용할 수 있지만 경쟁 제품으로
+제공할 수는 없으며, 각 버전은 출시 2년 뒤 MIT가 됩니다. 0.25.0까지의 버전은
+모두 MIT입니다. [LICENSE](LICENSE)와 [TRADEMARKS.md](TRADEMARKS.md)를 참고하세요.
 선택 사항인 Offdesk Cloud 서비스는 별도로 유지 관리되며 이 저장소에 포함되어
 있지 않습니다.

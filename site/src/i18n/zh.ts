@@ -34,7 +34,7 @@ const zh: Dict = {
   home: {
     title: "Offdesk — 你和 Agent 共用同一个终端",
     description:
-      "你和 AI 编程 Agent 共用同一个终端：Agent 通过 CLI 打开、输入、读取，你在手机上看着同一个终端，需要时接管键盘。自托管远程终端，支持 Claude Code、Codex 和 tmux 里的任何程序，MIT 开源。",
+      "你和 AI 编程 Agent 共用同一个终端：Agent 通过 CLI 打开、输入、读取，你在手机上看着同一个终端，需要时接管键盘。自托管远程终端，支持 Claude Code、Codex 和 tmux 里的任何程序，Hub 以 MIT 开源。",
     hero: {
       title: "你和 Agent，共用一个终端。",
       lead: "Agent 通过 CLI 打开终端、输入命令、读取输出。你在手机上看着同一个终端，需要你时接管键盘。",
@@ -51,7 +51,7 @@ const zh: Dict = {
       { key: "机器", value: "任意数量，一个网址" },
       { key: "流量", value: "经过你自己的 Hub" },
       { key: "Agent", value: "open · send · wait · read" },
-      { key: "许可", value: "自托管，MIT" },
+      { key: "许可", value: "自托管，Hub MIT" },
     ],
     beats: {
       title: "谁需要键盘，谁就接过去。",
@@ -165,7 +165,7 @@ const zh: Dict = {
         "要用 App 加密访问，用 App 的扫描器扫描加密配对码。要用普通浏览器访问，按隧道指南配置身份验证。",
       cloudBadge: "邀请制测试",
       cloudBody:
-        "可选的 Offdesk Cloud 提供托管的远程访问。它的服务是闭源的；公开仓库里的 Hub、Node、CLI 和客户端仍采用 MIT 许可。本地连接器会检查加密连接是否可达，隧道持续失败时会自动退避重试。本地使用不需要 Cloud 账户。",
+        "可选的 Offdesk Cloud 提供托管的远程访问。它的服务是闭源的；公开仓库里的 Hub、Node 和 CLI 采用 MIT 许可，Web UI 和各端 App 以 FSL-1.1-MIT 公开源码。本地连接器会检查加密连接是否可达，隧道持续失败时会自动退避重试。本地使用不需要 Cloud 账户。",
     },
     more: {
       title: "远程 Shell、手机上的编程 Agent，以及 CLI 自动化。",
@@ -214,7 +214,7 @@ const zh: Dict = {
       // One row per project, in the order of the table in the template; names
       // stay in English and live in the template.
       rows: [
-        ["tmux 里能跑的都行", "任意数量，一个网址", "你自己的 Hub", "open / send / wait / read", "是，MIT"],
+        ["tmux 里能跑的都行", "任意数量，一个网址", "你自己的 Hub", "open / send / wait / read", "是，MIT + FSL"],
         ["否：是 Claude Code 会话，不是终端", "多台机器的会话在同一个列表里", "Anthropic 的服务器；对话记录存储在那里", "文档未说明", "否"],
         ["是：vt &lt;任意命令&gt;、vt --shell", "每台机器一个服务器", "自选：局域网、Tailscale、ngrok、Cloudflare", "只能启动命令", "是，MIT"],
         ["否：封装 claude 和 codex", "多台；spawn --machine", "默认经 slopus 云，端到端加密", "create / send / history / wait", "可选，MIT"],

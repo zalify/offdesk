@@ -43,7 +43,7 @@ App 安装后的名字是 **Offdesk Dev**，本文简称 Offdesk。命令行工�
 - **自托管部署：** 在 macOS/Linux 上使用 Rust 二进制或 Docker 部署，数据存于 SQLite，Web UI 内置在 Hub 二进制中。
 - **App 加密连接：** 已配对的 App 与 Hub 之间端到端加密。普通浏览器访问走另一套登录流程；从公网用浏览器访问需要 HTTPS 和身份验证。
 
-本仓库中的 Hub、node、CLI 和客户端均采用 **MIT 许可证**。自托管不需要任何厂商账号。可选的 **Offdesk Cloud** 是一项独立的闭源服务，提供托管的远程访问。它的开源本地连接器会检查加密连接是否可达，在隧道持续故障时自动重启，长时间中断时按退避策略重试。
+本仓库中的 Hub、node、CLI 以及协议和加密 crate 采用 **MIT 许可证**；Web UI 和桌面端、手机端 App 以 **FSL-1.1-MIT** 公开源码（见[许可证](#许可证)）。自托管不需要任何厂商账号。可选的 **Offdesk Cloud** 是一项独立的闭源服务，提供托管的远程访问。它的开源本地连接器会检查加密连接是否可达，在隧道持续故障时自动重启，长时间中断时按退避策略重试。
 
 有问题、配置没跑通、想要什么功能：来 [Discord](https://discord.gg/aFUu6VMzc)。
 
@@ -379,4 +379,4 @@ Cloud 会通过 `*.cloud.offdesk.dev` 下的托管地址转发加密的 App 流�
 
 ## 许可证
 
-本仓库代码采用 MIT 许可证，见 [LICENSE](LICENSE)。可选的 Offdesk Cloud 服务单独维护，不包含在本仓库中。
+`crates/` 下的全部代码（Hub、node、CLI、协议和加密 crate）以及 `packages/shared` 采用 MIT 许可证。Web UI（`packages/app`）和桌面端、Android、iOS App（`packages/desktop`）采用 Functional Source License（FSL-1.1-MIT）：可以阅读、审计、编译、修改和使用（包括在工作中使用），但不能拿来做竞品，每个版本发布两年后自动转为 MIT。0.25.0 及以前的版本全部是 MIT。见 [LICENSE](LICENSE) 和 [TRADEMARKS.md](TRADEMARKS.md)。可选的 Offdesk Cloud 服务单独维护，不包含在本仓库中。

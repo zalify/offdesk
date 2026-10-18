@@ -68,8 +68,9 @@ Hub y tus sesiones tienen que seguir en línea.
   de sesión aparte; el acceso público desde el navegador necesita HTTPS y
   autenticación.
 
-El Hub, el node, la CLI y los clientes de este repositorio tienen **licencia
-MIT**. Para autoalojarlo no necesitas ninguna cuenta del proveedor. El
+El Hub, el node, la CLI y los crates de protocolo y cifrado de este
+repositorio tienen **licencia MIT**; la interfaz web y las apps de escritorio
+y móvil publican su código bajo **FSL-1.1-MIT** ([Licencia](#licencia)). Para autoalojarlo no necesitas ninguna cuenta del proveedor. El
 servicio opcional **Offdesk Cloud** ofrece acceso remoto gestionado como
 servicio aparte y de código cerrado. Su conector local, de código abierto,
 comprueba la accesibilidad cifrada y se reinicia solo tras fallos persistentes
@@ -647,5 +648,12 @@ de quedar desconectados.
 
 ## Licencia
 
-El código de este repositorio es MIT. Consulta [LICENSE](LICENSE). El
+Todo lo que está en `crates/` (el Hub, el node, la CLI y los crates de
+protocolo y cifrado) y `packages/shared` es MIT. La interfaz web
+(`packages/app`) y las apps de escritorio, Android e iOS (`packages/desktop`)
+usan la Functional Source License, FSL-1.1-MIT: puedes leerlas, auditarlas,
+compilarlas, modificarlas y usarlas, también en el trabajo, pero no ofrecerlas
+como producto competidor, y cada versión pasa a MIT dos años después de
+publicarse. Las versiones hasta la 0.25.0 son íntegramente MIT. Consulta
+[LICENSE](LICENSE) y [TRADEMARKS.md](TRADEMARKS.md). El
 servicio opcional Offdesk Cloud se mantiene por separado y no se incluye aquí.

@@ -34,7 +34,7 @@ const de: Dict = {
   home: {
     title: "Offdesk — Ein Terminal für dich und deine Agents",
     description:
-      "Selbst gehostetes Remote-Terminal für dich und deine Agents: Claude Code, Codex und alles in tmux. Agents nutzen die CLI, du übernimmst vom Handy. MIT-Lizenz.",
+      "Selbst gehostetes Remote-Terminal für dich und deine Agents: Claude Code, Codex und alles in tmux. Agents nutzen die CLI, du übernimmst vom Handy. Hub unter MIT-Lizenz.",
     hero: {
       title: "Ein Terminal, das du mit deinen Agents teilst.",
       lead: "Agents öffnen Terminals über die CLI, tippen hinein und lesen sie aus. Du siehst dieselben Terminals auf dem Handy und übernimmst die Tastatur, wenn sie dich brauchen.",
@@ -50,7 +50,7 @@ const de: Dict = {
       { key: "rechner", value: "beliebig viele, eine url" },
       { key: "traffic", value: "über deinen eigenen hub" },
       { key: "agents", value: "open · send · wait · read" },
-      { key: "lizenz", value: "selbst gehostet, MIT" },
+      { key: "lizenz", value: "selbst gehostet, Hub MIT" },
     ],
     beats: {
       title: "Wer die Tastatur braucht, nimmt sie sich.",
@@ -164,7 +164,7 @@ const de: Dict = {
         "Für verschlüsselten App-Zugriff scannst du den verschlüsselten Kopplungscode mit dem Scanner der App. Für normalen Browserzugriff richtest du die Authentifizierung ein, wie in der Tunnel-Anleitung beschrieben.",
       cloudBadge: "beta nur auf einladung",
       cloudBody:
-        "Das optionale Offdesk Cloud bietet verwalteten Fernzugriff. Der Dienst ist Closed Source; Hub, Node, CLI und Clients im öffentlichen Repository bleiben unter MIT-Lizenz. Der lokale Connector prüft die verschlüsselte Erreichbarkeit und versucht es bei anhaltenden Tunnelfehlern automatisch mit Backoff erneut. Lokale Nutzung braucht kein Cloud-Konto.",
+        "Das optionale Offdesk Cloud bietet verwalteten Fernzugriff. Der Dienst ist Closed Source; im öffentlichen Repository stehen Hub, Node und CLI unter MIT-Lizenz, Web-UI und Apps sind unter FSL-1.1-MIT im Quellcode einsehbar. Der lokale Connector prüft die verschlüsselte Erreichbarkeit und versucht es bei anhaltenden Tunnelfehlern automatisch mit Backoff erneut. Lokale Nutzung braucht kein Cloud-Konto.",
     },
     more: {
       title: "Remote-Shells, mobile Coding-Agents und CLI-Automatisierung.",
@@ -211,7 +211,7 @@ const de: Dict = {
         "Selbst gehostet",
       ],
       rows: [
-        ["Alles, was in tmux läuft", "Beliebig viele, eine URL", "Deinen eigenen Hub", "open / send / wait / read", "Ja, MIT"],
+        ["Alles, was in tmux läuft", "Beliebig viele, eine URL", "Deinen eigenen Hub", "open / send / wait / read", "Ja, MIT + FSL"],
         ["Nein – eine Claude-Code-Session, kein Terminal", "Sessions mehrerer Rechner in einer Liste", "Server von Anthropic; Transkript wird dort gespeichert", "Nicht dokumentiert", "Nein"],
         ["Ja – vt &lt;beliebiger Befehl&gt;, vt --shell", "Ein Server pro Rechner", "Deine Wahl: LAN, Tailscale, ngrok, Cloudflare", "Startet nur Befehle", "Ja, MIT"],
         ["Nein – umhüllt claude und codex", "Mehrere; spawn --machine", "Standardmäßig slopus-Cloud, Ende-zu-Ende-verschlüsselt", "create / send / history / wait", "Optional, MIT"],

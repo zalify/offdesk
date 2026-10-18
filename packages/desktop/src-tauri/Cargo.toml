@@ -2,7 +2,7 @@
 name = "offdesk-desktop"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "FSL-1.1-MIT"
 
 # `cdylib` is required by Tauri's mobile (Android/iOS) build, which loads
 # the Rust code as a shared library from the JVM / ObjC runtime.

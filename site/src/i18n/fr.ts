@@ -34,7 +34,7 @@ const fr: Dict = {
   home: {
     title: "Offdesk — Un terminal, partagé entre vous et vos agents",
     description:
-      "Terminal distant auto-hébergé : vos agents IA ouvrent des terminaux, y écrivent et les lisent via la CLI ; vous les suivez depuis votre téléphone et reprenez le clavier. Pour Claude Code, Codex et tout ce qui tourne dans tmux. Licence MIT.",
+      "Terminal distant auto-hébergé : vos agents IA ouvrent des terminaux, y écrivent et les lisent via la CLI ; vous les suivez depuis votre téléphone et reprenez le clavier. Pour Claude Code, Codex et tout ce qui tourne dans tmux. Hub sous licence MIT.",
     hero: {
       title: "Un terminal, partagé avec vos agents.",
       lead: "Les agents ouvrent des terminaux, y écrivent et les lisent via la CLI. Vous suivez les mêmes depuis votre téléphone, et reprenez le clavier quand ils ont besoin de vous.",
@@ -50,7 +50,7 @@ const fr: Dict = {
       { key: "machines", value: "illimitées, une seule url" },
       { key: "trafic", value: "via votre propre hub" },
       { key: "agents", value: "open · send · wait · read" },
-      { key: "licence", value: "auto-hébergé, MIT" },
+      { key: "licence", value: "auto-hébergé, Hub MIT" },
     ],
     beats: {
       title: "Le clavier est à qui en a besoin.",
@@ -164,7 +164,7 @@ const fr: Dict = {
         "Pour l’accès chiffré via l’App, scannez le code d’appairage chiffré avec le scanner de l’App. Pour l’accès navigateur ordinaire, configurez l’authentification comme décrit dans le guide du tunnel.",
       cloudBadge: "bêta sur invitation",
       cloudBody:
-        "Offdesk Cloud, optionnel, propose un accès distant géré. Ce service n’est pas open source ; le Hub, le node, la CLI et les clients du dépôt public restent sous licence MIT. Le connecteur local vérifie la joignabilité chiffrée et relance automatiquement, avec un délai croissant, les tunnels qui échouent durablement. L’usage local ne demande aucun compte Cloud.",
+        "Offdesk Cloud, optionnel, propose un accès distant géré. Ce service n’est pas open source ; dans le dépôt public, le Hub, le node et la CLI sont sous licence MIT, et l’interface web et les apps publient leur code sous FSL-1.1-MIT. Le connecteur local vérifie la joignabilité chiffrée et relance automatiquement, avec un délai croissant, les tunnels qui échouent durablement. L’usage local ne demande aucun compte Cloud.",
     },
     more: {
       title: "Shells distants, agents de code sur mobile et automatisation CLI.",
@@ -211,7 +211,7 @@ const fr: Dict = {
         "Auto-hébergé",
       ],
       rows: [
-        ["Tout ce qui tourne dans tmux", "Illimitées, une seule URL", "Votre propre hub", "open / send / wait / read", "Oui, MIT"],
+        ["Tout ce qui tourne dans tmux", "Illimitées, une seule URL", "Votre propre hub", "open / send / wait / read", "Oui, MIT + FSL"],
         ["Non — une session Claude Code, pas un terminal", "Sessions de plusieurs machines dans une seule liste", "Serveurs d’Anthropic ; transcription stockée chez eux", "Non documenté", "Non"],
         ["Oui — vt &lt;n’importe quelle commande&gt;, vt --shell", "Un serveur par machine", "Au choix : LAN, Tailscale, ngrok, Cloudflare", "Lance seulement des commandes", "Oui, MIT"],
         ["Non — enveloppe claude et codex", "Plusieurs ; spawn --machine", "Cloud slopus par défaut, chiffré de bout en bout", "create / send / history / wait", "Optionnel, MIT"],

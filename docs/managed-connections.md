@@ -47,7 +47,7 @@ You can continue with local network pairing without a Cloud account.
 
 The **Cloud account** button opens account management in the browser. Browser
 sessions never grant access to local native commands, and GitHub credentials do
-not enter the open-source App. **Turn off remote access** stops only this Cloud
+not enter the App. **Turn off remote access** stops only this Cloud
 connector; deletion may remain pending until the provider confirms cleanup.
 
 ## CLI connection

@@ -9,6 +9,8 @@ name = "offdesk-hub"
 path = "src/main.rs"
 
 [features]
+# The Web UI is FSL-1.1-MIT (packages/app/LICENSE.md), so a binary built with
+# this feature includes FSL code; without it the Hub is MIT only.
 # Bakes packages/app/dist into the binary so `offdesk-hub` serves the web UI
 # with nothing beside it. Off by default: a plain `cargo build` must not
 # require a built frontend. Release builds turn it on.
