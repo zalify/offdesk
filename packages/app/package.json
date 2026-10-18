@@ -2,7 +2,7 @@
   "name": "@offdesk/app",
   "version": "0.1.0",
   "private": true,
-  "license": "MIT",
+  "license": "FSL-1.1-MIT",
   "main": "expo-router/entry",
   "scripts": {
     "dev:web": "node scripts/copy-pdfjs-assets.mjs && expo start --web",

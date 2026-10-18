@@ -69,7 +69,9 @@ machines qui font tourner votre Hub et vos sessions doivent rester allumées.
   connexion distincte ; l'accès public par navigateur exige HTTPS et une
   authentification.
 
-Le Hub, le node, la CLI et les clients de ce dépôt sont sous **licence MIT**.
+Le Hub, le node, la CLI et les crates de protocole et de chiffrement de ce
+dépôt sont sous **licence MIT** ; l'interface web et les apps de bureau et
+mobiles publient leur code sous **FSL-1.1-MIT** ([Licence](#licence)).
 L'auto-hébergement ne demande aucun compte chez un éditeur. **Offdesk Cloud**,
 optionnel, fournit un accès distant géré sous forme de service séparé et
 propriétaire. Son connecteur local, open source, vérifie l'accessibilité
@@ -647,5 +649,13 @@ les [issues](https://github.com/zalify/offdesk/issues) GitHub pour les bugs.
 
 ## Licence
 
-Le code de ce dépôt est sous licence MIT. Voir [LICENSE](LICENSE). Le service
+Tout ce qui se trouve dans `crates/` (le Hub, le node, la CLI et les crates de
+protocole et de chiffrement) et `packages/shared` est sous licence MIT.
+L'interface web (`packages/app`) et les apps de bureau, Android et iOS
+(`packages/desktop`) sont sous Functional Source License, FSL-1.1-MIT : vous
+pouvez les lire, les auditer, les compiler, les modifier et les utiliser, y
+compris au travail, mais pas les proposer comme produit concurrent, et chaque
+version passe sous MIT deux ans après sa sortie. Les versions jusqu'à 0.25.0
+sont entièrement sous MIT. Voir [LICENSE](LICENSE) et
+[TRADEMARKS.md](TRADEMARKS.md). Le service
 optionnel Offdesk Cloud est maintenu séparément et n'est pas inclus ici.

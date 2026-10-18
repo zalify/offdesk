@@ -1,3 +1,26 @@
+Copyright (c) 2026 Zalify Inc.
+
+Portions of this repository are licensed as follows:
+
+- Everything under `packages/app` (the Web UI) and `packages/desktop` (the
+  desktop, Android and iOS apps) is licensed under the Functional Source
+  License, Version 1.1, MIT Future License (FSL-1.1-MIT), in the LICENSE.md
+  file of each of those directories. Each version becomes available under the
+  MIT license two years after it is released.
+- Third-party components keep their own licenses, such as
+  `packages/app/public/fonts/Iosevka-LICENSE.md`.
+- Everything else, including the Hub, node, CLI and the protocol and
+  encryption crates under `crates/`, is licensed under the MIT license below.
+  Hub binaries built with the `embed-ui` feature, as release builds are,
+  contain the compiled Web UI and so include FSL-1.1-MIT code; a Hub built
+  without it is MIT only.
+
+Versions up to and including 0.25.0 were released entirely under the MIT
+license, and they remain so.
+
+The Offdesk names and logos are not licensed under either license; see
+TRADEMARKS.md.
+
 MIT License
 
 Copyright (c) 2026 Zalify Inc.

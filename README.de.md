@@ -69,8 +69,10 @@ dein Hub und deine Sessions laufen, müssen online bleiben.
   gekoppelten Apps und dem Hub. Normaler Browserzugriff nutzt einen eigenen
   Anmeldeweg; öffentlicher Browserzugriff erfordert HTTPS und Authentifizierung.
 
-Hub, node, CLI und Clients in diesem Repository stehen unter der
-**MIT-Lizenz**. Selbst hosten geht ohne Konto beim Anbieter. Das optionale
+Hub, node, CLI sowie die Protokoll- und Verschlüsselungs-Crates in diesem
+Repository stehen unter der **MIT-Lizenz**; Web-UI, Desktop- und
+Smartphone-Apps sind unter **FSL-1.1-MIT** im Quellcode einsehbar
+([Lizenz](#lizenz)). Selbst hosten geht ohne Konto beim Anbieter. Das optionale
 **Offdesk Cloud** bietet verwalteten Fernzugriff als separaten,
 Closed-Source-Dienst. Sein quelloffener lokaler Connector prüft die
 verschlüsselte Erreichbarkeit und startet nach anhaltenden Tunnel-Ausfällen
@@ -650,6 +652,12 @@ schauen live zu, statt getrennt zu werden.
 
 ## Lizenz
 
-Der Code in diesem Repository steht unter der MIT-Lizenz. Siehe
-[LICENSE](LICENSE). Der optionale Dienst Offdesk Cloud wird separat gepflegt
+Alles unter `crates/` (Hub, node, CLI, Protokoll- und Verschlüsselungs-Crates)
+und `packages/shared` steht unter der MIT-Lizenz. Die Web-UI (`packages/app`)
+und die Desktop-, Android- und iOS-Apps (`packages/desktop`) stehen unter der
+Functional Source License, FSL-1.1-MIT: Du darfst sie lesen, prüfen, bauen,
+ändern und nutzen, auch im Beruf, aber nicht als Konkurrenzprodukt anbieten;
+jede Version wird zwei Jahre nach ihrer Veröffentlichung MIT. Versionen bis
+0.25.0 stehen vollständig unter MIT. Siehe [LICENSE](LICENSE) und
+[TRADEMARKS.md](TRADEMARKS.md). Der optionale Dienst Offdesk Cloud wird separat gepflegt
 und ist hier nicht enthalten.

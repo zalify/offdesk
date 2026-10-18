@@ -71,3 +71,23 @@ shards (`e2e/env-playbook.md`).
 
 - Every factual claim in user-facing docs must be backed by code in this repo.
 - Product name is `offdesk`, lowercase, always.
+
+## Licensing
+
+The repository has two licenses, by directory (see `LICENSE`):
+
+- `crates/*`, `packages/shared` and everything else: MIT.
+- `packages/app` and `packages/desktop`: FSL-1.1-MIT, in each directory's
+  `LICENSE.md`. Each version becomes MIT two years after its release.
+
+Keep the dependency direction one way: code under the FSL may depend on MIT
+code, but nothing under `crates/` or `packages/shared` may depend on
+`packages/app` or `packages/desktop`. The one exception is the Hub's optional
+`embed-ui` feature, which bakes the built Web UI into release binaries. Protocol and encryption code that third
+parties need to build a compatible client belongs in a crate, not in an app.
+
+By submitting a contribution, you agree that it is licensed under the license
+of the directory it changes, and that Zalify Inc. may also license your
+contributions to `packages/app` and `packages/desktop` under other terms,
+including commercial ones. The names and logos are covered by `TRADEMARKS.md`,
+not by either license.

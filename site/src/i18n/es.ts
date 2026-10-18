@@ -37,7 +37,7 @@ const es: Dict = {
   home: {
     title: "Offdesk — Una terminal remota, tuya y de tus agentes",
     description:
-      "Terminal remota autoalojada que compartes con tus agentes: ellos la usan con la CLI; tú la ves desde el teléfono y tomas el teclado. Claude Code, Codex, tmux. MIT.",
+      "Terminal remota autoalojada que compartes con tus agentes: ellos la usan con la CLI; tú la ves desde el teléfono y tomas el teclado. Claude Code, Codex, tmux. Hub MIT.",
     hero: {
       title: "Una terminal, tuya y de tus agentes.",
       lead: "Los agentes abren terminales, escriben en ellas y las leen con la CLI. Tú ves las mismas desde el teléfono y tomas el teclado cuando te necesitan.",
@@ -54,7 +54,7 @@ const es: Dict = {
       { key: "máquinas", value: "las que quieras, una url" },
       { key: "tráfico", value: "por tu propio hub" },
       { key: "agentes", value: "open · send · wait · read" },
-      { key: "licencia", value: "autoalojado, MIT" },
+      { key: "licencia", value: "autoalojado, Hub MIT" },
     ],
     beats: {
       title: "Quien necesita el teclado, lo toma.",
@@ -168,7 +168,7 @@ const es: Dict = {
         "Para el acceso cifrado con la App, escanea el código de emparejamiento cifrado con el escáner de la App. Para el acceso normal por navegador, configura la autenticación como se describe en la guía del túnel.",
       cloudBadge: "beta solo por invitación",
       cloudBody:
-        "Offdesk Cloud, opcional, ofrece acceso remoto gestionado. Su servicio es de código cerrado; el Hub, el node, la CLI y los clientes del repositorio público siguen bajo licencia MIT. El conector local comprueba que la conexión cifrada sea alcanzable y reintenta automáticamente, con backoff, los fallos persistentes del túnel. El uso local no necesita cuenta de Cloud.",
+        "Offdesk Cloud, opcional, ofrece acceso remoto gestionado. Su servicio es de código cerrado; en el repositorio público, el Hub, el node y la CLI tienen licencia MIT, y la interfaz web y las apps publican su código bajo FSL-1.1-MIT. El conector local comprueba que la conexión cifrada sea alcanzable y reintenta automáticamente, con backoff, los fallos persistentes del túnel. El uso local no necesita cuenta de Cloud.",
     },
     more: {
       title: "Shells remotas, agentes de código en el teléfono y automatización con la CLI.",
@@ -217,7 +217,7 @@ const es: Dict = {
       // One row per project, in the order of the table in the template; names
       // stay in English and live in the template.
       rows: [
-        ["Todo lo que corre en tmux", "Las que quieras, una URL", "Tu propio hub", "open / send / wait / read", "Sí, MIT"],
+        ["Todo lo que corre en tmux", "Las que quieras, una URL", "Tu propio hub", "open / send / wait / read", "Sí, MIT + FSL"],
         ["No — una sesión de Claude Code, no una terminal", "Sesiones de varias máquinas en una lista", "Servidores de Anthropic; la transcripción se guarda allí", "No documentado", "No"],
         ["Sí — vt &lt;cualquier comando&gt;, vt --shell", "Un servidor por máquina", "Tú eliges: LAN, Tailscale, ngrok, Cloudflare", "Solo lanza comandos", "Sí, MIT"],
         ["No — envuelve claude y codex", "Varias; spawn --machine", "Nube de slopus por defecto, cifrado de extremo a extremo", "create / send / history / wait", "Opcional, MIT"],
