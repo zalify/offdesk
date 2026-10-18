@@ -1,11 +1,15 @@
 interface Size { width: number; height: number }
 
-/** Fit after the terminal's own viewport settles, not just window resize.
- * Fixed chrome and IME animations can finish in separate layout passes. */
+/** Fit when the terminal's own viewport changes, not just on window resize:
+ * fixed chrome and the keyboard can land in separate layout passes. The fit
+ * runs on the next frame (changes within one frame make one fit). Waiting
+ * any longer leaves the old grid on screen — clipped below the keyboard as
+ * it opens, half blank as it closes — for the whole wait. */
 export function createMobileViewportFitScheduler<Timer>(options: {
   canFit: () => boolean;
   fit: () => void;
-  schedule: (callback: () => void, delay: number) => Timer;
+  /** Runs callback on the next frame (requestAnimationFrame). */
+  schedule: (callback: () => void) => Timer;
   cancel: (timer: Timer) => void;
 }) {
   let previous: Size | null = null;
@@ -29,7 +33,7 @@ export function createMobileViewportFitScheduler<Timer>(options: {
       timer = options.schedule(() => {
         timer = null;
         if (!disposed && options.canFit()) options.fit();
-      }, 150);
+      });
     },
     dispose() { disposed = true; clear(); },
   };

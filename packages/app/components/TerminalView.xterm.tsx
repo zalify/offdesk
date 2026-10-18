@@ -1506,8 +1506,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           measureLayout();
           fitToContainerRef.current({ skipIfUnchanged: true });
         },
-        schedule: (callback, delay) => window.setTimeout(callback, delay),
-        cancel: (timer) => window.clearTimeout(timer),
+        schedule: (callback) => requestAnimationFrame(callback),
+        cancel: (frame) => cancelAnimationFrame(frame),
       });
       const resizeObserver = new ResizeObserver(() => {
         scheduleMeasure();

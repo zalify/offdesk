@@ -4,21 +4,26 @@ afterEach(()=>vi.useRealTimers());
 function setup() {
   vi.useFakeTimers();
   const fit=vi.fn(); const canFit=vi.fn(()=>true);
-  const scheduler=createMobileViewportFitScheduler({canFit,fit,schedule:setTimeout,cancel:clearTimeout});
+  // A frame, as requestAnimationFrame would run it.
+  const scheduler=createMobileViewportFitScheduler({canFit,fit,schedule:callback=>setTimeout(callback,16),cancel:clearTimeout});
   scheduler.observe({width:390,height:700});
   return {scheduler,fit,canFit};
 }
 describe('mobile container fitting',()=>{
-  it('waits for the final keyboard and fixed-toolbar layout without fitting on mount',()=>{
+  it('fits on the next frame after the keyboard or fixed toolbars move, never on mount',()=>{
     const {scheduler,fit}=setup();vi.advanceTimersByTime(200);expect(fit).not.toHaveBeenCalled();
-    scheduler.observe({width:390,height:420});vi.advanceTimersByTime(100);
-    scheduler.observe({width:390,height:360});vi.advanceTimersByTime(149);expect(fit).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);expect(fit).toHaveBeenCalledTimes(1);
-    scheduler.observe({width:390,height:360});vi.advanceTimersByTime(200);expect(fit).toHaveBeenCalledTimes(1);
+    scheduler.observe({width:390,height:420});vi.advanceTimersByTime(16);expect(fit).toHaveBeenCalledTimes(1);
+    scheduler.observe({width:390,height:360});vi.advanceTimersByTime(16);expect(fit).toHaveBeenCalledTimes(2);
+    scheduler.observe({width:390,height:360});vi.advanceTimersByTime(200);expect(fit).toHaveBeenCalledTimes(2);
+  });
+  it('makes one fit for changes within a frame',()=>{
+    const {scheduler,fit}=setup();
+    scheduler.observe({width:390,height:420});scheduler.observe({width:390,height:360});
+    vi.advanceTimersByTime(16);expect(fit).toHaveBeenCalledTimes(1);
   });
   it('responds to fixed UI changes even when the window does not resize, and restores height',()=>{
-    const {scheduler,fit}=setup();scheduler.observe({width:390,height:560});vi.advanceTimersByTime(150);
-    scheduler.observe({width:390,height:700});vi.advanceTimersByTime(150);expect(fit).toHaveBeenCalledTimes(2);
+    const {scheduler,fit}=setup();scheduler.observe({width:390,height:560});vi.advanceTimersByTime(16);
+    scheduler.observe({width:390,height:700});vi.advanceTimersByTime(16);expect(fit).toHaveBeenCalledTimes(2);
   });
   it('does not resize viewers or inactive panes and rechecks control before firing',()=>{
     const {scheduler,fit,canFit}=setup();canFit.mockReturnValue(false);

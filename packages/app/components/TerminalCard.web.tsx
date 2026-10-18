@@ -30,7 +30,6 @@ const LiveTerminalView = lazy(() =>
 
 const FIT_REF_RETRY_LIMIT = 10;
 const FIT_REF_RETRY_DELAY_MS = 100;
-const MOBILE_VIEWPORT_SETTLE_MS = 150;
 
 export interface TerminalCardRef {
   fitToContainer: (opts?: {
@@ -691,7 +690,6 @@ function MobileViewportTerminalSync({
 }) {
   const viewportHeight = useVisualViewportHeight();
   const previousViewportHeightRef = useRef<number | null>(null);
-  const viewportChangeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const previousHeight = previousViewportHeightRef.current;
@@ -705,23 +703,13 @@ function MobileViewportTerminalSync({
     });
     if (!action) return;
 
-    if (viewportChangeTimerRef.current !== null) {
-      window.clearTimeout(viewportChangeTimerRef.current);
-    }
-    viewportChangeTimerRef.current = window.setTimeout(() => {
-      viewportChangeTimerRef.current = null;
-      requestAnimationFrame(() => {
-        if (action === "refit") onRefit();
-        else onScrollToBottom();
-      });
-    }, MOBILE_VIEWPORT_SETTLE_MS);
-
-    return () => {
-      if (viewportChangeTimerRef.current !== null) {
-        window.clearTimeout(viewportChangeTimerRef.current);
-        viewportChangeTimerRef.current = null;
-      }
-    };
+    // On the next frame, once layout has the new height: until then the old
+    // grid stays up, clipped by the opening keyboard or half blank as it closes.
+    const frame = requestAnimationFrame(() => {
+      if (action === "refit") onRefit();
+      else onScrollToBottom();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [isActive, isController, onRefit, onScrollToBottom, viewportHeight]);
 
   return null;
