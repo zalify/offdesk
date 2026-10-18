@@ -298,6 +298,38 @@ test("mobile terminal switch over a slow link keeps the previous screen until th
   await expect(page.getByTestId(`workspace-pane-${firstTerminalId}`)).toHaveCount(0);
 });
 
+test("mobile app load keeps one loading view until the Hub answers, never the empty-Hub screen", async ({
+  page,
+}) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  await createTerminalViaApi(page);
+
+  // A slow Hub, as right after pairing over a remote link: the first
+  // bootstrap answers late. Until it does, there is nothing to show but the
+  // loading view; an empty machine list then means "not loaded yet".
+  await page.route("**/api/bootstrap", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await route.continue();
+  });
+  await page.addInitScript(() => {
+    const w = window as unknown as { __emptyHubSeen?: boolean };
+    w.__emptyHubSeen = false;
+    const watch = () => {
+      if (document.querySelector("[data-testid='empty-machines']")) w.__emptyHubSeen = true;
+      requestAnimationFrame(watch);
+    };
+    requestAnimationFrame(watch);
+  });
+  await page.reload();
+
+  await expect(page.getByTestId("mobile-workbench")).toBeVisible({ timeout: 20_000 });
+  expect(
+    await page.evaluate(() => (window as unknown as { __emptyHubSeen?: boolean }).__emptyHubSeen),
+  ).toBe(false);
+});
+
 test("mobile back button returns to the previous terminal without reloading the screen", async ({
   page,
 }) => {
@@ -306,6 +338,16 @@ test("mobile back button returns to the previous terminal without reloading the 
   await requestMachineControl(page);
   const firstTerminalId = await createTerminalViaApi(page, { cwd: "/root" });
   const secondTerminalId = await createTerminalViaApi(page, { cwd: "/tmp" });
+  await showDrawnTerminal(page, secondTerminalId);
+  // The app as it usually is: loaded (an update, a Hub switch, a reload) with
+  // a terminal already in the URL, which Expo Router keeps in its own record
+  // of the entry.
+  await page.reload();
+  await expect
+    .poll(async () => (await readTerminalBuffer(page, secondTerminalId)).trim(), {
+      timeout: 20_000,
+    })
+    .not.toBe("");
   await showDrawnTerminal(page, firstTerminalId);
   await showDrawnTerminal(page, secondTerminalId);
 
