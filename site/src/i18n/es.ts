@@ -159,7 +159,7 @@ const es: Dict = {
       tunnelGuide: "la guía del túnel",
       lanSetup: "configuración lan",
       pairing: "emparejamiento cifrado de la app",
-      cloudSetup: "configuración de cloud",
+      cloudSetup: "configuración del acceso remoto",
       homeTitle: "# en la máquina de casa",
       homeBody:
         'Crea el túnel en el panel de Cloudflare, apúntalo a <span class="inline-code">server:4317</span>, pon su token en <span class="inline-code">.env</span> y:',
@@ -168,7 +168,7 @@ const es: Dict = {
         "Para el acceso cifrado con la App, escanea el código de emparejamiento cifrado con el escáner de la App. Para el acceso normal por navegador, configura la autenticación como se describe en la guía del túnel.",
       cloudBadge: "beta solo por invitación",
       cloudBody:
-        "Offdesk Cloud, opcional, ofrece acceso remoto gestionado. Su servicio es de código cerrado; en el repositorio público, el Hub, el node y la CLI tienen licencia MIT, y la interfaz web y las apps publican su código bajo FSL-1.1-MIT. El conector local comprueba que la conexión cifrada sea alcanzable y reintenta automáticamente, con backoff, los fallos persistentes del túnel. El uso local no necesita cuenta de Cloud.",
+        "Offdesk, el servicio alojado en offdesk.so, ofrece acceso remoto gestionado opcional. Su servicio es de código cerrado; en el repositorio público, el Hub, el node y la CLI tienen licencia MIT, y la interfaz web y las apps publican su código bajo FSL-1.1-MIT. El conector local comprueba que la conexión cifrada sea alcanzable y reintenta automáticamente, con backoff, los fallos persistentes del túnel. El uso local no necesita cuenta de Offdesk.",
     },
     more: {
       title: "Shells remotas, agentes de código en el teléfono y automatización con la CLI.",
@@ -289,7 +289,7 @@ const es: Dict = {
     lead: "Convierte en tu hub el Mac que se queda encendido. Después, abre su terminal desde tu teléfono. Empieza con ambos dispositivos en la misma red local.",
     preview: "Sobre las capturas",
     previewText:
-      "Estas capturas son de nuestra prueba de 0.6.4-rc.1 en un Mac Mini. La versión estable actual incluye el emparejamiento del teléfono y la configuración de Cloud actualizados. Las instrucciones siguen la nueva versión; las capturas antiguas conservan sus etiquetas de RC y su diseño. El panel de emparejamiento ahora separa Offdesk App de Browser access. El botón de descarga ofrece la versión estable.",
+      "Estas capturas son de nuestra prueba de 0.6.4-rc.1 en un Mac Mini. La versión estable actual incluye el emparejamiento del teléfono y la configuración del acceso remoto actualizados. Las instrucciones siguen la nueva versión; las capturas antiguas conservan sus etiquetas de RC y su diseño. El panel de emparejamiento ahora separa Offdesk App de Browser access. El botón de descarga ofrece la versión estable.",
     download: "Descargar para Mac",
     phone: "Consigue la app del teléfono",
     contents: "En esta página",
@@ -357,10 +357,10 @@ const es: Dict = {
           "Mantén el Mac encendido, con la sesión iniciada y conectado. Una dirección local funciona en esa red; configura el acceso remoto por separado cuando quieras usar Offdesk fuera de casa. Escanear un código no hace que una dirección local sea accesible desde internet.",
       },
       cloud: {
-        title: "7. Opcional: conéctate fuera de casa con Offdesk Cloud",
-        body: "Cloud es por ahora una beta solo por invitación. Inicia sesión y canjea tu invitación en la <a href='https://offdesk.so'>consola de Cloud</a>. En el Mac, elige <strong>Set up remote access</strong>, sigue los pasos de inicio de sesión y verifica la autorización del equipo. Cuando la dirección de Cloud esté lista, empareja tu teléfono con el modo Offdesk App.",
+        title: "7. Opcional: conéctate fuera de casa con tu cuenta de Offdesk",
+        body: "El acceso remoto a través de Offdesk (offdesk.so) es por ahora una beta solo por invitación. Inicia sesión y canjea tu invitación en <a href='https://offdesk.so'>offdesk.so</a>. En el Mac, elige <strong>Set up remote access</strong>, sigue los pasos de inicio de sesión y verifica la autorización del equipo. Cuando la dirección remota esté lista, empareja tu teléfono con el modo Offdesk App.",
         extra:
-          "Para el recorrido completo de un usuario nuevo, instala las últimas apps estables de macOS y Android desde este sitio. iOS se distribuye por TestFlight; las builds disponibles dependen de tu grupo de pruebas. Tras la configuración, desactiva la conexión Wi-Fi del teléfono y comprueba la terminal con datos móviles mientras el Mac sigue en línea. Un teléfono emparejado abre <strong>Hub &amp; connection</strong> desde su título. Si solo usas la red local, puedes prescindir de Cloud y de las invitaciones.",
+          "Para el recorrido completo de un usuario nuevo, instala las últimas apps estables de macOS y Android desde este sitio. iOS se distribuye por TestFlight; las builds disponibles dependen de tu grupo de pruebas. Tras la configuración, desactiva la conexión Wi-Fi del teléfono y comprueba la terminal con datos móviles mientras el Mac sigue en línea. Un teléfono emparejado abre <strong>Hub &amp; connection</strong> desde su título. Si solo usas la red local, puedes prescindir de la cuenta de Offdesk y de las invitaciones.",
       },
     },
     trouble: "Si tu pantalla se ve distinta",

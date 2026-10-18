@@ -629,7 +629,7 @@ impl Server {
                 Ok(json!({
                     "protocolVersion": version,
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "offdesk", "version": env!("CARGO_PKG_VERSION")},
+                    "serverInfo": {"name": "offdesk-dev", "version": env!("CARGO_PKG_VERSION")},
                     "instructions": INSTRUCTIONS,
                 }))
             }
@@ -1110,7 +1110,7 @@ mod tests {
             assert_eq!(reply["id"], 1);
             assert_eq!(reply["result"]["protocolVersion"], version);
             assert_eq!(reply["result"]["capabilities"], json!({"tools": {}}));
-            assert_eq!(reply["result"]["serverInfo"]["name"], "offdesk");
+            assert_eq!(reply["result"]["serverInfo"]["name"], "offdesk-dev");
             assert_eq!(
                 reply["result"]["serverInfo"]["version"],
                 env!("CARGO_PKG_VERSION")

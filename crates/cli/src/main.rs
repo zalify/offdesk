@@ -367,8 +367,8 @@ browser of its own: `ls --json` shows it with `opener_browser_id`.")]
     /// Serve the agent browser as MCP tools over stdio (for Claude Code, Codex, ...)
     #[command(after_help = "\
 Register it with an agent that speaks MCP, from inside an offdesk terminal:
-  claude mcp add offdesk -- offdesk mcp
-  codex mcp add offdesk -- offdesk mcp
+  claude mcp add offdesk-dev -- offdesk mcp
+  codex mcp add offdesk-dev -- offdesk mcp
 
 Tools: browser_open, browser_list, browser_close, browser_goto,
 browser_snapshot, browser_click, browser_fill, browser_upload, browser_press, browser_dialog,

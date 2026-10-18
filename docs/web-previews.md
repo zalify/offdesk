@@ -80,9 +80,9 @@ The **website preview itself is HTTPS, not the terminal's end-to-end encrypted
 transport**. The Hub and a TLS-terminating reverse proxy can process page content.
 A separate preview ingress must route to the regular Hub listener (typically
 4317); the encrypted-only listener (typically 4318) remains restricted to
-`/ws/secure`. Do not broaden the managed Cloud tunnel's encrypted-only route to
-serve previews. This open-source feature does not configure or deploy an
-Offdesk Cloud preview service.
+`/ws/secure`. Do not broaden the managed tunnel's encrypted-only route to
+serve previews. This open-source feature does not configure or deploy a
+preview service on the hosted Offdesk (offdesk.so).
 
 ## Development-server compatibility
 

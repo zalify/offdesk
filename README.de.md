@@ -72,9 +72,9 @@ dein Hub und deine Sessions laufen, müssen online bleiben.
 Hub, node, CLI sowie die Protokoll- und Verschlüsselungs-Crates in diesem
 Repository stehen unter der **MIT-Lizenz**; Web-UI, Desktop- und
 Smartphone-Apps sind unter **FSL-1.1-MIT** im Quellcode einsehbar
-([Lizenz](#lizenz)). Selbst hosten geht ohne Konto beim Anbieter. Das optionale
-**Offdesk Cloud** bietet verwalteten Fernzugriff als separaten,
-Closed-Source-Dienst. Sein quelloffener lokaler Connector prüft die
+([Lizenz](#lizenz)). Selbst hosten geht ohne Konto beim Anbieter. Optional bietet das
+gehostete **Offdesk** ([offdesk.so](https://offdesk.so)) verwalteten Fernzugriff
+als separaten Closed-Source-Dienst. Sein quelloffener lokaler Connector prüft die
 verschlüsselte Erreichbarkeit und startet nach anhaltenden Tunnel-Ausfällen
 automatisch neu, mit Backoff bei längeren Störungen.
 
@@ -101,7 +101,7 @@ installiert ist.
 - [Installation unter macOS und Pairing mit dem Smartphone](https://offdesk.dev/de/docs/mac)
 - [Einrichtung im LAN](docs/setup-lan.md) und [öffentlicher Zugriff mit HTTPS, OAuth oder Tailscale](docs/setup-public.md)
 - [Ende-zu-Ende-verschlüsselte App-Verbindungen](docs/encrypted-connections.md) und
-  [optionale Einrichtung von Offdesk Cloud](docs/managed-connections.md)
+  [optionaler Fernzugriff über Offdesk (offdesk.so)](docs/managed-connections.md)
 - [Web-Vorschau für localhost](docs/web-previews.md): optionale Weiterleitung über
   eine eigene Preview-Domain und HTTPS-Ingress, getrennt von der
   Terminal-E2EE
@@ -467,7 +467,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # einen Menschen um Hilfe bitten
 offdesk browser wait-control <browser>          # blockieren, solange ein Mensch ihn steuert (exit 1 bei Timeout)
 offdesk browser take <browser> --reason "..." [--force]   # die Kontrolle von einem Menschen zurückholen
-offdesk mcp                                     # der Agent-Browser als MCP-Tools über stdio: claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # der Agent-Browser als MCP-Tools über stdio: claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # anklickbare Download-Links (OSC 8) für Dateien/Ordner auf diesem Rechner ausgeben; max. 20 MiB pro Datei; kein Hub-Token nötig
 offdesk link [--no-open]                        # den Hub im Browser öffnen; auf dem Rechner des Hubs Anmeldelink + Code
 ```
@@ -617,13 +617,13 @@ Herunterfahren oder Neustart des Rechners ist etwas anderes: tmux bewahrt
 laufende Prozesse nicht über einen Neustart hinweg.
 
 **Brauche ich ein Konto?** Selbst hosten geht ohne Konto beim Anbieter: Die
-Installation legt einen lokalen Benutzer und einen Anmeldelink an. Das
-optionale Offdesk Cloud nutzt eine eigene Anmeldung für den verwalteten
-Fernzugriff.
+Installation legt einen lokalen Benutzer und einen Anmeldelink an. Der
+optionale Fernzugriff über das gehostete Offdesk (offdesk.so) nutzt eine eigene
+Anmeldung.
 
 **Läuft mein Datenverkehr über offdesk.dev?** Direkte LAN-Verbindungen gehen
-an deinen Hub. Das optionale Offdesk Cloud leitet verschlüsselten App-Verkehr
-über eine verwaltete Adresse unter `*.relay.offdesk.cloud`. Ein selbst
+an deinen Hub. Der optionale Fernzugriff über Offdesk (offdesk.so) leitet
+verschlüsselten App-Verkehr über eine verwaltete Adresse unter `*.relay.offdesk.cloud`. Ein selbst
 verwalteter Tunnel läuft über dessen Anbieter.
 [Verschlüsseltes Pairing](docs/encrypted-connections.md) schützt
 Terminal-Inhalte zwischen App und Hub; ein normaler Anmeldelink im Browser ist
@@ -659,5 +659,5 @@ Functional Source License, FSL-1.1-MIT: Du darfst sie lesen, prüfen, bauen,
 ändern und nutzen, auch im Beruf, aber nicht als Konkurrenzprodukt anbieten;
 jede Version wird zwei Jahre nach ihrer Veröffentlichung MIT. Versionen bis
 0.25.0 stehen vollständig unter MIT. Siehe [LICENSE](LICENSE) und
-[TRADEMARKS.md](TRADEMARKS.md). Der optionale Dienst Offdesk Cloud wird separat gepflegt
-und ist hier nicht enthalten.
+[TRADEMARKS.md](TRADEMARKS.md). Der optionale gehostete Dienst Offdesk (offdesk.so) wird
+separat gepflegt und ist hier nicht enthalten.

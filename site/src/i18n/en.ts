@@ -165,7 +165,7 @@ const en = {
       tunnelGuide: "the tunnel guide",
       lanSetup: "lan setup",
       pairing: "encrypted app pairing",
-      cloudSetup: "cloud setup",
+      cloudSetup: "remote access setup",
       homeTitle: "# on the machine at home",
       homeBody:
         'Create the tunnel in Cloudflare\'s dashboard, point it at <span class="inline-code">server:4317</span>, drop its token in <span class="inline-code">.env</span>, and:',
@@ -174,7 +174,7 @@ const en = {
         "For encrypted App access, scan the encrypted pairing code with the App's scanner. For ordinary browser access, configure authentication as described in the tunnel guide.",
       cloudBadge: "invite-only beta",
       cloudBody:
-        "Optional Offdesk Cloud offers managed remote access. Its service is closed source; in the public repository, the Hub, node and CLI are MIT licensed, and the Web UI and apps are source-available under FSL-1.1-MIT. The local connector checks encrypted reachability and automatically retries sustained tunnel failures with backoff. Local use needs no Cloud account.",
+        "The hosted Offdesk at offdesk.so offers optional managed remote access. Its service is closed source; in the public repository, the Hub, node and CLI are MIT licensed, and the Web UI and apps are source-available under FSL-1.1-MIT. The local connector checks encrypted reachability and automatically retries sustained tunnel failures with backoff. Local use needs no Offdesk account.",
     },
     more: {
       title: "Remote shells, mobile coding agents, and CLI automation.",
@@ -294,7 +294,7 @@ const en = {
     lead: "Make the Mac that stays on your hub. Then open its terminal from your phone. Start with both devices on the same local network.",
     preview: "About the screenshots",
     previewText:
-      "These screenshots come from our Mac Mini test of 0.6.4-rc.1. The current stable release includes updated phone pairing and Cloud setup. The instructions below follow the new version; the older screenshots retain their RC labels and layout. The pairing panel now separates Offdesk App from Browser access. The download button serves the stable release.",
+      "These screenshots come from our Mac Mini test of 0.6.4-rc.1. The current stable release includes updated phone pairing and remote access setup. The instructions below follow the new version; the older screenshots retain their RC labels and layout. The pairing panel now separates Offdesk App from Browser access. The download button serves the stable release.",
     download: "Download for Mac",
     phone: "Get the phone app",
     contents: "On this page",
@@ -362,10 +362,10 @@ const en = {
           "Keep the Mac powered on, logged in and connected. A local address works on that network; set up remote access separately when you are ready to use Offdesk away from home. Scanning a code does not make a local address reachable over the internet.",
       },
       cloud: {
-        title: "7. Optional: connect away from home with Offdesk Cloud",
-        body: "Cloud is currently an invite-only beta. Sign in and redeem your invitation in the <a href='https://offdesk.so'>Cloud console</a>. On the Mac, choose <strong>Set up remote access</strong>, follow the sign-in steps and verify the computer authorization. Once the Cloud address is ready, pair your phone using the Offdesk App mode.",
+        title: "7. Optional: connect away from home with your Offdesk account",
+        body: "Remote access through Offdesk (offdesk.so) is currently an invite-only beta. Sign in and redeem your invitation at <a href='https://offdesk.so'>offdesk.so</a>. On the Mac, choose <strong>Set up remote access</strong>, follow the sign-in steps and verify the computer authorization. Once the remote address is ready, pair your phone using the Offdesk App mode.",
         extra:
-          "For the full new-user journey, install the latest stable macOS and Android apps from this site. iOS is distributed through TestFlight; available builds depend on your testing group. After setup, turn off the phone’s Wi-Fi and check the terminal over mobile data while the Mac stays online. A paired phone opens <strong>Hub &amp; connection</strong> from its title. Local-network use can skip Cloud and invitations.",
+          "For the full new-user journey, install the latest stable macOS and Android apps from this site. iOS is distributed through TestFlight; available builds depend on your testing group. After setup, turn off the phone’s Wi-Fi and check the terminal over mobile data while the Mac stays online. A paired phone opens <strong>Hub &amp; connection</strong> from its title. Local-network use can skip the Offdesk account and invitations.",
       },
     },
     trouble: "If your screen looks different",

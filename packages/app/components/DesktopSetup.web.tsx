@@ -529,9 +529,9 @@ export function HubReadyScreen({
           </div>
           <div style={{ marginTop: 10, padding: 16, display: "flex", flexDirection: "column", gap: 8, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6 }}>
             <div style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600 }}>Where will you connect from?</div>
-            <Body size={13}>At home your phone reaches this Mac over Wi‑Fi. Away from home, turn on remote access with Offdesk Cloud or your own tunnel.</Body>
+            <Body size={13}>At home your phone reaches this Mac over Wi‑Fi. Away from home, turn on remote access with your Offdesk account (offdesk.so) or your own tunnel.</Body>
             <div>
-              <Button kind="secondary" size="sm" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide Cloud setup" : "Set up remote access"}</Button>
+              <Button kind="secondary" size="sm" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide remote access setup" : "Set up remote access"}</Button>
             </div>
             {showCloud && <CloudConnectionPanel onPairPhone={() => { setLink(null); setShowCloud(false); }} />}
           </div>

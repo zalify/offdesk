@@ -49,7 +49,7 @@ export function SecurePairingPanel({ baseUrl, managed = false }: { baseUrl?: str
   return <div data-testid="secure-pairing-panel" style={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, paddingTop: 4 }}>
     <div style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600 }}>End-to-end encrypted connection</div>
     <Body size={13} style={{ textAlign: "center" }}>For the iPhone or Android app. Create a pairing code below, then choose Scan QR Code in Offdesk. Your terminal content is end-to-end encrypted. Use the app’s scanner, not your phone’s camera.</Body>
-    {managed ? <Body size={13} style={{ textAlign: "center", overflowWrap: "anywhere" }}>Offdesk Cloud · {baseUrl}</Body> : null}
+    {managed ? <Body size={13} style={{ textAlign: "center", overflowWrap: "anywhere" }}>Offdesk (offdesk.so) · {baseUrl}</Body> : null}
     {pairing && !expired && qr ? <>
       {pairing.connection_check?.identity_verified ? <div role="status" style={{ textAlign: "center" }}>
         <Body size={13}>Hub verified · {pairing.connection_check.handshake_ms} ms handshake from this Mac</Body>

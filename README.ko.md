@@ -64,8 +64,8 @@ iPhone, Android 휴대폰, 데스크톱 앱에서 사용할 수 있습니다. Of
 이 저장소의 Hub, node, CLI, 프로토콜과 암호화 crate는 **MIT 라이선스**이고,
 웹 UI와 데스크톱·휴대폰 앱은 **FSL-1.1-MIT**로 소스를 공개합니다
 ([라이선스](#라이선스)). 셀프
-호스팅에는 벤더 계정이 필요 없습니다. 선택 사항인 **Offdesk Cloud**는 관리형
-원격 접속을 제공하는 별도의 비공개 소스 서비스입니다. 이 서비스의 오픈 소스
+호스팅에는 벤더 계정이 필요 없습니다. 선택 사항인 호스팅형 **Offdesk**([offdesk.so](https://offdesk.so))는
+관리형 원격 접속을 제공하는 별도의 비공개 소스 서비스입니다. 이 서비스의 오픈 소스
 로컬 커넥터는 암호화된 연결 가능 여부를 확인하고, 터널 장애가 계속되면 자동으로
 재시작하며, 장애가 길어지면 재시도 간격을 늘립니다.
 
@@ -91,7 +91,7 @@ iPhone, Android 휴대폰, 데스크톱 앱에서 사용할 수 있습니다. Of
 - [macOS 설치와 휴대폰 페어링](https://offdesk.dev/ko/docs/mac)
 - [LAN 설정](docs/setup-lan.md)과 [HTTPS, OAuth, Tailscale을 이용한 공개 접속](docs/setup-public.md)
 - [종단 간 암호화된 앱 연결](docs/encrypted-connections.md)과
-  [선택 사항인 Offdesk Cloud 설정](docs/managed-connections.md)
+  [Offdesk(offdesk.so)를 통한 선택적 원격 접속](docs/managed-connections.md)
 - [localhost 웹 미리보기](docs/web-previews.md): 전용 미리보기 도메인과 HTTPS
   인그레스를 쓰는 옵트인 포워딩. 터미널 E2EE와는 별개
 - [HTML 파일 미리보기](docs/html-file-previews.md): 머신에 있는 `.html` 파일을
@@ -427,7 +427,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # 사람에게 도움 요청
 offdesk browser wait-control <browser>          # 사람이 제어하는 동안 대기 (타임아웃 시 exit 1)
 offdesk browser take <browser> --reason "..." [--force]   # 사람에게서 제어권 되찾기
-offdesk mcp                                     # 에이전트 브라우저를 stdio MCP 도구로 제공: claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # 에이전트 브라우저를 stdio MCP 도구로 제공: claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # 이 머신의 파일/폴더에 대한 클릭 다운로드 링크(OSC 8) 출력, 파일당 최대 20 MiB, Hub 토큰 불필요
 offdesk link [--no-open]                        # 브라우저에서 Hub 열기, Hub 머신에서는 로그인 링크와 코드
 ```
@@ -559,11 +559,11 @@ Hub와 노드에 다시 접근할 수 있게 되면 같은 터미널에 다시 �
 프로세스를 보존하지 않습니다.
 
 **계정이 필요한가요?** 셀프 호스팅에는 벤더 계정이 필요 없습니다. 설치하면
-로컬 사용자와 로그인 링크가 만들어집니다. 선택 사항인 Offdesk Cloud는 관리형
-원격 접속을 위해 별도의 로그인을 사용합니다.
+로컬 사용자와 로그인 링크가 만들어집니다. 호스팅형 Offdesk(offdesk.so)를 통한
+선택적 원격 접속은 별도의 로그인을 사용합니다.
 
-**트래픽이 offdesk.dev를 거치나요?** LAN 직접 연결은 내 Hub로 갑니다. 선택
-사항인 Offdesk Cloud는 암호화된 앱 트래픽을 `*.relay.offdesk.cloud` 아래의 관리형
+**트래픽이 offdesk.dev를 거치나요?** LAN 직접 연결은 내 Hub로 갑니다.
+Offdesk(offdesk.so)를 통한 선택적 원격 접속은 암호화된 앱 트래픽을 `*.relay.offdesk.cloud` 아래의 관리형
 주소를 통해 전달합니다. 직접 관리하는 터널은 해당 제공업체를 거칩니다.
 [암호화 페어링](docs/encrypted-connections.md)은 앱과 Hub 사이의 터미널 내용을
 보호하며, 일반 브라우저 로그인 링크는 이와 다른 방식입니다.
@@ -595,5 +595,5 @@ MIT 라이선스입니다. 웹 UI(`packages/app`)와 데스크톱·Android·iOS 
 감사하고, 빌드하고, 수정하고, 업무를 포함해 사용할 수 있지만 경쟁 제품으로
 제공할 수는 없으며, 각 버전은 출시 2년 뒤 MIT가 됩니다. 0.25.0까지의 버전은
 모두 MIT입니다. [LICENSE](LICENSE)와 [TRADEMARKS.md](TRADEMARKS.md)를 참고하세요.
-선택 사항인 Offdesk Cloud 서비스는 별도로 유지 관리되며 이 저장소에 포함되어
+선택 사항인 호스팅형 Offdesk(offdesk.so) 서비스는 별도로 유지 관리되며 이 저장소에 포함되어
 있지 않습니다.

@@ -1,7 +1,8 @@
 # Official managed connections (invitation beta)
 
-Offdesk Cloud reaches a Hub through Offdesk Relay at `https://<slug>.relay.offdesk.cloud`
-(your username by default), for encrypted remote connections only.
+Offdesk, the hosted service at [offdesk.so](https://offdesk.so), reaches a Hub through
+Offdesk Relay at `https://<slug>.relay.offdesk.cloud` (your username by default), for
+encrypted remote connections only.
 `https://offdesk.so` is the control API. Hubs set up before the relay used
 `https://<hub-id>.cloud.offdesk.dev` (a Cloudflare tunnel); running `install` again moves
 them to the relay, and they pair again with its address. **Deployment and
@@ -17,7 +18,7 @@ You can continue to use your own tunnel or LAN without the managed service.
 Standard Hubs on port 4317 also offer an encrypted-only listener at
 `127.0.0.1:4318`. Custom Hub instances can set `OFFDESK_SECURE_LISTEN` or
 `--secure-listen`. If the default loopback port is occupied, local access continues
-and Cloud verification fails until the conflict is resolved.
+and remote access verification fails until the conflict is resolved.
 
 The relay connector is part of `offdesk-hub`: nothing else is downloaded or run. It
 dials out to the relay over WebSockets (nothing has to reach the Mac) and joins each
@@ -29,7 +30,8 @@ that key, replaces an existing personal tunnel, or reinstalls the Hub service.
 
 ## Desktop setup
 
-On the Mac, open **Settings → This machine → Offdesk Cloud**:
+On the Mac, open **Settings → This machine → Offdesk** (the panel marked
+`offdesk.so`; versions before this rename call it **Offdesk Cloud**):
 
 1. Choose **Sign in with GitHub**. In the browser, sign in, activate your invitation
    if needed, and approve the matching code displayed by the Mac app.
@@ -43,11 +45,11 @@ On the Mac, open **Settings → This machine → Offdesk Cloud**:
    phone can check its saved connection methods without another QR.
 
 First-time setup also offers **Set up remote access** after the Mac is ready.
-You can continue with local network pairing without a Cloud account.
+You can continue with local network pairing without an Offdesk account.
 
-The **Cloud account** button opens account management in the browser. Browser
+The **Offdesk account** button opens account management in the browser. Browser
 sessions never grant access to local native commands, and GitHub credentials do
-not enter the App. **Turn off remote access** stops only this Cloud
+not enter the App. **Turn off remote access** stops only this remote access
 connector; deletion may remain pending until the provider confirms cleanup.
 
 ## CLI connection
@@ -118,11 +120,11 @@ refers to provisioning. The desktop panel refreshes while it is visible and
 marks a failed refresh as unconfirmed.
 
 On the relay, the connector redials a lost connection with backoff (1 second up
-to a minute), at once after a relay restart, and every minute while Cloud refuses
+to a minute), at once after a relay restart, and every minute while Offdesk refuses
 it (a disabled connection). The relay pings it every 20 seconds; a minute of
 silence counts as lost.
 
-On a Cloudflare tunnel (older setups), the local Cloud service probes every 30
+On a Cloudflare tunnel (older setups), the local `offdesk-cloud` service probes every 30
 seconds, after each previous probe finishes. Three consecutive failures with a reachable local Hub restart only
 its connector, refreshing edge discovery. Repeated restarts back off from 15
 seconds to 10 minutes; five minutes of healthy probes reset the delay. A stopped

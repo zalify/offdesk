@@ -155,7 +155,7 @@ const de: Dict = {
       tunnelGuide: "tunnel-anleitung",
       lanSetup: "lan-einrichtung",
       pairing: "verschlüsselte app-kopplung",
-      cloudSetup: "cloud-einrichtung",
+      cloudSetup: "fernzugriff einrichten",
       homeTitle: "# auf dem rechner zu hause",
       homeBody:
         'Erstelle den Tunnel im Cloudflare-Dashboard, richte ihn auf <span class="inline-code">server:4317</span>, leg sein Token in <span class="inline-code">.env</span> ab, und dann:',
@@ -164,7 +164,7 @@ const de: Dict = {
         "Für verschlüsselten App-Zugriff scannst du den verschlüsselten Kopplungscode mit dem Scanner der App. Für normalen Browserzugriff richtest du die Authentifizierung ein, wie in der Tunnel-Anleitung beschrieben.",
       cloudBadge: "beta nur auf einladung",
       cloudBody:
-        "Das optionale Offdesk Cloud bietet verwalteten Fernzugriff. Der Dienst ist Closed Source; im öffentlichen Repository stehen Hub, Node und CLI unter MIT-Lizenz, Web-UI und Apps sind unter FSL-1.1-MIT im Quellcode einsehbar. Der lokale Connector prüft die verschlüsselte Erreichbarkeit und versucht es bei anhaltenden Tunnelfehlern automatisch mit Backoff erneut. Lokale Nutzung braucht kein Cloud-Konto.",
+        "Das gehostete Offdesk unter offdesk.so bietet optional verwalteten Fernzugriff. Der Dienst ist Closed Source; im öffentlichen Repository stehen Hub, Node und CLI unter MIT-Lizenz, Web-UI und Apps sind unter FSL-1.1-MIT im Quellcode einsehbar. Der lokale Connector prüft die verschlüsselte Erreichbarkeit und versucht es bei anhaltenden Tunnelfehlern automatisch mit Backoff erneut. Lokale Nutzung braucht kein Offdesk-Konto.",
     },
     more: {
       title: "Remote-Shells, mobile Coding-Agents und CLI-Automatisierung.",
@@ -281,7 +281,7 @@ const de: Dict = {
     lead: "Mach den Mac, der immer an bleibt, zu deinem Hub. Öffne dann sein Terminal vom Handy aus. Starte mit beiden Geräten im selben lokalen Netzwerk.",
     preview: "Zu den Screenshots",
     previewText:
-      "Diese Screenshots stammen aus unserem Test von 0.6.4-rc.1 auf einem Mac Mini. Die aktuelle stabile Version bringt eine überarbeitete Handy-Kopplung und Cloud-Einrichtung. Die Anleitung unten folgt der neuen Version; die älteren Screenshots zeigen noch ihre RC-Bezeichnungen und ihr Layout. Das Kopplungsfenster trennt jetzt Offdesk App von Browser access. Der Download-Button liefert die stabile Version.",
+      "Diese Screenshots stammen aus unserem Test von 0.6.4-rc.1 auf einem Mac Mini. Die aktuelle stabile Version bringt eine überarbeitete Handy-Kopplung und Einrichtung des Fernzugriffs. Die Anleitung unten folgt der neuen Version; die älteren Screenshots zeigen noch ihre RC-Bezeichnungen und ihr Layout. Das Kopplungsfenster trennt jetzt Offdesk App von Browser access. Der Download-Button liefert die stabile Version.",
     download: "Für Mac herunterladen",
     phone: "Handy-App holen",
     contents: "Auf dieser Seite",
@@ -347,10 +347,10 @@ const de: Dict = {
           "Lass den Mac eingeschaltet, angemeldet und verbunden. Eine lokale Adresse funktioniert in diesem Netzwerk; richte den Fernzugriff separat ein, wenn du Offdesk unterwegs nutzen willst. Einen Code zu scannen macht eine lokale Adresse nicht über das Internet erreichbar.",
       },
       cloud: {
-        title: "7. Optional: mit Offdesk Cloud von unterwegs verbinden",
-        body: "Cloud ist derzeit eine Beta nur auf Einladung. Melde dich an und löse deine Einladung in der <a href='https://offdesk.so'>Cloud-Konsole</a> ein. Wähle auf dem Mac <strong>Set up remote access</strong>, folge den Anmeldeschritten und bestätige die Autorisierung des Computers. Sobald die Cloud-Adresse bereit ist, koppelst du dein Handy im Modus Offdesk App.",
+        title: "7. Optional: mit deinem Offdesk-Konto von unterwegs verbinden",
+        body: "Fernzugriff über Offdesk (offdesk.so) ist derzeit eine Beta nur auf Einladung. Melde dich an und löse deine Einladung auf <a href='https://offdesk.so'>offdesk.so</a> ein. Wähle auf dem Mac <strong>Set up remote access</strong>, folge den Anmeldeschritten und bestätige die Autorisierung des Computers. Sobald die Fernzugriffsadresse bereit ist, koppelst du dein Handy im Modus Offdesk App.",
         extra:
-          "Für den kompletten Ablauf als neuer Nutzer installierst du die neuesten stabilen macOS- und Android-Apps von dieser Website. iOS wird über TestFlight verteilt; welche Builds verfügbar sind, hängt von deiner Testgruppe ab. Schalte nach der Einrichtung das WLAN des Handys aus und prüfe das Terminal über mobile Daten, während der Mac online bleibt. Ein gekoppeltes Handy öffnet <strong>Hub &amp; connection</strong> über seinen Titel. Im lokalen Netzwerk kannst du Cloud und Einladungen überspringen.",
+          "Für den kompletten Ablauf als neuer Nutzer installierst du die neuesten stabilen macOS- und Android-Apps von dieser Website. iOS wird über TestFlight verteilt; welche Builds verfügbar sind, hängt von deiner Testgruppe ab. Schalte nach der Einrichtung das WLAN des Handys aus und prüfe das Terminal über mobile Daten, während der Mac online bleibt. Ein gekoppeltes Handy öffnet <strong>Hub &amp; connection</strong> über seinen Titel. Im lokalen Netzwerk kannst du das Offdesk-Konto und Einladungen überspringen.",
       },
     },
     trouble: "Wenn dein Bildschirm anders aussieht",

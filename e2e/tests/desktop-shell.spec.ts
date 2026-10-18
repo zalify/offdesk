@@ -348,7 +348,7 @@ test("managed Cloud is used only for encrypted pairing while browser links retai
   const picker = dialog.getByTestId("hub-address-picker");
   const panel = dialog.getByTestId("secure-pairing-panel");
   await expect(picker).toHaveCount(0);
-  await expect(panel.getByText("Offdesk Cloud · " + cloud, { exact: true })).toBeVisible();
+  await expect(panel.getByText("Offdesk (offdesk.so) · " + cloud, { exact: true })).toBeVisible();
   await panel.getByRole("button", { name: "Pair an encrypted device", exact: true }).click();
   await expect(panel.getByText(cloud, { exact: true })).toBeVisible();
   await dialog.getByTestId("phone-purpose-browser").click();

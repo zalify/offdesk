@@ -39,7 +39,7 @@
 - **セルフホスト:** macOS / Linux 上の Rust バイナリまたは Docker で動作します。ストレージは SQLite で、Web UI は Hub のバイナリに組み込まれています。
 - **App の暗号化接続:** ペアリングした App と Hub の間はエンドツーエンドで暗号化されます。通常のブラウザアクセスは別のサインイン方式を使い、ブラウザから公開アクセスする場合は HTTPS と認証が必要です。
 
-このリポジトリの Hub、node、CLI、プロトコルと暗号化の crate は **MIT ライセンス**で、Web UI とデスクトップ・スマホアプリは **FSL-1.1-MIT** でソースを公開しています（[ライセンス](#ライセンス)）。セルフホストにベンダーのアカウントは不要です。オプションの **Offdesk Cloud** は、マネージドなリモートアクセスを提供する別のクローズドソースのサービスです。そのオープンソースのローカルコネクタは暗号化された経路の到達性を確認し、トンネルの障害が続いた場合は自動で再起動します（障害が長引く場合はバックオフします）。
+このリポジトリの Hub、node、CLI、プロトコルと暗号化の crate は **MIT ライセンス**で、Web UI とデスクトップ・スマホアプリは **FSL-1.1-MIT** でソースを公開しています（[ライセンス](#ライセンス)）。セルフホストにベンダーのアカウントは不要です。オプションのホスト型 **Offdesk**（[offdesk.so](https://offdesk.so)）は、マネージドなリモートアクセスを提供する別のクローズドソースのサービスです。そのオープンソースのローカルコネクタは暗号化された経路の到達性を確認し、トンネルの障害が続いた場合は自動で再起動します（障害が長引く場合はバックオフします）。
 
 質問、うまくいかなかったセットアップ、ほしい機能などは[Discord](https://discord.gg/aFUu6VMzc) へどうぞ。
 
@@ -60,7 +60,7 @@
 
 - [macOS のインストールとスマートフォンのペアリング](https://offdesk.dev/ja/docs/mac)
 - [LAN でのセットアップ](docs/setup-lan.md)と、[HTTPS、OAuth、Tailscale による外部からのアクセス](docs/setup-public.md)
-- [App のエンドツーエンド暗号化接続](docs/encrypted-connections.md)と[オプションの Offdesk Cloud のセットアップ](docs/managed-connections.md)
+- [App のエンドツーエンド暗号化接続](docs/encrypted-connections.md)と[Offdesk（offdesk.so）によるオプションのリモートアクセス](docs/managed-connections.md)
 - [localhost の Web プレビュー](docs/web-previews.md): 専用のプレビュードメインと HTTPS の受け口を使う、オプトインの転送機能です。ターミナルの E2EE とは別系統です
 - [HTML ファイルのプレビュー](docs/html-file-previews.md): マシン上の `.html`
   ファイルを、デスクトップアプリや Android アプリでページとして開けます
@@ -269,7 +269,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # 人に助けを求める
 offdesk browser wait-control <browser>          # 人が操作している間は待機する（タイムアウトで exit 1）
 offdesk browser take <browser> --reason "..." [--force]   # 人から操作を取り戻す
-offdesk mcp                                     # エージェントブラウザを stdio 上の MCP ツールとして提供: claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # エージェントブラウザを stdio 上の MCP ツールとして提供: claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # このマシンのファイル / フォルダのクリックでダウンロードできるリンク（OSC 8）を表示。1 ファイル最大 20 MiB。Hub のトークン不要
 offdesk link [--no-open]                        # Hub をブラウザで開く。Hub のマシンではサインインリンクとコードを表示
 ```
@@ -349,9 +349,9 @@ Hub が表示するサインインリンクは、持っている人なら誰で�
 
 **ブラウザやスマートフォンの接続が切れても、ターミナルは残りますか?** tmux はノード上で動いているので、クライアントを閉じたりネットワークが切れたりしてもセッションは終了しません。Hub とノードに再び到達できるようになれば、同じターミナルに再接続できます。ホストのシャットダウンや再起動は別です。tmux は再起動をまたいで実行中のプロセスを保持しません。
 
-**アカウントは必要ですか?** セルフホストにベンダーのアカウントは不要です。インストール時にローカルユーザーとサインインリンクが作成されます。オプションの Offdesk Cloud は、マネージドなリモートアクセスのために別のサインインを使います。
+**アカウントは必要ですか?** セルフホストにベンダーのアカウントは不要です。インストール時にローカルユーザーとサインインリンクが作成されます。ホスト型の Offdesk（offdesk.so）によるオプションのリモートアクセスは、別のサインインを使います。
 
-**通信は offdesk.dev を経由しますか?** LAN での直接接続は、あなたの Hub に向かいます。オプションの Offdesk Cloud は、App の暗号化された通信を `*.relay.offdesk.cloud`
+**通信は offdesk.dev を経由しますか?** LAN での直接接続は、あなたの Hub に向かいます。Offdesk（offdesk.so）によるオプションのリモートアクセスは、App の暗号化された通信を `*.relay.offdesk.cloud`
 配下のマネージドなアドレス経由でルーティングします。自分で管理するトンネルを使う場合は、そのプロバイダーを経由します。[暗号化ペアリング](docs/encrypted-connections.md)は App と Hub の間のターミナルの内容を保護します。通常のブラウザ用サインインリンクは別のモードです。
 
 **Claude Code 専用ですか?** これはターミナルです。Claude Code、Codex、OpenCode、1 時間かかるビルド、vim。tmux で動くものは何でもここで動き、Offdesk はそれが何かを知りませんし、気にもしません。
@@ -366,4 +366,4 @@ Hub が表示するサインインリンクは、持っている人なら誰で�
 
 ## ライセンス
 
-`crates/` 以下（Hub、node、CLI、プロトコルと暗号化の crate）と `packages/shared` は MIT ライセンスです。Web UI（`packages/app`）とデスクトップ・Android・iOS アプリ（`packages/desktop`）は Functional Source License（FSL-1.1-MIT）です。閲覧、監査、ビルド、改変、利用（業務での利用を含む）はできますが、競合製品として提供することはできません。各バージョンはリリースの 2 年後に MIT になります。0.25.0 までのバージョンはすべて MIT です。[LICENSE](LICENSE) と [TRADEMARKS.md](TRADEMARKS.md) を参照してください。オプションの Offdesk Cloud サービスは別途管理されており、ここには含まれていません。
+`crates/` 以下（Hub、node、CLI、プロトコルと暗号化の crate）と `packages/shared` は MIT ライセンスです。Web UI（`packages/app`）とデスクトップ・Android・iOS アプリ（`packages/desktop`）は Functional Source License（FSL-1.1-MIT）です。閲覧、監査、ビルド、改変、利用（業務での利用を含む）はできますが、競合製品として提供することはできません。各バージョンはリリースの 2 年後に MIT になります。0.25.0 までのバージョンはすべて MIT です。[LICENSE](LICENSE) と [TRADEMARKS.md](TRADEMARKS.md) を参照してください。オプションのホスト型サービス Offdesk（offdesk.so）は別途管理されており、ここには含まれていません。

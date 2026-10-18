@@ -57,7 +57,8 @@ position and session count are shown; no extra toolbar row is needed.
 also offers **Choose another Hub**, even when the current Hub cannot connect.
 
 Up to 16 encrypted Hubs can be saved on one device, each with its own OS-stored
-credential. This is separate from Cloud beta's one-Hub-per-account allowance.
+credential. This is separate from the one-Hub-per-account allowance of
+the Offdesk (offdesk.so) remote access beta.
 Older single-Hub pairings appear automatically without rescanning. Hub names
 can be changed in the picker; adding a machine inside a Hub remains a separate
 operation in the Machines menu.

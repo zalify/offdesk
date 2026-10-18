@@ -16,7 +16,7 @@ the file's source only.
   both resolve: `file://` URLs in HTML, CSS, scripts and SVG are rewritten to
   plain absolute paths.
 - Each file the page asks for is read from the machine through the app's
-  existing connection (LAN, public Hub or the encrypted Cloud route), like a
+  existing connection (LAN, public Hub or the encrypted managed route), like a
   download. Nothing new is exposed on the Hub. Up to 20 MB per file.
 - Links to other sites open in your browser. Scripts, styles and fonts from
   other sites (a CDN) load as usual, straight from the device.

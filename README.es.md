@@ -71,8 +71,8 @@ Hub y tus sesiones tienen que seguir en línea.
 El Hub, el node, la CLI y los crates de protocolo y cifrado de este
 repositorio tienen **licencia MIT**; la interfaz web y las apps de escritorio
 y móvil publican su código bajo **FSL-1.1-MIT** ([Licencia](#licencia)). Para autoalojarlo no necesitas ninguna cuenta del proveedor. El
-servicio opcional **Offdesk Cloud** ofrece acceso remoto gestionado como
-servicio aparte y de código cerrado. Su conector local, de código abierto,
+servicio opcional **Offdesk** ([offdesk.so](https://offdesk.so)), alojado por nosotros,
+ofrece acceso remoto gestionado como servicio aparte y de código cerrado. Su conector local, de código abierto,
 comprueba la accesibilidad cifrada y se reinicia solo tras fallos persistentes
 del túnel, con espera progresiva durante cortes prolongados.
 
@@ -99,7 +99,7 @@ separado.
 - [Instalación en macOS y emparejamiento del móvil](https://offdesk.dev/es/docs/mac)
 - [Configuración en LAN](docs/setup-lan.md) y [acceso público con HTTPS, OAuth o Tailscale](docs/setup-public.md)
 - [Conexiones cifradas de extremo a extremo de la App](docs/encrypted-connections.md) y
-  [configuración opcional de Offdesk Cloud](docs/managed-connections.md)
+  [acceso remoto opcional a través de Offdesk (offdesk.so)](docs/managed-connections.md)
 - [Vistas previas web de localhost](docs/web-previews.md): reenvío opcional con
   un dominio de vista previa dedicado y entrada HTTPS, independiente del E2EE
   del terminal
@@ -468,7 +468,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # pide ayuda a una persona
 offdesk browser wait-control <browser>          # espera mientras una persona lo controla (sale con 1 si se agota el tiempo)
 offdesk browser take <browser> --reason "..." [--force]   # recupera el control que tiene una persona
-offdesk mcp                                     # el navegador del agente como herramientas MCP por stdio: claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # el navegador del agente como herramientas MCP por stdio: claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # imprime enlaces de descarga clicables (OSC 8) de archivos/carpetas de esta máquina; máx. 20 MiB por archivo; sin token del hub
 offdesk link [--no-open]                        # abre el hub en un navegador; en la máquina del hub, el enlace de inicio de sesión y el código
 ```
@@ -614,12 +614,12 @@ reinicio.
 
 **¿Necesito una cuenta?** Para autoalojarlo no necesitas ninguna cuenta del
 proveedor: la instalación crea un usuario local y un enlace de inicio de
-sesión. El servicio opcional Offdesk Cloud usa un inicio de sesión aparte para
-el acceso remoto gestionado.
+sesión. El acceso remoto opcional a través del servicio alojado Offdesk (offdesk.so)
+usa un inicio de sesión aparte.
 
 **¿Mi tráfico pasa por offdesk.dev?** Las conexiones directas en la LAN van a
-tu Hub. El servicio opcional Offdesk Cloud enruta el tráfico cifrado de la App
-a través de una dirección gestionada bajo `*.relay.offdesk.cloud`. Un túnel que
+tu Hub. El acceso remoto opcional a través de Offdesk (offdesk.so) enruta el
+tráfico cifrado de la App a través de una dirección gestionada bajo `*.relay.offdesk.cloud`. Un túnel que
 gestiones tú usa su propio proveedor. El
 [emparejamiento cifrado](docs/encrypted-connections.md) protege el contenido
 del terminal entre la App y el Hub; un enlace de inicio de sesión normal en el
@@ -656,4 +656,5 @@ compilarlas, modificarlas y usarlas, también en el trabajo, pero no ofrecerlas
 como producto competidor, y cada versión pasa a MIT dos años después de
 publicarse. Las versiones hasta la 0.25.0 son íntegramente MIT. Consulta
 [LICENSE](LICENSE) y [TRADEMARKS.md](TRADEMARKS.md). El
-servicio opcional Offdesk Cloud se mantiene por separado y no se incluye aquí.
+servicio alojado opcional Offdesk (offdesk.so) se mantiene por separado y no se
+incluye aquí.
