@@ -120,7 +120,21 @@ agent in the foreground instead, and stops with the terminal.
 
 ## 3. Open it on your phone
 
-Browse to `http://<lan-ip>:4317`. Nothing to install.
+Nothing to install: a browser on the same Wi-Fi will do. The address alone
+does not sign you in, though. `http://<lan-ip>:4317` opens a sign-in page that
+asks for the **sign-in link**, the address with `?token=…` on the end. Get it
+from the machine running the hub, any of these ways:
+
+- **The Offdesk app on that Mac:** Settings → Phone, then switch to
+  **browser access**. Scan its QR code with your phone's camera and you are
+  signed in; or choose **Copy link**, send it to your phone, and paste it
+  into the sign-in page.
+- **A terminal on that machine**, for a hub installed with the line above:
+  `offdesk-hub link` prints the link again.
+- **Docker:** the link is in the container's logs (step 1).
+
+The link signs in whoever has it; see
+[What this setup does not protect](#what-this-setup-does-not-protect).
 
 The Android app takes the same address on its first launch — a bare
 `<lan-ip>:4317` is read as `http`, since a hub at home has no certificate. Open a terminal, run

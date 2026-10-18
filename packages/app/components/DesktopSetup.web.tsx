@@ -37,7 +37,7 @@ import { Body, Button, Card, Display, Eyebrow, Spinner, StepMark, Wordmark, font
 const IPHONE_URL = "https://testflight.apple.com/join/rV4ktaGv";
 const ANDROID_URL = "https://offdesk.dev/apk";
 
-async function openOutside(url: string) {
+export async function openOutside(url: string) {
   try {
     const { open } = await import("@tauri-apps/plugin-shell");
     await open(url);
