@@ -1,0 +1,37 @@
+// The mark, as site/scripts/brand.mjs draws it (brandMark.test.ts keeps these
+// the same as docs/media/mark.svg): Offdesk's hand-drawn desk and three speed
+// lines (traced fills), and a terminal window tilted −14° off it with the
+// `>_` prompt in it. Placed in a 40 × 32 box, the drawing centred, as
+// docs/media/mark.svg has it.
+
+export const MARK_VIEWBOX = "0 0 40 32";
+export const MARK_PLACE = "translate(-10.166 -12.133) scale(0.057)";
+export const MARK_TRACED = [
+  "translate(513.875 495.125) scale(2.211) translate(-143.79 -105.01)",
+  "translate(0 -20) scale(0.3486512205789726)",
+  "translate(-218.585787,966.764618) scale(0.1,-0.1)",
+] as const;
+export const MARK_TILT = "translate(20 -14) rotate(-14 704.79 348.71)";
+
+export const MARK_DESK =
+  "M3325 4991 c-437 -12 -944 -40 -1002 -57 -162 -46 -187 -260 -40 -336 43 -22 175 -28 283 -12 l42 6 8 -339 c5 -186 7 -522 4 -748 -3 -225 -5 -514 -5 -641 l0 -231 30 -48 c70 -113 218 -118 301 -10 42 56 47 174 41 1161 l-6 872 97 6 c169 11 595 14 952 5 190 -4 660 -7 1045 -6 792 2 1327 -1 1334 -9 3 -2 6 -429 7 -947 1 -698 4 -957 13 -1000 42 -198 298 -217 360 -26 9 27 9 94 1 270 -5 129 -10 562 -10 962 l0 729 158 -7 c180 -8 219 1 271 61 79 90 58 220 -46 281 -39 23 -61 27 -176 34 -352 23 -3085 45 -3662 30z";
+export const MARK_SPEED = [
+  "M6563 7695 c-59 -26 -556 -383 -702 -504 -97 -82 -124 -166 -81 -251 28 -56 72 -83 141 -88 74 -5 79 -3 290 155 96 72 251 183 344 248 200 139 211 148 236 197 75 146 -77 309 -228 243z",
+  "M6663 6931 c-53 -25 -611 -398 -741 -496 -137 -103 -177 -189 -129 -281 56 -109 177 -124 300 -36 99 71 517 352 654 439 136 88 165 123 171 203 10 139 -127 231 -255 171z",
+  "M7114 6396 c-37 -17 -476 -314 -692 -469 -186 -133 -207 -160 -207 -258 0 -102 64 -168 163 -169 63 0 89 14 292 160 102 72 284 199 406 280 233 157 267 186 284 251 38 139 -114 265 -246 205z",
+] as const;
+export const MARK_WINDOW =
+  "M 616.75 269.21 C 604.90 269.71 597.70 279.71 597.70 293.71 L 597.70 388.71 C 598.13 411.71 611.67 428.21 635.38 428.21 L 791.56 428.21 C 804.68 427.71 811.88 417.71 811.88 403.21 L 811.88 294.21 C 811.45 279.71 802.99 269.21 790.29 269.21 Z";
+export const MARK_CHEVRON = "M 646.20 321.71 L 675.20 349.21 L 644.70 375.71";
+export const MARK_UNDERSCORE = "M 704.20 375.71 C 723.20 377.21 743.20 374.71 763.20 376.21";
+
+/**
+ * Stroke weights for a detail level, as brand.mjs sets them: `full` (speed
+ * lines and `>_`) at its drawn weight; `medium` (no speed lines, `>` alone)
+ * heavier, for small sizes. `outline` thickens the traced fills (0: none).
+ */
+export function markWeights(detail: "full" | "medium") {
+  return detail === "full"
+    ? { window: 24.9, prompt: 26, outline: 0 }
+    : { window: 33.955, prompt: 35.455, outline: 117.459 };
+}
