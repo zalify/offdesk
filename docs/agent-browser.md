@@ -352,12 +352,19 @@ offdesk terminal (the server then knows which terminal opened a browser, as the
 CLI does):
 
 ```
-claude mcp add offdesk -- offdesk mcp
-codex mcp add offdesk -- offdesk mcp      # or in ~/.codex/config.toml:
-                                          #   [mcp_servers.offdesk]
+claude mcp add offdesk-dev -- offdesk mcp
+codex mcp add offdesk-dev -- offdesk mcp  # or in ~/.codex/config.toml:
+                                          #   [mcp_servers.offdesk-dev]
                                           #   command = "offdesk"
                                           #   args = ["mcp"]
 ```
+
+The server reports itself as `offdesk-dev`. The hosted Offdesk
+([offdesk.so](https://offdesk.so)) registers its MCP server as `offdesk`, so
+both can be installed side by side. The registered name is local to your
+agent: an existing registration named `offdesk` keeps working. To rename it,
+remove it (`claude mcp remove offdesk`, `codex mcp remove offdesk`) and add it
+again with the commands above.
 
 Tools (arguments in brackets are optional):
 

@@ -156,7 +156,7 @@ const zh: Dict = {
       tunnelGuide: "隧道指南",
       lanSetup: "局域网设置",
       pairing: "App 加密配对",
-      cloudSetup: "Cloud 设置",
+      cloudSetup: "远程访问设置",
       homeTitle: "# 在家里的机器上",
       homeBody:
         '在 Cloudflare 控制台创建隧道，指向 <span class="inline-code">server:4317</span>，把它的 token 放进 <span class="inline-code">.env</span>，然后：',
@@ -165,7 +165,7 @@ const zh: Dict = {
         "要用 App 加密访问，用 App 的扫描器扫描加密配对码。要用普通浏览器访问，按隧道指南配置身份验证。",
       cloudBadge: "邀请制测试",
       cloudBody:
-        "可选的 Offdesk Cloud 提供托管的远程访问。它的服务是闭源的；公开仓库里的 Hub、Node 和 CLI 采用 MIT 许可，Web UI 和各端 App 以 FSL-1.1-MIT 公开源码。本地连接器会检查加密连接是否可达，隧道持续失败时会自动退避重试。本地使用不需要 Cloud 账户。",
+        "托管版 Offdesk（offdesk.so）提供可选的托管远程访问。它的服务是闭源的；公开仓库里的 Hub、Node 和 CLI 采用 MIT 许可，Web UI 和各端 App 以 FSL-1.1-MIT 公开源码。本地连接器会检查加密连接是否可达，隧道持续失败时会自动退避重试。本地使用不需要 Offdesk 账户。",
     },
     more: {
       title: "远程 Shell、手机上的编程 Agent，以及 CLI 自动化。",
@@ -285,7 +285,7 @@ const zh: Dict = {
     lead: "把常开着的 Mac 变成主机，然后用手机连接它的终端。第一次先在同一局域网内完成连接。",
     preview: "截图版本说明",
     previewText:
-      "配图来自 Mac Mini 上的 0.6.4-rc.1 实测。当前正式版已更新手机配对和 Cloud 引导；以下文字对应新版，旧截图保留当时的 RC 标识和布局。配对页现在通过 Offdesk App / Browser access 两个选项切换用途，下面的下载按钮提供正式版。",
+      "配图来自 Mac Mini 上的 0.6.4-rc.1 实测。当前正式版已更新手机配对和远程访问引导；以下文字对应新版，旧截图保留当时的 RC 标识和布局。配对页现在通过 Offdesk App / Browser access 两个选项切换用途，下面的下载按钮提供正式版。",
     download: "下载 Mac 正式版",
     phone: "下载手机 App",
     contents: "本页步骤",
@@ -353,10 +353,10 @@ const zh: Dict = {
           "保持 Mac 开机、登录且联网。局域网地址只适合当前网络；要在外面使用，之后再配置远程连接。这里的扫码步骤本身不会让局域网地址变成公网地址。",
       },
       cloud: {
-        title: "7. 可选：通过 Offdesk Cloud 在外面连接",
-        body: "Cloud 当前为邀请制测试服务。在 <a href='https://offdesk.so'>Cloud 控制台</a>登录并兑换邀请码，再回到 Mac 的 <strong>Set up remote access</strong>，按步骤登录、核对电脑授权信息。Cloud 地址就绪后，再通过 Offdesk App 模式配对手机。",
+        title: "7. 可选：通过 Offdesk 账户在外面连接",
+        body: "通过 Offdesk（offdesk.so）进行的远程访问当前为邀请制测试服务。在 <a href='https://offdesk.so'>offdesk.so</a> 登录并兑换邀请码，再回到 Mac 的 <strong>Set up remote access</strong>，按步骤登录、核对电脑授权信息。远程地址就绪后，再通过 Offdesk App 模式配对手机。",
         extra:
-          "验证完整新用户流程时，请从官网安装最新 macOS 和 Android 正式版。iOS 通过 TestFlight 分发；测试组中的可用版本以 TestFlight 显示为准。Cloud 完成后关闭手机 Wi-Fi，用蜂窝网络确认终端可连接；Mac 必须保持在线。已配对手机可从顶部标题打开 <strong>Hub &amp; connection</strong>。局域网使用可跳过 Cloud 和邀请码。",
+          "验证完整新用户流程时，请从官网安装最新 macOS 和 Android 正式版。iOS 通过 TestFlight 分发；测试组中的可用版本以 TestFlight 显示为准。远程访问设置完成后关闭手机 Wi-Fi，用蜂窝网络确认终端可连接；Mac 必须保持在线。已配对手机可从顶部标题打开 <strong>Hub &amp; connection</strong>。局域网使用可跳过 Offdesk 账户和邀请码。",
       },
     },
     trouble: "如果界面和教程不一样",

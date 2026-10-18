@@ -287,13 +287,13 @@ impl LoginStatus {
             || !canonical_id(id)
             || !["pending", "approved", "expired"].contains(&self.state.as_str())
         {
-            return Err("Cloud returned an invalid sign-in response".into());
+            return Err("offdesk.so returned an invalid sign-in response".into());
         }
         if let Some(url) = &self.verification_uri {
             let code = self
                 .user_code
                 .as_deref()
-                .ok_or("Cloud sign-in code is missing")?;
+                .ok_or("The offdesk.so sign-in code is missing")?;
             if code.len() != 12
                 || !code
                     .bytes()
@@ -302,10 +302,10 @@ impl LoginStatus {
                 || self.interval != Some(5)
                 || self.expires_at.is_none()
             {
-                return Err("Cloud returned an unsafe sign-in address".into());
+                return Err("offdesk.so returned an unsafe sign-in address".into());
             }
         } else if self.user_code.is_some() {
-            return Err("Cloud sign-in address is missing".into());
+            return Err("The offdesk.so sign-in address is missing".into());
         }
         Ok(())
     }
@@ -537,7 +537,7 @@ impl Api {
             request = request.json(&data);
         }
         let response = request.send().await.map_err(|_| {
-            "Could not reach Offdesk Cloud. Retry this operation when the network returns"
+            "Could not reach Offdesk (offdesk.so). Retry this operation when the network returns"
         })?;
         decode_response(response).await
     }
@@ -825,7 +825,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             "id":registration.id,"control_token":registration.control_token,"hub_public_key":registration.public_key
         }))).await?;
         result.validate(&registration.id)?;
-        if result.state == "pending" && result.verification_uri.is_none() { return Err("Cloud sign-in address is missing".into()); }
+        if result.state == "pending" && result.verification_uri.is_none() { return Err("The offdesk.so sign-in address is missing".into()); }
         println!(
             "{}",
             serde_json::to_string(&result).map_err(|_| "Invalid login response")?
@@ -992,7 +992,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             let report = crate::tunnel_check::check(&endpoint).await;
             if !report.passed(true) {
                 crate::tunnel_check::print_report(&report, true);
-                return Err("Cloud connection is currently unavailable or could not be verified. Keep this Mac online while the connector retries, then check again".into());
+                return Err("Remote access through Offdesk is currently unavailable or could not be verified. Keep this Mac online while the connector retries, then check again".into());
             }
             // The relay's regional routes are advertised too, those that pass the same check
             let mut routes = Vec::new();

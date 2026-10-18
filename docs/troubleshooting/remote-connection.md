@@ -1,6 +1,6 @@
 # Local network works, but Remote connection is Unreachable
 
-Use this guide for a managed Offdesk Cloud connection on macOS, particularly
+Use this guide for a managed connection through Offdesk (offdesk.so) on macOS, particularly
 when a proxy such as Clash Verge uses Fake-IP DNS. Work through the Hub,
 connector, and remote route checks before attributing the failure to the proxy.
 
@@ -9,7 +9,7 @@ assume the default ports and database; adjust local URLs and add
 `--database /path/to/hub.db` to Hub commands for a custom installation. Replace
 `<hub-id>` with the identifier in the URL reported by `cloud status`.
 
-## 1. Verify the local Hub and Cloud setup
+## 1. Verify the local Hub and remote access setup
 
 ```sh
 lsof -nP -iTCP:4317 -sTCP:LISTEN
@@ -22,8 +22,8 @@ offdesk-hub cloud status
 | --- | --- |
 | Port 4317 is absent | Diagnose the Hub service first. |
 | Port 4317 works, but the encrypted listener or its identity check fails | Resolve the secure listener, port conflict, or database/identity mismatch before investigating the tunnel. |
-| Cloud is disabled or provisioning is incomplete | Follow [managed connection setup](../managed-connections.md). |
-| Local identity passes and Cloud is enabled and active | Check the connector below. |
+| Remote access is disabled or provisioning is incomplete | Follow [managed connection setup](../managed-connections.md). |
+| Local identity passes and remote access is enabled and active | Check the connector below. |
 
 Updated Hubs check live encrypted reachability before `cloud status` reports
 `verified: true`. `active` refers only to provisioned resources. Older versions
@@ -89,7 +89,7 @@ launchctl kickstart -k "gui/$(id -u)/dev.offdesk.cloud"
 
 This interrupts the managed remote transport without restarting the Hub or
 node. Target this service specifically; do not kill unrelated cloudflared
-processes or disable/re-enroll Cloud to refresh runtime addresses.
+processes or disable/re-enroll remote access to refresh runtime addresses.
 
 Check for new `Registered tunnel connection` log entries and a positive
 `readyConnections` count. If the connector now uses the fresh addresses and

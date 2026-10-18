@@ -116,17 +116,18 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
   const registered = status && status.state !== "unregistered";
   return <section data-testid="cloud-connection-panel" style={{ padding: 16, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6, display: "flex", flexDirection: "column", gap: 10 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-      <strong style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600 }}>Offdesk Cloud</strong>
+      <strong style={{ fontFamily: "var(--font-display)", fontSize: 14, fontWeight: 600 }}>Offdesk</strong>
+      <span style={{ fontFamily: "var(--font-display)", fontSize: 12, color: colors.fg3 }}>offdesk.so</span>
       {connected ? <span style={{ fontFamily: "var(--font-display)", fontSize: 11.5, fontWeight: 500, padding: "2px 8px", border: `1px solid ${colors.line}`, borderRadius: 3, color: colors.accent }}>remote access ready</span> : null}
     </div>
     <Body size={13}>Reach this computer from mobile data or another Wi-Fi network. Your terminal content stays end-to-end encrypted.</Body>
-    <ol aria-label="Cloud setup progress" style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px", listStyle: "none", padding: 0, margin: "8px 0" }}>
+    <ol aria-label="Remote access setup progress" style={{ display: "flex", flexWrap: "wrap", gap: "8px 20px", listStyle: "none", padding: 0, margin: "8px 0" }}>
       {["Sign in", "Verify connection", "Pair phone"].map((label, index) => {
         const step = connected ? 2 : registered ? 1 : 0;
         return <li key={label} aria-current={step === index ? "step" : undefined} style={{ fontFamily: "var(--font-display)", fontSize: 12.5, fontWeight: step === index ? 600 : 400, color: step === index ? colors.fg0 : colors.fg3 }}>{index < step ? "[✓]" : step === index ? "[~]" : "[ ]"} {label.toLowerCase()}</li>;
       })}
     </ol>
-    {!registered && !login && <Body size={13}>Invitation beta · one Hub per account. Sign in to enable remote access for this Mac. Local network access works without Cloud.</Body>}
+    {!registered && !login && <Body size={13}>Invitation beta · one Hub per account. Sign in to enable remote access for this Mac. Local network access works without an Offdesk account.</Body>}
     {busy ? <Body size={13}><span role="status">{busy}</span></Body> : null}
     {connected ? <>
       <Body size={13}><span role="status">Remote connection ready · Encryption verified</span></Body>
@@ -146,11 +147,11 @@ export function CloudConnectionPanel({ onPairPhone, onConnectionChanged }: { onP
       {registered && !status.local_enabled && status.state !== "revoking" ? <Button size="sm" disabled={busy !== null} onClick={() => void run("enable")}>Enable remote connection</Button> : null}
       {registered && status.local_enabled && !connected && status.state !== "revoking" ? <Button size="sm" disabled={busy !== null} onClick={() => void run("check")}>Verify connection</Button> : null}
       <Button size="sm" kind="ghost" disabled={busy !== null} onClick={() => void run("status")}>Check again</Button>
-      <Button size="sm" kind="ghost" onClick={() => void openCloud("https://offdesk.so").catch(cause => setError(message(cause)))}>Cloud account</Button>
+      <Button size="sm" kind="ghost" onClick={() => void openCloud("https://offdesk.so").catch(cause => setError(message(cause)))}>Offdesk account</Button>
       {status?.local_enabled ? <Button size="sm" kind="danger" disabled={busy !== null} onClick={() => setConfirmDisable(true)}>Turn off remote access</Button> : null}
     </div>
     {confirmDisable ? <div>
-      <Body size={13}>Disconnect phones using Offdesk Cloud? Local connections and running terminals stay available.</Body>
+      <Body size={13}>Disconnect phones that connect through your Offdesk account? Local connections and running terminals stay available.</Body>
       <Button size="sm" disabled={busy !== null} onClick={() => void run("disable")}>Turn off</Button>{" "}<Button size="sm" kind="ghost" onClick={() => setConfirmDisable(false)}>Keep connected</Button>
     </div> : null}
     {stale && !busy ? <Body size={13}>Connection status could not be confirmed. Check again before relying on remote access.</Body> : null}

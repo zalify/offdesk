@@ -155,7 +155,7 @@ const fr: Dict = {
       tunnelGuide: "le guide du tunnel",
       lanSetup: "configuration lan",
       pairing: "appairage chiffré de l’app",
-      cloudSetup: "configuration cloud",
+      cloudSetup: "configuration de l’accès distant",
       homeTitle: "# sur la machine à la maison",
       homeBody:
         'Créez le tunnel dans le tableau de bord Cloudflare, pointez-le vers <span class="inline-code">server:4317</span>, mettez son token dans <span class="inline-code">.env</span>, puis :',
@@ -164,7 +164,7 @@ const fr: Dict = {
         "Pour l’accès chiffré via l’App, scannez le code d’appairage chiffré avec le scanner de l’App. Pour l’accès navigateur ordinaire, configurez l’authentification comme décrit dans le guide du tunnel.",
       cloudBadge: "bêta sur invitation",
       cloudBody:
-        "Offdesk Cloud, optionnel, propose un accès distant géré. Ce service n’est pas open source ; dans le dépôt public, le Hub, le node et la CLI sont sous licence MIT, et l’interface web et les apps publient leur code sous FSL-1.1-MIT. Le connecteur local vérifie la joignabilité chiffrée et relance automatiquement, avec un délai croissant, les tunnels qui échouent durablement. L’usage local ne demande aucun compte Cloud.",
+        "Offdesk, le service hébergé sur offdesk.so, propose en option un accès distant géré. Ce service n’est pas open source ; dans le dépôt public, le Hub, le node et la CLI sont sous licence MIT, et l’interface web et les apps publient leur code sous FSL-1.1-MIT. Le connecteur local vérifie la joignabilité chiffrée et relance automatiquement, avec un délai croissant, les tunnels qui échouent durablement. L’usage local ne demande aucun compte Offdesk.",
     },
     more: {
       title: "Shells distants, agents de code sur mobile et automatisation CLI.",
@@ -280,7 +280,7 @@ const fr: Dict = {
     lead: "Faites du Mac qui reste allumé votre hub. Ouvrez ensuite son terminal depuis votre téléphone. Commencez avec les deux appareils sur le même réseau local.",
     preview: "À propos des captures d’écran",
     previewText:
-      "Ces captures viennent de notre test de la 0.6.4-rc.1 sur un Mac Mini. La version stable actuelle inclut un appairage du téléphone et une configuration Cloud mis à jour. Les instructions ci-dessous suivent la nouvelle version ; les anciennes captures gardent leurs libellés RC et leur mise en page. Le panneau d’appairage sépare désormais Offdesk App et Browser access. Le bouton de téléchargement fournit la version stable.",
+      "Ces captures viennent de notre test de la 0.6.4-rc.1 sur un Mac Mini. La version stable actuelle inclut un appairage du téléphone et une configuration de l’accès distant mis à jour. Les instructions ci-dessous suivent la nouvelle version ; les anciennes captures gardent leurs libellés RC et leur mise en page. Le panneau d’appairage sépare désormais Offdesk App et Browser access. Le bouton de téléchargement fournit la version stable.",
     download: "Télécharger pour Mac",
     phone: "Obtenir l’app mobile",
     contents: "Sur cette page",
@@ -346,10 +346,10 @@ const fr: Dict = {
           "Gardez le Mac allumé, avec la session ouverte et connecté au réseau. Une adresse locale fonctionne sur ce réseau ; configurez l’accès distant séparément quand vous serez prêt à utiliser Offdesk hors de chez vous. Scanner un code ne rend pas une adresse locale joignable depuis Internet.",
       },
       cloud: {
-        title: "7. Optionnel : hors de chez vous avec Offdesk Cloud",
-        body: "Cloud est actuellement une bêta sur invitation. Connectez-vous et utilisez votre invitation dans la <a href='https://offdesk.so'>console Cloud</a>. Sur le Mac, choisissez <strong>Set up remote access</strong>, suivez les étapes de connexion et vérifiez l’autorisation de l’ordinateur. Une fois l’adresse Cloud prête, appairez votre téléphone avec le mode Offdesk App.",
+        title: "7. Optionnel : hors de chez vous avec votre compte Offdesk",
+        body: "L’accès distant via Offdesk (offdesk.so) est actuellement une bêta sur invitation. Connectez-vous et utilisez votre invitation sur <a href='https://offdesk.so'>offdesk.so</a>. Sur le Mac, choisissez <strong>Set up remote access</strong>, suivez les étapes de connexion et vérifiez l’autorisation de l’ordinateur. Une fois l’adresse distante prête, appairez votre téléphone avec le mode Offdesk App.",
         extra:
-          "Pour le parcours complet d’un nouvel utilisateur, installez les dernières apps stables macOS et Android depuis ce site. iOS est distribué via TestFlight ; les builds disponibles dépendent de votre groupe de test. Après la configuration, coupez le Wi-Fi du téléphone et vérifiez le terminal en données mobiles pendant que le Mac reste en ligne. Un téléphone appairé ouvre <strong>Hub &amp; connection</strong> depuis son titre. En réseau local, vous pouvez vous passer de Cloud et des invitations.",
+          "Pour le parcours complet d’un nouvel utilisateur, installez les dernières apps stables macOS et Android depuis ce site. iOS est distribué via TestFlight ; les builds disponibles dépendent de votre groupe de test. Après la configuration, coupez le Wi-Fi du téléphone et vérifiez le terminal en données mobiles pendant que le Mac reste en ligne. Un téléphone appairé ouvre <strong>Hub &amp; connection</strong> depuis son titre. En réseau local, vous pouvez vous passer du compte Offdesk et des invitations.",
       },
     },
     trouble: "Si votre écran est différent",

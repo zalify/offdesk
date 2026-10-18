@@ -1,7 +1,7 @@
 # Agent bridge protocol, version 1
 
 A bridge connects an Offdesk hub to a server you choose (your own service, or a hosted
-one such as Offdesk Cloud). The hub dials out and keeps one WebSocket open; nothing has
+one such as Offdesk at offdesk.so). The hub dials out and keeps one WebSocket open; nothing has
 to reach the hub. Over it the server sees the hub's coding agent runs and, within what
 the person allowed **on the hub**, answers them and starts agents. Terminal output never
 goes over a bridge.

@@ -61,8 +61,9 @@ from one interface. The machines running your Hub and sessions must stay online.
 The Hub, node, CLI, and the protocol and encryption crates in this repository
 are **MIT licensed**; the Web UI and the desktop and phone apps are
 source-available under **FSL-1.1-MIT** ([License](#license)).
-Self-hosting needs no vendor account. Optional **Offdesk Cloud** provides
-managed remote access as a separate, closed-source service. Its open-source
+Self-hosting needs no vendor account. Optionally, the hosted **Offdesk**
+([offdesk.so](https://offdesk.so)) provides managed remote access as a separate,
+closed-source service. Its open-source
 local connector checks encrypted reachability and automatically restarts after
 sustained tunnel failures, with backoff for extended outages.
 
@@ -89,7 +90,7 @@ Linux can also host a Hub with tmux installed separately.
   ([中文图文指南](https://offdesk.dev/zh/docs/mac))
 - [LAN setup](docs/setup-lan.md) and [public access with HTTPS, OAuth, or Tailscale](docs/setup-public.md)
 - [End-to-end encrypted App connections](docs/encrypted-connections.md) and
-  [optional Offdesk Cloud setup](docs/managed-connections.md)
+  [optional remote access through Offdesk (offdesk.so)](docs/managed-connections.md)
 - [Localhost web previews](docs/web-previews.md): opt-in forwarding with a
   dedicated preview domain and HTTPS ingress, separate from terminal E2EE
 - [HTML file previews](docs/html-file-previews.md): open an `.html` file of a
@@ -432,7 +433,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # ask a person for help
 offdesk browser wait-control <browser>          # block while a person controls it (exit 1 on timeout)
 offdesk browser take <browser> --reason "..." [--force]   # take control back from a person
-offdesk mcp                                     # the agent browser and agent runs (list_runs, get_run, answer_request, start_run) as MCP tools: claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # the agent browser and agent runs (list_runs, get_run, answer_request, start_run) as MCP tools: claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # print click-to-download links (OSC 8) for files/folders on this machine; max 20 MiB per file; no hub token needed
 offdesk link [--no-open]                        # open the hub in a browser; on the hub's machine, the sign-in link + code
 offdesk runs [--all] [--waiting] [--machine <id>] [--json]
@@ -644,12 +645,12 @@ A host shutdown or reboot is different: tmux does not preserve running processes
 across a reboot.
 
 **Do I need an account?** Self-hosting needs no vendor account: installation
-creates a local user and a sign-in link. Optional Offdesk Cloud uses a separate
-sign-in for managed remote access.
+creates a local user and a sign-in link. Optional remote access through the hosted
+Offdesk (offdesk.so) uses a separate sign-in.
 
 **Does my traffic go through offdesk.dev?** Direct LAN connections go to your
-Hub. Optional Offdesk Cloud routes encrypted App traffic through a managed
-address under `*.relay.offdesk.cloud`. A self-managed tunnel uses its provider.
+Hub. Optional remote access through Offdesk (offdesk.so) routes encrypted App
+traffic through a managed address under `*.relay.offdesk.cloud`. A self-managed tunnel uses its provider.
 [Encrypted pairing](docs/encrypted-connections.md) protects terminal content
 between the App and Hub; an ordinary browser sign-in link is a different mode.
 
@@ -681,5 +682,5 @@ Functional Source License, FSL-1.1-MIT: you can read, audit, build, modify and
 use them, including at work, but not offer them as a competing product, and
 each version becomes MIT two years after its release. Versions up to 0.25.0
 are entirely MIT. See [LICENSE](LICENSE) and [TRADEMARKS.md](TRADEMARKS.md).
-The optional Offdesk Cloud service is maintained separately and is not
-included here.
+The optional hosted Offdesk service (offdesk.so) is maintained separately and
+is not included here.

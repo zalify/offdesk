@@ -155,7 +155,7 @@ const ko: Dict = {
       tunnelGuide: "터널 가이드",
       lanSetup: "LAN 설정",
       pairing: "암호화 앱 페어링",
-      cloudSetup: "클라우드 설정",
+      cloudSetup: "원격 접속 설정",
       homeTitle: "# 집에 있는 머신에서",
       homeBody:
         'Cloudflare 대시보드에서 터널을 만들어 <span class="inline-code">server:4317</span>을 가리키게 하고, 토큰을 <span class="inline-code">.env</span>에 넣은 다음:',
@@ -164,7 +164,7 @@ const ko: Dict = {
         "암호화된 App 접속은 App의 스캐너로 암호화 페어링 코드를 스캔하세요. 일반 브라우저 접속은 터널 가이드에 따라 인증을 설정하세요.",
       cloudBadge: "초대 전용 베타",
       cloudBody:
-        "선택 사항인 Offdesk Cloud는 관리형 원격 접속을 제공합니다. 이 서비스는 비공개 소스이지만, 공개 저장소의 Hub, Node, CLI는 MIT 라이선스이고, 웹 UI와 앱은 FSL-1.1-MIT로 소스를 공개합니다. 로컬 커넥터는 암호화된 연결이 닿는지 확인하고, 터널 장애가 계속되면 백오프를 두고 자동으로 재시도합니다. 로컬에서만 쓴다면 Cloud 계정이 필요 없습니다.",
+        "offdesk.so의 호스팅형 Offdesk는 선택 사항인 관리형 원격 접속을 제공합니다. 이 서비스는 비공개 소스이지만, 공개 저장소의 Hub, Node, CLI는 MIT 라이선스이고, 웹 UI와 앱은 FSL-1.1-MIT로 소스를 공개합니다. 로컬 커넥터는 암호화된 연결이 닿는지 확인하고, 터널 장애가 계속되면 백오프를 두고 자동으로 재시도합니다. 로컬에서만 쓴다면 Offdesk 계정이 필요 없습니다.",
     },
     more: {
       title: "원격 셸, 모바일 코딩 에이전트, CLI 자동화.",
@@ -280,7 +280,7 @@ const ko: Dict = {
     lead: "계속 켜 두는 Mac을 Hub로 만드세요. 그런 다음 휴대폰에서 그 Mac의 터미널을 여세요. 처음에는 두 기기를 같은 로컬 네트워크에 두고 시작하세요.",
     preview: "스크린샷 안내",
     previewText:
-      "이 스크린샷은 Mac Mini에서 0.6.4-rc.1을 테스트하며 찍은 것입니다. 현재 안정 버전에는 개선된 휴대폰 페어링과 Cloud 설정이 들어 있습니다. 아래 안내는 새 버전을 기준으로 하며, 이전 스크린샷에는 RC 표시와 이전 레이아웃이 그대로 남아 있습니다. 이제 페어링 패널에서 Offdesk App과 Browser access가 분리되어 있습니다. 다운로드 버튼은 안정 버전을 제공합니다.",
+      "이 스크린샷은 Mac Mini에서 0.6.4-rc.1을 테스트하며 찍은 것입니다. 현재 안정 버전에는 개선된 휴대폰 페어링과 원격 접속 설정이 들어 있습니다. 아래 안내는 새 버전을 기준으로 하며, 이전 스크린샷에는 RC 표시와 이전 레이아웃이 그대로 남아 있습니다. 이제 페어링 패널에서 Offdesk App과 Browser access가 분리되어 있습니다. 다운로드 버튼은 안정 버전을 제공합니다.",
     download: "Mac용 다운로드",
     phone: "휴대폰 앱 받기",
     contents: "이 페이지의 내용",
@@ -346,10 +346,10 @@ const ko: Dict = {
           "Mac은 전원을 켜 두고, 로그인한 상태로, 네트워크에 연결해 두세요. 로컬 주소는 그 네트워크 안에서 동작합니다. 집 밖에서 Offdesk를 쓸 준비가 되면 원격 접속을 따로 설정하세요. 코드를 스캔한다고 해서 로컬 주소가 인터넷에서 접근 가능해지지는 않습니다.",
       },
       cloud: {
-        title: "7. 선택 사항: Offdesk Cloud로 집 밖에서 연결하기",
-        body: "Cloud는 현재 초대 전용 베타입니다. 로그인하고 <a href='https://offdesk.so'>Cloud 콘솔</a>에서 초대를 등록하세요. Mac에서 <strong>Set up remote access</strong>를 선택하고, 로그인 단계를 따라 진행한 뒤 컴퓨터 인증을 확인하세요. Cloud 주소가 준비되면 Offdesk App 방식으로 휴대폰을 페어링하세요.",
+        title: "7. 선택 사항: Offdesk 계정으로 집 밖에서 연결하기",
+        body: "Offdesk(offdesk.so)를 통한 원격 접속은 현재 초대 전용 베타입니다. 로그인하고 <a href='https://offdesk.so'>offdesk.so</a>에서 초대를 등록하세요. Mac에서 <strong>Set up remote access</strong>를 선택하고, 로그인 단계를 따라 진행한 뒤 컴퓨터 인증을 확인하세요. 원격 주소가 준비되면 Offdesk App 방식으로 휴대폰을 페어링하세요.",
         extra:
-          "처음 사용하는 사람의 전체 과정을 따라 하려면 이 사이트에서 최신 안정 버전의 macOS 앱과 Android 앱을 설치하세요. iOS는 TestFlight로 배포되며, 받을 수 있는 빌드는 테스트 그룹에 따라 다릅니다. 설정을 마친 뒤 Mac은 온라인 상태로 두고 휴대폰의 Wi-Fi를 꺼서 모바일 데이터로 터미널이 열리는지 확인하세요. 페어링된 휴대폰에서는 제목을 눌러 <strong>Hub &amp; connection</strong>을 열 수 있습니다. 로컬 네트워크에서만 쓴다면 Cloud와 초대는 건너뛰어도 됩니다.",
+          "처음 사용하는 사람의 전체 과정을 따라 하려면 이 사이트에서 최신 안정 버전의 macOS 앱과 Android 앱을 설치하세요. iOS는 TestFlight로 배포되며, 받을 수 있는 빌드는 테스트 그룹에 따라 다릅니다. 설정을 마친 뒤 Mac은 온라인 상태로 두고 휴대폰의 Wi-Fi를 꺼서 모바일 데이터로 터미널이 열리는지 확인하세요. 페어링된 휴대폰에서는 제목을 눌러 <strong>Hub &amp; connection</strong>을 열 수 있습니다. 로컬 네트워크에서만 쓴다면 Offdesk 계정과 초대는 건너뛰어도 됩니다.",
       },
     },
     trouble: "화면이 다르게 보인다면",

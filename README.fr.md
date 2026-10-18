@@ -72,8 +72,8 @@ machines qui font tourner votre Hub et vos sessions doivent rester allumées.
 Le Hub, le node, la CLI et les crates de protocole et de chiffrement de ce
 dépôt sont sous **licence MIT** ; l'interface web et les apps de bureau et
 mobiles publient leur code sous **FSL-1.1-MIT** ([Licence](#licence)).
-L'auto-hébergement ne demande aucun compte chez un éditeur. **Offdesk Cloud**,
-optionnel, fournit un accès distant géré sous forme de service séparé et
+L'auto-hébergement ne demande aucun compte chez un éditeur. Le service hébergé
+**Offdesk** ([offdesk.so](https://offdesk.so)), optionnel, fournit un accès distant géré sous forme de service séparé et
 propriétaire. Son connecteur local, open source, vérifie l'accessibilité
 chiffrée et redémarre automatiquement après des échecs prolongés du tunnel,
 avec un délai croissant lors des longues pannes.
@@ -101,7 +101,7 @@ séparément.
 - [Installation sur macOS et appairage du téléphone](https://offdesk.dev/fr/docs/mac)
 - [Installation sur le réseau local](docs/setup-lan.md) et [accès public avec HTTPS, OAuth ou Tailscale](docs/setup-public.md)
 - [Connexions chiffrées de bout en bout de l'App](docs/encrypted-connections.md) et
-  [configuration optionnelle d'Offdesk Cloud](docs/managed-connections.md)
+  [accès distant optionnel via Offdesk (offdesk.so)](docs/managed-connections.md)
 - [Aperçus web de localhost](docs/web-previews.md) : un transfert à activer
   soi-même, avec un domaine d'aperçu dédié et une entrée HTTPS, distinct du
   chiffrement de bout en bout du terminal
@@ -469,7 +469,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # demander de l'aide à une personne
 offdesk browser wait-control <browser>          # bloquer tant qu'une personne le contrôle (sortie 1 si délai dépassé)
 offdesk browser take <browser> --reason "..." [--force]   # reprendre le contrôle à une personne
-offdesk mcp                                     # le navigateur de l'agent comme outils MCP sur stdio : claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # le navigateur de l'agent comme outils MCP sur stdio : claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # afficher des liens cliquables (OSC 8) pour télécharger des fichiers/dossiers de cette machine ; 20 Mio max par fichier ; aucun jeton du hub requis
 offdesk link [--no-open]                        # ouvrir le hub dans un navigateur ; sur la machine du hub, le lien de connexion + le code
 ```
@@ -615,12 +615,12 @@ processus en cours à travers un redémarrage.
 
 **Faut-il un compte ?** L'auto-hébergement ne demande aucun compte chez un
 éditeur : l'installation crée un utilisateur local et un lien de connexion.
-Offdesk Cloud, optionnel, utilise une connexion distincte pour l'accès distant
-géré.
+L'accès distant optionnel via le service hébergé Offdesk (offdesk.so) utilise
+une connexion distincte.
 
 **Mon trafic passe-t-il par offdesk.dev ?** Les connexions directes sur le
-réseau local vont à votre Hub. Offdesk Cloud, optionnel, fait passer le trafic
-chiffré de l'App par une adresse gérée sous `*.relay.offdesk.cloud`. Un tunnel que
+réseau local vont à votre Hub. L'accès distant optionnel via Offdesk (offdesk.so)
+fait passer le trafic chiffré de l'App par une adresse gérée sous `*.relay.offdesk.cloud`. Un tunnel que
 vous gérez vous-même passe par son fournisseur.
 [L'appairage chiffré](docs/encrypted-connections.md) protège le contenu du
 terminal entre l'App et le Hub ; un lien de connexion ordinaire dans un
@@ -658,4 +658,5 @@ compris au travail, mais pas les proposer comme produit concurrent, et chaque
 version passe sous MIT deux ans après sa sortie. Les versions jusqu'à 0.25.0
 sont entièrement sous MIT. Voir [LICENSE](LICENSE) et
 [TRADEMARKS.md](TRADEMARKS.md). Le service
-optionnel Offdesk Cloud est maintenu séparément et n'est pas inclus ici.
+hébergé optionnel Offdesk (offdesk.so) est maintenu séparément et n'est pas
+inclus ici.

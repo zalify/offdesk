@@ -43,7 +43,7 @@ App 安装后的名字是 **Offdesk Dev**，本文简称 Offdesk。命令行工�
 - **自托管部署：** 在 macOS/Linux 上使用 Rust 二进制或 Docker 部署，数据存于 SQLite，Web UI 内置在 Hub 二进制中。
 - **App 加密连接：** 已配对的 App 与 Hub 之间端到端加密。普通浏览器访问走另一套登录流程；从公网用浏览器访问需要 HTTPS 和身份验证。
 
-本仓库中的 Hub、node、CLI 以及协议和加密 crate 采用 **MIT 许可证**；Web UI 和桌面端、手机端 App 以 **FSL-1.1-MIT** 公开源码（见[许可证](#许可证)）。自托管不需要任何厂商账号。可选的 **Offdesk Cloud** 是一项独立的闭源服务，提供托管的远程访问。它的开源本地连接器会检查加密连接是否可达，在隧道持续故障时自动重启，长时间中断时按退避策略重试。
+本仓库中的 Hub、node、CLI 以及协议和加密 crate 采用 **MIT 许可证**；Web UI 和桌面端、手机端 App 以 **FSL-1.1-MIT** 公开源码（见[许可证](#许可证)）。自托管不需要任何厂商账号。可选的托管版 **Offdesk**（[offdesk.so](https://offdesk.so)）是一项独立的闭源服务，提供托管的远程访问。它的开源本地连接器会检查加密连接是否可达，在隧道持续故障时自动重启，长时间中断时按退避策略重试。
 
 有问题、配置没跑通、想要什么功能：来 [Discord](https://discord.gg/aFUu6VMzc)。
 
@@ -64,7 +64,7 @@ App 安装后的名字是 **Offdesk Dev**，本文简称 Offdesk。命令行工�
 
 - [macOS 安装与手机配对（图文指南）](https://offdesk.dev/zh/docs/mac)
 - [局域网配置](docs/setup-lan.md)，以及 [通过 HTTPS、OAuth 或 Tailscale 公网访问](docs/setup-public.md)
-- [App 端到端加密连接](docs/encrypted-connections.md) 和[可选的 Offdesk Cloud 配置](docs/managed-connections.md)
+- [App 端到端加密连接](docs/encrypted-connections.md) 和[可选的 Offdesk（offdesk.so）远程访问配置](docs/managed-connections.md)
 - [localhost 网页预览](docs/web-previews.md)：需手动开启的端口转发，使用专用预览域名和 HTTPS 入口，与终端的端到端加密相互独立
 - [HTML 文件预览](docs/html-file-previews.md)：在桌面或 Android App 中把机器上的 `.html` 文件作为网页打开
 - [自定义终端按键](docs/terminal-keys.md)：按键布局、Shift 组合键，以及无需重新弹出系统键盘的向后删除
@@ -279,7 +279,7 @@ offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|clo
 offdesk browser handoff <browser> --reason "Please log in" [--wait]   # 请人来帮忙
 offdesk browser wait-control <browser>          # 有人控制浏览器时阻塞等待（超时退出码为 1）
 offdesk browser take <browser> --reason "..." [--force]   # 从人手里收回控制权
-offdesk mcp                                     # 通过 stdio 把 agent 浏览器作为 MCP 工具提供：claude mcp add offdesk -- offdesk mcp
+offdesk mcp                                     # 通过 stdio 把 agent 浏览器作为 MCP 工具提供：claude mcp add offdesk-dev -- offdesk mcp
 offdesk fetch <path>... [--plain]               # 为本机文件/文件夹输出可点击下载的链接（OSC 8）；单个文件最大 20 MiB；不需要 Hub token
 offdesk link [--no-open]                        # 在浏览器中打开 Hub；在 Hub 所在机器上则输出登录链接和二维码
 ```
@@ -360,10 +360,10 @@ Hub 打印的登录链接谁拿到谁就能登录，请像对待密码一样对�
 
 **浏览器或手机断线后，终端还在吗？** tmux 运行在节点上，所以关闭客户端或客户端断网都不会结束会话。等 Hub 和节点重新可达后，再连回同一个终端即可。主机关机或重启则不同：tmux 不会在重启后保留正在运行的进程。
 
-**需要注册账号吗？** 自托管不需要任何厂商账号：安装时会创建一个本地用户和一个登录链接。可选的 Offdesk Cloud 使用单独的登录，提供托管的远程访问。
+**需要注册账号吗？** 自托管不需要任何厂商账号：安装时会创建一个本地用户和一个登录链接。通过托管版 Offdesk（offdesk.so）进行的可选远程访问使用单独的登录。
 
-**我的流量会经过 offdesk.dev 吗？** 局域网直连时流量直达你的 Hub。可选的 Offdesk
-Cloud 会通过 `*.relay.offdesk.cloud` 下的托管地址转发加密的 App 流量。自己管理的隧道则经过对应的服务商。[加密配对](docs/encrypted-connections.md) 保护 App 与 Hub
+**我的流量会经过 offdesk.dev 吗？** 局域网直连时流量直达你的 Hub。通过 Offdesk（offdesk.so）
+进行的可选远程访问会通过 `*.relay.offdesk.cloud` 下的托管地址转发加密的 App 流量。自己管理的隧道则经过对应的服务商。[加密配对](docs/encrypted-connections.md) 保护 App 与 Hub
 之间的终端内容；普通的浏览器登录链接是另一种模式。
 
 **只能用于 Claude Code 吗？** 它就是一个终端。Claude Code、Codex、OpenCode、一个要跑一小时的构建，或者 vim——只要能在 tmux 里运行，在这里就能运行，Offdesk 并不知道、也不关心你跑的是什么。
@@ -379,4 +379,4 @@ Cloud 会通过 `*.relay.offdesk.cloud` 下的托管地址转发加密的 App �
 
 ## 许可证
 
-`crates/` 下的全部代码（Hub、node、CLI、协议和加密 crate）以及 `packages/shared` 采用 MIT 许可证。Web UI（`packages/app`）和桌面端、Android、iOS App（`packages/desktop`）采用 Functional Source License（FSL-1.1-MIT）：可以阅读、审计、编译、修改和使用（包括在工作中使用），但不能拿来做竞品，每个版本发布两年后自动转为 MIT。0.25.0 及以前的版本全部是 MIT。见 [LICENSE](LICENSE) 和 [TRADEMARKS.md](TRADEMARKS.md)。可选的 Offdesk Cloud 服务单独维护，不包含在本仓库中。
+`crates/` 下的全部代码（Hub、node、CLI、协议和加密 crate）以及 `packages/shared` 采用 MIT 许可证。Web UI（`packages/app`）和桌面端、Android、iOS App（`packages/desktop`）采用 Functional Source License（FSL-1.1-MIT）：可以阅读、审计、编译、修改和使用（包括在工作中使用），但不能拿来做竞品，每个版本发布两年后自动转为 MIT。0.25.0 及以前的版本全部是 MIT。见 [LICENSE](LICENSE) 和 [TRADEMARKS.md](TRADEMARKS.md)。可选的托管版 Offdesk 服务（offdesk.so）单独维护，不包含在本仓库中。

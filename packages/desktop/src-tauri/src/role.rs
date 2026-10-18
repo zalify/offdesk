@@ -523,17 +523,17 @@ pub async fn cloud_action(action: CloudAction) -> Result<serde_json::Value, Stri
             CloudAction::LoginStatus => "login-status", CloudAction::Enable => "install",
             CloudAction::Check => "check", CloudAction::Disable => "disable",
         };
-        let output = hub_command(&["cloud", action], None)?.output().map_err(|_| "Could not start Cloud setup")?;
+        let output = hub_command(&["cloud", action], None)?.output().map_err(|_| "Could not start remote access setup")?;
         if !output.status.success() {
             // CLI errors are local, bounded messages; never forward stdout from
             // a failed check (it is not a successful connection status).
             let message = String::from_utf8_lossy(&output.stderr);
             let message = message.lines().rev().find(|line| line.starts_with("error:")).unwrap_or("");
             return Err(if message.is_empty() || message.len() > 512 {
-                "Cloud setup could not finish. Update the Hub, then retry.".into()
+                "Remote access setup could not finish. Update the Hub, then retry.".into()
             } else { message.trim_start_matches("error:").trim().to_owned() });
         }
-        if output.stdout.len() > 16384 { return Err("Invalid Cloud status response".into()); }
-        serde_json::from_slice(&output.stdout).map_err(|_| "Invalid Cloud status response".into())
-    }).await.map_err(|_| "Cloud setup was interrupted".to_string())?
+        if output.stdout.len() > 16384 { return Err("Invalid remote access status response".into()); }
+        serde_json::from_slice(&output.stdout).map_err(|_| "Invalid remote access status response".into())
+    }).await.map_err(|_| "Remote access setup was interrupted".to_string())?
 }

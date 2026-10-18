@@ -591,7 +591,7 @@ async fn main() {
         match tokio::net::TcpListener::bind(address).await {
             Ok(listener) => Some(listener),
             Err(error) if automatic_secure => {
-                tracing::warn!("Cloud's loopback port is unavailable: {error}. Local Hub continues; Cloud setup will report this conflict.");
+                tracing::warn!("The remote access loopback port is unavailable: {error}. Local Hub continues; remote access setup will report this conflict.");
                 None
             }
             Err(error) => panic!("Could not bind the configured encrypted-only listener: {error}"),
