@@ -1,4 +1,5 @@
 import { HubPickerPanel } from "../components/HubPickerPanel";
+import { openOutside } from "../components/DesktopSetup.web";
 import { OldHubNotice } from "../components/OldHubNotice.web";
 import { hubHost, plainScanVerdict, probeHubVersion } from "../lib/hubVersionCheck";
 import { scanWithCleanup } from "../lib/scanLifecycle";
@@ -14,6 +15,9 @@ import { getServerUrl, setServerUrl } from "../lib/serverUrl";
 import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
 import { Body, Button, Card, Display, Eyebrow, Wordmark, fontDisplay, inputStyle } from "../components/Primitives.web";
 import { colors } from "../lib/colors";
+
+// The LAN setup guide's sign-in step: where the link comes from.
+const SIGN_IN_DOC_URL = "https://github.com/zalify/offdesk/blob/main/docs/setup-lan.md#3-open-it-on-your-phone";
 
 type OAuthProvider = "github" | "google";
 
@@ -634,8 +638,25 @@ export default function LoginScreen({
   const link = providers?.link ? (
     <>
       <Body>
-        The Hub address alone does not sign you in. On the computer running Offdesk, open the phone connection screen and choose Copy link. Paste the complete sign-in link here, including the token or code:
+        The Hub address alone does not sign you in. Get the sign-in link from the computer running the Hub:
       </Body>
+      <ol data-testid="sign-in-link-steps" style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-sans)", fontSize: 14, lineHeight: 1.5, color: colors.fg2 }}>
+        <li>In the Offdesk app, open Settings → Phone and choose <b>browser access</b>. Scan its QR code with your phone’s camera, or choose Copy link and paste it below.</li>
+        <li>Installed the Hub from the command line? Run <code style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>offdesk-hub link</code> on that computer.</li>
+      </ol>
+      <a
+        href={SIGN_IN_DOC_URL}
+        target="_blank"
+        rel="noreferrer"
+        onClick={(event) => {
+          event.preventDefault();
+          void openOutside(SIGN_IN_DOC_URL);
+        }}
+        style={{ alignSelf: "flex-start", fontFamily: fontDisplay, fontSize: 13, color: colors.accent, padding: "10px 0" }}
+      >
+        how to sign in on your phone →
+      </a>
+      <Body size={13}>Paste the complete link, including the token or code:</Body>
       <input
         type="url"
         value={pastedLink}
