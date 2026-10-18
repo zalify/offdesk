@@ -354,7 +354,7 @@ const zh: Dict = {
       },
       cloud: {
         title: "7. 可选：通过 Offdesk Cloud 在外面连接",
-        body: "Cloud 当前为邀请制测试服务。在 <a href='https://cloud.offdesk.dev'>Cloud 控制台</a>使用 GitHub 登录并兑换邀请码，再回到 Mac 的 <strong>Set up remote access</strong>，按步骤登录、核对电脑授权信息。Cloud 地址就绪后，再通过 Offdesk App 模式配对手机。",
+        body: "Cloud 当前为邀请制测试服务。在 <a href='https://offdesk.so'>Cloud 控制台</a>登录并兑换邀请码，再回到 Mac 的 <strong>Set up remote access</strong>，按步骤登录、核对电脑授权信息。Cloud 地址就绪后，再通过 Offdesk App 模式配对手机。",
         extra:
           "验证完整新用户流程时，请从官网安装最新 macOS 和 Android 正式版。iOS 通过 TestFlight 分发；测试组中的可用版本以 TestFlight 显示为准。Cloud 完成后关闭手机 Wi-Fi，用蜂窝网络确认终端可连接；Mac 必须保持在线。已配对手机可从顶部标题打开 <strong>Hub &amp; connection</strong>。局域网使用可跳过 Cloud 和邀请码。",
       },

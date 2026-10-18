@@ -623,7 +623,7 @@ Fernzugriff.
 
 **Läuft mein Datenverkehr über offdesk.dev?** Direkte LAN-Verbindungen gehen
 an deinen Hub. Das optionale Offdesk Cloud leitet verschlüsselten App-Verkehr
-über eine verwaltete Adresse unter `*.cloud.offdesk.dev`. Ein selbst
+über eine verwaltete Adresse unter `*.relay.offdesk.cloud`. Ein selbst
 verwalteter Tunnel läuft über dessen Anbieter.
 [Verschlüsseltes Pairing](docs/encrypted-connections.md) schützt
 Terminal-Inhalte zwischen App und Hub; ein normaler Anmeldelink im Browser ist
