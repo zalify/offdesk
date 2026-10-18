@@ -8,16 +8,13 @@ test.use({
 // A phone browser at a home hub's bare address: it has to learn where the
 // sign-in link comes from on this page, not by guessing.
 test("the link sign-in page says where the link comes from and links the guide", async ({ page }) => {
-  // The E2E hub runs in dev mode, which has no link sign-in; answer as a home
-  // hub (no GitHub or Google) does.
+  // The E2E hub runs in dev mode: it signs anyone in and offers no link
+  // sign-in. Answer as a home hub (no GitHub or Google) does instead.
+  await page.route("**/api/auth/dev", (route) => route.fulfill({ status: 404, body: "" }));
   await page.route("**/api/auth/providers", (route) =>
     route.fulfill({ json: { github: false, google: false, link: true } }),
   );
   await page.goto("/");
-  // TEMP: what the page shows.
-  await page.waitForTimeout(4000);
-  console.log("SIGNIN url", page.url());
-  console.log("SIGNIN text", JSON.stringify((await page.locator("body").innerText()).slice(0, 800)));
 
   const steps = page.getByTestId("sign-in-link-steps");
   await expect(steps).toBeVisible();
