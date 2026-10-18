@@ -43,6 +43,7 @@ import { HostSwitcher } from "./HostSwitcher.web";
 import { useLongPress } from "@/lib/longPress";
 import { WorkspaceManager } from "./WorkspaceManager.web";
 import { TextButton } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 export type TabDropPlacement = "before" | "after";
 
@@ -336,7 +337,7 @@ function TabBarComponent({
         label="Tabs"
         pressed={workspaceManagerOpen}
         onClick={() => setWorkspaceManagerOpen(true)}
-        style={{ alignSelf: "center", fontSize: 13 }}
+        style={{ alignSelf: "center", fontSize: rem(13) }}
       >
         ≡
       </TextButton>
@@ -426,7 +427,7 @@ function TabBarComponent({
                   }
                   onSelectGroup(group.id);
                 }}
-                style={{ fontSize: 12.5, cursor: group.persistent ? "grab" : "pointer", touchAction: "none" }}
+                style={{ fontSize: rem(12.5), cursor: group.persistent ? "grab" : "pointer", touchAction: "none" }}
               >
                 {index}:
               </span>
@@ -487,7 +488,7 @@ function TabBarComponent({
         className="odk-btn odk-btn--secondary"
         style={newTabStyle}
       >
-        <span aria-hidden="true" style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+        <span aria-hidden="true" style={{ fontSize: rem(14), lineHeight: 1 }}>+</span>
         new tab
       </button>
       <div style={{ width: 20, flexShrink: 0 }} />
@@ -731,7 +732,7 @@ const newTabStyle: CSSProperties = {
   minHeight: 26,
   gap: 6,
   padding: "0 9px",
-  fontSize: 12,
+  fontSize: rem(12),
 };
 
 // Unboxed icons; an open panel gets the hover fill, so it reads as pressed.
@@ -745,7 +746,7 @@ function panelButtonStyle(open: boolean): CSSProperties {
 }
 
 const browserCountStyle: CSSProperties = {
-  fontSize: 9.5,
+  fontSize: rem(9.5),
   lineHeight: 1,
   marginTop: -2,
   color: colors.fg1,
@@ -763,7 +764,7 @@ const tabButtonStyle: CSSProperties = {
   height: "100%",
   font: "inherit",
   fontFamily: "var(--font-display)",
-  fontSize: 12.5,
+  fontSize: rem(12.5),
   cursor: "pointer",
 };
 

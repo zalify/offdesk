@@ -1,4 +1,5 @@
 import { colors, colorAlpha } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 interface ModeIndicatorProps {
   isController: boolean;
@@ -16,7 +17,7 @@ export function ModeIndicator({ isController, onRequestControl, onReleaseControl
       background: isController ? colorAlpha.accentMedium15 : colors.surface,
       borderRadius: 6,
       border: '1px solid ' + (isController ? colors.accent : colors.border),
-      fontSize: 12,
+      fontSize: rem(12),
       userSelect: 'none' as const,
     }}>
       <span style={{
@@ -36,7 +37,7 @@ export function ModeIndicator({ isController, onRequestControl, onReleaseControl
           color: isController ? colors.foregroundSecondary : colors.accent,
           cursor: 'pointer',
           padding: '2px 8px',
-          fontSize: 11,
+          fontSize: rem(11),
         }}
       >
         {isController ? 'Release' : 'Take Control'}

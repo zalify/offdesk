@@ -7,7 +7,7 @@
 /* Every key is one column of a grid (--key-width, set from the bar's width),
    so both rows line up. The visible key is 36px tall inside a 44px-tall hit
    area; on the narrowest phones the label shrinks to fit six characters. */
-.offdesk-keybar .offdesk-terminal-key{box-sizing:border-box;display:flex;align-items:center;justify-content:center;flex:0 0 var(--key-width);width:var(--key-width);min-width:0;height:44px;margin:0;padding:0;border:0;border-radius:3px;background:transparent;color:inherit;font-family:var(--font-display);font-size:min(12px,calc((var(--key-width) - 4px) / 3.8));font-weight:500;white-space:nowrap;user-select:none;-webkit-user-select:none;cursor:pointer;position:relative;isolation:isolate}
+.offdesk-keybar .offdesk-terminal-key{box-sizing:border-box;display:flex;align-items:center;justify-content:center;flex:0 0 var(--key-width);width:var(--key-width);min-width:0;height:44px;margin:0;padding:0;border:0;border-radius:3px;background:transparent;color:inherit;font-family:var(--font-display);font-size:min(.75rem,calc((var(--key-width) - 4px) / 3.8));font-weight:500;white-space:nowrap;user-select:none;-webkit-user-select:none;cursor:pointer;position:relative;isolation:isolate}
 .offdesk-keybar .offdesk-terminal-key::before{content:'';position:absolute;inset:4px 0;z-index:-1;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent}
 .offdesk-keybar .offdesk-terminal-key[data-accent=true]{color:rgb(var(--color-on-primary));font-weight:600}
 .offdesk-keybar .offdesk-terminal-key[data-accent=true]::before{border-color:transparent;background:rgb(var(--color-primary))}
@@ -27,10 +27,10 @@
 .offdesk-keybar-scroll-wrap[data-left=true]::before,.offdesk-keybar-scroll-wrap[data-right=true]::after{opacity:1}
 .offdesk-keybar-view-only{display:flex;align-items:center;gap:12px;min-height:44px;padding:2px 0 2px 4px;font-family:var(--font-display)}
 .offdesk-keybar-view-only>span{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
-.offdesk-keybar-view-only strong{font-size:13px;font-weight:600}
-.offdesk-keybar-view-only>span>span{font-size:11px;color:rgb(var(--color-fg-3))}
+.offdesk-keybar-view-only strong{font-size:.8125rem;font-weight:600}
+.offdesk-keybar-view-only>span>span{font-size:.6875rem;color:rgb(var(--color-fg-3))}
 .offdesk-keybar-view-only button{flex-shrink:0;min-height:44px;padding:0 16px}
-.offdesk-selection-bar,.offdesk-attachment-status{display:flex;align-items:center;gap:8px;min-height:44px;font-family:var(--font-display);font-size:12px}
+.offdesk-selection-bar,.offdesk-attachment-status{display:flex;align-items:center;gap:8px;min-height:44px;font-family:var(--font-display);font-size:.75rem}
 .offdesk-selection-bar span,.offdesk-attachment-status span{flex:1;min-width:0;overflow-wrap:anywhere;font-family:var(--font-sans)}
 .offdesk-selection-bar button,.offdesk-attachment-status button{display:flex;align-items:center;gap:6px;min-height:44px;border:0;background:transparent;color:inherit;font:inherit;padding:0 10px;text-transform:lowercase}
 .offdesk-keybar-spinner{animation:offdeskSpin 800ms linear infinite}

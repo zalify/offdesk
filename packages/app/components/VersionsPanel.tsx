@@ -21,6 +21,7 @@ import {
   type HubAnswer,
 } from "@/lib/hubVersions";
 import { Button, fontProse, StepMark } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
   const versions = useVersions();
@@ -65,7 +66,7 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
   return (
     <div data-testid="settings-versions" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", alignItems: "flex-end", gap: 16, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 240px", fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+        <div style={{ flex: "1 1 240px", fontFamily: fontProse, fontSize: rem(13), lineHeight: rem(20), color: colors.fg2 }}>
           Everything this hub knows about.
           {versions.checkedAt ? ` Checked ${checkedAgo(versions.checkedAt, Date.now())}.` : ""}
           {bundled ? " On this Mac the hub and node are bundled with the app and update with it." : ""}
@@ -75,11 +76,11 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
         </Button>
       </div>
       <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse", fontFamily: "var(--font-display)", fontSize: 13, color: colors.fg0 }}>
+        <table style={{ width: "100%", minWidth: 560, borderCollapse: "collapse", fontFamily: "var(--font-display)", fontSize: rem(13), color: colors.fg0 }}>
           <thead>
             <tr style={{ textAlign: "left" }}>
               {["part", "where", "running", "latest", "action"].map((heading) => (
-                <th key={heading} scope="col" style={{ ...cell, padding: "8px 0", fontSize: 12, fontWeight: 500, color: colors.fg3, textAlign: heading === "action" ? "right" : "left" }}>
+                <th key={heading} scope="col" style={{ ...cell, padding: "8px 0", fontSize: rem(12), fontWeight: 500, color: colors.fg3, textAlign: heading === "action" ? "right" : "left" }}>
                   {heading}
                 </th>
               ))}
@@ -136,8 +137,8 @@ export function VersionsPanel({ hubAddress }: { hubAddress: string }) {
           </tbody>
         </table>
       </div>
-      {services?.error ? <div role="alert" style={{ fontFamily: fontProse, fontSize: 12, color: colors.err, overflowWrap: "anywhere" }}>{services.error}</div> : null}
-      {update.error ? <div role="alert" style={{ fontFamily: fontProse, fontSize: 12, color: colors.err, overflowWrap: "anywhere" }}>{update.error}</div> : null}
+      {services?.error ? <div role="alert" style={{ fontFamily: fontProse, fontSize: rem(12), color: colors.err, overflowWrap: "anywhere" }}>{services.error}</div> : null}
+      {update.error ? <div role="alert" style={{ fontFamily: fontProse, fontSize: rem(12), color: colors.err, overflowWrap: "anywhere" }}>{update.error}</div> : null}
     </div>
   );
 }
@@ -165,7 +166,7 @@ function Row({ part, where, running, behind, latest, action }: {
       <td style={{ ...cell, color: colors.fg2 }}>{where}</td>
       <td style={{ ...cell, color: behind ? colors.err : colors.fg0 }}>{running}</td>
       <td style={cell}>{latest}</td>
-      <td style={{ ...cell, paddingRight: 0, textAlign: "right", fontSize: 12 }}>{action}</td>
+      <td style={{ ...cell, paddingRight: 0, textAlign: "right", fontSize: rem(12) }}>{action}</td>
     </tr>
   );
 }

@@ -8,6 +8,7 @@ import { THEMES } from "@/lib/themes";
 import { readTerminalFontSetting, writeTerminalFontSetting } from "@/lib/fontPreferences";
 import { DEFAULT_TERMINAL_FONT, availableTerminalFonts, quoteFontFamily } from "@/lib/terminalFonts";
 import { ThemeRow } from "./ThemePicker";
+import { rem } from "@/lib/rem";
 
 // The fonts the app ships, then any listed font this phone has (Menlo on an
 // iPhone): never one it would draw as the default instead.
@@ -48,7 +49,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
       onClick={() => setTab(value)}
       style={{
         minHeight: 32, padding: "0 14px", border: 0, borderRadius: 3, cursor: "pointer",
-        fontFamily: "var(--font-display)", fontSize: 12.5,
+        fontFamily: "var(--font-display)", fontSize: rem(12.5),
         background: tab === value ? colors.bg3 : "transparent",
         color: tab === value ? colors.fg0 : colors.fg2,
         fontWeight: tab === value ? 600 : 500,
@@ -59,11 +60,11 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
   );
   const row: React.CSSProperties = {
     display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, minHeight: 48,
-    borderTop: `1px solid ${colors.lineSoft}`, fontFamily: "var(--font-display)", fontSize: 13, color: colors.fg1,
+    borderTop: `1px solid ${colors.lineSoft}`, fontFamily: "var(--font-display)", fontSize: rem(13), color: colors.fg1,
   };
   const stepButton: React.CSSProperties = {
     width: 44, height: 40, borderRadius: 3, border: `1px solid ${colors.line}`, background: "transparent",
-    color: colors.fg0, fontFamily: "var(--font-display)", fontSize: 13, cursor: "pointer",
+    color: colors.fg0, fontFamily: "var(--font-display)", fontSize: rem(13), cursor: "pointer",
   };
 
   return (
@@ -84,7 +85,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
       >
         <span style={{ alignSelf: "center", width: 40, height: 4, borderRadius: 2, background: colors.line }} />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>appearance</span>
+          <span style={{ fontFamily: "var(--font-display)", fontSize: rem(17), fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>appearance</span>
           <span style={{ flex: 1 }} />
           <div role="tablist" aria-label="Appearance" style={{ display: "flex", gap: 2, padding: 2, border: `1px solid ${colors.line}`, borderRadius: 4 }}>
             {tabButton("theme")}
@@ -94,14 +95,14 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
 
         {tab === "theme" ? (
           <>
-            <span style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: colors.fg2 }}>
+            <span style={{ fontFamily: "var(--font-sans)", fontSize: rem(13), color: colors.fg2 }}>
               Tap to try it on this terminal. Swipe for more.
             </span>
             <ThemeRow />
           </>
         ) : (
           <>
-            <span style={{ fontFamily: "var(--font-sans)", fontSize: 13, color: colors.fg2 }}>terminal font</span>
+            <span style={{ fontFamily: "var(--font-sans)", fontSize: rem(13), color: colors.fg2 }}>terminal font</span>
             <div role="group" aria-label="Terminal font" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {fonts.map((option) => {
                 const on = (font.family || "") === option.value || (!option.value && font.family === DEFAULT_TERMINAL_FONT);
@@ -113,7 +114,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
                     onClick={() => applyFont({ ...font, family: option.value })}
                     style={{
                       minHeight: 40, padding: "0 14px", borderRadius: 3, cursor: "pointer",
-                      fontFamily: `${quoteFontFamily(option.label)}, monospace`, fontSize: 13,
+                      fontFamily: `${quoteFontFamily(option.label)}, monospace`, fontSize: rem(13),
                       border: `1px solid ${on ? colors.primary : colors.line}`,
                       background: on ? colors.primary : "transparent",
                       color: on ? colors.onPrimary : colors.fg1,
@@ -133,7 +134,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
                 <button type="button" aria-label="Larger terminal text" style={stepButton} disabled={size >= 24} onClick={() => applyFont({ ...font, size: Math.min(24, size + 1) })}>A+</button>
               </span>
             </div>
-            <span style={{ fontFamily: "var(--font-sans)", fontSize: 12.5, color: colors.fg3 }}>More fonts are in Settings.</span>
+            <span style={{ fontFamily: "var(--font-sans)", fontSize: rem(12.5), color: colors.fg3 }}>More fonts are in Settings.</span>
           </>
         )}
 
@@ -142,7 +143,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
             type="button"
             data-testid="appearance-cancel"
             onClick={cancel}
-            style={{ flex: 1, minHeight: 46, borderRadius: 4, border: `1px solid ${colors.line}`, background: "transparent", color: colors.fg0, fontFamily: "var(--font-display)", fontSize: 13.5, cursor: "pointer" }}
+            style={{ flex: 1, minHeight: 46, borderRadius: 4, border: `1px solid ${colors.line}`, background: "transparent", color: colors.fg0, fontFamily: "var(--font-display)", fontSize: rem(13.5), cursor: "pointer" }}
           >
             cancel
           </button>
@@ -150,7 +151,7 @@ export function AppearanceSheet({ onClose }: { onClose: () => void }) {
             type="button"
             data-testid="appearance-done"
             onClick={onClose}
-            style={{ flex: 1, minHeight: 46, borderRadius: 4, border: 0, background: colors.primary, color: colors.onPrimary, fontFamily: "var(--font-display)", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}
+            style={{ flex: 1, minHeight: 46, borderRadius: 4, border: 0, background: colors.primary, color: colors.onPrimary, fontFamily: "var(--font-display)", fontSize: rem(13.5), fontWeight: 600, cursor: "pointer" }}
           >
             {changed && theme !== opened.theme ? `use ${THEMES[themeId].name.toLowerCase()}` : "done"}
           </button>

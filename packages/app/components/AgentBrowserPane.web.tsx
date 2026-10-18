@@ -37,6 +37,7 @@ import {
   AgentBrowserDialogOverlay,
   AgentBrowserLoadingBar,
 } from "./AgentBrowserPageOverlays.web";
+import { rem } from "@/lib/rem";
 
 const IS_MAC = typeof navigator !== "undefined" && detectOS() === "macos";
 
@@ -46,7 +47,7 @@ const lower = { textTransform: "lowercase" } as const;
 
 const bannerButton = {
   fontFamily: "var(--font-display)",
-  fontSize: 12,
+  fontSize: rem(12),
   fontWeight: 600,
   minHeight: 28,
   padding: "0 12px",
@@ -88,7 +89,7 @@ const toolbarButton = {
   background: "transparent",
   color: colors.fg0,
   fontFamily: "var(--font-display)",
-  fontSize: 13,
+  fontSize: rem(13),
 } as const;
 
 /**
@@ -163,7 +164,7 @@ function AddressBar({
         height: 24,
         boxSizing: "border-box",
         padding: "0 8px",
-        fontSize: 11,
+        fontSize: rem(11),
         color: draft === null ? colors.foregroundMuted : colors.foreground,
         background: colors.bg0,
         border: `1px solid ${invalid ? colors.err : colors.line}`,
@@ -524,7 +525,7 @@ export function AgentBrowserPane({
             height: 24,
             boxSizing: "border-box",
             fontFamily: "var(--font-display)",
-            fontSize: 12,
+            fontSize: rem(12),
             fontWeight: mine ? 600 : 500,
             padding: "0 10px",
             borderRadius: 3,
@@ -559,7 +560,7 @@ export function AgentBrowserPane({
           data-testid="agent-browser-state"
           style={{
             fontFamily: "var(--font-display)",
-            fontSize: 11,
+            fontSize: rem(11),
             color: state === "live" ? colors.accent : colors.fg3,
             flexShrink: 0,
             ...lower,
@@ -574,7 +575,7 @@ export function AgentBrowserPane({
           data-testid="agent-browser-error"
           style={{
             padding: "6px 12px",
-            fontSize: 12,
+            fontSize: rem(12),
             color: colors.err,
             borderBottom: `1px solid ${colors.lineSoft}`,
             flexShrink: 0,
@@ -593,7 +594,7 @@ export function AgentBrowserPane({
             gap: 10,
             padding: "8px 16px",
             fontFamily: "var(--font-sans)",
-            fontSize: 13,
+            fontSize: rem(13),
             color: colors.err,
             background: "transparent",
             borderBottom: `1px solid ${colors.err}`,
@@ -633,7 +634,7 @@ export function AgentBrowserPane({
             gap: 10,
             padding: "8px 16px",
             fontFamily: "var(--font-sans)",
-            fontSize: 13,
+            fontSize: rem(13),
             color: colors.err,
             background: "transparent",
             borderBottom: `1px solid ${colors.err}`,
@@ -771,7 +772,7 @@ export function AgentBrowserPane({
                 alignItems: "center",
                 justifyContent: "center",
                 color: colors.foregroundMuted,
-                fontSize: 12,
+                fontSize: rem(12),
               }}
             >
               Waiting for the browser…

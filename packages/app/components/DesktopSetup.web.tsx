@@ -33,6 +33,7 @@ import { getServerUrl, setServerUrl } from "@/lib/serverUrl";
 import LoginScreen from "../app/login";
 import { AppTitleBar } from "./AppTitleBar.web";
 import { Body, Button, Card, Display, Eyebrow, Spinner, StepMark, Wordmark, fontDisplay } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 const IPHONE_URL = "https://testflight.apple.com/join/rV4ktaGv";
 const ANDROID_URL = "https://offdesk.dev/apk";
@@ -301,7 +302,7 @@ function RoleCard({
 }) {
   return (
     <Card style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, padding: 24 }}>
-      <span style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 500, color: accent ? colors.accent : colors.fg3 }}>{label}</span>
+      <span style={{ fontFamily: fontDisplay, fontSize: rem(12), fontWeight: 500, color: accent ? colors.accent : colors.fg3 }}>{label}</span>
       <Display size={22}>{title}</Display>
       <Body size={15} style={{ flexGrow: 1 }}>{body}</Body>
       <div style={{ marginTop: 8 }}>{action}</div>
@@ -375,7 +376,7 @@ export function HubSetup({
       <StepList steps={steps} active={active} />
       {error ? (
         <div style={{ width: "100%", maxWidth: 600, display: "flex", flexDirection: "column", gap: 10, paddingTop: 12, borderTop: `1px dashed ${colors.lineSoft}` }}>
-          <div style={{ fontFamily: fontDisplay, fontSize: 12, fontWeight: 500, color: colors.fg3 }}>if a step fails</div>
+          <div style={{ fontFamily: fontDisplay, fontSize: rem(12), fontWeight: 500, color: colors.fg3 }}>if a step fails</div>
           <div role="alert" style={errorBox}>{error}</div>
           <div style={{ display: "flex", gap: 8 }}>
             {status.supported ? (
@@ -406,7 +407,7 @@ const errorBox = {
   borderRadius: 4,
   color: colors.err,
   fontFamily: "var(--font-display)",
-  fontSize: 12,
+  fontSize: rem(12),
   overflowWrap: "anywhere",
 } as const;
 
@@ -431,9 +432,9 @@ function StepList({ steps, active, compact = false }: { steps: Step[]; active: n
           <StepMark state={step.done ? "done" : index === active ? "active" : "todo"} />
           <span style={{ flexGrow: 1, color: step.done || index === active ? colors.fg0 : colors.fg2 }}>{step.title}</span>
           {index === active ? (
-            <span style={{ fontSize: 12, color: colors.accent }}>waiting…</span>
+            <span style={{ fontSize: rem(12), color: colors.accent }}>waiting…</span>
           ) : step.meta ? (
-            <span style={{ fontSize: 12, color: colors.fg3 }}>{step.meta}</span>
+            <span style={{ fontSize: rem(12), color: colors.fg3 }}>{step.meta}</span>
           ) : null}
         </div>
       ))}
@@ -528,7 +529,7 @@ export function HubReadyScreen({
             )}
           </div>
           <div style={{ marginTop: 10, padding: 16, display: "flex", flexDirection: "column", gap: 8, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6 }}>
-            <div style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600 }}>Where will you connect from?</div>
+            <div style={{ fontFamily: fontDisplay, fontSize: rem(14), fontWeight: 600 }}>Where will you connect from?</div>
             <Body size={13}>At home your phone reaches this Mac over Wi‑Fi. Away from home, turn on remote access with your Offdesk account (offdesk.so) or your own tunnel.</Body>
             <div>
               <Button kind="secondary" size="sm" onClick={() => setShowCloud(value => !value)}>{showCloud ? "Hide remote access setup" : "Set up remote access"}</Button>
@@ -621,7 +622,7 @@ export function PhoneCodePanel({
             data-testid={`phone-purpose-${value}`}
             aria-label={value === "app" ? "Offdesk Dev app, recommended" : "Browser access"}
             style={{ minHeight: 36, padding: "0 10px", border: 0, cursor: "pointer",
-              fontFamily: fontDisplay, fontSize: 12, fontWeight: purpose === value ? 600 : 500,
+              fontFamily: fontDisplay, fontSize: rem(12), fontWeight: purpose === value ? 600 : 500,
               background: purpose === value ? colors.primary : "transparent",
               color: purpose === value ? colors.onPrimary : colors.fg2 }}>
             {value === "app" ? "offdesk/dev app" : "browser access"}
@@ -645,7 +646,7 @@ export function PhoneCodePanel({
           opacity: picking ? 0.5 : 1,
         }}
       >
-        {qr ? <QrImage svg={qr} size={compact ? 142 : 186} label="Phone sign-in QR code" /> : <span role={qrError ? "alert" : "status"} style={{ fontSize: 12, color: colors.fg3 }}>{qrError ? "Could not generate the QR code. Use Copy link below instead." : link ? "Generating QR code…" : "Waiting for the hub…"}</span>}
+        {qr ? <QrImage svg={qr} size={compact ? 142 : 186} label="Phone sign-in QR code" /> : <span role={qrError ? "alert" : "status"} style={{ fontSize: rem(12), color: colors.fg3 }}>{qrError ? "Could not generate the QR code. Use Copy link below instead." : link ? "Generating QR code…" : "Waiting for the hub…"}</span>}
       </div>
       </> : null}
 
@@ -664,7 +665,7 @@ export function PhoneCodePanel({
             background: colors.bg1,
             color: colors.fg0,
             fontFamily: fontDisplay,
-            fontSize: 13,
+            fontSize: rem(13),
           }}
         >
           {options.map((option) => (
@@ -673,16 +674,16 @@ export function PhoneCodePanel({
             </option>
           ))}
         </select>
-        <span style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg3 }}>{link?.public_url === link?.url && link?.public_url ? "Internet address — keep this Mac awake and online." : "Local address — your phone must be on the same network."}</span>
+        <span style={{ fontFamily: "var(--font-sans)", fontSize: rem(12), color: colors.fg3 }}>{link?.public_url === link?.url && link?.public_url ? "Internet address — keep this Mac awake and online." : "Local address — your phone must be on the same network."}</span>
       </label> : null}
 
       {purpose === "app" ? <>
         {link ? <SecurePairingPanel baseUrl={link.secure_url ?? link.url} managed={Boolean(link.secure_url)} /> : <Body>Waiting for the hub…</Body>}
-      <div style={{ alignSelf: "stretch", display: "flex", gap: 8, justifyContent: "center", paddingTop: 12, borderTop: `1px solid ${colors.lineSoft}`, fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>
+      <div style={{ alignSelf: "stretch", display: "flex", gap: 8, justifyContent: "center", paddingTop: 12, borderTop: `1px solid ${colors.lineSoft}`, fontFamily: fontDisplay, fontSize: rem(12), color: colors.fg3 }}>
         no app yet?
-        <button type="button" className="odk-text-btn" style={{ minHeight: 0, padding: 0, fontSize: 12, color: colors.fg0, textDecoration: "underline" }} onClick={() => void openOutside(IPHONE_URL)} aria-label="iPhone app">iphone</button>
+        <button type="button" className="odk-text-btn" style={{ minHeight: 0, padding: 0, fontSize: rem(12), color: colors.fg0, textDecoration: "underline" }} onClick={() => void openOutside(IPHONE_URL)} aria-label="iPhone app">iphone</button>
         ·
-        <button type="button" className="odk-text-btn" style={{ minHeight: 0, padding: 0, fontSize: 12, color: colors.fg0, textDecoration: "underline" }} onClick={() => void openOutside(ANDROID_URL)} aria-label="Android app">android</button>
+        <button type="button" className="odk-text-btn" style={{ minHeight: 0, padding: 0, fontSize: rem(12), color: colors.fg0, textDecoration: "underline" }} onClick={() => void openOutside(ANDROID_URL)} aria-label="Android app">android</button>
       </div>
       </> : <>
       <div
@@ -701,7 +702,7 @@ export function PhoneCodePanel({
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 12,
+            fontSize: rem(12),
             color: colors.fg2,
             flexGrow: 1,
             overflow: "hidden",
@@ -716,7 +717,7 @@ export function PhoneCodePanel({
         </Button>
       </div>
       {link ? (
-        <div style={{ fontFamily: "var(--font-sans)", fontSize: 12, color: colors.fg3, textAlign: "center" }}>
+        <div style={{ fontFamily: "var(--font-sans)", fontSize: rem(12), color: colors.fg3, textAlign: "center" }}>
           {link.link
             ? "The link signs in whoever has it. Keep it off shared screens."
             : "This hub signs in through GitHub or Google, so the code is just the address."}
@@ -792,7 +793,7 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
   };
 
   const row = (label: string, ok: boolean | null) => (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: fontDisplay, fontSize: 14, color: ok ? colors.fg0 : colors.fg2 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 12, fontFamily: fontDisplay, fontSize: rem(14), color: ok ? colors.fg0 : colors.fg2 }}>
       <StepMark state={ok ? "done" : "todo"} />
       <span style={{ textTransform: "lowercase" }}>{label}</span>
     </div>
@@ -805,7 +806,7 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <Body size={13}>This app is a client: it opens terminals on a hub somewhere else.</Body>
         <div>
-          <Button kind="secondary" onClick={() => void becomeHub()} disabled={busy} style={{ height: 36, fontSize: 13 }}>
+          <Button kind="secondary" onClick={() => void becomeHub()} disabled={busy} style={{ height: 36, fontSize: rem(13) }}>
             Make this machine the hub instead
           </Button>
         </div>
@@ -822,20 +823,20 @@ export function ThisMachineSection({ onPairPhone, onConnectionChanged }: { onPai
         {row("Answering on this machine", status?.listening ?? null)}
       </div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <Button kind="secondary" onClick={() => onPairPhone ? onPairPhone() : setShowCode((v) => !v)} style={{ height: 36, fontSize: 13 }} testId="settings-show-phone-code">
+        <Button kind="secondary" onClick={() => onPairPhone ? onPairPhone() : setShowCode((v) => !v)} style={{ height: 36, fontSize: rem(13) }} testId="settings-show-phone-code">
           {showCode ? "Hide the phone code" : "Show the phone code"}
         </Button>
         {confirmStop ? (
           <>
-            <Button onClick={() => void stopBeingHub()} disabled={busy} style={{ height: 36, fontSize: 13 }}>
+            <Button onClick={() => void stopBeingHub()} disabled={busy} style={{ height: 36, fontSize: rem(13) }}>
               {busy ? "Stopping…" : "Yes, remove both services"}
             </Button>
-            <Button kind="ghost" onClick={() => setConfirmStop(false)} style={{ height: 36, fontSize: 13 }}>
+            <Button kind="ghost" onClick={() => setConfirmStop(false)} style={{ height: 36, fontSize: rem(13) }}>
               Keep it
             </Button>
           </>
         ) : (
-          <Button kind="danger" onClick={() => setConfirmStop(true)} style={{ height: 36, fontSize: 12.5 }}>
+          <Button kind="danger" onClick={() => setConfirmStop(true)} style={{ height: 36, fontSize: rem(12.5) }}>
             Stop being the hub
           </Button>
         )}

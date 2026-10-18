@@ -8,6 +8,7 @@ import {
 } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useAgentBrowserTabs } from "@/lib/useAgentBrowserTabs";
+import { rem } from "@/lib/rem";
 
 const iconButton = {
   width: 40,
@@ -109,7 +110,7 @@ export function AgentBrowserMobileSurface({
           aria-label="Back to terminals"
           title="Back to terminals"
           onClick={onClose}
-          style={{ ...iconButton, fontSize: 15 }}
+          style={{ ...iconButton, fontSize: rem(15) }}
         >
           ←
         </button>
@@ -152,7 +153,7 @@ export function AgentBrowserMobileSurface({
                   background: active ? colors.primary : "transparent",
                   color: active ? colors.onPrimary : colors.fg2,
                   fontWeight: active ? 600 : 500,
-                  fontSize: 12,
+                  fontSize: rem(12),
                   opacity: closing ? 0.5 : 1,
                   cursor: "pointer",
                 }}
@@ -181,7 +182,7 @@ export function AgentBrowserMobileSurface({
                 {browserControlledBy(browser, deviceId) && (
                   <span
                     style={{
-                      fontSize: 10.5,
+                      fontSize: rem(10.5),
                       padding: "0 5px",
                       border: `1px solid ${active ? colors.onPrimary : colors.line}`,
                       borderRadius: 3,
@@ -202,7 +203,7 @@ export function AgentBrowserMobileSurface({
                     event.stopPropagation();
                     void closeTab(browser);
                   }}
-                  style={{ ...iconButton, width: 32, height: 32, fontSize: 11, color: active ? colors.onPrimary : colors.fg3 }}
+                  style={{ ...iconButton, width: 32, height: 32, fontSize: rem(11), color: active ? colors.onPrimary : colors.fg3 }}
                 >
                   [x]
                 </button>
@@ -219,7 +220,7 @@ export function AgentBrowserMobileSurface({
             setAdding((value) => !value);
             setError(null);
           }}
-          style={{ ...iconButton, fontSize: 13, color: colors.fg0 }}
+          style={{ ...iconButton, fontSize: rem(13), color: colors.fg0 }}
         >
           [+]
         </button>
@@ -261,7 +262,7 @@ export function AgentBrowserMobileSurface({
               minHeight: 40,
               padding: "0 12px",
               fontFamily: "var(--font-display)",
-              fontSize: 16,
+              fontSize: rem(16),
               color: colors.fg0,
               background: colors.bg0,
               border: `1px solid ${colors.line}`,
@@ -276,7 +277,7 @@ export function AgentBrowserMobileSurface({
             style={{
               minHeight: 40,
               fontFamily: "var(--font-display)",
-              fontSize: 13,
+              fontSize: rem(13),
               fontWeight: 600,
               padding: "0 14px",
               borderRadius: 4,
@@ -298,7 +299,7 @@ export function AgentBrowserMobileSurface({
           data-testid="mobile-browser-surface-error"
           style={{
             padding: "5px 10px",
-            fontSize: 12,
+            fontSize: rem(12),
             color: colors.danger,
             borderBottom: `1px solid ${colors.border}`,
             flexShrink: 0,
@@ -321,7 +322,7 @@ export function AgentBrowserMobileSurface({
             padding: 24,
             textAlign: "center",
             color: colors.fg3,
-            fontSize: 13,
+            fontSize: rem(13),
           }}
         >
           {awaitingId !== null || opening

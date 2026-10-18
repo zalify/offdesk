@@ -6,6 +6,7 @@ import {
   loadPrefixBindings,
   type PrefixBindings,
 } from "@/lib/prefixKey";
+import { rem } from "@/lib/rem";
 
 // Compact overlay listing the live ⌃B bindings. Opened by ⌃B ?, closed by
 // Esc or any click. "Coming soon" actions (phase 2+) are filtered out.
@@ -56,7 +57,7 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
       >
         <div
           style={{
-            fontSize: 15,
+            fontSize: rem(15),
             fontWeight: 600,
             color: colors.fg0,
             marginBottom: 14,
@@ -79,7 +80,7 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
                 alignItems: "center",
                 justifyContent: "space-between",
                 gap: 8,
-                fontSize: 12.5,
+                fontSize: rem(12.5),
                 textTransform: "lowercase",
               }}
             >
@@ -102,7 +103,7 @@ export function CheatSheetOverlay({ onClose }: { onClose: () => void }) {
             paddingTop: 10,
             borderTop: `1px solid ${colors.lineSoft}`,
             fontFamily: "var(--font-sans)",
-            fontSize: 12,
+            fontSize: rem(12),
             color: colors.fg3,
           }}
         >

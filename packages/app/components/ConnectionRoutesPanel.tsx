@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { colors } from "../lib/colors";
 import { connectionRoutesSnapshot, refreshConnectionRoutes, routeLatencyLabel, secureConnectionStatus, subscribeConnectionRoutes, switchConnectionRoute, type CheckedRoute } from "../lib/secureTransport";
+import { rem } from "../lib/rem";
 
 /** Also lives on recovery: a dead LAN connection must not hide remote access. */
 export function ConnectionRoutesPanel({ onSwitched }: { onSwitched?: () => void }) {
@@ -50,22 +51,22 @@ export function ConnectionRoutesPanel({ onSwitched }: { onSwitched?: () => void 
       const candidates = routes.filter(route => route.kind === kind);
       const label = kind === "local" ? "Local network" : "Remote connection";
       return <div key={kind} style={{ background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 4, padding: "12px 14px" }}>
-        <strong style={{ fontSize: 13, fontWeight: 600, textTransform: "lowercase" }}>{label}</strong>
-        <p style={{ color: colors.fg3, fontFamily: "var(--font-sans)", fontSize: 12, margin: "6px 0 10px" }}>{kind === "local" ? "Use when your phone and computer are on the same network." : "Use with mobile data or another Wi-Fi network."}</p>
-        {candidates.length === 0 ? <span style={{ color: colors.foregroundMuted, fontSize: 13 }}>{checking ? "Checking…" : report?.discovery_available ? "Not configured" : "No saved address"}</span> : candidates.map(route => {
+        <strong style={{ fontSize: rem(13), fontWeight: 600, textTransform: "lowercase" }}>{label}</strong>
+        <p style={{ color: colors.fg3, fontFamily: "var(--font-sans)", fontSize: rem(12), margin: "6px 0 10px" }}>{kind === "local" ? "Use when your phone and computer are on the same network." : "Use with mobile data or another Wi-Fi network."}</p>
+        {candidates.length === 0 ? <span style={{ color: colors.foregroundMuted, fontSize: rem(13) }}>{checking ? "Checking…" : report?.discovery_available ? "Not configured" : "No saved address"}</span> : candidates.map(route => {
           const active = route.hub_url.replace(/\/$/, "") === current?.replace(/\/$/, "");
           // Latency from this check shows as its routes land; the last check's stays hidden meanwhile.
           const latency = checking && !report?.partial ? null : routeLatencyLabel(route, routes);
           return <button key={route.hub_url} type="button" disabled={checking || switching || !route.available || (active && !onSwitched)} onClick={() => void choose(route.hub_url)} aria-label={`${label}: ${route.hub_url}`} aria-current={active ? "true" : undefined} style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", width: "100%", minHeight: 44, textAlign: "left", background: "none", border: 0, color: route.available ? colors.foreground : colors.foregroundMuted, padding: "8px 0", cursor: "pointer" }}>
-            <span style={{ overflowWrap: "anywhere", minWidth: 0, fontSize: 13 }}>{route.hub_url}</span>
-            {latency && <span data-testid="route-latency" style={{ flexShrink: 0, marginLeft: "auto", fontSize: 12, color: colors.fg2, fontVariantNumeric: "tabular-nums" }}>{latency}</span>}
-            <span style={{ flexShrink: 0, fontSize: 11.5, fontWeight: active ? 600 : 500, padding: "2px 8px", borderRadius: 3, textTransform: "lowercase", ...(active && route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg2 }) }}>{checking ? "Checking…" : !route.available ? active ? "Selected · Unreachable" : "Unreachable" : active ? "Current" : "Available"}</span>
+            <span style={{ overflowWrap: "anywhere", minWidth: 0, fontSize: rem(13) }}>{route.hub_url}</span>
+            {latency && <span data-testid="route-latency" style={{ flexShrink: 0, marginLeft: "auto", fontSize: rem(12), color: colors.fg2, fontVariantNumeric: "tabular-nums" }}>{latency}</span>}
+            <span style={{ flexShrink: 0, fontSize: rem(11.5), fontWeight: active ? 600 : 500, padding: "2px 8px", borderRadius: 3, textTransform: "lowercase", ...(active && route.available ? { background: colors.primary, color: colors.onPrimary } : { border: `1px solid ${colors.line}`, color: colors.fg2 }) }}>{checking ? "Checking…" : !route.available ? active ? "Selected · Unreachable" : "Unreachable" : active ? "Current" : "Available"}</span>
           </button>;
         })}
       </div>;
     })}
-    <p role="status" style={{ margin: 0, fontSize: 13, color: colors.foregroundMuted }}>{switching ? "Switching connection…" : "Switch without pairing again. Your terminals stay running."}</p>
-    {report && !report.discovery_available && <p style={{ margin: 0, fontSize: 13, color: colors.foregroundMuted }}>Showing saved addresses. To find new connections, make sure your Hub is reachable and up to date.</p>}
-    {error && <p role="alert" style={{ margin: 0, color: colors.err, fontSize: 13 }}>{error}</p>}
+    <p role="status" style={{ margin: 0, fontSize: rem(13), color: colors.foregroundMuted }}>{switching ? "Switching connection…" : "Switch without pairing again. Your terminals stay running."}</p>
+    {report && !report.discovery_available && <p style={{ margin: 0, fontSize: rem(13), color: colors.foregroundMuted }}>Showing saved addresses. To find new connections, make sure your Hub is reachable and up to date.</p>}
+    {error && <p role="alert" style={{ margin: 0, color: colors.err, fontSize: rem(13) }}>{error}</p>}
   </div>;
 }

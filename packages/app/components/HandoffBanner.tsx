@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { colors } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 /** "Picked up where you left off". On the desktop a square notice under the
  *  tab bar; on the phone (`inline`) it takes the title bar's subtitle line
@@ -58,7 +59,7 @@ export function HandoffBanner({
         border: `1px solid ${colors.line}`,
         color: colors.fg1,
         fontFamily: "var(--font-display)",
-        fontSize: 12,
+        fontSize: rem(12),
         whiteSpace: "nowrap",
         pointerEvents: "none",
         opacity: visible ? 1 : 0,

@@ -11,6 +11,7 @@ import {
 } from "@/lib/api";
 import { colors } from "@/lib/colors";
 import { CONTENT_LEVELS } from "@/lib/tokenAccess";
+import { rem } from "@/lib/rem";
 
 /** The events a webhook can get, as the hub names them. */
 export const WEBHOOK_EVENTS: { type: string; label: string }[] = [
@@ -30,7 +31,8 @@ const inputStyle: React.CSSProperties = {
   color: colors.fg0,
   padding: "8px 12px",
   fontFamily: "var(--font-display)",
-  fontSize: 13,
+  // The same size as the form's labels around it.
+  fontSize: "inherit",
   outline: "none",
 };
 
@@ -41,7 +43,7 @@ const smallButton: React.CSSProperties = {
   color: colors.foregroundSecondary,
   cursor: "pointer",
   padding: "6px 10px",
-  fontSize: 12,
+  fontSize: rem(12),
   whiteSpace: "nowrap",
 };
 
@@ -110,7 +112,7 @@ export function WebhooksPanel() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ fontSize: 11, color: colors.foregroundMuted }}>
+      <div style={{ fontSize: rem(11), color: colors.foregroundMuted }}>
         Agent run events, POSTed to a URL and signed the Standard Webhooks
         way: to your own service, or to ntfy through the example in
         examples/webhooks. A webhook only tells; it can't answer or start
@@ -125,7 +127,7 @@ export function WebhooksPanel() {
           padding: 12,
           border: `1px solid ${colors.border}`,
           borderRadius: 4,
-          fontSize: 12,
+          fontSize: rem(12),
           color: colors.foregroundSecondary,
         }}
       >
@@ -206,7 +208,7 @@ export function WebhooksPanel() {
               cursor: ready ? "pointer" : "default",
               opacity: ready ? 1 : 0.5,
               padding: "8px 16px",
-              fontSize: 13,
+              fontSize: rem(13),
               fontWeight: 500,
               whiteSpace: "nowrap",
             }}
@@ -235,7 +237,7 @@ export function WebhooksPanel() {
               aria-label="Signing secret"
               value={secret}
               onFocus={(e) => e.target.select()}
-              style={{ ...inputStyle, flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}
+              style={{ ...inputStyle, flex: 1, minWidth: 0, fontFamily: "var(--font-mono)", fontSize: rem(12) }}
             />
             <button type="button" style={smallButton} onClick={() => navigator.clipboard?.writeText(secret)}>
               Copy
@@ -244,7 +246,7 @@ export function WebhooksPanel() {
               Done
             </button>
           </div>
-          <div style={{ fontSize: 11, color: colors.foregroundMuted }}>
+          <div style={{ fontSize: rem(11), color: colors.foregroundMuted }}>
             The signing secret: give it to the receiver to check each request.
             It won't be shown again.
           </div>
@@ -252,9 +254,9 @@ export function WebhooksPanel() {
       )}
 
       {hooks === null ? (
-        <div style={{ fontSize: 12, color: colors.foregroundMuted }}>Loading…</div>
+        <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>Loading…</div>
       ) : hooks.length === 0 ? (
-        <div style={{ fontSize: 12, color: colors.foregroundMuted }}>No webhooks yet.</div>
+        <div style={{ fontSize: rem(12), color: colors.foregroundMuted }}>No webhooks yet.</div>
       ) : (
         hooks.map((hook) => {
           const events = hook.events.length
@@ -269,17 +271,17 @@ export function WebhooksPanel() {
               style={{ display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}
             >
               <div style={{ flex: "1 1 220px", minWidth: 0 }}>
-                <div style={{ fontSize: 13, color: hook.enabled ? colors.foreground : colors.foregroundMuted }}>
+                <div style={{ fontSize: rem(13), color: hook.enabled ? colors.foreground : colors.foregroundMuted }}>
                   {hook.name}
                   {!hook.enabled && " · off"}
                 </div>
-                <div style={{ fontSize: 11, color: colors.foregroundMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div style={{ fontSize: rem(11), color: colors.foregroundMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {hook.url}
                 </div>
-                <div style={{ fontSize: 11, color: colors.foregroundSecondary }}>
+                <div style={{ fontSize: rem(11), color: colors.foregroundSecondary }}>
                   {events} · {level?.label.toLowerCase()}
                 </div>
-                <div style={{ fontSize: 11, color: hook.last_error ? colors.danger : colors.foregroundMuted }}>
+                <div style={{ fontSize: rem(11), color: hook.last_error ? colors.danger : colors.foregroundMuted }}>
                   {hook.last_error
                     ? `last attempt failed: ${hook.last_error} · retrying`
                     : `last delivered ${when(hook.last_delivery_at)}`}
@@ -324,8 +326,8 @@ export function WebhooksPanel() {
         })
       )}
 
-      {notice && <div style={{ fontSize: 12, color: colors.foregroundSecondary }}>{notice}</div>}
-      {error && <div style={{ fontSize: 12, color: colors.danger }}>{error}</div>}
+      {notice && <div style={{ fontSize: rem(12), color: colors.foregroundSecondary }}>{notice}</div>}
+      {error && <div style={{ fontSize: rem(12), color: colors.danger }}>{error}</div>}
     </div>
   );
 }

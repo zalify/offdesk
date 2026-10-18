@@ -118,6 +118,7 @@ import { LazyLoadingFallback } from "./LazyLoadingFallback";
 import { claimSamePagePops } from "@/lib/samePagePops";
 import { BootScreen } from "./BootScreen.web";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { rem } from "@/lib/rem";
 
 const EmptyMachinesView = lazy(() =>
   lazyWithReload(() =>
@@ -2072,7 +2073,7 @@ function TerminalCanvasInner() {
                     background: colors.bg0,
                     color: colors.fg2,
                     fontFamily: "var(--font-sans)",
-                    fontSize: 13,
+                    fontSize: rem(13),
                     flexShrink: 0,
                   }}
                 >
@@ -2320,11 +2321,11 @@ function EmptyState({
         alignItems: "center",
         justifyContent: "center",
         color: colors.fg2,
-        fontSize: 13,
+        fontSize: rem(13),
       }}
     >
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
-        <div style={{ fontSize: 13, color: colors.fg3 }}>
+        <div style={{ fontSize: rem(13), color: colors.fg3 }}>
           <span aria-hidden="true" style={{ color: colors.accent }}>~</span>
           <span aria-hidden="true"> $ </span>
           <span style={{ textTransform: "lowercase" }}>
@@ -2334,7 +2335,7 @@ function EmptyState({
         </div>
         {!canCreate && onTakeControl && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-            <p style={{ margin: 0, fontFamily: "var(--font-sans)", fontSize: 14, color: colors.fg2 }}>You’re viewing this machine. Take control to create a terminal.</p>
+            <p style={{ margin: 0, fontFamily: "var(--font-sans)", fontSize: rem(14), color: colors.fg2 }}>You’re viewing this machine. Take control to create a terminal.</p>
             <Button
               testId="empty-take-control"
               disabled={requesting}
@@ -2343,7 +2344,7 @@ function EmptyState({
             >
               {requesting ? "taking control…" : "take control"}
             </Button>
-            {error && <p role="alert" style={{ margin: 0, color: colors.err, fontSize: 12 }}>{error}</p>}
+            {error && <p role="alert" style={{ margin: 0, color: colors.err, fontSize: rem(12) }}>{error}</p>}
           </div>
         )}
         {canCreate && (

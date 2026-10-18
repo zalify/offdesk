@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { colors } from "@/lib/colors";
 import { fontDisplay } from "./Primitives.web";
 import { BOOT_STEPS, pickBootTips, type BootStep } from "@/lib/bootScreen";
+import { rem } from "@/lib/rem";
 
 const WORDMARK = "offdesk/dev";
 // The wordmark types itself out once per page load, then holds.
@@ -88,7 +89,7 @@ export function BootScreen({
       <div
         aria-label="Offdesk Dev"
         role="img"
-        style={{ fontSize: 24, fontWeight: 600, color: colors.fg0, display: "flex", alignItems: "baseline" }}
+        style={{ fontSize: rem(24), fontWeight: 600, color: colors.fg0, display: "flex", alignItems: "baseline" }}
       >
         <span
           aria-hidden="true"
@@ -116,7 +117,7 @@ export function BootScreen({
         ))}
       </div>
 
-      <div style={{ fontSize: 11, color: colors.fg3, minHeight: 16, textAlign: "center" }}>
+      <div style={{ fontSize: rem(11), color: colors.fg3, minHeight: 16, textAlign: "center" }}>
         {detail ?? STEP_LABEL[step]}
       </div>
 
@@ -137,7 +138,7 @@ export function BootScreen({
           animation: `offdeskSlideUp 320ms ease-out ${after(FIRST_TIP_MS)} both`,
         }}
       >
-        <div style={{ fontSize: 10, letterSpacing: "0.08em", color: colors.fg3, marginBottom: 8 }}>TIP</div>
+        <div style={{ fontSize: rem(10), letterSpacing: "0.08em", color: colors.fg3, marginBottom: 8 }}>TIP</div>
         <div style={{ position: "relative" }}>
           <p
             className="odk-boot-anim"
@@ -175,7 +176,7 @@ const STEP_LABEL: Record<BootStep, string> = {
 const TIP_TEXT: CSSProperties = {
   margin: 0,
   fontFamily: "var(--font-sans)",
-  fontSize: 13,
+  fontSize: rem(13),
   lineHeight: 1.5,
   color: colors.fg1,
 };

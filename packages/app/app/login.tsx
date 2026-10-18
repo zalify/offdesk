@@ -15,6 +15,7 @@ import { getServerUrl, setServerUrl } from "../lib/serverUrl";
 import { useMobileHubSwitch } from "../lib/useMobileHubSwitch";
 import { Body, Button, Card, Display, Eyebrow, Wordmark, fontDisplay, inputStyle } from "../components/Primitives.web";
 import { colors } from "../lib/colors";
+import { rem } from "../lib/rem";
 
 // The LAN setup guide's sign-in step: where the link comes from.
 const SIGN_IN_DOC_URL = "https://github.com/zalify/offdesk/blob/main/docs/setup-lan.md#3-open-it-on-your-phone";
@@ -346,7 +347,7 @@ export default function LoginScreen({
   const rule = (text: string) => (
     <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0" }}>
       <div style={{ flexGrow: 1, height: 1, background: colors.lineSoft }} />
-      <span style={{ fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>{text}</span>
+      <span style={{ fontFamily: fontDisplay, fontSize: rem(12), color: colors.fg3 }}>{text}</span>
       <div style={{ flexGrow: 1, height: 1, background: colors.lineSoft }} />
     </div>
   );
@@ -436,9 +437,9 @@ export default function LoginScreen({
     })();
     const step = (n: string, title: string, sub: string) => (
       <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
-        <span style={{ flexShrink: 0, fontFamily: fontDisplay, fontSize: 14, fontWeight: 500, color: colors.accent }}>{n}.</span>
+        <span style={{ flexShrink: 0, fontFamily: fontDisplay, fontSize: rem(14), fontWeight: 500, color: colors.accent }}>{n}.</span>
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <div style={{ fontFamily: fontDisplay, fontSize: 14, fontWeight: 600, color: colors.fg0 }}>{title}</div>
+          <div style={{ fontFamily: fontDisplay, fontSize: rem(14), fontWeight: 600, color: colors.fg0 }}>{title}</div>
           <Body size={13}>{sub}</Body>
         </div>
       </div>
@@ -453,7 +454,7 @@ export default function LoginScreen({
               ? "The hub is there. This phone isn't allowed to see it yet."
               : "Nothing answered at that address."}
           </Display>
-          <div style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 3, border: `1px dashed ${colors.line}`, fontFamily: fontDisplay, fontSize: 12, color: colors.fg2 }}>
+          <div style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderRadius: 3, border: `1px dashed ${colors.line}`, fontFamily: fontDisplay, fontSize: rem(12), color: colors.fg2 }}>
             <span aria-hidden="true" style={{ color: colors.fg3 }}>○</span>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{address}</span>
             <span style={{ color: colors.fg3, flexShrink: 0 }}>
@@ -553,7 +554,7 @@ export default function LoginScreen({
       >
         <div style={{ width: "100%", maxWidth: 600, flexShrink: 0, margin: "0 auto auto", display: "flex", flexDirection: "column", gap: 18 }}>
           {onBackToSetup ? (
-            <button type="button" className="odk-text-btn" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start", padding: 0, fontSize: 13, color: colors.fg2 }} data-testid="login-back-to-setup">
+            <button type="button" className="odk-text-btn" onClick={onBackToSetup} disabled={connecting} style={{ alignSelf: "flex-start", padding: 0, fontSize: rem(13), color: colors.fg2 }} data-testid="login-back-to-setup">
               ← back to setup
             </button>
           ) : null}
@@ -640,9 +641,9 @@ export default function LoginScreen({
       <Body>
         The Hub address alone does not sign you in. Get the sign-in link from the computer running the Hub:
       </Body>
-      <ol data-testid="sign-in-link-steps" style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-sans)", fontSize: 14, lineHeight: 1.5, color: colors.fg2 }}>
+      <ol data-testid="sign-in-link-steps" style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6, fontFamily: "var(--font-sans)", fontSize: rem(14), lineHeight: 1.5, color: colors.fg2 }}>
         <li>In the Offdesk app, open Settings → Phone and choose <b>browser access</b>. Scan its QR code with your phone’s camera, or choose Copy link and paste it below.</li>
-        <li>Installed the Hub from the command line? Run <code style={{ fontFamily: "var(--font-mono)", fontSize: 13 }}>offdesk-hub link</code> on that computer.</li>
+        <li>Installed the Hub from the command line? Run <code style={{ fontFamily: "var(--font-mono)", fontSize: rem(13) }}>offdesk-hub link</code> on that computer.</li>
       </ol>
       <a
         href={SIGN_IN_DOC_URL}
@@ -652,7 +653,7 @@ export default function LoginScreen({
           event.preventDefault();
           void openOutside(SIGN_IN_DOC_URL);
         }}
-        style={{ alignSelf: "flex-start", fontFamily: fontDisplay, fontSize: 13, color: colors.accent, padding: "10px 0" }}
+        style={{ alignSelf: "flex-start", fontFamily: fontDisplay, fontSize: rem(13), color: colors.accent, padding: "10px 0" }}
       >
         how to sign in on your phone →
       </a>
@@ -689,7 +690,7 @@ export default function LoginScreen({
       {scanError && inMobileApp ? note(scanError, "error") : null}
       {switchHubError && inMobileApp ? <div role="alert">{note(switchHubError, "error")}</div> : null}
       {inMobileApp ? (
-        <Button kind="ghost" onClick={() => void handleSwitchHub()} disabled={switchingHub} style={{ alignSelf: "center", height: 36, fontSize: 13 }}>
+        <Button kind="ghost" onClick={() => void handleSwitchHub()} disabled={switchingHub} style={{ alignSelf: "center", height: 36, fontSize: rem(13) }}>
           {switchingHub ? "Switching…" : "Use a different hub"}
         </Button>
       ) : null}

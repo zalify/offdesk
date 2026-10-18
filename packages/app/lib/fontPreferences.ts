@@ -24,8 +24,17 @@ export function applyUiFontPreferences() {
     if (family) style.setProperty(property, family);
     else style.removeProperty(property);
   }
-  const size = Number(localStorage.getItem("offdesk:ui-font-size"));
-  style.fontSize = size >= 10 && size <= 20 ? `${size}px` : "";
+  style.fontSize = uiRootFontSize(Number(localStorage.getItem("offdesk:ui-font-size")));
+}
+
+// The Interface text size is the size of body text, 14px by default. UI text
+// is in rem (see rem.ts), so scaling the root by size / 14 scales all of it
+// and keeps the browser's own default size as the base.
+export const DEFAULT_UI_FONT_SIZE = 14;
+
+export function uiRootFontSize(size: number): string {
+  if (!(size >= 10 && size <= 20) || size === DEFAULT_UI_FONT_SIZE) return "";
+  return `${+((size / DEFAULT_UI_FONT_SIZE) * 100).toFixed(4)}%`;
 }
 
 export function notifyFontPreferencesChanged() {

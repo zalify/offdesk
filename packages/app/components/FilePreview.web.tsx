@@ -25,6 +25,7 @@ import { canPreviewHtml, openHtmlPreview } from "@/lib/nativeHtmlPreview";
 import { showNotice } from "@/lib/workspaceToast";
 import { PdfPreview } from "./PdfPreview.web";
 import { formatBytes } from "@/lib/resourceStats";
+import { rem } from "@/lib/rem";
 
 type View =
   | { kind: "image"; src: string }
@@ -167,7 +168,7 @@ export function FilePreview({
       background: "transparent",
       color: colors.fg0,
       fontFamily: "var(--font-display)",
-      fontSize: 13,
+      fontSize: rem(13),
       cursor: disabled ? "default" : "pointer",
       opacity: disabled ? 0.4 : 1,
       flexShrink: 0,
@@ -188,7 +189,7 @@ export function FilePreview({
       cursor: disabled ? "default" : "pointer",
       opacity: disabled ? 0.5 : 1,
       fontFamily: "var(--font-display)",
-      fontSize: 12.5,
+      fontSize: rem(12.5),
       fontWeight: primary ? 600 : 500,
       flexShrink: 0,
     }) as const;
@@ -201,7 +202,7 @@ export function FilePreview({
       onClick={download}
       style={{
         ...textButton(true, state.status !== "ready" || saving),
-        ...(big ? { minHeight: 44, padding: "0 24px", fontSize: 14 } : null),
+        ...(big ? { minHeight: 44, padding: "0 24px", fontSize: rem(14) } : null),
       }}
     >
       {saving ? <Loader2 size={14} aria-hidden style={SPIN} /> : null}
@@ -241,7 +242,7 @@ export function FilePreview({
             data-testid="file-browser-preview-name"
             title={path}
             style={{
-              fontSize: 13,
+              fontSize: rem(13),
               fontWeight: 500,
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -251,7 +252,7 @@ export function FilePreview({
             {name}
           </div>
           {shownSize !== undefined && (
-            <div style={{ fontSize: 11, color: colors.fg3 }}>{formatBytes(shownSize)}</div>
+            <div style={{ fontSize: rem(11), color: colors.fg3 }}>{formatBytes(shownSize)}</div>
           )}
         </div>
         {state.status === "ready" && state.view.kind === "markdown" && (
@@ -444,7 +445,7 @@ function ReadyView({
               margin: 0,
               padding: touch ? "12px 14px" : "10px 14px",
               fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-              fontSize: touch ? 13 : 12,
+              fontSize: rem(touch ? 13 : 12),
               lineHeight: 1.55,
               whiteSpace: "pre-wrap",
               overflowWrap: "anywhere",
@@ -461,8 +462,8 @@ function ReadyView({
   return (
     <Message testId="file-browser-preview-unsupported">
       <FileIcon size={40} aria-hidden style={{ color: colors.fg3 }} />
-      <div style={{ fontSize: 14, color: colors.fg0, wordBreak: "break-all" }}>{file.name}</div>
-      <div style={{ fontSize: 12 }}>{formatBytes(file.size)}</div>
+      <div style={{ fontSize: rem(14), color: colors.fg0, wordBreak: "break-all" }}>{file.name}</div>
+      <div style={{ fontSize: rem(12) }}>{formatBytes(file.size)}</div>
       <div style={{ marginBottom: 10 }}>This kind of file has no preview</div>
       {downloadButton}
     </Message>
@@ -475,7 +476,7 @@ function Notice({ children }: { children: React.ReactNode }) {
       data-testid="file-browser-preview-truncated"
       style={{
         padding: "4px 14px",
-        fontSize: 11,
+        fontSize: rem(11),
         color: colors.warn,
         background: colors.bg1,
         borderBottom: `1px solid ${colors.lineSoft}`,
@@ -509,7 +510,7 @@ function Message({
         minHeight: 160,
         padding: 24,
         textAlign: "center",
-        fontSize: 13,
+        fontSize: rem(13),
         color: color ?? colors.fg3,
       }}
     >

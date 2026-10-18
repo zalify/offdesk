@@ -11,6 +11,7 @@ import { openSettings } from "@/lib/openSettings";
 import { hostOf, hubWarning, useVersions } from "@/lib/hubVersions";
 import { HubPhoneCode } from "./DesktopSetup.web";
 import { Button, fontDisplay, fontProse, TextButton } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 /**
  * Getting offdesk onto a phone: the hub's address as a QR code, and where to
@@ -110,7 +111,7 @@ export function MobileAppPanel() {
   const browserCode = (
     <div>
       <div
-        style={{ fontSize: 12, fontFamily: "var(--font-sans)", color: colors.fg3, marginBottom: 12 }}
+        style={{ fontSize: rem(12), fontFamily: "var(--font-sans)", color: colors.fg3, marginBottom: 12 }}
       >
         Browser sign-in · No app needed. Scan with your phone’s camera to
         open this Hub in a browser. For end-to-end encrypted App pairing,
@@ -141,19 +142,19 @@ export function MobileAppPanel() {
           }}
         >
           {qrSvg ? <QrImage svg={qrSvg} size={142} label="Phone sign-in QR code" /> : (
-            <span style={{ fontSize: 11, color: colors.foregroundMuted }}>QR code unavailable. Copy a sign-in link from the Hub’s screen.</span>
+            <span style={{ fontSize: rem(11), color: colors.foregroundMuted }}>QR code unavailable. Copy a sign-in link from the Hub’s screen.</span>
           )}
         </div>
 
         <div style={{ flex: 1, minWidth: 240 }}>
           <div
-            style={{ fontSize: 12, fontWeight: 500, color: colors.fg0, marginBottom: 4 }}
+            style={{ fontSize: rem(12), fontWeight: 500, color: colors.fg0, marginBottom: 4 }}
           >
             address the phone should open
           </div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: rem(12),
               fontFamily: "var(--font-sans)",
               color: colors.fg3,
               marginBottom: 8,
@@ -174,7 +175,7 @@ export function MobileAppPanel() {
           {sessionToken && (
             <div
               style={{
-                fontSize: 12,
+                fontSize: rem(12),
                 fontFamily: "var(--font-sans)",
                 color: colors.fg2,
                 marginTop: 8,
@@ -189,7 +190,7 @@ export function MobileAppPanel() {
           {isLoopback && (
             <div
               style={{
-                fontSize: 12,
+                fontSize: rem(12),
                 fontFamily: "var(--font-sans)",
                 color: colors.fg2,
                 marginTop: 8,
@@ -213,7 +214,7 @@ export function MobileAppPanel() {
           </div>
           <div
             style={{
-              fontSize: 12,
+              fontSize: rem(12),
               fontFamily: "var(--font-sans)",
               color: colors.fg3,
               marginTop: 8,
@@ -229,7 +230,7 @@ export function MobileAppPanel() {
   );
 
   if (isDesktopShell()) return <ClientPhonePanel browserCode={isSecureConnection() ? null : browserCode} />;
-  if (isSecureConnection()) return <p style={{ color: colors.foregroundMuted, fontSize: 13 }}>To pair another encrypted App, create a new pairing code on the Hub’s own screen.</p>;
+  if (isSecureConnection()) return <p style={{ color: colors.foregroundMuted, fontSize: rem(13) }}>To pair another encrypted App, create a new pairing code on the Hub’s own screen.</p>;
   return browserCode;
 }
 
@@ -261,29 +262,29 @@ function ClientPhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
 
   return (
     <div data-testid="client-phone-panel" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-      <div style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+      <div style={{ fontFamily: fontProse, fontSize: rem(13), lineHeight: rem(20), color: colors.fg2 }}>
         This computer connects to the hub on {hubName}. Only the hub makes pairing codes.
       </div>
       <section aria-label="Pair on the hub" style={{ boxSizing: "border-box", padding: 24, display: "flex", flexWrap: "wrap", gap: "20px 32px", alignItems: "center", background: colors.bg1, border: `1px solid ${colors.line}`, borderRadius: 6 }}>
         <div style={{ flex: "1 1 280px", minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
-          <span style={{ fontFamily: fontDisplay, fontSize: 16, fontWeight: 600, color: colors.fg0 }}>Pair your phone on {hubName}</span>
-          <ol style={{ margin: 0, padding: "0 0 0 20px", listStyle: "decimal", display: "flex", flexDirection: "column", gap: 8, fontFamily: fontProse, fontSize: 14, lineHeight: "21px", color: colors.fg1 }}>
+          <span style={{ fontFamily: fontDisplay, fontSize: rem(16), fontWeight: 600, color: colors.fg0 }}>Pair your phone on {hubName}</span>
+          <ol style={{ margin: 0, padding: "0 0 0 20px", listStyle: "decimal", display: "flex", flexDirection: "column", gap: 8, fontFamily: fontProse, fontSize: rem(14), lineHeight: rem(21), color: colors.fg1 }}>
             <li>On {hubName}, open Offdesk Dev › settings › phone.</li>
             <li>In the phone app, tap scan and point it at the encrypted code.</li>
             <li>The app keeps its own interface and stays encrypted at home or away.</li>
           </ol>
         </div>
-        <div style={{ width: 220, maxWidth: "100%", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, fontFamily: fontDisplay, fontSize: 12, color: colors.fg3 }}>
+        <div style={{ width: 220, maxWidth: "100%", flexShrink: 0, display: "flex", flexDirection: "column", gap: 8, fontFamily: fontDisplay, fontSize: rem(12), color: colors.fg3 }}>
           <div style={{ display: "flex", gap: 12 }}><span style={{ flex: 1 }}>hub</span><span style={{ color: colors.fg0, overflowWrap: "anywhere", textAlign: "right" }}>{hubName}</span></div>
           <div style={{ display: "flex", gap: 12 }}><span style={{ flex: 1 }}>address</span><span style={{ color: colors.fg0, overflowWrap: "anywhere", textAlign: "right" }}>{shownAddress}</span></div>
         </div>
       </section>
       {warning ? (
         <div data-testid="client-phone-hub-behind" style={{ boxSizing: "border-box", padding: "14px 16px", display: "flex", gap: 12, alignItems: "center", background: colors.bg1, border: `1px solid ${colors.err}`, borderRadius: 6 }}>
-          <span aria-hidden="true" style={{ color: colors.err, fontFamily: fontDisplay, fontSize: 13, fontWeight: 600 }}>!</span>
+          <span aria-hidden="true" style={{ color: colors.err, fontFamily: fontDisplay, fontSize: rem(13), fontWeight: 600 }}>!</span>
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontFamily: fontDisplay, fontSize: 13, fontWeight: 600, color: colors.fg0 }}>{warning}</span>
-            <span style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+            <span style={{ fontFamily: fontDisplay, fontSize: rem(13), fontWeight: 600, color: colors.fg0 }}>{warning}</span>
+            <span style={{ fontFamily: fontProse, fontSize: rem(13), lineHeight: rem(20), color: colors.fg2 }}>
               Update {hubName} first, or the phone's browser code shows the hub's older interface.
             </span>
           </div>
@@ -294,8 +295,8 @@ function ClientPhonePanel({ browserCode }: { browserCode: ReactNode | null }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px 24px", flexWrap: "wrap", padding: "12px 0", borderBottom: `1px solid ${colors.lineSoft}` }}>
             <div style={{ flex: "1 1 240px", minWidth: 0, display: "flex", flexDirection: "column", gap: 4 }}>
-              <span style={{ fontFamily: fontDisplay, fontSize: 14, color: colors.fg0 }}>phone browser without the app</span>
-              <span style={{ fontFamily: fontProse, fontSize: 12.5, color: colors.fg3 }}>A sign-in code for a browser. It shows the interface built into the hub.</span>
+              <span style={{ fontFamily: fontDisplay, fontSize: rem(14), color: colors.fg0 }}>phone browser without the app</span>
+              <span style={{ fontFamily: fontProse, fontSize: rem(12.5), color: colors.fg3 }}>A sign-in code for a browser. It shows the interface built into the hub.</span>
             </div>
             <Button size="sm" kind="secondary" onClick={() => setShowBrowserCode((shown) => !shown)}>
               {showBrowserCode ? "hide browser code" : "show browser code"}

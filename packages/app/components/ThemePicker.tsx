@@ -4,6 +4,7 @@
 import { colors } from "@/lib/colors";
 import { useTheme, type SystemThemes } from "@/lib/theme";
 import { THEME_IDS, THEMES, type ThemeDefinition, type ThemeId } from "@/lib/themes";
+import { rem } from "@/lib/rem";
 
 const GROUPS: { label: string; ids: ThemeId[] }[] = [
   { label: "dark", ids: THEME_IDS.filter((id) => THEMES[id].scheme === "dark") },
@@ -61,10 +62,10 @@ function ThemeCard({ id, pressed, onPick, compact }: { id: ThemeId; pressed: boo
     >
       <ThemeMiniature theme={theme} height={compact ? 96 : 72} />
       <span style={{ display: "flex", justifyContent: compact ? "center" : "space-between", alignItems: "baseline", gap: 6, width: "100%" }}>
-        <span style={{ fontFamily: "var(--font-display)", fontSize: 12.5, fontWeight: pressed ? 600 : 500, color: pressed ? colors.fg0 : colors.fg1, textTransform: "lowercase" }}>
+        <span style={{ fontFamily: "var(--font-display)", fontSize: rem(12.5), fontWeight: pressed ? 600 : 500, color: pressed ? colors.fg0 : colors.fg1, textTransform: "lowercase" }}>
           {theme.name}
         </span>
-        {!compact && <span style={{ fontFamily: "var(--font-display)", fontSize: 11, color: colors.fg3 }}>{theme.tag}</span>}
+        {!compact && <span style={{ fontFamily: "var(--font-display)", fontSize: rem(11), color: colors.fg3 }}>{theme.tag}</span>}
       </span>
     </button>
   );
@@ -79,7 +80,7 @@ export function ThemeGrid() {
     <div role="group" aria-label="Theme" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
       {GROUPS.map((group) => (
         <div key={group.label} role="group" aria-label={`${group.label} themes`} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <span style={{ fontFamily: "var(--font-display)", fontSize: 12, color: colors.fg3 }}>{group.label}</span>
+          <span style={{ fontFamily: "var(--font-display)", fontSize: rem(12), color: colors.fg3 }}>{group.label}</span>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 10 }}>
             {group.ids.map((id) => <ThemeCard key={id} id={id} pressed={theme === id} onPick={() => setTheme(id)} />)}
           </div>
@@ -101,14 +102,14 @@ export function ThemeRow() {
 
 function PairSelect({ label, scheme, value, onChange }: { label: string; scheme: "light" | "dark"; value: ThemeId; onChange: (id: ThemeId) => void }) {
   return (
-    <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: "var(--font-display)", fontSize: 12.5, color: colors.fg3 }}>
+    <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontFamily: "var(--font-display)", fontSize: rem(12.5), color: colors.fg3 }}>
       {label}
       <select
         value={value}
         onChange={(event) => onChange(event.target.value as ThemeId)}
         style={{
           minHeight: 32, padding: "0 8px", borderRadius: 3, border: `1px solid ${colors.line}`,
-          background: colors.bg2, color: colors.fg0, fontFamily: "var(--font-display)", fontSize: 12.5, textTransform: "lowercase",
+          background: colors.bg2, color: colors.fg0, fontFamily: "var(--font-display)", fontSize: rem(12.5), textTransform: "lowercase",
         }}
       >
         {THEME_IDS.filter((id) => THEMES[id].scheme === scheme).map((id) => <option key={id} value={id}>{THEMES[id].name}</option>)}

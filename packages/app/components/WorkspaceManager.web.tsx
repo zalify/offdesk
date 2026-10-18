@@ -22,6 +22,7 @@ import {
   collectPaneTerminalIds,
   type WorkspaceGroup,
 } from "@/lib/terminalWorkspaceLayout";
+import { rem } from "@/lib/rem";
 
 export type WorkspaceManagerPlacement = "drawer" | "sheet";
 export type WorkspaceManagerDropPlacement = "before" | "after";
@@ -286,7 +287,7 @@ function WorkspaceManagerComponent({
                         disabled={!canRenameOrDelete}
                         onClick={() => onRenameGroup(group)}
                       >
-                        <span style={{ fontSize: 11.5 }}>rename</span>
+                        <span style={{ fontSize: rem(11.5) }}>rename</span>
                       </ManagerIconButton>
                       <ManagerIconButton
                         label={`Delete ${group.label}`}
@@ -499,14 +500,14 @@ const headerIconStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   color: colors.fg0,
-  fontSize: 15,
+  fontSize: rem(15),
   fontWeight: 600,
 };
 
 const subtitleStyle: CSSProperties = {
   marginTop: 2,
   color: colors.fg3,
-  fontSize: 11,
+  fontSize: rem(11),
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -531,13 +532,13 @@ const primaryButtonStyle: CSSProperties = {
   borderRadius: 7,
   background: colors.accent,
   color: colors.onAccent,
-  fontSize: 12,
+  fontSize: rem(12),
   fontWeight: 700,
 };
 
 const summaryStyle: CSSProperties = {
   color: colors.fg3,
-  fontSize: 11,
+  fontSize: rem(11),
   whiteSpace: "nowrap",
 };
 
@@ -549,7 +550,7 @@ const viewOnlyStyle: CSSProperties = {
   color: colors.fg2,
   background: colors.bg2,
   fontFamily: "var(--font-sans)",
-  fontSize: 12,
+  fontSize: rem(12),
 };
 
 const treeStyle: CSSProperties = {
@@ -592,7 +593,7 @@ const groupSelectStyle: CSSProperties = {
 const treeBranchStyle: CSSProperties = {
   color: colors.fg3,
   fontFamily: "var(--font-mono)",
-  fontSize: 11,
+  fontSize: rem(11),
   flexShrink: 0,
 };
 
@@ -602,7 +603,7 @@ const groupLabelStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   color: colors.fg0,
-  fontSize: 12.5,
+  fontSize: rem(12.5),
   fontWeight: 500,
 };
 
@@ -611,7 +612,7 @@ const automaticBadgeStyle: CSSProperties = {
   border: `1px solid ${colors.line}`,
   borderRadius: 3,
   color: colors.fg3,
-  fontSize: 10.5,
+  fontSize: rem(10.5),
   whiteSpace: "nowrap",
 };
 
@@ -624,7 +625,7 @@ const countBadgeStyle: CSSProperties = {
   borderRadius: 3,
   color: colors.fg3,
   background: "transparent",
-  fontSize: 11,
+  fontSize: rem(11),
 };
 
 const groupActionsStyle: CSSProperties = {
@@ -649,7 +650,7 @@ const iconButtonStyle: CSSProperties = {
   background: "transparent",
   color: colors.fg2,
   fontFamily: "var(--font-display)",
-  fontSize: 12.5,
+  fontSize: rem(12.5),
   cursor: "pointer",
 };
 
@@ -692,7 +693,7 @@ const terminalTitleStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   color: colors.fg1,
-  fontSize: 12,
+  fontSize: rem(12),
 };
 
 const terminalCwdStyle: CSSProperties = {
@@ -702,7 +703,7 @@ const terminalCwdStyle: CSSProperties = {
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   color: colors.fg3,
-  fontSize: 10.5,
+  fontSize: rem(10.5),
 };
 
 const moveButtonStyle: CSSProperties = {
@@ -717,14 +718,14 @@ const moveButtonStyle: CSSProperties = {
   background: "transparent",
   color: colors.fg0,
   fontFamily: fontDisplay,
-  fontSize: 12,
+  fontSize: rem(12),
   fontWeight: 500,
 };
 
 const emptyGroupStyle: CSSProperties = {
   padding: "9px 6px 5px 22px",
   color: colors.fg3,
-  fontSize: 11,
+  fontSize: rem(11),
   fontStyle: "italic",
 };
 
@@ -740,7 +741,7 @@ const newTerminalStyle: CSSProperties = {
   background: "transparent",
   color: colors.fg3,
   fontFamily: "var(--font-display)",
-  fontSize: 12,
+  fontSize: rem(12),
 };
 
 const emptyStyle: CSSProperties = {
@@ -751,7 +752,7 @@ const emptyStyle: CSSProperties = {
   justifyContent: "center",
   gap: 8,
   color: colors.fg2,
-  fontSize: 12,
+  fontSize: rem(12),
   textAlign: "center",
 };
 
@@ -760,7 +761,7 @@ const footerStyle: CSSProperties = {
   borderTop: `1px solid ${colors.lineSoft}`,
   color: colors.fg3,
   fontFamily: "var(--font-sans)",
-  fontSize: 12,
+  fontSize: rem(12),
   lineHeight: 1.45,
 };
 

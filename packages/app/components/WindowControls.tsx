@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { isTauri, detectOS } from "@/lib/platform";
 import { colors } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 function MacControls() {
   const [hovered, setHovered] = useState(false);
@@ -103,7 +104,7 @@ function WinLinuxControls() {
     height: "100%",
     color: colors.fg2,
     fontFamily: "var(--font-display)",
-    fontSize: 13,
+    fontSize: rem(13),
   };
   const hover = (danger = false) => ({
     onMouseEnter: (e: React.MouseEvent<HTMLButtonElement>) => {

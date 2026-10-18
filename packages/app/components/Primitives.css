@@ -5,13 +5,13 @@
    inputs, toasts; 6px panels and floating cards. */
 
 /* ── Buttons ─────────────────────────────────────────────────────── */
-.odk-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border:1px solid rgb(var(--color-line));border-radius:4px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:13px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color 120ms ease,border-color 120ms ease,opacity 120ms ease}
+.odk-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border:1px solid rgb(var(--color-line));border-radius:4px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:.8125rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background-color 120ms ease,border-color 120ms ease,opacity 120ms ease}
 /* Chrome is lowercase on screen. Callers may pass sentence-case labels: the
    DOM keeps them for screen readers, tests and translators. */
 .odk-btn{text-transform:lowercase}
 .odk-btn:disabled,.odk-btn[aria-disabled=true]{opacity:.45;cursor:default}
-.odk-btn--sm{height:32px;padding:0 12px;font-size:12px}
-.odk-btn--xs{height:28px;padding:0 12px;font-size:12px}
+.odk-btn--sm{height:32px;padding:0 12px;font-size:.75rem}
+.odk-btn--xs{height:28px;padding:0 12px;font-size:.75rem}
 .odk-btn--primary{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-btn--ghost{border-color:transparent;color:rgb(var(--color-fg-2))}
 .odk-btn--danger{border-color:transparent;color:rgb(var(--color-err))}
@@ -26,14 +26,14 @@
 
 /* Plain lowercase chrome text: `files`, `settings`, `[+]`, `≡`, `mac-mini ▾`.
    No box; muted until hovered, pressed or open. */
-.odk-text-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:28px;padding:0 6px;border:0;border-radius:3px;background:transparent;color:rgb(var(--color-fg-3));font-family:var(--font-display);font-size:12.5px;font-weight:400;line-height:1;white-space:nowrap;cursor:pointer}
+.odk-text-btn{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:28px;padding:0 6px;border:0;border-radius:3px;background:transparent;color:rgb(var(--color-fg-3));font-family:var(--font-display);font-size:.78125rem;font-weight:400;line-height:1;white-space:nowrap;cursor:pointer}
 .odk-text-btn--strong{color:rgb(var(--color-fg-0))}
 .odk-text-btn[aria-pressed=true],.odk-text-btn[aria-expanded=true]{color:rgb(var(--color-fg-0))}
 .odk-text-btn:disabled{opacity:.45;cursor:default}
 .odk-text-btn-alert{color:rgb(var(--color-err))}
 @media(hover:hover){.odk-text-btn:not(:disabled):hover{color:rgb(var(--color-fg-0));background:rgb(var(--color-bg-3))}}
 /* Square 44px targets for the phone title bar's [f] [b] [m]. */
-.odk-text-btn--square{width:44px;height:44px;padding:0;font-size:13px;color:rgb(var(--color-fg-0))}
+.odk-text-btn--square{width:44px;height:44px;padding:0;font-size:.8125rem;color:rgb(var(--color-fg-0))}
 @media(pointer:coarse){.odk-text-btn{min-height:44px;min-width:44px}}
 
 /* Brackets drawn by CSS, for buttons whose text other code reads ("Sent"). */
@@ -45,20 +45,20 @@
 @media(hover:hover){.odk-menu-row:not(:disabled):hover{background:rgb(var(--color-bg-3))!important}}
 
 /* ── Chips and badges ────────────────────────────────────────────── */
-.odk-chip{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:1px solid rgb(var(--color-line));border-radius:3px;font-family:var(--font-display);font-size:11px;font-weight:500;line-height:1;color:rgb(var(--color-fg-2));white-space:nowrap}
+.odk-chip{box-sizing:border-box;display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;border:1px solid rgb(var(--color-line));border-radius:3px;font-family:var(--font-display);font-size:.6875rem;font-weight:500;line-height:1;color:rgb(var(--color-fg-2));white-space:nowrap}
 .odk-chip--solid{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-chip--waiting{border-color:transparent;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-weight:600}
 .odk-chip--md{height:24px}
 .odk-chip-glyph{color:rgb(var(--color-accent))}
 /* A square status block: `waiting`, `2 waiting`. */
-.odk-badge{flex-shrink:0;display:inline-flex;align-items:center;padding:2px 8px;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-family:var(--font-display);font-size:12px;font-weight:600;line-height:1.3;white-space:nowrap}
+.odk-badge{flex-shrink:0;display:inline-flex;align-items:center;padding:2px 8px;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-family:var(--font-display);font-size:.75rem;font-weight:600;line-height:1.3;white-space:nowrap}
 
 /* ── Fields ──────────────────────────────────────────────────────── */
 .odk-field{display:flex;flex-direction:column;gap:6px;min-width:0}
-.odk-label{font-family:var(--font-display);font-size:12px;font-weight:500;color:rgb(var(--color-fg-0))}
-.odk-help{font-family:var(--font-sans);font-size:12px;line-height:18px;color:rgb(var(--color-fg-3))}
+.odk-label{font-family:var(--font-display);font-size:.75rem;font-weight:500;color:rgb(var(--color-fg-0))}
+.odk-help{font-family:var(--font-sans);font-size:.75rem;line-height:1.125rem;color:rgb(var(--color-fg-3))}
 .odk-help--error{color:rgb(var(--color-err))}
-.odk-input{box-sizing:border-box;width:100%;height:38px;padding:0 12px;border:1px solid rgb(var(--color-line));border-radius:4px;background:rgb(var(--color-bg-1));color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:13px;outline:none}
+.odk-input{box-sizing:border-box;width:100%;height:38px;padding:0 12px;border:1px solid rgb(var(--color-line));border-radius:4px;background:rgb(var(--color-bg-1));color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:.8125rem;outline:none}
 .odk-input::placeholder{color:rgb(var(--color-fg-3))}
 .odk-input:focus-visible{outline:2px solid rgb(var(--color-focus));outline-offset:2px}
 @media(pointer:coarse){.odk-input{min-height:44px}}
@@ -70,14 +70,14 @@
 /* Floating card: the updater, menus, dialogs. */
 .odk-float{box-sizing:border-box;background:rgb(var(--color-bg-2));border:1px solid rgb(var(--color-line));border-radius:6px;box-shadow:0 24px 64px rgb(0 0 0 / .45);color:rgb(var(--color-fg-0));font-family:var(--font-display)}
 /* Transient message: square, mono, never a pill. */
-.odk-toast{box-sizing:border-box;display:inline-flex;align-items:center;gap:10px;padding:8px 12px;background:rgb(var(--color-bg-2));border:1px solid rgb(var(--color-line));border-radius:4px;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:12px;line-height:1.4}
+.odk-toast{box-sizing:border-box;display:inline-flex;align-items:center;gap:10px;padding:8px 12px;background:rgb(var(--color-bg-2));border:1px solid rgb(var(--color-line));border-radius:4px;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:.75rem;line-height:1.4}
 
 .odk-waiting{box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid rgb(var(--color-err));border-radius:4px}
-.odk-waiting-title{font-family:var(--font-display);font-size:12px;font-weight:600;color:rgb(var(--color-err))}
+.odk-waiting-title{font-family:var(--font-display);font-size:.75rem;font-weight:600;color:rgb(var(--color-err))}
 .odk-waiting-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 
 /* ── Status line ─────────────────────────────────────────────────── */
-.odk-status{box-sizing:border-box;display:flex;align-items:center;gap:12px;height:34px;padding-left:12px;background:rgb(var(--color-bg-2));border-top:1px solid rgb(var(--color-line-soft));font-family:var(--font-display);font-size:12px;color:rgb(var(--color-fg-0));min-width:0;flex-shrink:0}
+.odk-status{box-sizing:border-box;display:flex;align-items:center;gap:12px;height:34px;padding-left:12px;background:rgb(var(--color-bg-2));border-top:1px solid rgb(var(--color-line-soft));font-family:var(--font-display);font-size:.75rem;color:rgb(var(--color-fg-0));min-width:0;flex-shrink:0}
 .odk-status-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .odk-status-muted{color:rgb(var(--color-fg-3));white-space:nowrap}
 .odk-status-fill{flex:1 1 auto;min-width:0}
@@ -94,14 +94,14 @@ button.odk-status-end--active.odk-status-btn--end{border-left:0;background:rgb(v
 @media(pointer:coarse){.odk-status{height:44px}.odk-status-btn{min-height:36px}}
 
 /* ── Tabs ────────────────────────────────────────────────────────── */
-.odk-tab{box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:rgb(var(--color-fg-3));font-family:var(--font-display);font-size:12.5px;white-space:nowrap;cursor:pointer}
+.odk-tab{box-sizing:border-box;display:flex;align-items:center;gap:8px;padding:0 14px;border:0;border-bottom:2px solid transparent;background:transparent;color:rgb(var(--color-fg-3));font-family:var(--font-display);font-size:.78125rem;white-space:nowrap;cursor:pointer}
 .odk-tab[aria-selected=true]{border-bottom-color:rgb(var(--color-accent));color:rgb(var(--color-fg-0))}
 .odk-tab-meta{color:rgb(var(--color-fg-3))}
 .odk-tab-alert{color:rgb(var(--color-err))}
 @media(hover:hover){.odk-tab:hover{color:rgb(var(--color-fg-0))}}
 
 /* ── Key bar keys (phone, Fold) ─────────────────────────────────── */
-.odk-key{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;height:36px;min-width:36px;padding:0 10px;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:12px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
+.odk-key{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;height:36px;min-width:36px;padding:0 10px;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:.75rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
 .odk-key--accent{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-key[aria-pressed=true]{border-color:rgb(var(--color-accent));color:rgb(var(--color-accent))}
 .odk-key:disabled{opacity:.4;cursor:not-allowed}
@@ -109,7 +109,7 @@ button.odk-status-end--active.odk-status-btn--end{border-left:0;background:rgb(v
 .odk-key--accent:active{background:rgb(var(--color-primary));filter:brightness(.92)}
 
 /* ── Setup steps and the cursor ─────────────────────────────────── */
-.odk-step{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid rgb(var(--color-line-soft));font-family:var(--font-display);font-size:14px}
+.odk-step{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid rgb(var(--color-line-soft));font-family:var(--font-display);font-size:.875rem}
 .odk-step:last-child{border-bottom:0}
 .odk-step-mark{flex-shrink:0;color:rgb(var(--color-fg-0))}
 .odk-step-mark--active{color:rgb(var(--color-accent))}

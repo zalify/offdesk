@@ -17,6 +17,7 @@ import {
   pixelRatio,
   stepZoom,
 } from "@/lib/pdfPreview";
+import { rem } from "@/lib/rem";
 
 type PdfjsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 
@@ -147,7 +148,7 @@ export function PdfPreview({
           alignItems: "center",
           justifyContent: "center",
           gap: 6,
-          fontSize: 13,
+          fontSize: rem(13),
           color: colors.fg3,
         }}
       >
@@ -171,7 +172,7 @@ export function PdfPreview({
       borderRadius: 6,
       background: "transparent",
       color: colors.fg2,
-      fontSize: 12,
+      fontSize: rem(12),
       cursor: disabled ? "default" : "pointer",
       opacity: disabled ? 0.4 : 1,
     }) as const;
@@ -190,7 +191,7 @@ export function PdfPreview({
       >
         <span
           data-testid="file-browser-preview-pdf-count"
-          style={{ flex: 1, fontSize: 12, color: colors.fg3 }}
+          style={{ flex: 1, fontSize: rem(12), color: colors.fg3 }}
         >
           {load.pages} {load.pages === 1 ? "page" : "pages"}
         </span>

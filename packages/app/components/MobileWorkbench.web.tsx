@@ -63,10 +63,11 @@ import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { WorkspaceManager } from "./WorkspaceManager.web";
 import { anyNodeBehind, copyNodeUpdateCommand, nodeUpdateChip, nodeVersionLabel, NODE_UPDATE_COMMAND, useSheetVersions } from "@/lib/machineVersions";
 import { Button, Chip, TextButton, fontDisplay, fontProse } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 // The title bar's [f] [b] [m]: 40px squares, so five fit beside the
 // session title on a 320px phone.
-const titleBarButton = { width: 40, height: 40, minWidth: 40, minHeight: 40, fontSize: 13 } as const;
+const titleBarButton = { width: 40, height: 40, minWidth: 40, minHeight: 40, fontSize: rem(13) } as const;
 
 interface MobileWorkbenchProps {
   machines: MachineInfo[];
@@ -503,7 +504,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center", gap: 1, overflow: "hidden" }}>
           {activeChip ? (
             <>
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, fontSize: 14, fontWeight: 600, lineHeight: 1.1 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0, fontSize: rem(14), fontWeight: 600, lineHeight: 1.1 }}>
                 {displayTerminalTitle(activeChip.terminal)}
               </span>
               <span
@@ -514,7 +515,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   overflow: "hidden",
                   whiteSpace: "nowrap",
                   color: colors.fg3,
-                  fontSize: 10.5,
+                  fontSize: rem(10.5),
                   lineHeight: 1.15,
                 }}
               >
@@ -540,7 +541,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 <span
                   data-testid="mobile-title-bar-opener"
                   title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
-                  style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: 10, letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
+                  style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: rem(10), letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
                 >
                   <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
                   opened by {terminalOpenerText(activeChip.terminal)}
@@ -549,8 +550,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             </>
           ) : (
             <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              <span style={{ color: colors.fg2, fontSize: 14, fontWeight: 600, textTransform: "lowercase" }}>No terminal</span>
-              <span style={{ color: colors.fg3, fontSize: 10.5 }}>
+              <span style={{ color: colors.fg2, fontSize: rem(14), fontWeight: 600, textTransform: "lowercase" }}>No terminal</span>
+              <span style={{ color: colors.fg3, fontSize: rem(10.5) }}>
                 <span
                   data-testid="mobile-title-bar-dot"
                   role="img"
@@ -611,7 +612,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             >
               [b
               {browserButton.count > 0 && (
-                <span data-testid="mobile-title-bar-browser-count" aria-hidden="true" style={{ fontSize: 10, color: colors.fg2 }}>
+                <span data-testid="mobile-title-bar-browser-count" aria-hidden="true" style={{ fontSize: rem(10), color: colors.fg2 }}>
                   {browserButton.count}
                 </span>
               )}
@@ -685,11 +686,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               alignItems: "center",
               justifyContent: "center",
               color: colors.fg3,
-              fontSize: 14,
+              fontSize: rem(14),
             }}
           >
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center", fontFamily: fontDisplay }}>
-              <div style={{ fontSize: 13 }}>
+              <div style={{ fontSize: rem(13) }}>
                 <span aria-hidden="true" style={{ color: colors.accent }}>~</span>
                 <span aria-hidden="true"> $ </span>
                 <span style={{ textTransform: "lowercase" }}>No terminals yet</span>
@@ -755,8 +756,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 padding: "4px 16px 12px",
                 fontFamily: fontDisplay,
               }}>
-                <span style={{ flex: 1, fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Sessions</span>
-                <span data-testid="mobile-session-position" style={{ fontSize: 11.5, color: colors.fg3 }}>
+                <span style={{ flex: 1, fontSize: rem(20), fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Sessions</span>
+                <span data-testid="mobile-session-position" style={{ fontSize: rem(11.5), color: colors.fg3 }}>
                   {activePosition}/{chips.length}
                 </span>
               </div>
@@ -804,7 +805,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   padding: "8px 4px 4px",
                   fontFamily: fontDisplay,
                   color: colors.fg3,
-                  fontSize: 12,
+                  fontSize: rem(12),
                   fontWeight: 500,
                 }}
               >
@@ -859,7 +860,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                           display: "block",
                           color: colors.fg0,
                           fontFamily: fontDisplay,
-                          fontSize: 14,
+                          fontSize: rem(14),
                           fontWeight: active ? 600 : 400,
                           whiteSpace: "normal",
                           overflowWrap: "anywhere",
@@ -867,7 +868,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                       >
                         {displayTerminalTitle(terminal)}
                         {terminal.reachable && terminal.attention === "confirmation" && (
-                          <span style={{ display: "block", marginTop: 3, fontFamily: "inherit", color: colors.err, fontSize: 12, fontWeight: 500 }}>? confirmation requested</span>
+                          <span style={{ display: "block", marginTop: 3, fontFamily: "inherit", color: colors.err, fontSize: rem(12), fontWeight: 500 }}>? confirmation requested</span>
                         )}
                       </span>
                       <span
@@ -875,7 +876,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                           display: "block",
                           marginTop: 3,
                           color: colors.fg3,
-                          fontSize: 11,
+                          fontSize: rem(11),
                           whiteSpace: "normal",
                           overflowWrap: "anywhere",
                         }}
@@ -895,7 +896,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                             border: `1px solid ${colors.line}`,
                             borderRadius: 3,
                             color: colors.fg2,
-                            fontSize: 10.5,
+                            fontSize: rem(10.5),
                           }}
                         >
                           <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
@@ -920,7 +921,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                         border: "none",
                         color: colors.fg3,
                         fontFamily: fontDisplay,
-                        fontSize: 12,
+                        fontSize: rem(12),
                         cursor: canCreateTerminal ? "pointer" : "not-allowed",
                         opacity: canCreateTerminal ? 1 : 0.4,
                       }}
@@ -964,8 +965,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           title="Machines"
           header={sheetVersions && hubName ? (
             <div style={{ flexShrink: 0, padding: "4px 16px 10px", display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ flex: "1 0 auto", fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Machines</span>
-              <span data-testid="mobile-host-hub-version" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 12.5, fontWeight: 500, color: colors.fg2 }}>
+              <span style={{ flex: "1 0 auto", fontSize: rem(20), fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Machines</span>
+              <span data-testid="mobile-host-hub-version" style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: rem(12.5), fontWeight: 500, color: colors.fg2 }}>
                 hub {hubName} · {sheetVersions.hub.hub}
               </span>
             </div>
@@ -1037,15 +1038,15 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {online ? "●" : "○"}
                 </span>
                 <span style={{ minWidth: 0, display: "flex", flexDirection: "column", gap: 3 }}>
-                  <span style={{ fontSize: 14, fontWeight: isActive ? 600 : 400, color: online ? colors.fg0 : colors.fg2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  <span style={{ fontSize: rem(14), fontWeight: isActive ? 600 : 400, color: online ? colors.fg0 : colors.fg2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {m.name}
                   </span>
-                  <span style={{ fontSize: 12, color: online ? colors.fg2 : colors.fg3 }}>
+                  <span style={{ fontSize: rem(12), color: online ? colors.fg2 : colors.fg3 }}>
                     {online ? `${m.os} · ${count} ${count === 1 ? "terminal" : "terminals"}` : "offline"}
                     {nodeLabel && node?.version ? ` · ${nodeLabel}` : null}
                   </span>
                   {nodeLabel && !node?.version ? (
-                    <span style={{ fontSize: 12, color: colors.fg3 }}>{nodeLabel}</span>
+                    <span style={{ fontSize: rem(12), color: colors.fg3 }}>{nodeLabel}</span>
                   ) : null}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1056,7 +1057,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   ) : null}
                   {/* With a chip there is no room for both on a phone; the
                       accent edge and aria-current still mark this one (P03). */}
-                  {isActive && !chip ? <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: 11.5, fontWeight: 500, color: colors.accent }}>current</span> : null}
+                  {isActive && !chip ? <span style={{ flexShrink: 0, whiteSpace: "nowrap", fontSize: rem(11.5), fontWeight: 500, color: colors.accent }}>current</span> : null}
                 </span>
               </button>
               <button
@@ -1069,7 +1070,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   setHostSheetOpen(false);
                   onRemoveHost(m.id);
                 }}
-                style={{ width: 44, height: 44, fontSize: 12 }}
+                style={{ width: 44, height: 44, fontSize: rem(12) }}
               >
                 [x]
               </button>
@@ -1082,12 +1083,12 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               data-testid="mobile-node-update-card"
               style={{ margin: "0 16px 12px", padding: "12px 14px", display: "flex", flexDirection: "column", gap: 6, background: colors.bg1, border: `1px solid ${colors.lineSoft}`, borderRadius: 6 }}
             >
-              <span style={{ fontSize: 13, fontWeight: 600, color: colors.fg0 }}>updates happen on each Mac</span>
-              <span style={{ fontFamily: fontProse, fontSize: 13, lineHeight: "20px", color: colors.fg2 }}>
+              <span style={{ fontSize: rem(13), fontWeight: 600, color: colors.fg0 }}>updates happen on each Mac</span>
+              <span style={{ fontFamily: fontProse, fontSize: rem(13), lineHeight: rem(20), color: colors.fg2 }}>
                 The phone can't update a Mac. Open Offdesk Dev there, or run the command it shows.
               </span>
               {updateCopy === "failed" ? (
-                <code role="alert" style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: colors.fg1, overflowWrap: "anywhere" }}>
+                <code role="alert" style={{ fontFamily: "var(--font-mono)", fontSize: rem(12), color: colors.fg1, overflowWrap: "anywhere" }}>
                   {NODE_UPDATE_COMMAND}
                 </code>
               ) : null}
@@ -1270,7 +1271,7 @@ function SessionSwitcherHeader({
         padding: "2px 16px 6px",
         overflowX: "auto",
         fontFamily: "var(--font-mono)",
-        fontSize: 10,
+        fontSize: rem(10),
         color: colors.fg3,
       }}
     >
@@ -1308,7 +1309,7 @@ function SessionSwitcherHeader({
               textOverflow: "ellipsis",
               whiteSpace: "nowrap",
               fontFamily: fontDisplay,
-              fontSize: 14,
+              fontSize: rem(14),
               fontWeight: 600,
             }}
           >
@@ -1316,7 +1317,7 @@ function SessionSwitcherHeader({
           </span>
           <span aria-hidden="true" style={{ flexShrink: 0, color: colors.fg3 }}>›</span>
         </span>
-        <span data-testid="mobile-session-header-metrics" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 8px", fontFamily: "var(--font-mono)", fontSize: 10, lineHeight: 1.5 }}>
+        <span data-testid="mobile-session-header-metrics" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 8px", fontFamily: "var(--font-mono)", fontSize: rem(10), lineHeight: 1.5 }}>
           <span data-testid="mobile-session-header-rtt" style={{ color: colors.fg1 }}>
             {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
           </span>
@@ -1345,7 +1346,7 @@ function SessionSwitcherHeader({
               color: up ? colors.fg0 : colors.fg3,
               cursor: "pointer",
               fontFamily: fontDisplay,
-              fontSize: 14,
+              fontSize: rem(14),
               fontWeight: 600,
               whiteSpace: "nowrap",
             }}
@@ -1514,7 +1515,7 @@ function Sheet({
               flexShrink: 0,
               padding: "4px 16px 10px",
               fontFamily: fontDisplay,
-              fontSize: 20,
+              fontSize: rem(20),
               fontWeight: 600,
               letterSpacing: "-0.02em",
               color: colors.fg0,
@@ -1523,7 +1524,7 @@ function Sheet({
               gap: 8,
             }}
           >
-            {backLabel && <button type="button" aria-label={backLabel} onClick={onBack} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer", font: "inherit", fontSize: 15 }}>←</button>}
+            {backLabel && <button type="button" aria-label={backLabel} onClick={onBack} style={{ border: 0, background: "none", color: "inherit", width: 44, height: 44, display: "grid", placeItems: "center", cursor: "pointer", font: "inherit", fontSize: rem(15) }}>←</button>}
             {title}
           </div>
         ))}
@@ -1572,7 +1573,7 @@ function MenuRow({
         background: "none",
         border: "none",
         fontFamily: fontDisplay,
-        fontSize: 14,
+        fontSize: rem(14),
         textTransform: "lowercase",
         cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.5 : 1,

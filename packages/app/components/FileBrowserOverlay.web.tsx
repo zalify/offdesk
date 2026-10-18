@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { FileBrowser } from "./FileBrowser.web";
 import { colors, colorAlpha } from "@/lib/colors";
+import { rem } from "@/lib/rem";
 
 // A floating panel over the workspace listing one machine's files, like the
 // agent browser overlay. The workspace underneath stays mounted.
@@ -85,7 +86,7 @@ export function FileBrowserOverlay({
             flexShrink: 0,
           }}
         >
-          <h2 style={{ margin: 0, flex: 1, minWidth: 0, fontSize: 18, lineHeight: "24px", fontWeight: 600, letterSpacing: "-0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <h2 style={{ margin: 0, flex: 1, minWidth: 0, fontSize: rem(18), lineHeight: rem(24), fontWeight: 600, letterSpacing: "-0.02em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             files on {machineName}
           </h2>
           <button

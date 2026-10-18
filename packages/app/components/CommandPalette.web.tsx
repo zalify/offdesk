@@ -7,6 +7,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
 import { AgentMarker } from "./Primitives.web";
+import { rem } from "@/lib/rem";
 
 export type PaletteSection = "actions" | "tabs" | "hosts";
 export type PaletteFilter = "all" | "tabs" | "hosts";
@@ -153,7 +154,7 @@ export function CommandPalette({
             borderBottom: `1px solid ${colors.lineSoft}`,
           }}
         >
-          <span aria-hidden="true" style={{ color: colors.accent, fontSize: 15, fontWeight: 500 }}>:</span>
+          <span aria-hidden="true" style={{ color: colors.accent, fontSize: rem(15), fontWeight: 500 }}>:</span>
           <input
             ref={inputRef}
             data-testid="command-palette-input"
@@ -173,11 +174,11 @@ export function CommandPalette({
               outline: "none",
               color: colors.fg0,
               fontFamily: "var(--font-display)",
-              fontSize: 15,
+              fontSize: rem(15),
               padding: 0,
             }}
           />
-          <span style={{ fontSize: 11, color: colors.fg3 }}>esc</span>
+          <span style={{ fontSize: rem(11), color: colors.fg3 }}>esc</span>
         </div>
         <div
           ref={listRef}
@@ -191,7 +192,7 @@ export function CommandPalette({
           }}
         >
           {visibleRows.length === 0 && (
-            <div style={{ padding: "14px", color: colors.fg3, fontSize: 12, textAlign: "center" }}>
+            <div style={{ padding: "14px", color: colors.fg3, fontSize: rem(12), textAlign: "center" }}>
               no matching commands
             </div>
           )}
@@ -204,7 +205,7 @@ export function CommandPalette({
                   <div
                     style={{
                       padding: index === 0 ? "8px 12px 4px" : "10px 12px 4px",
-                      fontSize: 11.5,
+                      fontSize: rem(11.5),
                       fontWeight: 500,
                       color: colors.fg3,
                     }}
@@ -229,7 +230,7 @@ export function CommandPalette({
                     background: selected ? colors.primary : "transparent",
                     color: selected ? colors.onPrimary : row.disabled ? colors.fg3 : colors.fg0,
                     fontFamily: "var(--font-display)",
-                    fontSize: 13.5,
+                    fontSize: rem(13.5),
                     fontWeight: selected ? 600 : 400,
                     textAlign: "left",
                     padding: "8px 12px",
@@ -257,7 +258,7 @@ export function CommandPalette({
                     />
                   )}
                   {row.meta && (
-                    <span style={{ fontSize: 12, color: selected ? colors.onPrimary : colors.fg3, whiteSpace: "nowrap", flexShrink: 0 }}>
+                    <span style={{ fontSize: rem(12), color: selected ? colors.onPrimary : colors.fg3, whiteSpace: "nowrap", flexShrink: 0 }}>
                       {row.meta}
                     </span>
                   )}
@@ -266,7 +267,7 @@ export function CommandPalette({
                       style={{
                         color: selected ? colors.onPrimary : colors.fg3,
                         fontWeight: 400,
-                        fontSize: 12,
+                        fontSize: rem(12),
                         whiteSpace: "nowrap",
                         flexShrink: 0,
                       }}
