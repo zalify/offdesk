@@ -14,6 +14,10 @@ test("the link sign-in page says where the link comes from and links the guide",
     route.fulfill({ json: { github: false, google: false, link: true } }),
   );
   await page.goto("/");
+  // TEMP: what the page shows.
+  await page.waitForTimeout(4000);
+  console.log("SIGNIN url", page.url());
+  console.log("SIGNIN text", JSON.stringify((await page.locator("body").innerText()).slice(0, 800)));
 
   const steps = page.getByTestId("sign-in-link-steps");
   await expect(steps).toBeVisible();
