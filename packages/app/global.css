@@ -246,6 +246,21 @@ body {
 @keyframes offdeskSpin {
   to { transform: rotate(360deg); }
 }
+@keyframes offdeskBootType {
+  from { width: 0; }
+}
+@keyframes offdeskBootPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+/* The loading screen keeps its timing (a tip still waits its turn) but drops
+   the motion. */
+@media (prefers-reduced-motion: reduce) {
+  .odk-boot-anim {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
 @keyframes offdeskReconnect {
   from { transform: translateX(-100%); }
   to   { transform: translateX(265%); }

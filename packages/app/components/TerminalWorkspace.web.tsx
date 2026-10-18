@@ -106,6 +106,8 @@ interface TerminalWorkspaceProps {
   // workspace fills it with live handlers; the chrome calls them.
   commandsRef?: MutableRefObject<WorkspaceCommandChannel>;
   onActiveGroupChange?: (groupId: string | null) => void;
+  /** Compact: the shown pane has drawn its first screen (or given up). */
+  onActivePaneReady?: (terminalId: string) => void;
 }
 
 // Handlers the desktop chrome (TabBar, CommandPalette) invokes on the
@@ -203,6 +205,7 @@ function TerminalWorkspaceComponent({
   onReleaseControl,
   commandsRef,
   onActiveGroupChange,
+  onActivePaneReady,
 }: TerminalWorkspaceProps) {
   const [workspace, setWorkspace] = useState(() =>
     createTerminalWorkspace(
@@ -370,7 +373,10 @@ function TerminalWorkspaceComponent({
   ) {
     compactHoldRef.current = null;
   }
+  const onActivePaneReadyRef = useRef(onActivePaneReady);
+  onActivePaneReadyRef.current = onActivePaneReady;
   const releaseCompactHold = useCallback((terminalId: string) => {
+    onActivePaneReadyRef.current?.(terminalId);
     const hold = compactHoldRef.current;
     if (hold?.to !== terminalId) return;
     compactHoldRef.current = null;

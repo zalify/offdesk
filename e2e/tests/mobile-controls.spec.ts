@@ -298,36 +298,80 @@ test("mobile terminal switch over a slow link keeps the previous screen until th
   await expect(page.getByTestId(`workspace-pane-${firstTerminalId}`)).toHaveCount(0);
 });
 
-test("mobile app load keeps one loading view until the Hub answers, never the empty-Hub screen", async ({
+test("mobile app load keeps one loading screen from launch to the first drawn terminal", async ({
   page,
 }) => {
   await openApp(page);
   await resetMachineState(page);
   await requestMachineControl(page);
-  await createTerminalViaApi(page);
+  const terminalId = await createTerminalViaApi(page);
 
   // A slow Hub, as right after pairing over a remote link: the first
-  // bootstrap answers late. Until it does, there is nothing to show but the
-  // loading view; an empty machine list then means "not loaded yet".
+  // bootstrap answers late, long enough for a tip. Until a terminal has
+  // drawn there is nothing to show but the loading screen; an empty machine
+  // list meanwhile means "not loaded yet", not "no machines".
   await page.route("**/api/bootstrap", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    await new Promise((resolve) => setTimeout(resolve, 2500));
     await route.continue();
   });
-  await page.addInitScript(() => {
-    const w = window as unknown as { __emptyHubSeen?: boolean };
-    w.__emptyHubSeen = false;
-    const watch = () => {
-      if (document.querySelector("[data-testid='empty-machines']")) w.__emptyHubSeen = true;
-      requestAnimationFrame(watch);
+  await page.addInitScript((target) => {
+    type Term = {
+      buffer: {
+        active: {
+          length: number;
+          getLine: (i: number) => { translateToString: (trim: boolean) => string } | undefined;
+        };
+      };
     };
-    requestAnimationFrame(watch);
-  });
+    const w = window as unknown as {
+      __offdeskTerminals?: Map<string, Term>;
+      __bootFrames?: { boot: string | null; tip: boolean; empty: boolean; drawn: boolean }[];
+    };
+    const frames: { boot: string | null; tip: boolean; empty: boolean; drawn: boolean }[] = [];
+    w.__bootFrames = frames;
+    const sample = () => {
+      const boot = document.querySelector("[data-testid='boot-screen']");
+      const tips = document.querySelector("[data-testid='boot-tips']");
+      const term = w.__offdeskTerminals?.get(target);
+      let drawn = false;
+      if (term) {
+        const buf = term.buffer.active;
+        for (let i = 0; i < buf.length && !drawn; i++) {
+          drawn = (buf.getLine(i)?.translateToString(true) ?? "").trim() !== "";
+        }
+      }
+      frames.push({
+        boot: boot?.getAttribute("data-step") ?? null,
+        tip: tips ? Number(getComputedStyle(tips).opacity) > 0.5 : false,
+        empty: document.querySelector("[data-testid='empty-machines']") !== null,
+        drawn,
+      });
+      if (!(drawn && !boot) && frames.length < 3000) requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }, terminalId);
   await page.reload();
 
   await expect(page.getByTestId("mobile-workbench")).toBeVisible({ timeout: 20_000 });
-  expect(
-    await page.evaluate(() => (window as unknown as { __emptyHubSeen?: boolean }).__emptyHubSeen),
-  ).toBe(false);
+  await expect(page.getByTestId("boot-screen")).toHaveCount(0, { timeout: 20_000 });
+  const frames = await page.evaluate(
+    () =>
+      (window as unknown as {
+        __bootFrames: { boot: string | null; tip: boolean; empty: boolean; drawn: boolean }[];
+      }).__bootFrames,
+  );
+  // Every frame before the terminal drew was the loading screen; it went
+  // forward through its steps (never back), a tip showed during the wait,
+  // and it lifted only once the terminal was drawn under it.
+  expect(frames.some((frame) => frame.empty)).toBe(false);
+  const firstDrawn = frames.findIndex((frame) => frame.drawn);
+  expect(firstDrawn).toBeGreaterThan(0);
+  expect(frames.slice(0, firstDrawn).every((frame) => frame.boot !== null)).toBe(true);
+  const order = ["signin", "hub", "terminal"];
+  const steps = frames.map((frame) => order.indexOf(frame.boot ?? "terminal"));
+  expect(steps.every((step, i) => i === 0 || step >= steps[i - 1])).toBe(true);
+  expect(frames.some((frame) => frame.boot === "terminal")).toBe(true);
+  expect(frames.some((frame) => frame.tip)).toBe(true);
 });
 
 test("mobile back button returns to the previous terminal without reloading the screen", async ({

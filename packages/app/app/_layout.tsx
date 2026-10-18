@@ -8,13 +8,14 @@ import { Component, useLayoutEffect, type ErrorInfo, type ReactNode } from "reac
 import { applyUiFontPreferences, subscribeFontPreferences } from "../lib/fontPreferences";
 import { Slot } from "expo-router";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { AuthProvider, useAuth } from "../lib/auth";
 import { isDesktopShell } from "../lib/desktopHub";
 import { ThemeProvider } from "../lib/theme";
 import { colors } from "../lib/colors";
 import LoginScreen from "./login";
 import { DesktopGate } from "../components/DesktopSetup.web";
+import { BootScreen } from "../components/BootScreen.web";
 import { AndroidUpdateNotification } from "../components/AndroidUpdateNotification";
 import { IosUpdateNotification } from "../components/IosUpdateNotification";
 
@@ -100,11 +101,7 @@ function AuthGate() {
   }
 
   if (isLoading) {
-    return (
-      <View className="flex-1 bg-background items-center justify-center">
-        <ActivityIndicator size="large" color={colors.accent} />
-      </View>
-    );
+    return <BootScreen step="signin" />;
   }
 
   if (!isAuthenticated) {
