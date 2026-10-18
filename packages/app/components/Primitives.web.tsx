@@ -6,6 +6,18 @@
 import type { CSSProperties, ReactNode } from "react";
 
 import { colors } from "@/lib/colors";
+import {
+  MARK_CHEVRON,
+  MARK_DESK,
+  MARK_PLACE,
+  MARK_SPEED,
+  MARK_TILT,
+  MARK_TRACED,
+  MARK_UNDERSCORE,
+  MARK_VIEWBOX,
+  MARK_WINDOW,
+  markWeights,
+} from "@/lib/brandMark";
 import "./Primitives.css";
 
 /** Geist Mono: chrome, headings, labels. */
@@ -380,26 +392,45 @@ export function Donut({
 /** The desk with a terminal window flying off it (logo v1). */
 export function Logo({ size = 28, title }: { size?: number; title?: string }) {
   const height = Math.round((size * 32) / 40);
+  // Small sizes drop the speed lines and the underscore and draw heavier, as
+  // the brand's small icons do.
+  const detail = size >= 32 ? "full" : "medium";
+  const weight = markWeights(detail);
+  const ink = colors.fg0;
   return (
     <svg
       width={size}
       height={height}
-      viewBox="0 0 40 32"
+      viewBox={MARK_VIEWBOX}
       fill="none"
-      stroke="currentColor"
-      strokeWidth={size < 24 ? 3 : 2.2}
-      strokeLinecap="round"
-      strokeLinejoin="round"
       role={title ? "img" : undefined}
       aria-label={title}
       aria-hidden={title ? undefined : true}
-      style={{ flexShrink: 0, color: colors.fg0 }}
+      style={{ flexShrink: 0 }}
     >
-      <path d="M3 23h18M5.5 23v7M18.5 23v7" />
-      {size >= 24 ? <path d="M19.5 16l3-2M18 12.5l3-2" /> : null}
-      <g transform="rotate(-14 30 9)">
-        <rect x="23" y="3" width="15" height="12" rx="2.5" />
-        <path d={size >= 24 ? "M26.5 7.2l2 1.6-2 1.6M30.5 11h3" : "M26.5 7.2l2 1.6-2 1.6"} stroke={colors.accent} />
+      <g transform={MARK_PLACE}>
+        <g transform={MARK_TRACED[0]}>
+          <g transform={MARK_TRACED[1]}>
+            <g
+              transform={MARK_TRACED[2]}
+              fill={ink}
+              stroke={weight.outline ? ink : undefined}
+              strokeWidth={weight.outline || undefined}
+              strokeLinejoin="round"
+            >
+              <path d={MARK_DESK} />
+              {detail === "full" ? MARK_SPEED.map((d) => <path key={d} d={d} />) : null}
+            </g>
+          </g>
+        </g>
+        <g transform={MARK_TILT} fill="none" stroke={ink} strokeLinecap="round" strokeLinejoin="round">
+          <path d={MARK_WINDOW} strokeWidth={weight.window} />
+          <path
+            d={detail === "full" ? `${MARK_CHEVRON} ${MARK_UNDERSCORE}` : MARK_CHEVRON}
+            stroke={colors.accent}
+            strokeWidth={weight.prompt}
+          />
+        </g>
       </g>
     </svg>
   );
