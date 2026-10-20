@@ -256,9 +256,11 @@ function TerminalWorkspaceComponent({
     return map;
   }, [siblings]);
 
-  // Set when reconcile swaps the active group's root for a layout saved
-  // elsewhere; the panes then need the same refit a local layout change gets.
-  const adoptedLayoutGroupIdRef = useRef<string | null>(null);
+  // Set when reconcile reshapes the active group's root: a layout saved
+  // elsewhere, or a pane that closed or opened without a local action (its
+  // shell exited, another device closed it). The panes left then need the
+  // same refit a local layout change gets.
+  const reshapedLayoutGroupIdRef = useRef<string | null>(null);
   const layoutSaveQueuesRef = useRef(new Map<string, Promise<void>>());
   const previousTerminalIdRef = useRef(terminal.id);
   // Layout effect, not a passive one: the shell around the workspace (the
@@ -281,10 +283,9 @@ function TerminalWorkspaceComponent({
       if (
         prevActive &&
         nextActive?.id === prevActive.id &&
-        nextActive.layoutUpdatedAt !== prevActive.layoutUpdatedAt &&
         nextActive.root !== prevActive.root
       ) {
-        adoptedLayoutGroupIdRef.current = nextActive.id;
+        reshapedLayoutGroupIdRef.current = nextActive.id;
       }
       // Retry a pending selection: selectGroup may be issued from the
       // create-group HTTP response before the workspace_group_created
@@ -511,12 +512,12 @@ function TerminalWorkspaceComponent({
     },
     [],
   );
-  // A layout adopted from another device resizes the panes without any
-  // local action, so refit them the way the local layout handlers do.
+  // A layout reshaped by reconcile resizes the panes without any local
+  // action, so refit them the way the local layout handlers do.
   useEffect(() => {
-    const groupId = adoptedLayoutGroupIdRef.current;
+    const groupId = reshapedLayoutGroupIdRef.current;
     if (!groupId) return;
-    adoptedLayoutGroupIdRef.current = null;
+    reshapedLayoutGroupIdRef.current = null;
     if (!isController || workspace.activeGroupId !== groupId) return;
     requestPaneFit(collectIds(getActiveWorkspaceGroup(workspace)?.root ?? null), {
       focusTerminalId: workspace.activeTerminalId,
@@ -904,6 +905,14 @@ function TerminalWorkspaceComponent({
           onPick(nextWorkspace.activeTerminalId);
         }
         if (maximizedTerminalId === target.id) setMaximizedTerminalId(null);
+        // The panes left grow into the closed pane's rect without remounting,
+        // so they need the same refit a split gets.
+        if (nextWorkspace.activeGroupId === targetGroupId) {
+          requestPaneFit(
+            collectIds(getActiveWorkspaceGroup(nextWorkspace)?.root ?? null),
+            { focusTerminalId: nextWorkspace.activeTerminalId },
+          );
+        }
         void persistGroupLayout(nextWorkspace, targetGroupId);
       };
       void (async () => {
@@ -926,6 +935,7 @@ function TerminalWorkspaceComponent({
       onDestroy,
       onPick,
       persistGroupLayout,
+      requestPaneFit,
       updateWorkspace,
     ],
   );
