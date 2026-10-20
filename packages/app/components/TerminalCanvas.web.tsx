@@ -98,6 +98,7 @@ import {
   collectGroupPaneTerminalIds,
   collectPaneTerminalIds,
   createTerminalWorkspace,
+  pickWorkspaceTerminal,
   planNewTerminalPlacement,
   type WorkspaceGroup,
   type WorkspaceSplitIntent,
@@ -840,14 +841,16 @@ function TerminalCanvasInner() {
     ? terminals.find((t) => t.id === layout.zoomedTerminalId) ?? null
     : null;
   const workspaceTerminal = useMemo(() => {
-    if (expandedTerminal) return expandedTerminal;
-    if (workspaceAnchorTerminal?.machine_id === activeMachine?.id)
+    const machineId = activeMachine?.id ?? null;
+    if (expandedTerminal?.machine_id === machineId) return expandedTerminal;
+    if (workspaceAnchorTerminal?.machine_id === machineId)
       return workspaceAnchorTerminal;
-    return scopedTerminals[0] ?? null;
+    return pickWorkspaceTerminal(null, machineId, tabGroups, scopedTerminals);
   }, [
     expandedTerminal,
     workspaceAnchorTerminal,
     activeMachine,
+    tabGroups,
     scopedTerminals,
   ]);
 

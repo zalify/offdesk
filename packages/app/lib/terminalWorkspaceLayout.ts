@@ -520,6 +520,24 @@ export function groupPaneTerminalIds(group: WorkspaceGroup): string[] {
 
 export { MAX_PANES_PER_TAB };
 
+// The terminal the workspace opens on for one machine. A zoomed terminal on
+// another machine (left over from before a machine switch) does not count:
+// the machine's first tab does, so switching never lands on an empty tab.
+export function pickWorkspaceTerminal<T extends { id: string; machine_id: string }>(
+  zoomed: T | null,
+  machineId: string | null,
+  groups: WorkspaceGroup[],
+  machineTerminals: T[],
+): T | null {
+  if (zoomed && zoomed.machine_id === machineId) return zoomed;
+  const firstId = groups.length > 0 ? groupPaneTerminalIds(groups[0])[0] : undefined;
+  return (
+    machineTerminals.find((terminal) => terminal.id === firstId) ??
+    machineTerminals[0] ??
+    null
+  );
+}
+
 export function workspaceGroupPaneCount(
   group: WorkspaceGroup | null | undefined,
 ): number {
