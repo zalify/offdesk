@@ -98,6 +98,7 @@ import {
   collectGroupPaneTerminalIds,
   collectPaneTerminalIds,
   createTerminalWorkspace,
+  pickWorkspaceTerminal,
   planNewTerminalPlacement,
   type WorkspaceGroup,
   type WorkspaceSplitIntent,
@@ -840,14 +841,19 @@ function TerminalCanvasInner() {
     ? terminals.find((t) => t.id === layout.zoomedTerminalId) ?? null
     : null;
   const workspaceTerminal = useMemo(() => {
-    if (expandedTerminal) return expandedTerminal;
-    if (workspaceAnchorTerminal?.machine_id === activeMachine?.id)
+    const machineId = activeMachine?.id ?? null;
+    if (expandedTerminal?.machine_id === machineId) return expandedTerminal;
+    if (workspaceAnchorTerminal?.machine_id === machineId)
       return workspaceAnchorTerminal;
+    // A zoom left over from another machine: open this machine's first tab.
+    if (expandedTerminal)
+      return pickWorkspaceTerminal(expandedTerminal, machineId, tabGroups, scopedTerminals);
     return scopedTerminals[0] ?? null;
   }, [
     expandedTerminal,
     workspaceAnchorTerminal,
     activeMachine,
+    tabGroups,
     scopedTerminals,
   ]);
 
