@@ -845,7 +845,10 @@ function TerminalCanvasInner() {
     if (expandedTerminal?.machine_id === machineId) return expandedTerminal;
     if (workspaceAnchorTerminal?.machine_id === machineId)
       return workspaceAnchorTerminal;
-    return pickWorkspaceTerminal(null, machineId, tabGroups, scopedTerminals);
+    // A zoom left over from another machine: open this machine's first tab.
+    if (expandedTerminal)
+      return pickWorkspaceTerminal(expandedTerminal, machineId, tabGroups, scopedTerminals);
+    return scopedTerminals[0] ?? null;
   }, [
     expandedTerminal,
     workspaceAnchorTerminal,
