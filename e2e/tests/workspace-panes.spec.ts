@@ -5,6 +5,7 @@ import {
   createTerminalViaApi,
   deleteWorkspaceGroupViaApi,
   expandTerminalById,
+  fitPaneViaContextMenu,
   getAuthHeaders,
   getExpandedOverlay,
   listTerminals,
@@ -293,6 +294,66 @@ test("desktop workspace stays open when closing an inactive pane", async ({
 
   await context.close();
 });
+
+// OFF-44: the pane left after a close grows into the freed rect without
+// remounting, so it must refit (and resize its tmux session) like a split.
+test("closing a pane refits the pane left to the freed width", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 960 },
+  });
+  const page = await context.newPage();
+
+  await openApp(page);
+  await resetMachineState(page);
+  await takeControlFromHeader(page);
+  await selectHomeWorkpath(page);
+
+  const firstId = await createTerminalViaApi(page);
+  await expandTerminalById(page, firstId);
+  await expect(getExpandedOverlay(page)).toBeVisible();
+
+  // ⌃B % — side by side. Fit the first pane explicitly so its half-width
+  // size is settled on the machine before the close.
+  await pressPrefixKey(page, "Shift+Digit5");
+  await expect.poll(async () => (await listTerminals(page)).length).toBe(2);
+  const secondId = (await listTerminals(page)).find(
+    (terminal) => terminal.id !== firstId,
+  )!.id;
+  await fitPaneViaContextMenu(page, firstId);
+  await expect
+    .poll(() => serverCols(page, firstId), { timeout: 5_000 })
+    .toBe(await localCols(page, firstId));
+  const splitCols = await serverCols(page, firstId);
+
+  await openPaneContextMenu(page, secondId);
+  await page.getByRole("menuitem", { name: "Close pane" }).click();
+  await expect.poll(async () => (await listTerminals(page)).length).toBe(1);
+  await expect(page.locator("[data-testid^='workspace-pane-']")).toHaveCount(1);
+
+  await expect
+    .poll(() => serverCols(page, firstId), { timeout: 5_000 })
+    .toBeGreaterThan(splitCols * 1.6);
+
+  await context.close();
+});
+
+async function serverCols(page: Page, terminalId: string): Promise<number> {
+  const terminal = (await listTerminals(page)).find((t) => t.id === terminalId);
+  return terminal?.cols ?? 0;
+}
+
+async function localCols(page: Page, terminalId: string): Promise<number> {
+  return page.evaluate((tid) => {
+    const map = (
+      window as unknown as {
+        __offdeskTerminals?: Map<string, { cols: number }>;
+      }
+    ).__offdeskTerminals;
+    return map?.get(tid)?.cols ?? 0;
+  }, terminalId);
+}
 
 test("workspace remains mounted when terminal events are delayed", async ({
   browser,
