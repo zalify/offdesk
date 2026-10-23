@@ -126,6 +126,7 @@ mod tests {
             rows: 24,
             attention: None,
             opened_by: None,
+            last_activity_ms: None,
             reachable: true,
         }
     }

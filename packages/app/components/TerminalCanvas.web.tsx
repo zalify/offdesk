@@ -120,6 +120,8 @@ import { claimSamePagePops } from "@/lib/samePagePops";
 import { BootScreen } from "./BootScreen.web";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { rem } from "@/lib/rem";
+import { readSidebarShown, useSidebarFits, writeSidebarShown } from "@/lib/sessionList";
+import { WorkspaceManager } from "./WorkspaceManager.web";
 
 const EmptyMachinesView = lazy(() =>
   lazyWithReload(() =>
@@ -271,6 +273,20 @@ function TerminalCanvasInner() {
     createInitialMainLayout,
   );
   const { isCompact, isTouch } = useDisplayMode();
+  // The desktop sessions list, pinned beside the panes when the window fits;
+  // shown or hidden per device.
+  const sidebarFits = useSidebarFits() && !isTouch;
+  const [sidebarShown, setSidebarShown] = useState(readSidebarShown);
+  const toggleSidebar = useCallback(() => {
+    setSidebarShown((shown) => {
+      writeSidebarShown(!shown);
+      return !shown;
+    });
+  }, []);
+  const sessionsSidebar = useMemo(
+    () => (sidebarFits ? { shown: sidebarShown, onToggle: toggleSidebar } : undefined),
+    [sidebarFits, sidebarShown, toggleSidebar],
+  );
   const viewport = useVisualViewport();
   const viewportHeight = viewport?.height ?? null;
   const rootHeight: string =
@@ -2066,6 +2082,7 @@ function TerminalCanvasInner() {
                 filesButton={filesButtonProps}
                 onToggleFiles={handleToggleFiles}
                 onRemoveHost={handleRemoveHost}
+                sessionsSidebar={sessionsSidebar}
               />
               {!phoneHintDismissed && machines.length > 0 && (
                 <div
@@ -2096,6 +2113,32 @@ function TerminalCanvasInner() {
                 </div>
               )}
 
+              <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+              {sessionsSidebar?.shown && (
+                <WorkspaceManager
+                  open
+                  placement="sidebar"
+                  machineName={activeMachine?.name ?? ""}
+                  groups={tabGroups}
+                  terminalsById={scopedTerminalsById}
+                  activeGroupId={activeGroupId}
+                  activeTerminalId={workspaceTerminal?.id ?? null}
+                  canManage={isActiveController}
+                  onClose={toggleSidebar}
+                  onSelectGroup={(groupId) =>
+                    workspaceCommandsRef.current.selectGroup?.(groupId)
+                  }
+                  onSelectTerminal={handleZoomTerminal}
+                  onNewGroup={handleNewGroupClick}
+                  onNewTerminal={handleMobileNewTerminal}
+                  onRenameGroup={handleRenameGroup}
+                  onDeleteGroup={handleDeleteGroup}
+                  onReorderGroups={handleRequestWorkspaceGroupReorder}
+                  onMoveTerminal={handleMoveTerminalToWorkspace}
+                  onCloseTerminal={handleMobileCloseTerminal}
+                />
+              )}
+              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
               {scopedTerminals.length === 0 ? (
                 <EmptyState
                   scopeLabel={scopeLabel}
@@ -2132,6 +2175,8 @@ function TerminalCanvasInner() {
                   onActiveGroupChange={setActiveGroupId}
                 />
               )}
+              </div>
+              </div>
               <WorkspaceKeyBarSlot />
               <WorkspaceStatusLine
                 terminals={terminals}

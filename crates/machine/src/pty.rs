@@ -94,6 +94,9 @@ pub struct PaneInfo {
     /// same `list-panes -a` poll so callers never need a per-terminal
     /// subprocess just to learn the process name.
     pub current_command: Option<String>,
+    /// When the pane's window last had output (`window_activity`), in ms
+    /// since the epoch; `None` when tmux didn't report it.
+    pub activity_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -530,7 +533,7 @@ impl PtyManager {
                 "list-panes",
                 "-a",
                 "-F",
-                "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}",
+                "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}\t#{window_activity}",
             ])
             .output();
         let mut panes = match output {
@@ -1042,7 +1045,7 @@ fn pane_terminal(listing: &str, pane_id: &str) -> Option<String> {
 fn parse_pane_info(output: &str, hostname: &str) -> HashMap<String, PaneInfo> {
     let mut panes = HashMap::new();
     for line in output.lines() {
-        let mut parts = line.splitn(5, '\t');
+        let mut parts = line.splitn(6, '\t');
         let Some(session_name) = parts.next() else {
             continue;
         };
@@ -1065,7 +1068,12 @@ fn parse_pane_info(output: &str, hostname: &str) -> HashMap<String, PaneInfo> {
             .filter(|cmd| !cmd.is_empty() && !is_shell_name(cmd))
             .map(str::to_string);
         let pid = parts.next().and_then(|value| value.trim().parse().ok());
-        if title.is_none() && cwd.is_none() && current_command.is_none() {
+        let activity_ms = parts
+            .next()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .filter(|seconds| *seconds > 0)
+            .map(|seconds| seconds * 1000);
+        if title.is_none() && cwd.is_none() && current_command.is_none() && activity_ms.is_none() {
             continue;
         }
         panes.insert(
@@ -1075,6 +1083,7 @@ fn parse_pane_info(output: &str, hostname: &str) -> HashMap<String, PaneInfo> {
                 title,
                 cwd,
                 current_command,
+                activity_ms,
             },
         );
     }
@@ -1626,6 +1635,16 @@ mod tests {
             panes.get("ccc").and_then(|i| i.current_command.as_deref()),
             Some("cargo")
         );
+    }
+
+    #[test]
+    fn parse_pane_info_reads_the_window_activity_in_ms() {
+        let panes = parse_pane_info(
+            "odk_aaa\t\t/home/user\tnvim\t42\t1792915200\nodk_bbb\t\t/tmp\t\t43\t\n",
+            "dev",
+        );
+        assert_eq!(panes.get("aaa").and_then(|i| i.activity_ms), Some(1_792_915_200_000));
+        assert_eq!(panes.get("bbb").and_then(|i| i.activity_ms), None);
     }
 
     #[test]

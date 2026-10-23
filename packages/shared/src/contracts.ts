@@ -24,6 +24,9 @@ export interface TerminalInfo {
   /** Set when an API-token client (the CLI an agent drives) opened it;
    *  absent when a person did, and from older hubs. */
   opened_by?: TerminalOpener | null
+  /** When it last had output, ms since the epoch, in 30-second steps;
+   *  absent until the node reports it, and from older nodes. */
+  last_activity_ms?: number | null
 }
 
 export interface TerminalOpener {

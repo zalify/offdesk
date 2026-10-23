@@ -257,6 +257,7 @@ impl MachineManager {
                         attention: None,
                         reachable: false,
                         opened_by,
+                        last_activity_ms: None,
                     });
             }
             by_machine
@@ -1035,6 +1036,7 @@ impl MachineManager {
                     attention: None,
                     reachable: true,
                     opened_by,
+                    last_activity_ms: None,
                 };
                 Ok(terminal)
             }
@@ -2011,6 +2013,7 @@ impl MachineManager {
                             attention: None,
                             reachable: true,
                             opened_by: opened_by.clone(),
+                            last_activity_ms: None,
                         };
                         conn.terminals.insert(terminal_id.clone(), terminal.clone());
 
@@ -2150,6 +2153,22 @@ impl MachineManager {
                             drop(machines);
                             self.send_event(user_id.clone(), BrowserEvent::TerminalUpdated { terminal });
                             self.on_run_attention(user_id, &terminal_id, attention);
+                        }
+                    }
+                }
+            }
+            // Kept in memory like attention: it changes too often for SQLite,
+            // and the node sends it again after every reconnect.
+            MachineToHub::TerminalActivity { terminal_id, at_ms } => {
+                let mut machines = self.machines.lock().await;
+                if let Some(conn) = machines.get_mut(machine_id) {
+                    let user_id = conn.user_id.clone();
+                    if let Some(terminal) = conn.terminals.get_mut(&terminal_id) {
+                        if terminal.last_activity_ms != Some(at_ms) {
+                            terminal.last_activity_ms = Some(at_ms);
+                            let terminal = terminal.clone();
+                            drop(machines);
+                            self.send_event(user_id, BrowserEvent::TerminalUpdated { terminal });
                         }
                     }
                 }
@@ -3331,6 +3350,7 @@ mod tests {
             rows: 24,
             attention: None,
             opened_by: None,
+            last_activity_ms: None,
             reachable: true,
         }
     }
@@ -3610,6 +3630,50 @@ mod tests {
             BrowserEvent::TerminalResized { terminal }
                 if terminal.id == "term-a" && terminal.cols == 132 && terminal.rows == 40
         ));
+    }
+
+    #[tokio::test]
+    async fn terminal_activity_is_scoped_deduplicated_and_in_bootstrap() {
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        seed_machine(&pool, "user-b", "machine-b");
+        let manager = MachineManager::new(pool);
+        manager
+            .register_machine(machine("machine-a"), Some("user-a".into()))
+            .await;
+        manager
+            .register_machine(machine("machine-b"), Some("user-b".into()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![terminal("machine-a", "term-a")],
+                },
+            )
+            .await;
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(snapshot.terminals[0].last_activity_ms, None);
+        let mut events = manager.subscribe_events_after("user-a", snapshot.snapshot_seq);
+        let message = |at_ms| MachineToHub::TerminalActivity {
+            terminal_id: "term-a".into(),
+            at_ms,
+        };
+        // Another machine cannot touch this terminal, even knowing its id.
+        manager.handle_machine_message("machine-b", message(1_000)).await;
+        assert!(events.receiver.try_recv().is_err());
+        manager.handle_machine_message("machine-a", message(1_000)).await;
+        assert!(matches!(
+            events.receiver.recv().await.unwrap().event,
+            BrowserEvent::TerminalUpdated { terminal } if terminal.last_activity_ms == Some(1_000)
+        ));
+        // The same time again changes nothing.
+        manager.handle_machine_message("machine-a", message(1_000)).await;
+        assert!(events.receiver.try_recv().is_err());
+        assert_eq!(
+            manager.snapshot_for_user("user-a").await.terminals[0].last_activity_ms,
+            Some(1_000)
+        );
     }
 
     #[tokio::test]
