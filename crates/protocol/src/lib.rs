@@ -165,6 +165,25 @@ pub enum FsReadErrorCode {
     Io,
 }
 
+/// Capability a machine advertises when it can answer `HubToMachine::FsWriteFile`
+/// (and puts `sha256` in `FsReadResult`).
+pub const FS_WRITE_CAPABILITY: &str = "fs-write-v1";
+
+/// Why `FsWriteFile` failed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FsWriteErrorCode {
+    NotFound,
+    IsDirectory,
+    TooLarge,
+    PermissionDenied,
+    /// The file on disk or the new content is not UTF-8 text.
+    NotText,
+    /// The file changed since the editor read it.
+    Conflict,
+    Io,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceStats {
     /// CPU usage percentage (0.0 - 100.0), averaged across all cores
@@ -1611,6 +1630,17 @@ pub enum HubToMachine {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
     },
+    /// Replace an existing text file (<= `FS_READ_MAX_BYTES`), only while its
+    /// content still hashes to `base_sha256`. Needs `FS_WRITE_CAPABILITY`.
+    #[serde(rename = "fs_write_file")]
+    FsWriteFile {
+        request_id: String,
+        /// Absolute path, as `FsReadResult` resolved it.
+        path: String,
+        data_base64: String,
+        /// Hex SHA-256 of the content the edit started from.
+        base_sha256: String,
+    },
     #[serde(rename = "auth_result")]
     AuthResult { ok: bool, message: Option<String> },
     #[serde(rename = "check_foreground_process")]
@@ -1798,6 +1828,25 @@ pub enum MachineToHub {
         mime: String,
         size: u64,
         data_base64: String,
+        /// Hex SHA-256 of the content, from nodes with `FS_WRITE_CAPABILITY`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
+    },
+    #[serde(rename = "fs_write_result")]
+    FsWriteResult {
+        request_id: String,
+        path: String,
+        size: u64,
+        sha256: String,
+    },
+    #[serde(rename = "fs_write_error")]
+    FsWriteError {
+        request_id: String,
+        code: FsWriteErrorCode,
+        message: String,
+        /// The content's hash now, for `Conflict`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sha256: Option<String>,
     },
     #[serde(rename = "fs_read_error")]
     FsReadError {
@@ -2841,11 +2890,17 @@ mod tests {
             mime: "text/plain".into(),
             size: 2,
             data_base64: "aGk=".into(),
+            sha256: None,
         };
         let json = serde_json::to_string(&ok).unwrap();
+        assert!(!json.contains("sha256"));
         assert!(matches!(
             serde_json::from_str::<MachineToHub>(&json).unwrap(),
-            MachineToHub::FsReadResult { size: 2, .. }
+            MachineToHub::FsReadResult {
+                size: 2,
+                sha256: None,
+                ..
+            }
         ));
 
         let err = MachineToHub::FsReadError {
@@ -2863,6 +2918,40 @@ mod tests {
             MachineToHub::FsReadError {
                 code: FsReadErrorCode::TooLarge,
                 size: Some(99),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fs_write_messages_round_trip() {
+        use super::{FsWriteErrorCode, MachineToHub};
+        let request = HubToMachine::FsWriteFile {
+            request_id: "r".into(),
+            path: "/tmp/.env".into(),
+            data_base64: "aGk=".into(),
+            base_sha256: "ab".into(),
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""type":"fs_write_file""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::FsWriteFile { base_sha256, .. } if base_sha256 == "ab"
+        ));
+
+        let conflict = MachineToHub::FsWriteError {
+            request_id: "r".into(),
+            code: FsWriteErrorCode::Conflict,
+            message: "changed".into(),
+            sha256: Some("cd".into()),
+        };
+        let json = serde_json::to_string(&conflict).unwrap();
+        assert!(json.contains(r#""code":"conflict""#));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::FsWriteError {
+                code: FsWriteErrorCode::Conflict,
+                sha256: Some(_),
                 ..
             }
         ));

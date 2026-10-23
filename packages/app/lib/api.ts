@@ -280,9 +280,11 @@ export interface RemoteFile {
   mime: string;
   size: number;
   data_base64: string;
+  /** Content hash, from machines that can save files; editing needs it. */
+  sha256?: string;
 }
 
-/** Error from `fs/read`; `code` is the hub's error code (e.g. `too_large`). */
+/** Error from `fs/read` or `fs/write`; `code` is the hub's error code (e.g. `too_large`). */
 export class RemoteFileError extends Error {
   constructor(
     public readonly status: number,
@@ -290,10 +292,33 @@ export class RemoteFileError extends Error {
     message: string,
     public readonly size?: number,
     public readonly path?: string,
+    /** For `conflict`: the hash of what the file holds now. */
+    public readonly sha256?: string,
   ) {
     super(message);
     this.name = "RemoteFileError";
   }
+}
+
+function remoteFileError(err: unknown): unknown {
+  if (!(err instanceof ApiError)) return err;
+  // ApiError.message is "<status>: <body>"; the body is the hub's JSON.
+  let body: { error?: string; message?: string; size?: number; path?: string; sha256?: string } = {};
+  try {
+    body = JSON.parse(err.message.slice(err.message.indexOf(":") + 1).trim());
+  } catch {
+    // Non-JSON body (proxy error page): fall through with a generic code.
+  }
+  const code =
+    body.error ?? (err.status === 504 ? "timeout" : `http_${err.status}`);
+  return new RemoteFileError(
+    err.status,
+    code,
+    body.message ?? err.message,
+    body.size,
+    body.path,
+    body.sha256,
+  );
 }
 
 export async function readFile(
@@ -310,23 +335,25 @@ export async function readFile(
       `/api/machines/${machineId}/fs/read?${query}`,
     );
   } catch (err) {
-    if (!(err instanceof ApiError)) throw err;
-    // ApiError.message is "<status>: <body>"; the body is the hub's JSON.
-    let body: { error?: string; message?: string; size?: number; path?: string } = {};
-    try {
-      body = JSON.parse(err.message.slice(err.message.indexOf(":") + 1).trim());
-    } catch {
-      // Non-JSON body (proxy error page): fall through with a generic code.
-    }
-    const code =
-      body.error ?? (err.status === 504 ? "timeout" : `http_${err.status}`);
-    throw new RemoteFileError(
-      err.status,
-      code,
-      body.message ?? err.message,
-      body.size,
-      body.path,
-    );
+    throw remoteFileError(err);
+  }
+}
+
+/** Replace a text file on the machine, only while it still hashes to `baseSha256`. */
+export async function writeFile(
+  machineId: string,
+  path: string,
+  dataBase64: string,
+  baseSha256: string,
+): Promise<{ path: string; size: number; sha256: string }> {
+  try {
+    return await request("PUT", `/api/machines/${machineId}/fs/write`, {
+      path,
+      data_base64: dataBase64,
+      base_sha256: baseSha256,
+    });
+  } catch (err) {
+    throw remoteFileError(err);
   }
 }
 

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
     routing::{delete, get, patch, post, put},
@@ -14,6 +14,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::auth::AuthUser;
 use crate::AppState;
+
+/// A saved file's base64 JSON: `FS_READ_MAX_BYTES` (20 MiB) is ~26.7 MiB
+/// encoded, under the 32 MiB node frame and paired-app message caps.
+const FS_WRITE_MAX_BODY: usize = 32 * 1024 * 1024;
 
 #[derive(Deserialize)]
 pub struct CreateTerminalRequest {
@@ -1128,14 +1132,21 @@ async fn read_file(
         .filter(|c| !c.is_empty());
 
     match state.manager.read_file(&machine_id, path, cwd).await {
-        Ok(file) => Json(serde_json::json!({
-            "name": file.name,
-            "path": file.path,
-            "mime": file.mime,
-            "size": file.size,
-            "data_base64": file.data_base64,
-        }))
-        .into_response(),
+        Ok(file) => {
+            let mut body = serde_json::json!({
+                "name": file.name,
+                "path": file.path,
+                "mime": file.mime,
+                "size": file.size,
+                "data_base64": file.data_base64,
+            });
+            // Only a machine that can write files sends the hash; the app
+            // offers editing when it is there.
+            if let Some(sha256) = file.sha256 {
+                body["sha256"] = sha256.into();
+            }
+            Json(body).into_response()
+        }
         Err(FsReadFailure::Machine {
             code,
             message,
@@ -1177,6 +1188,98 @@ async fn read_file(
             StatusCode::GATEWAY_TIMEOUT,
             "timeout",
             "The machine took too long to read the file".into(),
+        ),
+    }
+}
+
+#[derive(Deserialize)]
+struct WriteFileBody {
+    path: String,
+    data_base64: String,
+    base_sha256: String,
+}
+
+/// Replace a text file on a machine with what the app's editor saved. The
+/// machine refuses when the file changed since `base_sha256` (409
+/// `conflict`, with the hash now), and when it isn't UTF-8 text.
+async fn write_file(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(body): Json<WriteFileBody>,
+) -> Response {
+    use crate::machine_manager::FsWriteFailure;
+    use offdesk_protocol::FsWriteErrorCode as Code;
+
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, &machine_id)
+        .await
+    {
+        return fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine not found".into(),
+        );
+    }
+    if body.path.is_empty() || body.base_sha256.is_empty() {
+        return fs_read_error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "path and base_sha256 are required".into(),
+        );
+    }
+
+    match state
+        .manager
+        .write_file(&machine_id, &body.path, body.data_base64, &body.base_sha256)
+        .await
+    {
+        Ok(file) => Json(serde_json::json!({
+            "path": file.path,
+            "size": file.size,
+            "sha256": file.sha256,
+        }))
+        .into_response(),
+        Err(FsWriteFailure::Machine {
+            code,
+            message,
+            sha256,
+        }) => {
+            let (status, name) = match code {
+                Code::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+                Code::IsDirectory => (StatusCode::BAD_REQUEST, "is_directory"),
+                Code::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+                Code::PermissionDenied => (StatusCode::FORBIDDEN, "permission_denied"),
+                Code::NotText => (StatusCode::UNPROCESSABLE_ENTITY, "not_text"),
+                Code::Conflict => (StatusCode::CONFLICT, "conflict"),
+                Code::Io => (StatusCode::BAD_GATEWAY, "io"),
+            };
+            let mut body = serde_json::json!({ "error": name, "message": message });
+            if let Some(sha256) = sha256 {
+                body["sha256"] = sha256.into();
+            }
+            (status, Json(body)).into_response()
+        }
+        Err(FsWriteFailure::Outdated) => fs_read_error(
+            StatusCode::CONFLICT,
+            "machine_outdated",
+            "This machine needs to be updated before it can save files".into(),
+        ),
+        Err(FsWriteFailure::NoMachine) => fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine is not connected".into(),
+        ),
+        Err(FsWriteFailure::Disconnected) => fs_read_error(
+            StatusCode::BAD_GATEWAY,
+            "machine_disconnected",
+            "Machine disconnected".into(),
+        ),
+        Err(FsWriteFailure::Timeout) => fs_read_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "timeout",
+            "The machine took too long to save the file".into(),
         ),
     }
 }
@@ -1242,6 +1345,12 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/machines/{machine_id}/fs/list", get(list_directory))
         .route("/api/machines/{machine_id}/fs/read", get(read_file))
+        .route(
+            "/api/machines/{machine_id}/fs/write",
+            // The content is base64 JSON up to FS_READ_MAX_BYTES; axum's
+            // 2 MB default would refuse it.
+            put(write_file).layer(DefaultBodyLimit::max(FS_WRITE_MAX_BODY)),
+        )
         .route("/api/machines/{machine_id}/stats", get(get_machine_stats))
 }
 
@@ -1437,6 +1546,7 @@ mod tests {
                             mime: "text/plain".into(),
                             size: 2,
                             data_base64: "aGk=".into(),
+                            sha256: Some("ab".into()),
                         }
                     } else {
                         MachineToHub::FsReadError {
@@ -1456,12 +1566,100 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data_base64"], "aGk=");
         assert_eq!(body["mime"], "text/plain");
+        assert_eq!(body["sha256"], "ab");
 
         let (status, body) = get_json(&state, "/api/machines/machine-a/fs/read?path=big").await;
         assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(body["error"], "too_large");
         assert_eq!(body["size"], 99);
         assert_eq!(body["path"], "/w/big");
+        machine_side.await.unwrap();
+    }
+
+    async fn put_fs_write(state: &AppState, machine_id: &str, body: Value) -> (StatusCode, Value) {
+        let token = sign_jwt("user-a", &state.jwt_secret);
+        let response = super::router()
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::PUT)
+                    .uri(format!("/api/machines/{machine_id}/fs/write"))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn fs_write_saves_and_maps_a_conflict() {
+        use offdesk_protocol::FsWriteErrorCode;
+        let state = state_with_terminals(Vec::new()).await;
+        let save = serde_json::json!({
+            "path": "/w/.env",
+            "data_base64": "QT0yCg==",
+            "base_sha256": "ab",
+        });
+        // machine-a registered without capabilities: it predates fs-write-v1.
+        let (status, body) = put_fs_write(&state, "machine-a", save.clone()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "machine_outdated");
+
+        let (status, _) = put_fs_write(&state, "other", save.clone()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_WRITE_CAPABILITY.to_string()],
+            )
+            .await;
+        let machine_side = {
+            let manager = state.manager.clone();
+            tokio::spawn(async move {
+                // First request: saved. Second: the file changed meanwhile.
+                for round in 0..2 {
+                    let Some(HubToMachine::FsWriteFile { request_id, .. }) = commands.recv().await
+                    else {
+                        panic!("expected FsWriteFile");
+                    };
+                    let reply = if round == 0 {
+                        MachineToHub::FsWriteResult {
+                            request_id,
+                            path: "/w/.env".into(),
+                            size: 4,
+                            sha256: "cd".into(),
+                        }
+                    } else {
+                        MachineToHub::FsWriteError {
+                            request_id,
+                            code: FsWriteErrorCode::Conflict,
+                            message: "changed".into(),
+                            sha256: Some("ef".into()),
+                        }
+                    };
+                    manager.handle_machine_message("machine-a", reply).await;
+                }
+            })
+        };
+        let (status, body) = put_fs_write(&state, "machine-a", save.clone()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["sha256"], "cd");
+
+        let (status, body) = put_fs_write(&state, "machine-a", save).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "conflict");
+        assert_eq!(body["sha256"], "ef");
         machine_side.await.unwrap();
     }
 

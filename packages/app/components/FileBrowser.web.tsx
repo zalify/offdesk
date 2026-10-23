@@ -44,12 +44,18 @@ export function FileBrowser({
   homeDir,
   startPath,
   touch,
+  canEdit = false,
+  onDirtyChange,
 }: {
   machineId: string;
   homeDir?: string;
   startPath: string;
   /** Phone surface: 44px rows, no keyboard navigation. */
   touch: boolean;
+  /** Text files may be edited (not under the view-only lock). */
+  canEdit?: boolean;
+  /** Whether an open editor holds unsaved changes. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [path, setPath] = useState(startPath);
   const [showHidden, setShowHidden] = useState(false);
@@ -579,9 +585,11 @@ export function FileBrowser({
           name={previewEntry?.name ?? previewPath.split("/").pop() ?? previewPath}
           size={previewEntry?.size}
           touch={touch}
+          canEdit={canEdit}
           onBack={closePreview}
           onPrev={onPrev}
           onNext={onNext}
+          onDirtyChange={onDirtyChange}
         />
       )}
       </div>
