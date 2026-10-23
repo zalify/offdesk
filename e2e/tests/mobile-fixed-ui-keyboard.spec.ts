@@ -85,14 +85,16 @@ test('the terminal refits the frame after the keyboard opens or closes',async({p
   await expect(getImmersiveTerminal(page)).toBeVisible();
   await expect.poll(async()=> (await state(page,id))?.lines).toContain('FIXED-STATUS');
   for(const height of [500,844]){
-    await page.evaluate(id=>{
+    // Resolves once the first frame is sampled, so frames[0] is the size
+    // before the resize; resizing sooner can land before that frame.
+    await page.evaluate(id=>new Promise<void>(resolve=>{
       const term=(window as any).__offdeskTerminals.get(id);
       const viewport=document.querySelector('[data-terminal-display-mode="immersive"]')!;
       const frames:{height:number;rows:number}[]=[];
       (window as any).__refitFrames=frames;
-      const sample=()=>{frames.push({height:viewport.clientHeight,rows:term.rows});if(frames.length<600)requestAnimationFrame(sample);};
+      const sample=()=>{frames.push({height:viewport.clientHeight,rows:term.rows});if(frames.length===1)resolve();if(frames.length<600)requestAnimationFrame(sample);};
       requestAnimationFrame(sample);
-    },id);
+    }),id);
     const rows=(await state(page,id))!.rows;
     await page.setViewportSize({width:390,height});
     await expect.poll(async()=> (await state(page,id))?.rows ?? rows).not.toBe(rows);
