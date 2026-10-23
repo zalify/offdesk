@@ -100,8 +100,10 @@ rename mapping is at the bottom.
 - `POST /api/agent-runs` (`StartAgentRun`: machine, `claude` or `codex`, folder,
   optional prompt, label, external reference and permission mode) starts the agent
   in a new terminal and tab and returns the run (`starting`) and the terminal. There
-  is no command field; the modes are `ask`, `accept_edits` and `plan` (Claude only),
-  none of which skips the agent's prompts. It needs the machine's control lease and a
+  is no command field; the modes are `ask`, `accept_edits`, `plan` (Claude only) and
+  `auto`, which goes ahead without asking (Claude `--permission-mode auto`, whose
+  classifier still asks before risky actions; Codex `--yolo`, with no approvals or
+  sandbox). Only `auto` skips the agent's prompts, and only when the person picks it. It needs the machine's control lease and a
   node with `agent-start-v1` (else 503); a missing folder is refused (502)
   (`crates/hub/src/routes/agent_runs.rs` `start_run`,
   `crates/hub/src/machine_manager/agent_runs.rs` `start_agent_run`).

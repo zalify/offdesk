@@ -106,6 +106,7 @@ const CODEX_BOOLEAN_FLAGS: &[&str] = &[
     "--oss",
     "--search",
     "--dangerously-bypass-approvals-and-sandbox",
+    "--yolo",
 ];
 
 const CODEX_VALUE_FLAGS: &[&str] = &[

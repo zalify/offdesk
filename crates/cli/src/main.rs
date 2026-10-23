@@ -203,7 +203,8 @@ enum Commands {
         #[arg(long = "ref")]
         external_ref: Option<String>,
         /// The agent's permission mode: ask (before edits and commands), accept-edits
-        /// (edits go ahead, commands ask) or plan (Claude only). Default: its own settings
+        /// (edits go ahead, commands ask), plan (Claude only) or auto (it goes ahead
+        /// without asking: Claude auto, Codex --yolo). Default: its own settings
         #[arg(long, value_enum)]
         mode: Option<StartMode>,
         /// Machine-readable JSON on stdout
@@ -803,6 +804,7 @@ enum StartMode {
     Ask,
     AcceptEdits,
     Plan,
+    Auto,
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -1246,6 +1248,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     StartMode::Ask => offdesk_protocol::AgentPermissionMode::Ask,
                     StartMode::AcceptEdits => offdesk_protocol::AgentPermissionMode::AcceptEdits,
                     StartMode::Plan => offdesk_protocol::AgentPermissionMode::Plan,
+                    StartMode::Auto => offdesk_protocol::AgentPermissionMode::Auto,
                 }),
                 device_id: None,
             };

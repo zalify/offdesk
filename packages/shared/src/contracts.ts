@@ -246,8 +246,8 @@ export interface AgentRunInfo {
   ended_at_ms?: number
 }
 
-/** The agent's own permission mode for a started run; none of them skips its prompts. */
-export type AgentPermissionMode = 'ask' | 'accept_edits' | 'plan'
+/** The agent's own permission mode for a started run; auto goes ahead without asking (Claude auto, Codex --yolo). */
+export type AgentPermissionMode = 'ask' | 'accept_edits' | 'plan' | 'auto'
 
 /** `POST /api/agent-runs`: the Hub builds the command; it never takes a command line. */
 export interface StartAgentRun {

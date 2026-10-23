@@ -422,8 +422,8 @@ pub const MAX_START_PROMPT_BYTES: usize = 32 * 1024;
 /// Longest label or external reference of a started run.
 pub const MAX_START_LABEL_CHARS: usize = 200;
 
-/// The agent's own permission mode for a started run. Only modes in which it still
-/// asks or stays sandboxed: nothing here skips its permission prompts.
+/// The agent's own permission mode for a started run. All but `auto` still ask or stay
+/// sandboxed; `auto` is only ever chosen by the person starting the run.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentPermissionMode {
@@ -435,6 +435,9 @@ pub enum AgentPermissionMode {
     AcceptEdits,
     /// It plans and changes nothing until you agree (Claude only).
     Plan,
+    /// It goes ahead without asking: Claude `auto` (its classifier asks before anything
+    /// risky); Codex `--yolo` (no approvals and no sandbox at all).
+    Auto,
 }
 
 impl AgentPermissionMode {
@@ -446,6 +449,7 @@ impl AgentPermissionMode {
                 Ok(&["--permission-mode", "acceptEdits"])
             }
             (RunAgent::Claude, AgentPermissionMode::Plan) => Ok(&["--permission-mode", "plan"]),
+            (RunAgent::Claude, AgentPermissionMode::Auto) => Ok(&["--permission-mode", "auto"]),
             (RunAgent::Codex, AgentPermissionMode::Ask) => {
                 Ok(&["--sandbox", "read-only", "--ask-for-approval", "on-request"])
             }
@@ -453,6 +457,7 @@ impl AgentPermissionMode {
                 Ok(&["--sandbox", "workspace-write", "--ask-for-approval", "on-request"])
             }
             (RunAgent::Codex, AgentPermissionMode::Plan) => Err("Codex has no plan mode"),
+            (RunAgent::Codex, AgentPermissionMode::Auto) => Ok(&["--yolo"]),
             (RunAgent::Other, _) => Err("Only claude and codex can be started"),
         }
     }
@@ -2931,9 +2936,11 @@ mod tests {
         assert!(AgentStart::normalize_prompt(&"x".repeat(super::MAX_START_PROMPT_BYTES + 1)).is_err());
         assert!(AgentStart::normalize_label("two\nlines").is_err());
 
-        // Modes map to the agent's own safe flags; there's no mode that skips prompts
+        // Modes map to the agent's own flags; only auto goes ahead without asking
         assert_eq!(AgentPermissionMode::AcceptEdits.args(RunAgent::Claude).unwrap(), ["--permission-mode", "acceptEdits"]);
         assert!(AgentPermissionMode::Plan.args(RunAgent::Codex).is_err());
+        assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Claude).unwrap(), ["--permission-mode", "auto"]);
+        assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Codex).unwrap(), ["--yolo"]);
         assert!(serde_json::from_str::<AgentPermissionMode>(r#""bypass_permissions""#).is_err());
 
         let mut start = AgentStart {
