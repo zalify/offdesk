@@ -1963,6 +1963,7 @@ function TerminalCanvasInner() {
                     machineName={filesMachine.name}
                     homeDir={filesMachine.home_dir}
                     startPath={filesState.startPath}
+                    canEdit={!viewOnlyLocked}
                     onClose={handleCloseFiles}
                   />
                 ) : null
@@ -2253,6 +2254,7 @@ function TerminalCanvasInner() {
             machineName={filesMachine.name}
             homeDir={filesMachine.home_dir}
             startPath={filesState.startPath}
+            canEdit={!viewOnlyLocked}
             onClose={handleCloseFiles}
           />
         )}

@@ -655,6 +655,7 @@ mod tests {
             ("POST", "/api/machines/machine-a/terminals"),
             ("DELETE", "/api/machines/machine-a/terminals/t1"),
             ("GET", "/api/machines/machine-a/fs/list?path=/"),
+            ("PUT", "/api/machines/machine-a/fs/write"),
             ("GET", "/api/auth/api-tokens"),
             ("POST", "/api/auth/api-tokens"),
             ("POST", &format!("/api/agent-runs/{}/answer", waiting.id)),

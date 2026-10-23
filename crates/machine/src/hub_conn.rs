@@ -182,6 +182,7 @@ impl HubConnection {
                 offdesk_protocol::composer::COMPOSER_V1.to_string(),
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
+                offdesk_protocol::FS_WRITE_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_CHOOSE_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_CAPABILITY.to_string(),
@@ -858,6 +859,7 @@ async fn handle_hub_message(
                         mime: file.mime,
                         size: file.size,
                         data_base64: file.data_base64,
+                        sha256: Some(file.sha256),
                     },
                     Err(e) => MachineToHub::FsReadError {
                         request_id,
@@ -865,6 +867,31 @@ async fn handle_hub_message(
                         message: e.message,
                         size: e.size,
                         path: e.path,
+                    },
+                };
+                let _ = send_tx.send(OutboundHubMessage::Json(message)).await;
+            });
+        }
+        HubToMachine::FsWriteFile {
+            request_id,
+            path,
+            data_base64,
+            base_sha256,
+        } => {
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let message = match write_file_for_hub(&path, &data_base64, &base_sha256).await {
+                    Ok(file) => MachineToHub::FsWriteResult {
+                        request_id,
+                        path: file.path,
+                        size: file.size,
+                        sha256: file.sha256,
+                    },
+                    Err(e) => MachineToHub::FsWriteError {
+                        request_id,
+                        code: e.code,
+                        message: e.message,
+                        sha256: e.sha256,
                     },
                 };
                 let _ = send_tx.send(OutboundHubMessage::Json(message)).await;
@@ -1415,6 +1442,12 @@ struct FsReadOk {
     mime: String,
     size: u64,
     data_base64: String,
+    sha256: String,
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
 }
 
 struct FsReadFail {
@@ -1534,10 +1567,13 @@ async fn read_file_for_hub(path: &str, cwd: Option<&str>) -> Result<FsReadOk, Fs
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| resolved_str.clone());
-    // Encoding 20 MiB is CPU work; keep it off the async workers.
-    let data_base64 = tokio::task::spawn_blocking(move || {
+    // Encoding and hashing 20 MiB is CPU work; keep it off the async workers.
+    let (data_base64, sha256) = tokio::task::spawn_blocking(move || {
         use base64::Engine;
-        base64::engine::general_purpose::STANDARD.encode(&bytes)
+        (
+            base64::engine::general_purpose::STANDARD.encode(&bytes),
+            sha256_hex(&bytes),
+        )
     })
     .await
     .map_err(|e| FsReadFail::new(Code::Io, format!("Encoding failed: {e}")))?;
@@ -1547,6 +1583,162 @@ async fn read_file_for_hub(path: &str, cwd: Option<&str>) -> Result<FsReadOk, Fs
         path: resolved_str,
         size,
         data_base64,
+        sha256,
+    })
+}
+
+struct FsWriteOk {
+    path: String,
+    size: u64,
+    sha256: String,
+}
+
+struct FsWriteFail {
+    code: offdesk_protocol::FsWriteErrorCode,
+    message: String,
+    sha256: Option<String>,
+}
+
+impl FsWriteFail {
+    fn new(code: offdesk_protocol::FsWriteErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            sha256: None,
+        }
+    }
+
+    fn from_io(error: &std::io::Error, path: &str) -> Self {
+        use offdesk_protocol::FsWriteErrorCode as Code;
+        let code = match error.kind() {
+            std::io::ErrorKind::NotFound => Code::NotFound,
+            std::io::ErrorKind::PermissionDenied => Code::PermissionDenied,
+            _ => Code::Io,
+        };
+        Self::new(code, format!("{path}: {error}"))
+    }
+}
+
+/// UTF-8 without NUL bytes: what the app's text editor can round-trip.
+fn is_editable_text(bytes: &[u8]) -> bool {
+    !bytes.contains(&0) && std::str::from_utf8(bytes).is_ok()
+}
+
+/// Replace an existing text file from the app's editor. Only files that
+/// exist and are text, and only while they still hold what the editor read
+/// (`base_sha256`): a newer change on the machine is never overwritten. The
+/// new content goes to a temporary file beside it, with the file's
+/// permissions, and is renamed over it, so a reader never sees half a file.
+async fn write_file_for_hub(
+    path: &str,
+    data_base64: &str,
+    base_sha256: &str,
+) -> Result<FsWriteOk, FsWriteFail> {
+    use offdesk_protocol::{FsWriteErrorCode as Code, FS_READ_MAX_BYTES};
+    let expanded = expand_tilde(path);
+    if !std::path::Path::new(&expanded).is_absolute() {
+        return Err(FsWriteFail::new(
+            Code::Io,
+            format!("{path} is not an absolute path"),
+        ));
+    }
+    let data = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|e| FsWriteFail::new(Code::Io, format!("Bad content: {e}")))?
+    };
+    if data.len() as u64 > FS_READ_MAX_BYTES {
+        return Err(FsWriteFail::new(
+            Code::TooLarge,
+            format!(
+                "The new content is {} bytes; the limit is {FS_READ_MAX_BYTES}",
+                data.len()
+            ),
+        ));
+    }
+    if !is_editable_text(&data) {
+        return Err(FsWriteFail::new(
+            Code::NotText,
+            "The new content is not UTF-8 text",
+        ));
+    }
+    // A symlink is followed: the file it points to changes, the link stays.
+    let resolved = tokio::fs::canonicalize(&expanded)
+        .await
+        .map_err(|e| FsWriteFail::from_io(&e, &expanded))?;
+    let resolved_str = resolved.to_string_lossy().to_string();
+    let meta = tokio::fs::metadata(&resolved)
+        .await
+        .map_err(|e| FsWriteFail::from_io(&e, &resolved_str))?;
+    if meta.is_dir() {
+        return Err(FsWriteFail::new(
+            Code::IsDirectory,
+            format!("{resolved_str} is a directory"),
+        ));
+    }
+    if !meta.is_file() {
+        return Err(FsWriteFail::new(
+            Code::Io,
+            format!("{resolved_str} is not a regular file"),
+        ));
+    }
+    if meta.len() > FS_READ_MAX_BYTES {
+        return Err(FsWriteFail::new(
+            Code::TooLarge,
+            format!("{resolved_str} is larger than {FS_READ_MAX_BYTES} bytes"),
+        ));
+    }
+    let current = tokio::fs::read(&resolved)
+        .await
+        .map_err(|e| FsWriteFail::from_io(&e, &resolved_str))?;
+    if !is_editable_text(&current) {
+        return Err(FsWriteFail::new(
+            Code::NotText,
+            format!("{resolved_str} is not UTF-8 text"),
+        ));
+    }
+    let current_sha256 = sha256_hex(&current);
+    if !current_sha256.eq_ignore_ascii_case(base_sha256) {
+        let mut fail = FsWriteFail::new(
+            Code::Conflict,
+            format!("{resolved_str} changed on the machine since it was opened"),
+        );
+        fail.sha256 = Some(current_sha256);
+        return Err(fail);
+    }
+
+    let dir = resolved.parent().ok_or_else(|| {
+        FsWriteFail::new(Code::Io, format!("{resolved_str} has no parent directory"))
+    })?;
+    let name = resolved
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let temp = dir.join(format!(".{name}.offdesk-{}.tmp", uuid::Uuid::new_v4()));
+    let temp_str = temp.to_string_lossy().to_string();
+    let written = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .await?;
+        file.write_all(&data).await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::set_permissions(&temp, meta.permissions()).await?;
+        tokio::fs::rename(&temp, &resolved).await
+    }
+    .await;
+    if let Err(e) = written {
+        let _ = tokio::fs::remove_file(&temp).await;
+        return Err(FsWriteFail::from_io(&e, &temp_str));
+    }
+    Ok(FsWriteOk {
+        size: data.len() as u64,
+        sha256: sha256_hex(&data),
+        path: resolved_str,
     })
 }
 
@@ -1804,6 +1996,94 @@ mod tests {
             .unwrap();
         assert_eq!(too_large.code, Code::TooLarge);
         assert_eq!(too_large.size, Some(FS_READ_MAX_BYTES + 1));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[tokio::test]
+    async fn fs_write_replaces_the_file_it_read_and_keeps_its_mode() {
+        let dir = scratch_dir();
+        let env = dir.join(".env");
+        std::fs::write(&env, b"A=1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let read = read_file_for_hub(env.to_str().unwrap(), None).await.ok().unwrap();
+        assert_eq!(read.sha256, sha256_hex(b"A=1\n"));
+
+        let written = write_file_for_hub(&read.path, &b64(b"A=2\n"), &read.sha256)
+            .await
+            .ok()
+            .unwrap();
+        assert_eq!(std::fs::read(&env).unwrap(), b"A=2\n");
+        assert_eq!(written.size, 4);
+        assert_eq!(written.sha256, sha256_hex(b"A=2\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&env).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        // No temporary file is left beside it.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn fs_write_refuses_a_changed_file_binary_content_and_new_files() {
+        use offdesk_protocol::FsWriteErrorCode as Code;
+        let dir = scratch_dir();
+        let note = dir.join("note.txt");
+        std::fs::write(&note, b"one").unwrap();
+        let note_str = note.to_str().unwrap();
+        let base = sha256_hex(b"one");
+        std::fs::write(&note, b"two").unwrap();
+
+        let conflict = write_file_for_hub(note_str, &b64(b"mine"), &base)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(conflict.code, Code::Conflict);
+        assert_eq!(conflict.sha256, Some(sha256_hex(b"two")));
+        assert_eq!(std::fs::read(&note).unwrap(), b"two");
+
+        let binary = write_file_for_hub(note_str, &b64(b"a\0b"), &sha256_hex(b"two"))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(binary.code, Code::NotText);
+
+        let image = dir.join("x.bin");
+        std::fs::write(&image, [0u8, 1, 2]).unwrap();
+        let on_disk = write_file_for_hub(
+            image.to_str().unwrap(),
+            &b64(b"text"),
+            &sha256_hex(&[0, 1, 2]),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(on_disk.code, Code::NotText);
+
+        let missing = dir.join("new.txt");
+        let not_found = write_file_for_hub(missing.to_str().unwrap(), &b64(b"x"), &base)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(not_found.code, Code::NotFound);
+        assert!(!missing.exists());
+
+        let relative = write_file_for_hub("note.txt", &b64(b"x"), &base)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(relative.code, Code::Io);
         std::fs::remove_dir_all(dir).ok();
     }
 

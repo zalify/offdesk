@@ -1,6 +1,9 @@
+import { useCallback, useState } from "react";
 import { FileBrowser } from "./FileBrowser.web";
 import { colors } from "@/lib/colors";
 import { rem } from "@/lib/rem";
+import { UNSAVED_EDIT_NOTICE } from "@/lib/fileEdit";
+import { showNotice } from "@/lib/workspaceToast";
 
 // The phone's file browser: a full-screen surface over the terminal area (the
 // terminals underneath stay mounted) with a back button, sized for touch.
@@ -9,14 +12,22 @@ export function FileBrowserMobileSurface({
   machineName,
   homeDir,
   startPath,
-  onClose,
+  canEdit = false,
+  onClose: close,
 }: {
   machineId: string;
   machineName: string;
   homeDir?: string;
   startPath: string;
+  canEdit?: boolean;
   onClose: () => void;
 }) {
+  // An open editor with unsaved changes keeps the surface open.
+  const [dirty, setDirty] = useState(false);
+  const onClose = useCallback(() => {
+    if (dirty) showNotice(UNSAVED_EDIT_NOTICE);
+    else close();
+  }, [dirty, close]);
   return (
     <div
       data-testid="mobile-file-browser-surface"
@@ -54,7 +65,14 @@ export function FileBrowserMobileSurface({
           {machineName}
         </div>
       </div>
-      <FileBrowser machineId={machineId} homeDir={homeDir} startPath={startPath} touch />
+      <FileBrowser
+        machineId={machineId}
+        homeDir={homeDir}
+        startPath={startPath}
+        touch
+        canEdit={canEdit}
+        onDirtyChange={setDirty}
+      />
     </div>
   );
 }

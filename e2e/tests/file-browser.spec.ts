@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   createTerminalViaApi,
   expandTerminalById,
+  getAuthHeaders,
   mobileTakeControl,
   openApp,
   readTerminalBuffer,
@@ -171,6 +172,69 @@ test.describe("file browser on desktop", () => {
     // Back up through the breadcrumb recovers.
     await page.locator('[data-testid="file-browser-crumb"][data-path="/tmp"]').click();
     await expect(row(page, "e2e-fb")).toBeVisible();
+  });
+
+  test("edit a text file, and refuse to save over a newer change", async ({ page }) => {
+    await openApp(page);
+    await resetMachineState(page);
+    await requestMachineControl(page);
+    const id = await startTerminal(page, "printf 'A=1\\nB=2\\n' > /tmp/e2e-fb/app.env; ");
+    await expandTerminalById(page, id);
+    await expect.poll(() => readTerminalBuffer(page, id)).toContain("FB_READY");
+    const headers = await getAuthHeaders(page);
+    const readOnMachine = async () => {
+      const resp = await page.request.get(
+        "/api/machines/e2e-node/fs/read?path=/tmp/e2e-fb/app.env",
+        { headers },
+      );
+      const file = (await resp.json()) as { data_base64: string; sha256: string };
+      return { text: Buffer.from(file.data_base64, "base64").toString("utf8"), sha256: file.sha256 };
+    };
+
+    await page.getByTestId("tab-bar-files").click();
+    await row(page, "e2e-fb").click();
+    await row(page, "app.env").click();
+    await expect(page.getByTestId("file-browser-preview-text")).toContainText("A=1");
+
+    // Edit and save: the machine has the new text.
+    await page.getByTestId("file-browser-preview-edit").click();
+    const editor = page.getByTestId("file-browser-editor");
+    await expect(editor).toHaveValue("A=1\nB=2\n");
+    await editor.fill("A=2\nB=2\n");
+    // Backspace and Escape stay in the editor: Esc asks before dropping changes.
+    await editor.press("End");
+    await editor.press("Backspace");
+    await editor.press("Escape");
+    await expect(page.getByTestId("file-browser-overlay")).toBeVisible();
+    await expect(page.getByTestId("file-browser-editor-discard")).toBeVisible();
+    await page.getByTestId("file-browser-editor-keep").click();
+    await editor.fill("A=2\nB=2\n");
+    await page.getByTestId("file-browser-editor-save").click();
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId("file-browser-preview-text")).toContainText("A=2");
+    await expect.poll(async () => (await readOnMachine()).text).toBe("A=2\nB=2\n");
+
+    // The file changes on the machine while it is open in the editor.
+    await page.getByTestId("file-browser-preview-edit").click();
+    await editor.fill("A=3\nB=2\n");
+    const before = await readOnMachine();
+    const resp = await page.request.put("/api/machines/e2e-node/fs/write", {
+      headers,
+      data: {
+        path: "/tmp/e2e-fb/app.env",
+        data_base64: Buffer.from("A=machine\n").toString("base64"),
+        base_sha256: before.sha256,
+      },
+    });
+    expect(resp.ok()).toBeTruthy();
+    await page.getByTestId("file-browser-editor-save").click();
+    await expect(page.getByTestId("file-browser-editor-error")).toContainText("changed on the machine");
+    expect((await readOnMachine()).text).toBe("A=machine\n");
+    // Closing is refused while the edit is unsaved; reloading drops it.
+    await page.getByTestId("file-browser-overlay-close").click();
+    await expect(page.getByTestId("file-browser-overlay")).toBeVisible();
+    await page.getByTestId("file-browser-editor-reload").click();
+    await expect(page.getByTestId("file-browser-preview-text")).toContainText("A=machine");
   });
 
   test("a directory path in the terminal opens the browser there", async ({ page }) => {

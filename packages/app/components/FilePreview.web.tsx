@@ -9,10 +9,17 @@ import {
   Globe,
   Loader2,
 } from "lucide-react";
-import { readFile } from "@/lib/api";
+import { readFile, RemoteFileError, writeFile } from "@/lib/api";
 import type { RemoteFile } from "@/lib/api";
 import { colors, colorAlpha } from "@/lib/colors";
 import { describeFetchError, saveFetchedFile } from "@/lib/fetchRemoteFile";
+import {
+  bytesToBase64,
+  describeSaveError,
+  editableText,
+  encodeEditedText,
+  type EditableText,
+} from "@/lib/fileEdit";
 import {
   analyzeFile,
   base64ToBytes,
@@ -38,7 +45,23 @@ type View =
 type State =
   | { status: "loading" }
   | { status: "error"; message: string }
-  | { status: "ready"; file: RemoteFile; view: View };
+  // `editable`: the text, when this machine can save it and the plain editor
+  // can write it back byte for byte where nothing changed.
+  | { status: "ready"; file: RemoteFile; view: View; editable: EditableText | null };
+
+// The open editor: its text, and where saving it got to. `conflict` means the
+// file changed on the machine since it was opened.
+interface Editor {
+  draft: string;
+  phase: "editing" | "saving" | "discard?";
+  error?: string;
+  conflict?: boolean;
+}
+
+function editableFor(file: RemoteFile, view: View): EditableText | null {
+  if (!file.sha256 || (view.kind !== "text" && view.kind !== "markdown")) return null;
+  return editableText(base64ToBytes(file.data_base64));
+}
 
 const SPIN = { animation: "offdeskSpin 800ms linear infinite" } as const;
 
@@ -88,7 +111,8 @@ async function buildView(file: RemoteFile): Promise<View> {
 
 /**
  * Previews one remote file inside the file browser. The parent keeps the
- * listing state; this only owns loading and presentation of the file.
+ * listing state; this only owns loading and presentation of the file, and
+ * editing it when it is plain text.
  */
 export function FilePreview({
   machineId,
@@ -96,37 +120,45 @@ export function FilePreview({
   name,
   size,
   touch,
+  canEdit = false,
   onBack,
   onPrev,
   onNext,
+  onDirtyChange,
 }: {
   machineId: string;
   path: string;
   name: string;
   size?: number;
   touch: boolean;
+  /** This device may change files (not under the view-only lock). */
+  canEdit?: boolean;
   onBack: () => void;
   onPrev?: () => void;
   onNext?: () => void;
+  /** Whether the editor holds changes that are not saved. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [state, setState] = useState<State>({ status: "loading" });
   const [reloadTick, setReloadTick] = useState(0);
   const [showSource, setShowSource] = useState(false);
   const [saving, setSaving] = useState(false);
   const [opening, setOpening] = useState(false);
+  const [editor, setEditor] = useState<Editor | null>(null);
   const pageable = isHtmlFile(name) && canPreviewHtml();
 
   useEffect(() => {
     let live = true;
     setState({ status: "loading" });
     setShowSource(false);
+    setEditor(null);
     (async () => {
       try {
         const file = await readFile(machineId, path);
         if (!live) return;
         const view = await buildView(file);
         if (!live) return;
-        setState({ status: "ready", file, view });
+        setState({ status: "ready", file, view, editable: editableFor(file, view) });
       } catch (err) {
         if (!live) return;
         setState({ status: "error", message: describeFetchError(err, path) });
@@ -150,6 +182,75 @@ export function FilePreview({
       .catch((err) => showNotice(err instanceof Error ? err.message : String(err), { tone: "error" }))
       .finally(() => setOpening(false));
   }, [machineId, path, name, opening]);
+
+  const editable = state.status === "ready" && canEdit ? state.editable : null;
+  const dirty = !!editor && !!editable && editor.draft !== editable.text;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  // Leaving the preview drops the editor; the parent must not stay blocked.
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  const startEditing = useCallback(() => {
+    if (editable) setEditor({ draft: editable.text, phase: "editing" });
+  }, [editable]);
+
+  const cancelEditing = useCallback(() => {
+    // Asking already: only the "discard changes" button throws them away.
+    if (!editor || editor.phase !== "editing") return;
+    if (dirty) {
+      setEditor({ ...editor, phase: "discard?" });
+      return;
+    }
+    setEditor(null);
+  }, [editor, dirty]);
+
+  const save = useCallback(async () => {
+    if (state.status !== "ready" || !editable || !editor || editor.phase === "saving") return;
+    const { file } = state;
+    if (!dirty) {
+      setEditor(null);
+      return;
+    }
+    setEditor({ ...editor, phase: "saving", error: undefined, conflict: false });
+    try {
+      const dataBase64 = bytesToBase64(encodeEditedText(editor.draft, editable));
+      const saved = await writeFile(machineId, file.path, dataBase64, file.sha256!);
+      const next: RemoteFile = { ...file, size: saved.size, sha256: saved.sha256, data_base64: dataBase64 };
+      const view = await buildView(next);
+      setState({ status: "ready", file: next, view, editable: editableFor(next, view) });
+      setEditor(null);
+      showNotice(`Saved ${file.name}`);
+    } catch (err) {
+      const conflict = err instanceof RemoteFileError && err.code === "conflict";
+      setEditor((current) =>
+        current && { ...current, phase: "editing", error: describeSaveError(err, file.name), conflict },
+      );
+    }
+  }, [state, editable, editor, dirty, machineId]);
+
+  // After a conflict: read the file again, dropping this edit.
+  const reloadFromMachine = useCallback(() => {
+    setEditor(null);
+    setReloadTick((n) => n + 1);
+  }, []);
+
+  const onEditorKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Typing must not reach the browser's own keys (Backspace goes up a
+      // directory, arrows page through files, Esc closes the overlay).
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEditing();
+      } else if (event.key === "s" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        void save();
+      }
+    },
+    [cancelEditing, save],
+  );
 
   const kind = state.status === "ready" ? state.view.kind : state.status;
   const shownSize = state.status === "ready" ? state.file.size : size;
@@ -227,16 +328,18 @@ export function FilePreview({
           flexShrink: 0,
         }}
       >
-        <button
-          type="button"
-          data-testid="file-browser-preview-back"
-          aria-label="Back to the list"
-          title="Back to the list (Esc)"
-          onClick={onBack}
-          style={{ ...textButton(false, false), border: "none", color: colors.fg2, padding: "0 6px" }}
-        >
-          ←{!touch && " back to the list"}
-        </button>
+        {!editor && (
+          <button
+            type="button"
+            data-testid="file-browser-preview-back"
+            aria-label="Back to the list"
+            title="Back to the list (Esc)"
+            onClick={onBack}
+            style={{ ...textButton(false, false), border: "none", color: colors.fg2, padding: "0 6px" }}
+          >
+            ←{!touch && " back to the list"}
+          </button>
+        )}
         <div style={{ flex: 1, minWidth: 0, padding: "0 4px" }}>
           <div
             data-testid="file-browser-preview-name"
@@ -251,11 +354,74 @@ export function FilePreview({
           >
             {name}
           </div>
-          {shownSize !== undefined && (
-            <div style={{ fontSize: rem(11), color: colors.fg3 }}>{formatBytes(shownSize)}</div>
+          {editor ? (
+            <div style={{ fontSize: rem(11), color: dirty ? colors.warn : colors.fg3 }}>
+              {dirty ? "editing · not saved" : "editing"}
+            </div>
+          ) : (
+            shownSize !== undefined && (
+              <div style={{ fontSize: rem(11), color: colors.fg3 }}>{formatBytes(shownSize)}</div>
+            )
           )}
         </div>
-        {state.status === "ready" && state.view.kind === "markdown" && (
+        {editor && editor.phase === "discard?" && (
+          <>
+            <button
+              type="button"
+              data-testid="file-browser-editor-keep"
+              onClick={() => setEditor({ ...editor, phase: "editing" })}
+              style={textButton(false, false)}
+            >
+              keep editing
+            </button>
+            <button
+              type="button"
+              data-testid="file-browser-editor-discard"
+              onClick={() => setEditor(null)}
+              style={{ ...textButton(false, false), color: colors.danger }}
+            >
+              discard changes
+            </button>
+          </>
+        )}
+        {editor && editor.phase !== "discard?" && (
+          <>
+            <button
+              type="button"
+              data-testid="file-browser-editor-cancel"
+              title="Cancel (Esc)"
+              disabled={editor.phase === "saving"}
+              onClick={cancelEditing}
+              style={textButton(false, editor.phase === "saving")}
+            >
+              cancel
+            </button>
+            <button
+              type="button"
+              data-testid="file-browser-editor-save"
+              title="Save (⌘S)"
+              disabled={editor.phase === "saving"}
+              onClick={() => void save()}
+              style={textButton(true, editor.phase === "saving")}
+            >
+              {editor.phase === "saving" ? <Loader2 size={14} aria-hidden style={SPIN} /> : null}
+              save
+            </button>
+          </>
+        )}
+        {!editor && editable && (
+          <button
+            type="button"
+            data-testid="file-browser-preview-edit"
+            aria-label="Edit"
+            title="Edit"
+            onClick={startEditing}
+            style={textButton(false, false)}
+          >
+            edit
+          </button>
+        )}
+        {!editor && state.status === "ready" && state.view.kind === "markdown" && (
           <button
             type="button"
             data-testid="file-browser-preview-source"
@@ -271,43 +437,47 @@ export function FilePreview({
             {showSource ? "show rendered" : "show source"}
           </button>
         )}
-        <button
-          type="button"
-          data-testid="file-browser-preview-prev"
-          aria-label="Previous file"
-          title="Previous file (←)"
-          disabled={!onPrev}
-          onClick={onPrev}
-          style={iconButton(!onPrev)}
-        >
-          ←
-        </button>
-        <button
-          type="button"
-          data-testid="file-browser-preview-next"
-          aria-label="Next file"
-          title="Next file (→)"
-          disabled={!onNext}
-          onClick={onNext}
-          style={iconButton(!onNext)}
-        >
-          →
-        </button>
-        {pageable && (
-          <button
-            type="button"
-            data-testid="file-browser-preview-page"
-            aria-label="Preview the page"
-            title="Preview the page"
-            disabled={opening}
-            onClick={openPage}
-            style={textButton(false, opening)}
-          >
-            {opening ? <Loader2 size={14} aria-hidden style={SPIN} /> : null}
-            preview
-          </button>
+        {!editor && (
+          <>
+            <button
+              type="button"
+              data-testid="file-browser-preview-prev"
+              aria-label="Previous file"
+              title="Previous file (←)"
+              disabled={!onPrev}
+              onClick={onPrev}
+              style={iconButton(!onPrev)}
+            >
+              ←
+            </button>
+            <button
+              type="button"
+              data-testid="file-browser-preview-next"
+              aria-label="Next file"
+              title="Next file (→)"
+              disabled={!onNext}
+              onClick={onNext}
+              style={iconButton(!onNext)}
+            >
+              →
+            </button>
+            {pageable && (
+              <button
+                type="button"
+                data-testid="file-browser-preview-page"
+                aria-label="Preview the page"
+                title="Preview the page"
+                disabled={opening}
+                onClick={openPage}
+                style={textButton(false, opening)}
+              >
+                {opening ? <Loader2 size={14} aria-hidden style={SPIN} /> : null}
+                preview
+              </button>
+            )}
+            {downloadButton(false)}
+          </>
         )}
-        {downloadButton(false)}
       </div>
 
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -331,7 +501,75 @@ export function FilePreview({
             </button>
           </Message>
         )}
-        {state.status === "ready" && (
+        {state.status === "ready" && editor && (
+          <>
+            {editor.error && (
+              <div
+                role="alert"
+                data-testid="file-browser-editor-error"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  padding: "6px 14px",
+                  fontSize: rem(12),
+                  color: colors.danger,
+                  background: colors.bg1,
+                  borderBottom: `1px solid ${colors.lineSoft}`,
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>{editor.error}</span>
+                {editor.conflict && (
+                  <button
+                    type="button"
+                    data-testid="file-browser-editor-reload"
+                    title="Read the file again; your changes here are dropped"
+                    onClick={reloadFromMachine}
+                    style={textButton(false, false)}
+                  >
+                    reload, dropping my changes
+                  </button>
+                )}
+              </div>
+            )}
+            <textarea
+              data-testid="file-browser-editor"
+              aria-label={`Edit ${state.file.name}`}
+              value={editor.draft}
+              autoFocus
+              readOnly={editor.phase === "saving"}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="off"
+              wrap="off"
+              onChange={(event) => setEditor({ ...editor, draft: event.target.value, phase: "editing" })}
+              onKeyDown={onEditorKeyDown}
+              style={{
+                flex: 1,
+                minHeight: 0,
+                width: "100%",
+                margin: 0,
+                padding: touch ? "12px 14px" : "10px 14px",
+                border: "none",
+                outline: "none",
+                resize: "none",
+                boxSizing: "border-box",
+                background: colors.bg0,
+                color: colors.fg0,
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                // 16px on touch: iOS zooms into any smaller field it focuses.
+                fontSize: touch ? 16 : rem(12),
+                lineHeight: 1.55,
+                tabSize: 4,
+                overscrollBehavior: "contain",
+              }}
+            />
+          </>
+        )}
+        {state.status === "ready" && !editor && (
           <ReadyView
             view={state.view}
             file={state.file}

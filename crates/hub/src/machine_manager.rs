@@ -51,6 +51,7 @@ pub enum PendingResult {
         process_name: Option<String>,
     },
     FsRead(Result<FsReadData, FsReadFailure>),
+    FsWrite(Result<FsWriteData, FsWriteFailure>),
     /// Node's reply to an agent browser command: its `data`, or its error text.
     AgentBrowser(Result<serde_json::Value, String>),
 }
@@ -63,6 +64,32 @@ pub struct FsReadData {
     pub mime: String,
     pub size: u64,
     pub data_base64: String,
+    /// Content hash, from machines that can also write files.
+    pub sha256: Option<String>,
+}
+
+/// A file a machine wrote.
+#[derive(Debug, Clone)]
+pub struct FsWriteData {
+    pub path: String,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// Why writing a remote file failed.
+#[derive(Debug)]
+pub enum FsWriteFailure {
+    /// The machine answered with a typed error.
+    Machine {
+        code: offdesk_protocol::FsWriteErrorCode,
+        message: String,
+        sha256: Option<String>,
+    },
+    /// The machine predates `fs-write-v1`.
+    Outdated,
+    NoMachine,
+    Disconnected,
+    Timeout,
 }
 
 /// Why reading a remote file failed.
@@ -1932,6 +1959,64 @@ impl MachineManager {
         }
     }
 
+    /// Replace a text file on a machine, only while it still hashes to
+    /// `base_sha256` (the machine checks).
+    pub async fn write_file(
+        &self,
+        machine_id: &str,
+        path: &str,
+        data_base64: String,
+        base_sha256: &str,
+    ) -> Result<FsWriteData, FsWriteFailure> {
+        if !self
+            .machine_supports(machine_id, offdesk_protocol::FS_WRITE_CAPABILITY)
+            .await
+        {
+            let known = self.machines.lock().await.contains_key(machine_id);
+            return Err(if known {
+                FsWriteFailure::Outdated
+            } else {
+                FsWriteFailure::NoMachine
+            });
+        }
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err(FsWriteFailure::NoMachine);
+            };
+            conn.cmd_tx.clone()
+        };
+        if cmd_tx
+            .send(HubToMachine::FsWriteFile {
+                request_id: request_id.clone(),
+                path: path.to_string(),
+                data_base64,
+                base_sha256: base_sha256.to_string(),
+            })
+            .await
+            .is_err()
+        {
+            self.remove_pending(&request_id).await;
+            return Err(FsWriteFailure::Disconnected);
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+            Ok(Ok(Ok(PendingResult::FsWrite(result)))) => result,
+            Ok(Ok(_)) => Err(FsWriteFailure::Disconnected),
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                Err(FsWriteFailure::Disconnected)
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(FsWriteFailure::Timeout)
+            }
+        }
+    }
+
     /// Request directory listing from a machine
     pub async fn list_directory(
         &self,
@@ -2249,6 +2334,7 @@ impl MachineManager {
                 mime,
                 size,
                 data_base64,
+                sha256,
             } => {
                 if let Some(tx) = self.pending.lock().await.remove(&request_id) {
                     let _ = tx.send(Ok(PendingResult::FsRead(Ok(FsReadData {
@@ -2257,6 +2343,35 @@ impl MachineManager {
                         mime,
                         size,
                         data_base64,
+                        sha256,
+                    }))));
+                }
+            }
+            MachineToHub::FsWriteResult {
+                request_id,
+                path,
+                size,
+                sha256,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::FsWrite(Ok(FsWriteData {
+                        path,
+                        size,
+                        sha256,
+                    }))));
+                }
+            }
+            MachineToHub::FsWriteError {
+                request_id,
+                code,
+                message,
+                sha256,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::FsWrite(Err(FsWriteFailure::Machine {
+                        code,
+                        message,
+                        sha256,
                     }))));
                 }
             }
@@ -4467,11 +4582,70 @@ mod tests {
                     mime: "text/plain".into(),
                     size: 2,
                     data_base64: "aGk=".into(),
+                    sha256: None,
                 },
             )
             .await;
         let data = reader.await.unwrap().ok().unwrap();
         assert_eq!(data.path, "/w/a.txt");
+        assert_eq!(manager.pending_count_for_tests().await, 0);
+    }
+
+    #[tokio::test]
+    async fn write_file_needs_the_capability_and_round_trips_a_conflict() {
+        let manager = std::sync::Arc::new(MachineManager::new(test_db()));
+        manager
+            .register_machine_with_capabilities(
+                machine("machine-old"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_READ_CAPABILITY.to_string()],
+            )
+            .await;
+        let outdated = manager
+            .write_file("machine-old", "/w/.env", "aGk=".into(), "ab")
+            .await;
+        assert!(matches!(outdated, Err(FsWriteFailure::Outdated)));
+
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_WRITE_CAPABILITY.to_string()],
+            )
+            .await;
+        let writer = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .write_file("machine-a", "/w/.env", "aGk=".into(), "ab")
+                    .await
+            })
+        };
+        let Some(HubToMachine::FsWriteFile {
+            request_id,
+            base_sha256,
+            ..
+        }) = commands.recv().await
+        else {
+            panic!("expected FsWriteFile");
+        };
+        assert_eq!(base_sha256, "ab");
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::FsWriteError {
+                    request_id,
+                    code: offdesk_protocol::FsWriteErrorCode::Conflict,
+                    message: "changed".into(),
+                    sha256: Some("cd".into()),
+                },
+            )
+            .await;
+        let failure = writer.await.unwrap().err().unwrap();
+        assert!(matches!(
+            failure,
+            FsWriteFailure::Machine { sha256: Some(ref s), .. } if s == "cd"
+        ));
         assert_eq!(manager.pending_count_for_tests().await, 0);
     }
 
