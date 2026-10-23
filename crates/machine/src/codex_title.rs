@@ -266,6 +266,7 @@ mod tests {
             title: Some("tradebase".into()),
             cwd: Some("/same/project".into()),
             current_command: Some("codex".into()),
+            activity_ms: None,
         }
     }
     fn process(pid: u32, parent: u32, name: &str) -> Process {

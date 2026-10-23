@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 import {
@@ -23,8 +23,18 @@ import {
   type WorkspaceGroup,
 } from "@/lib/terminalWorkspaceLayout";
 import { rem } from "@/lib/rem";
+import {
+  activityAge,
+  readSessionOrder,
+  sessionRows,
+  writeSessionOrder,
+  type SessionOrder,
+} from "@/lib/sessionList";
 
-export type WorkspaceManagerPlacement = "drawer" | "sheet";
+// "sidebar" is the desktop list pinned beside the panes, "drawer" the same
+// list over them when the window is too narrow, "sheet" the phone's tab
+// tree. The desktop ones list sessions, by recent output or in tab order.
+export type WorkspaceManagerPlacement = "drawer" | "sheet" | "sidebar";
 export type WorkspaceManagerDropPlacement = "before" | "after";
 
 interface WorkspaceManagerProps {
@@ -94,16 +104,38 @@ function WorkspaceManagerComponent({
   );
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const isSidebar = placement === "sidebar";
+  const listsSessions = placement !== "sheet";
+
+  const [order, setOrder] = useState<SessionOrder>(readSessionOrder);
+  const changeOrder = (next: SessionOrder) => {
+    setOrder(next);
+    writeSessionOrder(next);
+  };
+  const showRecent = listsSessions && order === "recent";
+  // Ages read "5m"; refresh them while they're shown.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!open || !showRecent) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [open, showRecent]);
+  const recentRows = useMemo(
+    () => (showRecent ? sessionRows(groups, terminalsById, "recent") : []),
+    [showRecent, groups, terminalsById],
+  );
 
   useEffect(() => {
-    if (!open) return;
+    // The pinned sidebar stays out of the way: no focus grab, no Escape.
+    if (!open || isSidebar) return;
     closeButtonRef.current?.focus();
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, onClose]);
+  }, [open, isSidebar, onClose]);
 
   const persistentMoveTargets = useMemo(
     () =>
@@ -120,27 +152,103 @@ function WorkspaceManagerComponent({
 
   const isSheet = placement === "sheet";
 
-  return (
-    <div
-      data-testid="workspace-manager"
-      data-placement={placement}
-      onClick={onClose}
-      style={{
-        position: "absolute",
-        inset: 0,
-        zIndex: 45,
-        display: "flex",
-        alignItems: isSheet ? "flex-end" : "stretch",
-        background: colorAlpha.backgroundShadow,
-        animation: "offdeskFadeIn 120ms ease-out",
-      }}
-    >
+  const renderTerminalRow = (
+    terminal: TerminalInfo,
+    group: WorkspaceGroup,
+    lead: ReactNode,
+    meta: ReactNode,
+  ) => {
+    const isTerminalActive = terminal.id === activeTerminalId;
+    const moveTargets = persistentMoveTargets.filter((target) => target.id !== group.id);
+    return (
+      <div
+        key={terminal.id}
+        data-testid={`workspace-manager-terminal-${terminal.id}`}
+        style={{
+          ...terminalRowStyle,
+          background: isTerminalActive ? colors.bg3 : "transparent",
+        }}
+      >
+        <button
+          type="button"
+          aria-current={isTerminalActive ? "true" : undefined}
+          onClick={() => {
+            onSelectTerminal(terminal.id);
+            if (isSheet) onClose();
+          }}
+          style={terminalSelectStyle}
+        >
+          {lead}
+          <span style={terminalTextStyle}>
+            <span style={terminalTitleStyle}>
+              {terminal.attention && (
+                <span aria-label="waiting" style={waitingMarkStyle}>
+                  !{" "}
+                </span>
+              )}
+              {displayTerminalTitle(terminal)}
+            </span>
+            {meta}
+            <span style={terminalCwdStyle}>{terminal.cwd}</span>
+            {terminalOpenerText(terminal) && (
+              <span
+                data-testid={`workspace-manager-opener-${terminal.id}`}
+                title={terminalOpenerDescription(terminal) ?? undefined}
+                style={terminalCwdStyle}
+              >
+                ⌁ opened by {terminalOpenerText(terminal)}
+              </span>
+            )}
+          </span>
+        </button>
+
+        {moveTargets.length > 0 ? (
+          <button
+            type="button"
+            data-testid={`workspace-manager-move-${terminal.id}`}
+            aria-label={`Move ${displayTerminalTitle(terminal)} to another tab`}
+            aria-haspopup="menu"
+            disabled={!canManage}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setMoveMenu({
+                terminal,
+                targets: moveTargets,
+                x: rect.left,
+                y: rect.bottom + 4,
+              });
+            }}
+            style={{
+              ...moveButtonStyle,
+              cursor: canManage ? "pointer" : "not-allowed",
+              opacity: canManage ? 1 : 0.35,
+            }}
+          >
+            move
+          </button>
+        ) : null}
+
+        <ManagerIconButton
+          label={`Close ${displayTerminalTitle(terminal)}`}
+          testid={`workspace-manager-close-terminal-${terminal.id}`}
+          disabled={!canManage}
+          onClick={() => onCloseTerminal(terminal)}
+        >
+          [x]
+        </ManagerIconButton>
+      </div>
+    );
+  };
+
+  const panel = (
       <section
-        role="dialog"
-        aria-modal="true"
+        data-testid={isSidebar ? "workspace-manager" : undefined}
+        data-placement={isSidebar ? placement : undefined}
+        role={isSidebar ? undefined : "dialog"}
+        aria-modal={isSidebar ? undefined : "true"}
         aria-labelledby="workspace-manager-title"
         onClick={(event) => event.stopPropagation()}
-        style={{
+        style={isSidebar ? sidebarStyle : {
           width: isSheet ? "100%" : "min(380px, calc(100vw - 44px))",
           maxHeight: isSheet ? "86%" : "100%",
           display: "flex",
@@ -172,7 +280,7 @@ function WorkspaceManagerComponent({
           <div style={headerIdentityStyle}>
             <div style={{ minWidth: 0 }}>
               <div id="workspace-manager-title" style={titleStyle}>
-                tabs
+                {listsSessions ? "sessions" : "tabs"}
               </div>
               <div style={subtitleStyle}>{machineName || "No host"}</div>
             </div>
@@ -181,12 +289,12 @@ function WorkspaceManagerComponent({
             ref={closeButtonRef}
             type="button"
             data-testid="workspace-manager-close"
-            aria-label="Close the tab list"
-            title="Close"
+            aria-label={isSidebar ? "Hide the sessions list" : "Close the tab list"}
+            title={isSidebar ? "Hide" : "Close"}
             onClick={onClose}
             className="odk-text-btn"
           >
-            [esc]
+            {isSidebar ? "hide" : "[esc]"}
           </button>
         </header>
 
@@ -200,9 +308,28 @@ function WorkspaceManagerComponent({
           >
             new tab
           </button>
-          <span style={summaryStyle}>
-            {groups.length} {groups.length === 1 ? "tab" : "tabs"}
-          </span>
+          {listsSessions ? (
+            <div role="group" aria-label="Order" style={orderToggleStyle}>
+              {(["recent", "tabs"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  data-testid={`workspace-manager-order-${value}`}
+                  aria-pressed={order === value}
+                  title={value === "recent" ? "Latest output first" : "In tab order"}
+                  onClick={() => changeOrder(value)}
+                  className="odk-text-btn"
+                  style={{ color: order === value ? colors.accent : colors.fg3 }}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span style={summaryStyle}>
+              {groups.length} {groups.length === 1 ? "tab" : "tabs"}
+            </span>
+          )}
         </div>
 
         {!canManage && (
@@ -212,7 +339,22 @@ function WorkspaceManagerComponent({
         )}
 
         <div style={treeStyle}>
-          {groups.length === 0 ? (
+          {showRecent && recentRows.length > 0 ? (
+            <div data-testid="workspace-manager-recent" style={recentListStyle}>
+              {recentRows.map(({ terminal, group }) => {
+                const age = activityAge(terminal.last_activity_ms, now);
+                return renderTerminalRow(
+                  terminal,
+                  group,
+                  null,
+                  <span style={terminalMetaStyle}>
+                    <span style={tabLabelStyle}>{group.label}</span>
+                    {age && <span title="Last output"> · {age}</span>}
+                  </span>,
+                );
+              })}
+            </div>
+          ) : groups.length === 0 ? (
             <div data-testid="workspace-manager-empty" style={emptyStyle}>
               <span>No tabs yet</span>
               <span style={{ color: colors.fg3 }}>
@@ -305,88 +447,16 @@ function WorkspaceManagerComponent({
                     {groupTerminals.length === 0 ? (
                       <div style={emptyGroupStyle}>Empty tab</div>
                     ) : (
-                      groupTerminals.map((terminal, terminalIndex) => {
-                        const isTerminalActive = terminal.id === activeTerminalId;
-                        const moveTargets = persistentMoveTargets.filter(
-                          (target) => target.id !== group.id,
-                        );
-                        return (
-                          <div
-                            key={terminal.id}
-                            data-testid={`workspace-manager-terminal-${terminal.id}`}
-                            style={{
-                              ...terminalRowStyle,
-                              background: isTerminalActive
-                                ? colors.bg3
-                                : "transparent",
-                            }}
-                          >
-                            <button
-                              type="button"
-                              aria-current={isTerminalActive ? "true" : undefined}
-                              onClick={() => {
-                                onSelectTerminal(terminal.id);
-                                if (isSheet) onClose();
-                              }}
-                              style={terminalSelectStyle}
-                            >
-                              <span style={treeBranchStyle} aria-hidden>
-                                {terminalIndex === groupTerminals.length - 1 ? "└" : "├"}
-                              </span>
-                              <span style={terminalTextStyle}>
-                                <span style={terminalTitleStyle}>
-                                  {displayTerminalTitle(terminal)}
-                                </span>
-                                <span style={terminalCwdStyle}>{terminal.cwd}</span>
-                                {terminalOpenerText(terminal) && (
-                                  <span
-                                    data-testid={`workspace-manager-opener-${terminal.id}`}
-                                    title={terminalOpenerDescription(terminal) ?? undefined}
-                                    style={terminalCwdStyle}
-                                  >
-                                    ⌁ opened by {terminalOpenerText(terminal)}
-                                  </span>
-                                )}
-                              </span>
-                            </button>
-
-                            {moveTargets.length > 0 ? (
-                              <button
-                                type="button"
-                                data-testid={`workspace-manager-move-${terminal.id}`}
-                                aria-label={`Move ${displayTerminalTitle(terminal)} to another tab`}
-                                aria-haspopup="menu"
-                                disabled={!canManage}
-                                onClick={(event) => {
-                                  const rect = event.currentTarget.getBoundingClientRect();
-                                  setMoveMenu({
-                                    terminal,
-                                    targets: moveTargets,
-                                    x: rect.left,
-                                    y: rect.bottom + 4,
-                                  });
-                                }}
-                                style={{
-                                  ...moveButtonStyle,
-                                  cursor: canManage ? "pointer" : "not-allowed",
-                                  opacity: canManage ? 1 : 0.35,
-                                }}
-                              >
-                                move
-                              </button>
-                            ) : null}
-
-                            <ManagerIconButton
-                              label={`Close ${displayTerminalTitle(terminal)}`}
-                              testid={`workspace-manager-close-terminal-${terminal.id}`}
-                              disabled={!canManage}
-                              onClick={() => onCloseTerminal(terminal)}
-                            >
-                              [x]
-                            </ManagerIconButton>
-                          </div>
-                        );
-                      })
+                      groupTerminals.map((terminal, terminalIndex) =>
+                        renderTerminalRow(
+                          terminal,
+                          group,
+                          <span style={treeBranchStyle} aria-hidden>
+                            {terminalIndex === groupTerminals.length - 1 ? "└" : "├"}
+                          </span>,
+                          null,
+                        ),
+                      )
                     )}
 
                     <button
@@ -419,11 +489,33 @@ function WorkspaceManagerComponent({
           <ContextMenu x={moveMenu.x} y={moveMenu.y} items={moveMenuItems} onClose={() => setMoveMenu(null)} />
         ) : null}
 
-        <footer style={footerStyle}>
-          A tab holds up to four terminals. Moving or deleting a tab does not
-          close its terminals.
-        </footer>
+        {!isSidebar && (
+          <footer style={footerStyle}>
+            A tab holds up to four terminals. Moving or deleting a tab does not
+            close its terminals.
+          </footer>
+        )}
       </section>
+  );
+
+  if (isSidebar) return panel;
+
+  return (
+    <div
+      data-testid="workspace-manager"
+      data-placement={placement}
+      onClick={onClose}
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 45,
+        display: "flex",
+        alignItems: isSheet ? "flex-end" : "stretch",
+        background: colorAlpha.backgroundShadow,
+        animation: "offdeskFadeIn 120ms ease-out",
+      }}
+    >
+      {panel}
     </div>
   );
 }
@@ -468,6 +560,50 @@ function ManagerIconButton({
 }
 
 export const WorkspaceManager = memo(WorkspaceManagerComponent);
+
+// Pinned beside the panes, below the tab bar: part of the layout, so no
+// shadow (only floating things get one) and a hairline edge.
+const sidebarStyle: CSSProperties = {
+  width: rem(300),
+  flexShrink: 0,
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  overflow: "hidden",
+  background: colors.bg1,
+  borderRight: `1px solid ${colors.lineSoft}`,
+};
+
+const orderToggleStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 2,
+};
+
+const recentListStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+};
+
+const terminalMetaStyle: CSSProperties = {
+  display: "block",
+  marginTop: 2,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  color: colors.fg3,
+  fontSize: rem(10.5),
+};
+
+const tabLabelStyle: CSSProperties = {
+  color: colors.fg2,
+};
+
+const waitingMarkStyle: CSSProperties = {
+  color: colors.danger,
+  fontWeight: 700,
+};
 
 const headerStyle: CSSProperties = {
   minHeight: 60,

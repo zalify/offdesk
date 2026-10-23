@@ -1,6 +1,7 @@
 // Desktop tab bar — the single permanent chrome row of the workspace, drawn
-// like tmux's window list (wireframes Main / B-Desktop). Left: ≡ opens the
-// tabs drawer, then one `0:name` tab per workspace group (persistent groups
+// like tmux's window list (wireframes Main / B-Desktop). Left: ≡ shows or
+// hides the pinned sessions sidebar (or, when the window is too narrow for
+// it, opens the list as a drawer), then one `0:name` tab per workspace group (persistent groups
 // + cwd fallback groups, same grouping TerminalWorkspace computes) with its
 // programs muted after it, then [+]. Right, as plain text: the machine
 // switcher (`mac-mini ▾`), cpu/mem/disk, `files`, `browser[n]`, `phone`,
@@ -89,6 +90,9 @@ interface TabBarProps {
   filesButton?: { open: boolean };
   onToggleFiles?: () => void;
   onRemoveHost: (machineId: string) => void;
+  /** Set when the window fits the pinned sessions sidebar: ≡ then shows or
+   *  hides it instead of opening the list as a drawer. */
+  sessionsSidebar?: { shown: boolean; onToggle: () => void };
 }
 
 function TabBarComponent({
@@ -123,8 +127,13 @@ function TabBarComponent({
   filesButton,
   onToggleFiles,
   onRemoveHost,
+  sessionsSidebar,
 }: TabBarProps) {
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
+  // Widening the window pins the list: the drawer gives way to the sidebar.
+  useEffect(() => {
+    if (sessionsSidebar) setWorkspaceManagerOpen(false);
+  }, [sessionsSidebar]);
   // The strip fades at its end only while tabs are hidden past it.
   const stripRef = useRef<HTMLDivElement>(null);
   const [stripOverflows, setStripOverflows] = useState(false);
@@ -334,9 +343,11 @@ function TabBarComponent({
       {/* Left: ≡ tabs, the tmux tabs, [+] */}
       <TextButton
         testId="desktop-workspace-manager-button"
-        label="Tabs"
-        pressed={workspaceManagerOpen}
-        onClick={() => setWorkspaceManagerOpen(true)}
+        label="Sessions"
+        pressed={sessionsSidebar ? sessionsSidebar.shown : workspaceManagerOpen}
+        onClick={() =>
+          sessionsSidebar ? sessionsSidebar.onToggle() : setWorkspaceManagerOpen(true)
+        }
         style={{ alignSelf: "center", fontSize: rem(13) }}
       >
         ≡

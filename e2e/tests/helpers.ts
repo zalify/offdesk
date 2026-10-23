@@ -13,6 +13,11 @@ async function authenticate(page: Page): Promise<void> {
     // exposes live xterm instances for buffer inspection). Production builds
     // never set this flag and therefore never expose internals globally.
     localStorage.setItem("offdesk:e2e", "1");
+    // Specs measure panes at full width: the pinned sessions sidebar starts
+    // hidden unless a test shows it (≡) or sets it first.
+    if (localStorage.getItem("offdesk:sessions-sidebar") === null) {
+      localStorage.setItem("offdesk:sessions-sidebar", "hidden");
+    }
   }, token);
 }
 

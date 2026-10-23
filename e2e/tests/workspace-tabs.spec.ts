@@ -1025,10 +1025,12 @@ test("workspace manager organizes, renames, moves, reorders, and deletes", async
   });
   await expandTerminalById(page, terminalId);
 
+  // On a wide window ≡ pins the list beside the panes; tab order shows the tabs.
   await page.getByTestId("desktop-workspace-manager-button").click();
   const manager = page.getByTestId("workspace-manager");
   await expect(manager).toBeVisible();
-  await expect(manager).toHaveAttribute("data-placement", "drawer");
+  await expect(manager).toHaveAttribute("data-placement", "sidebar");
+  await manager.getByTestId("workspace-manager-order-tabs").click();
   await expect(
     manager.getByTestId(`workspace-manager-group-${first.id}`),
   ).toContainText("1");
@@ -1069,4 +1071,62 @@ test("workspace manager organizes, renames, moves, reorders, and deletes", async
   expect((await listTerminals(page)).map((terminal) => terminal.id)).toContain(
     terminalId,
   );
+});
+
+test("the pinned sessions list puts the latest output first and stays as left", async ({
+  page,
+}) => {
+  await openApp(page);
+  await resetMachineState(page);
+  await takeControlFromHeader(page);
+
+  const older = await createWorkspaceGroupViaApi(page, `Older ${Date.now()}`);
+  const newer = await createWorkspaceGroupViaApi(page, `Newer ${Date.now()}`);
+  const olderTerminal = await createTerminalViaApi(page, {
+    cwd: "/root",
+    workspaceGroupId: older.id,
+  });
+  // tmux keeps activity in whole seconds.
+  await page.waitForTimeout(2_000);
+  const newerTerminal = await createTerminalViaApi(page, {
+    cwd: "/root",
+    workspaceGroupId: newer.id,
+  });
+  await expandTerminalById(page, olderTerminal);
+
+  await page.getByTestId("desktop-workspace-manager-button").click();
+  const manager = page.getByTestId("workspace-manager");
+  await expect(manager).toHaveAttribute("data-placement", "sidebar");
+  await manager.getByTestId("workspace-manager-order-recent").click();
+  const rows = manager
+    .getByTestId("workspace-manager-recent")
+    .locator('[data-testid^="workspace-manager-terminal-"]');
+  // The node reports activity on its next 5-second poll.
+  await expect
+    .poll(
+      async () => rows.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.testid)),
+      { timeout: 20_000 },
+    )
+    .toEqual([
+      `workspace-manager-terminal-${newerTerminal}`,
+      `workspace-manager-terminal-${olderTerminal}`,
+    ]);
+  await expect(rows.first()).toContainText(newer.name);
+
+  // Picking a session leaves the pinned list open.
+  await rows.first().getByRole("button").first().click();
+  await expect(manager).toBeVisible();
+
+  // Shown, and in recent order, after a reload; hide puts it behind ≡ again.
+  await page.reload();
+  await expect(page.getByTestId("workspace-manager")).toHaveAttribute("data-placement", "sidebar");
+  await expect(page.getByTestId("workspace-manager-order-recent")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.getByTestId("workspace-manager-close").click();
+  await expect(page.getByTestId("workspace-manager")).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByTestId("tab-bar")).toBeVisible();
+  await expect(page.getByTestId("workspace-manager")).toHaveCount(0);
 });

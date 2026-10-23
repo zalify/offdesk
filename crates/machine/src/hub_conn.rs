@@ -315,6 +315,7 @@ impl HubConnection {
                 rows: s.rows,
                 attention: None,
                 opened_by: None,
+                last_activity_ms: None,
                 reachable: true,
             })
             .collect();
@@ -430,7 +431,9 @@ impl HubConnection {
         // Titles, cwds and attention are reported only when they
         // change — every report used to trigger a synchronous SQLite write
         // on the hub — and the dedup maps reset with each hub connection,
-        // so a reconnected hub always gets a full refresh.
+        // so a reconnected hub always gets a full refresh. Activity (tmux's
+        // window_activity, for sorting sessions by recent) is reported in
+        // 30-second steps.
         let pty_for_titles = pty.clone();
         let send_tx_for_titles = send_tx.clone();
         let mut title_fallback_task = tokio::spawn(async move {
@@ -444,6 +447,8 @@ impl HubConnection {
             > = std::collections::HashMap::new();
             let mut last_sent_attention = std::collections::HashMap::new();
             let mut last_sent_agent = std::collections::HashMap::new();
+            let mut last_sent_activity: std::collections::HashMap<String, i64> =
+                std::collections::HashMap::new();
             loop {
                 interval.tick().await;
                 let poll_pty = pty_for_titles.clone();
@@ -468,6 +473,7 @@ impl HubConnection {
                 last_sent_title.retain(|id, _| terminal_ids.contains(id));
                 last_sent_attention.retain(|id, _| terminal_ids.contains(id));
                 last_sent_agent.retain(|id, _| terminal_ids.contains(id));
+                last_sent_activity.retain(|id, _| terminal_ids.contains(id));
                 for terminal_id in terminal_ids {
                     // The agent first: the hub opens a run for it, then attention
                     // can make that run wait on a person
@@ -500,6 +506,22 @@ impl HubConnection {
                         last_sent_attention.insert(terminal_id.clone(), attention);
                     }
                     let pane_info = pane_infos.get(&terminal_id);
+                    if let Some(at_ms) = activity_to_report(
+                        last_sent_activity.get(&terminal_id).copied(),
+                        pane_info.and_then(|info| info.activity_ms),
+                    ) {
+                        if send_tx_for_titles
+                            .send(OutboundHubMessage::Json(MachineToHub::TerminalActivity {
+                                terminal_id: terminal_id.clone(),
+                                at_ms,
+                            }))
+                            .await
+                            .is_err()
+                        {
+                            return;
+                        }
+                        last_sent_activity.insert(terminal_id.clone(), at_ms);
+                    }
                     let title_update = match pane_info.and_then(|info| info.title.as_ref()) {
                         Some(title) => Some((title.clone(), TerminalTitleSource::Osc)),
                         None => {
@@ -1212,6 +1234,17 @@ fn fallback_title(process_name: Option<String>) -> Option<(String, TerminalTitle
         .map(|name| (name, TerminalTitleSource::Process))
 }
 
+/// The activity time to report for a terminal, if any: the first one seen,
+/// then only once it has moved by `TERMINAL_ACTIVITY_STEP_MS`, so a terminal
+/// streaming output reports every 30 seconds rather than every poll.
+fn activity_to_report(last_sent: Option<i64>, current: Option<i64>) -> Option<i64> {
+    let current = current?;
+    match last_sent {
+        Some(last) if (current - last).abs() < offdesk_protocol::TERMINAL_ACTIVITY_STEP_MS => None,
+        _ => Some(current),
+    }
+}
+
 fn prepare_composer(message: &offdesk_protocol::ComposerMessage) -> Result<String, String> {
     use std::io::Write;
     message.validate()?;
@@ -1573,6 +1606,17 @@ mod tests {
                 data: "truncated!".into(),
             });
         assert!(prepare_composer(&invalid).is_err());
+    }
+
+    #[test]
+    fn activity_is_reported_first_then_in_steps() {
+        assert_eq!(activity_to_report(None, None), None);
+        assert_eq!(activity_to_report(None, Some(1_000_000)), Some(1_000_000));
+        assert_eq!(activity_to_report(Some(1_000_000), Some(1_000_000)), None);
+        assert_eq!(activity_to_report(Some(1_000_000), Some(1_029_000)), None);
+        assert_eq!(activity_to_report(Some(1_000_000), Some(1_030_000)), Some(1_030_000));
+        // A clock that went back is reported too.
+        assert_eq!(activity_to_report(Some(1_000_000), Some(900_000)), Some(900_000));
     }
 
     #[test]

@@ -47,7 +47,18 @@ pub struct TerminalInfo {
     /// Hub-authoritative: machines never set it. Absent from older hubs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<TerminalOpener>,
+    /// When the terminal last had output, in ms since the epoch: tmux's
+    /// `window_activity`, reported by the node at most every
+    /// `TERMINAL_ACTIVITY_STEP_MS`. Hub memory only; absent until the node
+    /// reports it, and from older nodes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_activity_ms: Option<i64>,
 }
+
+/// How far a terminal's activity time must move before the node reports it
+/// again: often enough to sort sessions by "recent", rare enough that a
+/// terminal streaming output doesn't send an update every poll.
+pub const TERMINAL_ACTIVITY_STEP_MS: i64 = 30_000;
 
 /// Who opened a terminal that a person didn't open from an app.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1846,6 +1857,10 @@ pub enum MachineToHub {
     },
     #[serde(rename = "terminal_cwd")]
     TerminalCwd { terminal_id: String, cwd: String },
+    /// When the terminal last had output (ms since the epoch), sent when it
+    /// moves by `TERMINAL_ACTIVITY_STEP_MS` or more.
+    #[serde(rename = "terminal_activity")]
+    TerminalActivity { terminal_id: String, at_ms: i64 },
     #[serde(rename = "terminal_attention")]
     TerminalAttention {
         terminal_id: String,

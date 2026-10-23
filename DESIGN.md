@@ -171,6 +171,12 @@ retired large-touch workspace: `docs/plans/2026-08-13-fold-touch-workspace.md`.
   (`nas` plus a three-bar cpu/mem/disk load glyph; a bar over 85% turns
   `fg-0`, never `err`) and the panel icons. The machine's name is not
   repeated on the status line.
+- **Sessions sidebar** (desktop, windows ≥1024px): `≡` shows or hides a
+  300px list pinned left of the panes, below the tab bar, on `bg-1` with a
+  `line-soft` edge and no shadow; each device remembers it. It lists every
+  terminal, `recent` (latest output first, with its tab and `5m`) or `tabs`
+  (the tab tree, to rename, reorder and delete). Narrower windows open the
+  same list as a drawer over the panes.
 - **Pane header**: `●` (accent when it has focus), program, cwd, and the
   agent marker on the right.
 - **Phone title bar**: a picker field (`bg-2`, `line` edge, 4px, `⇕` at its
