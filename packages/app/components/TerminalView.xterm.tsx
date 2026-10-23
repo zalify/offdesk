@@ -746,7 +746,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           continue;
         }
         const row = readTerminalRow(line, term.cols);
-        const text = row.text.trimEnd();
+        // A row that soft-wraps onto the next keeps its trailing spaces:
+        // they are text that ran up to the edge.
+        const text = buf.getLine(start + i + 1)?.isWrapped ? row.text : row.text.trimEnd();
         rawRows.push({
           text,
           isWrapped: row.wrapped,

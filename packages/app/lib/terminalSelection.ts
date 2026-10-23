@@ -30,20 +30,37 @@ const span = (row: RawRow, start: number, end: number) => columnAt(row, end) - c
  * its first word would not have fitted there. A full row above is a broken
  * word only when the two halves together are longer than a row; otherwise
  * the row just filled up at a space.
+ *
+ * When a row fills up exactly, Claude Code puts the space before the next
+ * word at the start of the next row and doesn't draw it, so that row
+ * (`shifted`) holds one column less: it is full one column short of the
+ * edge. So a row below a full one that is a single word ending one column
+ * short of the edge started a new word there.
  */
-function appWrap(prev: RawRow, next: RawRow, indent: number, cols: number): string | null {
+function appWrap(
+  prev: RawRow,
+  next: RawRow,
+  indent: number,
+  cols: number,
+  shifted: boolean,
+): string | null {
   const body = next.text.trimStart();
   const lead = next.text.length - body.length;
   if (!body || lead === 0 || lead !== indent || !prev.text.trim()) return null;
   const firstEnd = body.search(/\s/);
   const first = span(next, lead, firstEnd < 0 ? next.text.length : lead + firstEnd);
-  const prevWidth = prev.width ?? prev.text.length;
+  const prevWidth = rowWidth(prev, shifted);
   if (prevWidth >= cols) {
+    if (firstEnd < 0 && rowWidth(next, false) === cols - 1) return " ";
     const last = span(prev, prev.text.search(/\S+$/), prev.text.length);
     return last + first > cols - lead ? "" : " ";
   }
   return prevWidth + 1 + first > cols ? " " : null;
 }
+
+// Columns a row's text takes, counting the undrawn space a shifted row starts with.
+const rowWidth = (row: RawRow, shifted: boolean) =>
+  (row.width ?? row.text.length) + (shifted ? 1 : 0);
 
 // Collapse wrapped rows back into logical lines, so the user doesn't paste
 // artificial mid-sentence newlines (or a command broken in pieces) into a
@@ -52,22 +69,26 @@ function appWrap(prev: RawRow, next: RawRow, indent: number, cols: number): stri
 export function mergeWrappedRows(rows: RawRow[], cols = Infinity): string[] {
   const merged: string[] = [];
   let prev: RawRow | null = null;
+  let shifted = false;
   let indent = 0;
   for (const row of rows) {
     const last = merged.length - 1;
     if (prev && row.isWrapped) {
       merged[last] += row.text;
       prev = row;
+      shifted = false;
       continue;
     }
-    const join = prev ? appWrap(prev, row, indent, cols) : null;
+    const join: string | null = prev ? appWrap(prev, row, indent, cols, shifted) : null;
     if (join !== null) {
       merged[last] += join + row.text.trimStart();
+      shifted = join === " " && rowWidth(prev!, shifted) >= cols;
       prev = row;
       continue;
     }
     merged.push(row.text);
     prev = row;
+    shifted = false;
     const lead = row.text.length - row.text.trimStart().length;
     indent = lead + (ITEM_MARKER.exec(row.text.slice(lead))?.[0].length ?? 0);
   }

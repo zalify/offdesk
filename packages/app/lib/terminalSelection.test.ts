@@ -148,6 +148,41 @@ describe("mergeWrappedRows with the terminal width", () => {
     expect(mergeWrappedRows([full, rest], 10)).toEqual(["  中文中文测试"]);
   });
 
+  it("keeps the space Claude Code moves to the start of a row after a full one", () => {
+    // As it printed them on a 94-column tablet screen. Both rows above the
+    // paths fill up exactly, so the space before the path went to the next
+    // row, undrawn, and that row is full one column short of the edge.
+    const COLS = 94;
+    const wide = (...lines: string[]) =>
+      lines.map((text) => {
+        if (text.length > COLS) throw new Error(`wider than ${COLS}: ${text}`);
+        return row(text);
+      });
+    expect(
+      mergeWrappedRows(
+        wide(
+          "  ! psql \"$(grep '^DATABASE_URL=' ../app.zalify.com/.env.local | cut -d= -f2- | tr -d '\"')\" -f",
+          "  /private/tmp/claude-501/-Users-zourenyuan-workspaces-Zalify-Eng/2bf8f4e2-7eba-4f26-bb93-07c",
+          "  bc2a30368/scratchpad/unassign-luka.sql",
+          "",
+          "  ! psql \"$(grep '^DATABASE_URL='",
+          "  /Users/zourenyuan/workspaces/Zalify/Eng/app.zalify.com/.env.local | cut -d= -f2- | tr -d '\"'",
+          "  | cut -d'?' -f1)\" -f \"/private/tmp/claude-501/-Users-zourenyuan-workspaces-Zalify-Eng/2bf8f",
+          "  4e2-7eba-4f26-bb93-07cbc2a30368/scratchpad/unassign-luka.sql\"",
+          "  If it works, it prints one row.",
+          "  Run it from this terminal.",
+        ),
+        COLS,
+      ),
+    ).toEqual([
+      "  ! psql \"$(grep '^DATABASE_URL=' ../app.zalify.com/.env.local | cut -d= -f2- | tr -d '\"')\" -f /private/tmp/claude-501/-Users-zourenyuan-workspaces-Zalify-Eng/2bf8f4e2-7eba-4f26-bb93-07cbc2a30368/scratchpad/unassign-luka.sql",
+      "",
+      "  ! psql \"$(grep '^DATABASE_URL=' /Users/zourenyuan/workspaces/Zalify/Eng/app.zalify.com/.env.local | cut -d= -f2- | tr -d '\"' | cut -d'?' -f1)\" -f \"/private/tmp/claude-501/-Users-zourenyuan-workspaces-Zalify-Eng/2bf8f4e2-7eba-4f26-bb93-07cbc2a30368/scratchpad/unassign-luka.sql\"",
+      "  If it works, it prints one row.",
+      "  Run it from this terminal.",
+    ]);
+  });
+
   it("leaves rows alone without the width", () => {
     expect(mergeWrappedRows(rows("  takes about 3-5 minutes, and the output lands in", "  this"))).toEqual([
       "  takes about 3-5 minutes, and the output lands in",
