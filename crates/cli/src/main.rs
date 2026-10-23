@@ -203,8 +203,8 @@ enum Commands {
         #[arg(long = "ref")]
         external_ref: Option<String>,
         /// The agent's permission mode: ask (before edits and commands), accept-edits
-        /// (edits go ahead, commands ask), plan or auto (Claude only: its classifier
-        /// approves actions, asking when it won't). Default: its own settings
+        /// (edits go ahead, commands ask), plan (Claude only) or auto (it goes ahead
+        /// without asking: Claude auto, Codex --yolo). Default: its own settings
         #[arg(long, value_enum)]
         mode: Option<StartMode>,
         /// Machine-readable JSON on stdout

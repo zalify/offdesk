@@ -446,7 +446,7 @@ offdesk answer <run> --approve | --decline | --option <id> | --text <words>
                                                 # answer an agent run waiting on you; typed into its terminal for you
 offdesk start <machine> --agent claude|codex --cwd <dir> [--prompt <text> | --prompt-file <path>]
         [--label <name>] [--ref <id>] [--mode ask|accept-edits|plan|auto]
-                                                # start an agent in a new terminal with its first message; it still asks for permissions
+                                                # start an agent in a new terminal with its first message; it asks for permissions unless --mode auto
 offdesk tokens [--json]                         # API tokens and what each may do
 offdesk tokens create <name> [--scope runs:read,runs:answer,runs:approve,runs:start] [--content metadata|requests|notes]
         [--dir <folder>]... [--agent claude|codex]... [--machine <m>]... [--production] [--max-starts N] [--max-answers N] | --full

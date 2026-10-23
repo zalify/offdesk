@@ -343,7 +343,7 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "start_run",
-            "Start Claude Code or Codex in a new terminal on a machine, with its first message. It still asks for permissions as usual. Returns the run and its terminal.",
+            "Start Claude Code or Codex in a new terminal on a machine, with its first message. It asks for permissions as usual unless permission_mode is auto. Returns the run and its terminal.",
             schema(
                 json!({
                     "machine": {"type": "string", "description": "Machine id, unique prefix or name"},
@@ -352,7 +352,7 @@ pub fn tool_definitions() -> Vec<Value> {
                     "prompt": {"type": "string", "description": "Its first message"},
                     "label": {"type": "string", "description": "A name for the run"},
                     "external_ref": {"type": "string", "description": "Your reference (an issue, a task); the agent gets it as OFFDESK_EXTERNAL_REF"},
-                    "permission_mode": {"type": "string", "enum": ["ask", "accept_edits", "plan", "auto"], "description": "The agent's permission mode (plan and auto: Claude only); default: its own settings"},
+                    "permission_mode": {"type": "string", "enum": ["ask", "accept_edits", "plan", "auto"], "description": "The agent's permission mode (plan: Claude only; auto: Claude auto mode, Codex --yolo, only when the person asks for it); default: its own settings"},
                 }),
                 &["machine", "agent", "cwd"],
             ),
