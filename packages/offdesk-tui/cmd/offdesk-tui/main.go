@@ -24,6 +24,8 @@ import (
 
 const upstream = "2c2c7e374f870bd7b622e960f60b4ae3f44924aa"
 
+var version = "0.1.0-dev"
+
 func hidden() (string, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
 		return "", errors.New("pairing requires an interactive terminal")
@@ -57,7 +59,7 @@ func signIn(ctx context.Context, raw string) error {
 	}
 	cred := transport.Credentials{Hub: hub, Token: token, TokenID: id, DeviceID: device}
 	if e = config.Save(config.Config{Credentials: cred, Prefix: 0x1d}); e != nil {
-		return errors.New("token was created but could not be saved; revoke offdesk-tui (Termux) in Hub API token settings")
+		return errors.New("token was created but could not be saved; revoke offdesk-tui in Hub API token settings")
 	}
 	c, _, e := transport.Connect(ctx, cred, "")
 	if e != nil {
@@ -82,11 +84,31 @@ func run(ctx context.Context, args []string) error {
 		args = args[1:]
 	}
 	if cmd == "help" || cmd == "--help" || cmd == "-h" {
-		fmt.Println("offdesk-tui — native Offdesk terminal\n\nCommands:\n  pair                   hidden pairing or sign-in link prompt\n  login-file PATH        import a private sign-in link file\n  machines | terminals   list remote resources\n  ls MACHINE /path       browse remote files\n  download MACHINE /remote /local [--overwrite]\n  upload MACHINE /local /remote --replace\n  prefix HEX             configure local prefix (default 1d = Ctrl+])\n  version\n  (no command)           interactive persistent terminal tabs\n\nInside terminal: Ctrl+] then ? for local shortcuts.")
+		fmt.Println(`offdesk-tui — control Offdesk from your terminal
+
+Authentication:
+  offdesk-tui pair             Paste an encrypted offdesk://pair link or an
+                               HTTPS Hub sign-in link into a hidden prompt.
+  offdesk-tui login-file PATH  Read an HTTPS sign-in link from a private file.
+
+The HTTPS sign-in creates a separate API token; encrypted pairing creates a
+separate paired device. Credentials are saved in your user config directory
+under offdesk-tui/config.json. Keep links and credentials private.
+
+Commands:
+  machines | terminals   list remote resources
+  ls MACHINE /path       browse remote files
+  download MACHINE /remote /local [--overwrite]
+  upload MACHINE /local /remote --replace
+  prefix HEX             configure local prefix (default 1d = Ctrl+])
+  version
+  (no command)           interactive persistent terminal tabs
+
+Inside terminal: Ctrl+] then ? for local shortcuts.`)
 		return nil
 	}
 	if cmd == "version" {
-		fmt.Println("offdesk-tui 0.1.0; upstream", upstream)
+		fmt.Println("offdesk-tui "+version+"; upstream", upstream)
 		return nil
 	}
 	if cmd == "login-file" {

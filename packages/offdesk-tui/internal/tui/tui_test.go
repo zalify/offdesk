@@ -18,6 +18,13 @@ import (
 	"time"
 )
 
+func testConfigHome(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("HOME", root)
+	t.Setenv("XDG_CONFIG_HOME", root)
+}
+
 func TestStartWithoutTerminalsCreatesDirectly(t *testing.T) {
 	h := testhub.Start(t)
 	h.ClearTerminals()
@@ -28,7 +35,7 @@ func TestStartWithoutTerminalsCreatesDirectly(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	var out bytes.Buffer
 	cfg := config.Config{Prefix: 29}
 	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 1), readErr: make(chan error, 1)}
@@ -75,7 +82,7 @@ func TestChooseMachineBeforeAutomaticCreate(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	var out bytes.Buffer
 	cfg := config.Config{Prefix: 29}
 	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 2), readErr: make(chan error, 1)}
@@ -105,7 +112,7 @@ func TestReconcileRemovesOnlyConfirmedClosedTabs(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "closed"}, {Machine: "offline", Terminal: "unknown"}}}
 	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx}
 	if e = u.reconcileTabs(); e != nil {
@@ -188,7 +195,7 @@ func TestStartupIgnoresRecentlyExitedTerminalStillInHub(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	cfg := config.Config{}
 	sessions.RememberExit(&cfg, config.Tab{Machine: "machine", Terminal: "existing"}, time.Now())
 	var out bytes.Buffer
@@ -238,7 +245,7 @@ func TestSocketChoiceCancelDoesNotCreateTerminal(t *testing.T) {
 
 func TestTabMenuSelectsAnySavedTab(t *testing.T) {
 	h := testhub.Start(t)
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
@@ -274,7 +281,7 @@ func TestTerminalListAddsDiscoveredTerminalOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "another", Label: "Saved"}}}
 	var out bytes.Buffer
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 2), readErr: make(chan error, 1)}
@@ -322,7 +329,7 @@ func TestNewTerminalCreatesDistinctTabsWithoutExistingPicker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "existing", Label: "Original"}}}
 	var out bytes.Buffer
 	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 2), readErr: make(chan error, 1)}
@@ -373,7 +380,7 @@ func TestTerminateRequiresYesAndTargetsSelectedTerminal(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "new", Label: "Disposable"}}}
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &bytes.Buffer{}, input: make(chan []byte, 2), readErr: make(chan error, 1)}
 	u.input <- []byte("\r")
@@ -395,7 +402,7 @@ func TestDetachedTerminalShowsStatusAndPreservesSocketOnReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	testConfigHome(t)
 	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "existing", Label: "Work", Socket: "default"}}}
 	var out bytes.Buffer
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 1), readErr: make(chan error, 1)}

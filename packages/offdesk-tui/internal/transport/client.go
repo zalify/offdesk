@@ -123,7 +123,7 @@ func Connect(ctx context.Context, cred Credentials, code string) (*Client, strin
 	c := &Client{ws: ws, ch: newChannel(send, recv), cancel: cancel, ctx: connCtx, pending: map[string]chan Message{}, sockets: map[string]chan Message{}, done: make(chan struct{})}
 	auth := map[string]string{"type": "resume"}
 	if code != "" {
-		auth = map[string]string{"type": "pair", "code": code, "device_name": "offdesk-tui (Termux)"}
+		auth = map[string]string{"type": "pair", "code": code, "device_name": "offdesk-tui"}
 	}
 	b, _ := json.Marshal(auth)
 	if e = c.sendRaw(dialCtx, b); e != nil {

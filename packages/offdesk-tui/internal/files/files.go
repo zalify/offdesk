@@ -9,7 +9,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"golang.org/x/sys/unix"
 	"io"
 	"net/url"
 	"offdesk-tui/internal/api"
@@ -124,7 +123,7 @@ func Download(ctx context.Context, a api.API, machine, remote, local string, ove
 	if overwrite {
 		return os.Rename(f.Name(), local)
 	}
-	return unix.Renameat2(unix.AT_FDCWD, f.Name(), unix.AT_FDCWD, local, unix.RENAME_NOREPLACE)
+	return renameNoReplace(f.Name(), local)
 }
 
 // Replace implements the supported text editor operation, not arbitrary upload.

@@ -1,4 +1,4 @@
-// Package config stores credentials and local tabs in Termux private storage.
+// Package config stores credentials and local tabs in the user's config directory.
 package config
 
 import (

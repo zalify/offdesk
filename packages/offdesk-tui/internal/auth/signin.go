@@ -42,7 +42,7 @@ func CreateToken(ctx context.Context, hub, session string, hc *http.Client) (str
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(hub, "/")+"/api/auth/api-tokens", bytes.NewBufferString(`{"name":"offdesk-tui (Termux)"}`))
+	req, e := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(hub, "/")+"/api/auth/api-tokens", bytes.NewBufferString(`{"name":"offdesk-tui"}`))
 	if e != nil {
 		return "", "", errors.New("invalid request")
 	}

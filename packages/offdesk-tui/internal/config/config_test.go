@@ -10,6 +10,7 @@ import (
 func TestPrivateAtomicConfig(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", root)
+	t.Setenv("HOME", root)
 	c := Config{Prefix: 29, Credentials: transport.Credentials{Hub: "https://example.test", PrivateKey: []byte("fixture")}, Tabs: []Tab{{Machine: "m", Terminal: "t"}}}
 	if e := Save(c); e != nil {
 		t.Fatal(e)

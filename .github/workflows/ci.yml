@@ -17,8 +17,12 @@ permissions:
 
 jobs:
   tui-check:
-    name: Termux TUI
-    runs-on: ubuntu-latest
+    name: TUI (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-26]
     defaults:
       run:
         working-directory: packages/offdesk-tui
@@ -32,7 +36,9 @@ jobs:
         run: |
           go test ./...
           go vet ./...
+          go build -o "$RUNNER_TEMP/offdesk-tui-host" ./cmd/offdesk-tui
       - name: Build for Android arm64
+        if: runner.os == 'Linux'
         env:
           GOOS: android
           GOARCH: arm64
@@ -283,7 +289,7 @@ jobs:
   ci-result:
     name: CI Result
     if: always()
-    needs: [changes, site-check, rust-check, native-check, frontend-build, e2e-binaries, e2e, android-check]
+    needs: [changes, tui-check, site-check, rust-check, native-check, frontend-build, e2e-binaries, e2e, android-check]
     runs-on: ubuntu-latest
     steps:
       - name: Require every applicable check to pass
@@ -297,6 +303,7 @@ jobs:
             if (!['true', 'false'].includes(jobs.changes.outputs[key])) throw new Error(`Invalid ${key} scope`);
           }
           const expected = {
+            'tui-check': true,
             'site-check': jobs.changes.outputs.site === 'true',
             ...Object.fromEntries(['rust-check', 'native-check', 'frontend-build', 'e2e-binaries', 'e2e']
               .map(name => [name, jobs.changes.outputs.runtime === 'true'])),

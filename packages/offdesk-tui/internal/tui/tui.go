@@ -576,7 +576,7 @@ func (u *UI) Run(ctx context.Context) error {
 	u.ctx = ctx
 	u.output = os.Stdout
 	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
-		return errors.New("interactive mode requires a Termux terminal")
+		return errors.New("interactive mode requires a terminal")
 	}
 	state, e := term.MakeRaw(int(os.Stdin.Fd()))
 	if e != nil {

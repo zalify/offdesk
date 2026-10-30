@@ -52,9 +52,9 @@ from one interface. The machines running your Hub and sessions must stay online.
 - **CLI automation:** open a terminal, send input, wait for output, and read
   results with `offdesk open / send / wait / read` and JSON output. Terminals
   an agent opened are marked as such in the apps.
-- **Termux terminal client:** the experimental [offdesk-tui](packages/offdesk-tui/README.md)
-  streams interactive terminals into Termux, with machine and terminal
-  selection, keyboard passthrough, control and compatible file operations.
+- **Terminal client:** the experimental [offdesk-tui](packages/offdesk-tui/README.md)
+  controls Offdesk terminals from a local terminal, primarily in Termux and
+  also on Linux and macOS, with keyboard passthrough and file operations.
 - **Self-hosted deployment:** Rust binaries or Docker on macOS/Linux, with
   SQLite storage and the web UI embedded in the Hub binary.
 - **Encrypted App connections:** end-to-end encryption between paired Apps
