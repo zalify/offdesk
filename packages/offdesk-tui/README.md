@@ -2,6 +2,13 @@
 
 Native Go client for controlling Offdesk terminals from a local terminal. It targets Termux on Android first and also builds for Linux and macOS laptops. It streams the remote terminal into the local terminal emulator. The compatibility target is Offdesk Hub and node **v0.25.6**, upstream commit **`2c2c7e374f870bd7b622e960f60b4ae3f44924aa`**. It supports Offdesk's encrypted device-pairing transport and its official HTTPS/WSS token transport. The token transport has been tested with the live Hub and a disposable terminal; encrypted device pairing and actual coding agents remain unverified live. Linux and macOS have not yet been tested live.
 
+<p>
+  <img src="docs/images/termux-command-menu.jpg" alt="Offdesk TUI command menu in Termux with the on-screen keyboard" width="260">
+  <img src="docs/images/termux-remote-shell.jpg" alt="A remote Fish shell viewed through the Offdesk TUI in Termux" width="260">
+</p>
+
+The screenshots show the command menu and a remote shell in [Termux Launcher](https://github.com/PickleHik3/termux-launcher), an independent Termux-based launcher. It includes an in-app terminal keyboard based on [Unexpected Keyboard](https://github.com/Julow/Unexpected-Keyboard), with keys useful for Ctrl, Alt, Escape, and arrows. The launcher is optional; `offdesk-tui` also runs in regular Termux.
+
 ## Install and pair
 
 Install Go 1.27.2 or newer on the client and ensure the remote Offdesk node has tmux. From the repository root, build and install on Termux in fish:
