@@ -16,6 +16,29 @@ permissions:
   contents: read
 
 jobs:
+  tui-check:
+    name: Termux TUI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/offdesk-tui
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: packages/offdesk-tui/go.mod
+          cache-dependency-path: packages/offdesk-tui/go.sum
+      - name: Test and vet
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Build for Android arm64
+        env:
+          GOOS: android
+          GOARCH: arm64
+          CGO_ENABLED: '0'
+        run: go build -o "$RUNNER_TEMP/offdesk-tui" ./cmd/offdesk-tui
+
   changes:
     name: Change Scope
     runs-on: ubuntu-latest

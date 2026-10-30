@@ -52,6 +52,9 @@ from one interface. The machines running your Hub and sessions must stay online.
 - **CLI automation:** open a terminal, send input, wait for output, and read
   results with `offdesk open / send / wait / read` and JSON output. Terminals
   an agent opened are marked as such in the apps.
+- **Termux terminal client:** the experimental [offdesk-tui](packages/offdesk-tui/README.md)
+  streams interactive terminals into Termux, with machine and terminal
+  selection, keyboard passthrough, control and compatible file operations.
 - **Self-hosted deployment:** Rust binaries or Docker on macOS/Linux, with
   SQLite storage and the web UI embedded in the Hub binary.
 - **Encrypted App connections:** end-to-end encryption between paired Apps
@@ -100,6 +103,7 @@ Linux can also host a Hub with tmux installed separately.
 - [Agent browser](docs/agent-browser.md): a headless Chromium on a machine that
   agents drive with `offdesk browser`, and hand to you when they need a person
 - [Build from source](docs/building.md) · [Security model](SECURITY.md)
+- [Termux TUI setup, shortcuts and limitations](packages/offdesk-tui/README.md)
 - [Release notes and version history](https://github.com/zalify/offdesk/releases)
 
 ## Install
@@ -676,7 +680,7 @@ receiving output, so they watch live instead of being disconnected.
 ## License
 
 Everything under `crates/` (the Hub, node, CLI, and the protocol and
-encryption crates) and `packages/shared` is MIT. The Web UI (`packages/app`)
+encryption crates), `packages/shared`, and `packages/offdesk-tui` is MIT. The Web UI (`packages/app`)
 and the desktop, Android and iOS apps (`packages/desktop`) are under the
 Functional Source License, FSL-1.1-MIT: you can read, audit, build, modify and
 use them, including at work, but not offer them as a competing product, and
