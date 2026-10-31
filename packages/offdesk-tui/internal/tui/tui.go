@@ -111,8 +111,59 @@ func (u *UI) connect() error {
 	return nil
 }
 func (u *UI) save() error { return config.Save(*u.Config) }
+func (u *UI) isDefaultTmux(machine, terminalID, title string) bool {
+	for _, tab := range u.Config.Tabs {
+		if tab.Machine == machine && tab.Terminal == terminalID {
+			if tab.Socket == "default" || socketGroup(tab, title) == "Default tmux" {
+				return true
+			}
+		}
+	}
+	for _, tab := range u.Config.DetachedTabs {
+		if tab.Machine == machine && tab.Terminal == terminalID {
+			if tab.Socket == "default" || socketGroup(tab, title) == "Default tmux" {
+				return true
+			}
+		}
+	}
+	return socketGroup(config.Tab{Label: title}, title) == "Default tmux"
+}
+
+func (u *UI) findDefaultTmux(machineID string, ts []api.Terminal) (api.Terminal, bool) {
+	for _, t := range ts {
+		if t.Machine == machineID && u.isDefaultTmux(t.Machine, t.ID, t.Title) {
+			return t, true
+		}
+	}
+	for _, tab := range u.Config.Tabs {
+		if tab.Machine == machineID && tab.Socket == "default" {
+			for _, t := range ts {
+				if t.Machine == machineID && t.ID == tab.Terminal {
+					return t, true
+				}
+			}
+		}
+	}
+	for _, tab := range u.Config.DetachedTabs {
+		if tab.Machine == machineID && tab.Socket == "default" {
+			for _, t := range ts {
+				if t.Machine == machineID && t.ID == tab.Terminal {
+					return t, true
+				}
+			}
+		}
+	}
+	return api.Terminal{}, false
+}
+
 func (u *UI) createTerminal(m api.Machine, cwd string, initial bool) error {
-	u.print("\nTerminal on " + Safe(m.Name) + ":\n  1  Default tmux socket — attach or create a session\n  2  Offdesk socket — new Offdesk-managed shell\n")
+	ts, _ := u.API.Terminals(u.ctx)
+	existingTmux, hasExisting := u.findDefaultTmux(m.ID, ts)
+	if hasExisting {
+		u.print("\nTerminal on " + Safe(m.Name) + ":\n  1  Default tmux socket (already running — attach to existing)\n  2  Offdesk socket — new Offdesk-managed shell\n")
+	} else {
+		u.print("\nTerminal on " + Safe(m.Name) + ":\n  1  Default tmux socket — attach or create a session\n  2  Offdesk socket — new Offdesk-managed shell\n")
+	}
 	var startup, server, socket string
 	for {
 		choice, e := u.prompt("Socket [1/2, Enter=1, q=cancel]: ")
@@ -121,6 +172,11 @@ func (u *UI) createTerminal(m api.Machine, cwd string, initial bool) error {
 		}
 		switch strings.ToLower(strings.TrimSpace(choice)) {
 		case "", "1":
+			if hasExisting {
+				u.print("Attaching to existing Default tmux session on " + Safe(m.Name) + "…\n")
+				sessions.Add(u.Config, config.Tab{Machine: m.ID, Terminal: existingTmux.ID, Label: "Default tmux", Socket: "default"})
+				return u.save()
+			}
 			socket = "default"
 			startup, server, e = sessions.TmuxStartup()
 			if e != nil {
@@ -151,7 +207,11 @@ func (u *UI) createTerminal(m api.Machine, cwd string, initial bool) error {
 	}
 	label := strings.TrimSpace(t.Title)
 	if label == "" {
-		label = "Shell"
+		if socket == "default" {
+			label = "Default tmux"
+		} else {
+			label = "Shell"
+		}
 	}
 	base := label
 	for n := 2; ; n++ {
@@ -170,97 +230,372 @@ func (u *UI) createTerminal(m api.Machine, cwd string, initial bool) error {
 	sessions.Add(u.Config, config.Tab{Machine: m.ID, Terminal: t.ID, Label: label, TmuxServer: server, Socket: socket})
 	return u.save()
 }
-func (u *UI) choose(startup bool) error {
-	u.clear()
-	u.print("Offdesk TUI — select a terminal\n")
-	machines, e := u.API.Machines(u.ctx)
-	if e != nil {
+func (u *UI) terminateTerminal(machine, terminal string) error {
+	if e := u.API.Control(u.ctx, machine, true); e != nil {
 		return e
 	}
-	ts, e := u.API.Terminals(u.ctx)
-	if e != nil {
-		return e
+	return u.API.Destroy(u.ctx, machine, terminal)
+}
+
+func (u *UI) removeConfigTab(machine, terminal string) {
+	for j := len(u.Config.Tabs) - 1; j >= 0; j-- {
+		if u.Config.Tabs[j].Machine == machine && u.Config.Tabs[j].Terminal == terminal {
+			u.Config.Tabs = append(u.Config.Tabs[:j], u.Config.Tabs[j+1:]...)
+		}
 	}
-	if startup {
-		var changed bool
-		ts, changed = sessions.VisibleAtStartup(u.Config, ts, time.Now())
-		if changed {
-			if e = u.save(); e != nil {
-				return e
+	for j := len(u.Config.DetachedTabs) - 1; j >= 0; j-- {
+		if u.Config.DetachedTabs[j].Machine == machine && u.Config.DetachedTabs[j].Terminal == terminal {
+			u.Config.DetachedTabs = append(u.Config.DetachedTabs[:j], u.Config.DetachedTabs[j+1:]...)
+		}
+	}
+	if u.Config.Active >= len(u.Config.Tabs) {
+		u.Config.Active = max(0, len(u.Config.Tabs)-1)
+	}
+}
+
+func (u *UI) detachTab(tab config.Tab) {
+	for j := len(u.Config.Tabs) - 1; j >= 0; j-- {
+		if u.Config.Tabs[j].Machine == tab.Machine && u.Config.Tabs[j].Terminal == tab.Terminal {
+			tab = u.Config.Tabs[j]
+			u.Config.Tabs = append(u.Config.Tabs[:j], u.Config.Tabs[j+1:]...)
+		}
+	}
+	found := false
+	for _, d := range u.Config.DetachedTabs {
+		if d.Machine == tab.Machine && d.Terminal == tab.Terminal {
+			found = true
+			break
+		}
+	}
+	if !found {
+		u.Config.DetachedTabs = append(u.Config.DetachedTabs, tab)
+	}
+	if u.Config.Active >= len(u.Config.Tabs) {
+		u.Config.Active = max(0, len(u.Config.Tabs)-1)
+	}
+}
+
+func parseCommand(input string) (cmd string, arg string) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", ""
+	}
+	lower := strings.ToLower(input)
+	for _, prefix := range []string{"x", "a", "d"} {
+		if strings.HasPrefix(lower, prefix) {
+			rest := strings.TrimSpace(input[len(prefix):])
+			if rest == "" || rest == "all" || strings.HasPrefix(strings.ToLower(rest), "all ") || (len(rest) > 0 && (rest[0] >= '0' && rest[0] <= '9' || rest[0] == ',' || rest[0] == ' ')) {
+				return prefix, rest
 			}
 		}
 	}
-	if startup && len(machines) == 1 && len(ts) == 0 && !u.autoCreated {
-		e = u.createTerminal(machines[0], machines[0].Home, true)
-		if e == nil {
-			u.autoCreated = true
+	return "", input
+}
+
+func parseIndices(input string, maxLen int) []int {
+	clean := strings.ReplaceAll(input, ",", " ")
+	fields := strings.Fields(clean)
+	var result []int
+	seen := make(map[int]bool)
+	for _, f := range fields {
+		if strings.Contains(f, "-") {
+			parts := strings.SplitN(f, "-", 2)
+			start, err1 := strconv.Atoi(parts[0])
+			end, err2 := strconv.Atoi(parts[1])
+			if err1 == nil && err2 == nil && start <= end {
+				for n := start; n <= end; n++ {
+					if n >= 1 && n <= maxLen && !seen[n] {
+						seen[n] = true
+						result = append(result, n)
+					}
+				}
+				continue
+			}
 		}
-		return e
-	}
-	if len(machines) == 0 {
-		return errors.New("no machine is online")
-	}
-	if startup && len(ts) == 0 && len(machines) > 1 && !u.autoCreated {
-		u.print("No terminals are running. Select a machine:\n\n")
-		for i, m := range machines {
-			u.print(fmt.Sprintf("  %d  %s\n", i+1, Safe(m.Name)))
+		n, err := strconv.Atoi(f)
+		if err == nil && n >= 1 && n <= maxLen {
+			if !seen[n] {
+				seen[n] = true
+				result = append(result, n)
+			}
 		}
-		choice, e := u.prompt("\nMachine number (q to quit): ")
+	}
+	return result
+}
+
+func (u *UI) choose(startup bool) error {
+	for {
+		u.clear()
+		u.print("Offdesk TUI — select a terminal\n")
+		machines, e := u.API.Machines(u.ctx)
 		if e != nil {
 			return e
 		}
-		if strings.TrimSpace(choice) == "q" {
+		ts, e := u.API.Terminals(u.ctx)
+		if e != nil {
+			return e
+		}
+		if startup {
+			var changed bool
+			ts, changed = sessions.VisibleAtStartup(u.Config, ts, time.Now())
+			if changed {
+				if e = u.save(); e != nil {
+					return e
+				}
+			}
+		}
+		if startup && len(machines) == 1 && len(ts) == 0 && !u.autoCreated {
+			e = u.createTerminal(machines[0], machines[0].Home, true)
+			if e == nil {
+				u.autoCreated = true
+			}
+			return e
+		}
+		if len(machines) == 0 {
+			return errors.New("no machine is online")
+		}
+		if startup && len(ts) == 0 && len(machines) > 1 && !u.autoCreated {
+			u.print("No terminals are running. Select a machine:\n\n")
+			for i, m := range machines {
+				u.print(fmt.Sprintf("  %d  %s\n", i+1, Safe(m.Name)))
+			}
+			choice, e := u.prompt("\nMachine number (q to quit): ")
+			if e != nil {
+				return e
+			}
+			if strings.TrimSpace(choice) == "q" {
+				return io.EOF
+			}
+			n, e := strconv.Atoi(strings.TrimSpace(choice))
+			if e != nil || n < 1 || n > len(machines) {
+				return errors.New("invalid machine")
+			}
+			e = u.createTerminal(machines[n-1], machines[n-1].Home, true)
+			if e == nil {
+				u.autoCreated = true
+			}
+			return e
+		}
+		machineNames := make(map[string]string, len(machines))
+		for _, m := range machines {
+			machineNames[m.ID] = m.Name
+		}
+		names := u.foregroundNames(ts)
+		if len(machines) == 1 {
+			u.print(fmt.Sprintf("Machine: %s\n\n", Safe(machines[0].Name)))
+		} else {
+			for i, m := range machines {
+				u.print(fmt.Sprintf("Machine %d: %s\n", i+1, Safe(m.Name)))
+			}
+			u.print("\n")
+		}
+		for i, t := range ts {
+			label := terminalLabel(t.Title)
+			proc := names[t.Machine+"\x00"+t.ID]
+			if proc != "" && proc != "tmux" {
+				if label == "Shell" || strings.HasPrefix(label, "Shell ") {
+					label = proc
+				} else if label != proc {
+					label += " · " + proc
+				}
+			}
+			machineTag := ""
+			if len(machines) > 1 {
+				mName := machineNames[t.Machine]
+				if mName == "" {
+					mName = t.Machine[:min(8, len(t.Machine))]
+				}
+				machineTag = fmt.Sprintf(" [%s]", mName)
+			}
+			detached := false
+			for _, d := range u.Config.DetachedTabs {
+				if d.Machine == t.Machine && d.Terminal == t.ID {
+					detached = true
+					break
+				}
+			}
+			status := ""
+			if !t.Reachable {
+				status = " · unreachable"
+			} else if detached {
+				status = " · detached here"
+			}
+			u.print(fmt.Sprintf("  %d  %s%s  (%s)%s\n", i+1, Safe(label), Safe(machineTag), Safe(t.Cwd), status))
+		}
+		s, e := u.prompt("\nTerminal number, a=attach, d=detach, x=terminate, n=new, q=quit (e.g. 1, 1,2, a all, d all, x all): ")
+		if e != nil {
+			return e
+		}
+		s = strings.TrimSpace(s)
+		if s == "q" {
 			return io.EOF
 		}
-		n, e := strconv.Atoi(strings.TrimSpace(choice))
-		if e != nil || n < 1 || n > len(machines) {
-			return errors.New("invalid machine")
+		if s == "n" {
+			m := machines[0]
+			if len(machines) > 1 {
+				s, e = u.prompt("Machine number: ")
+				if e != nil {
+					return e
+				}
+				n, _ := strconv.Atoi(s)
+				if n < 1 || n > len(machines) {
+					return errors.New("invalid machine")
+				}
+				m = machines[n-1]
+			}
+			cwd, e := u.prompt("Working directory (empty = machine home): ")
+			if e != nil {
+				return e
+			}
+			if cwd == "" {
+				cwd = m.Home
+			}
+			return u.createTerminal(m, cwd, false)
 		}
-		e = u.createTerminal(machines[n-1], machines[n-1].Home, true)
-		if e == nil {
-			u.autoCreated = true
+		cmd, arg := parseCommand(s)
+		if cmd == "x" {
+			if arg == "all" || arg == "all -y" {
+				proceed := arg == "all -y"
+				if !proceed {
+					confirm, err := u.prompt(fmt.Sprintf("Terminate all %d terminal(s)? [y/n]: ", len(ts)))
+					if err != nil {
+						return err
+					}
+					c := strings.TrimSpace(strings.ToLower(confirm))
+					proceed = c == "y" || c == "yes"
+				}
+				if proceed {
+					skippedDefault := 0
+					for _, t := range ts {
+						if u.isDefaultTmux(t.Machine, t.ID, t.Title) {
+							skippedDefault++
+							continue
+						}
+						_ = u.terminateTerminal(t.Machine, t.ID)
+						u.removeConfigTab(t.Machine, t.ID)
+					}
+					_ = u.save()
+					if skippedDefault > 0 {
+						u.print(fmt.Sprintf("\nPreserved %d persistent Default tmux session(s).\n", skippedDefault))
+						_, _ = u.prompt("Enter to continue: ")
+					}
+				}
+				continue
+			}
+			indices := parseIndices(arg, len(ts))
+			if len(indices) == 0 {
+				u.print("Specify terminal number(s) to terminate (e.g. x 1, x 1,2, x all).\n")
+				_, _ = u.prompt("Enter to continue: ")
+				continue
+			}
+			var targets []api.Terminal
+			skippedDefault := 0
+			for _, idx := range indices {
+				t := ts[idx-1]
+				if u.isDefaultTmux(t.Machine, t.ID, t.Title) {
+					skippedDefault++
+					continue
+				}
+				targets = append(targets, t)
+			}
+			if len(targets) == 0 {
+				u.print("\nDefault tmux sessions are persistent and cannot be terminated.\nUse detach instead.\n")
+				_, _ = u.prompt("Enter to continue: ")
+				continue
+			}
+			promptMsg := fmt.Sprintf("Terminate %s (%s)? [y/n]: ", terminalLabel(targets[0].Title), Safe(targets[0].Cwd))
+			if len(targets) > 1 {
+				promptMsg = fmt.Sprintf("Terminate %d terminal(s)? [y/n]: ", len(targets))
+			}
+			confirm, err := u.prompt(promptMsg)
+			if err != nil {
+				return err
+			}
+			c := strings.TrimSpace(strings.ToLower(confirm))
+			if c == "y" || c == "yes" {
+				for _, t := range targets {
+					_ = u.terminateTerminal(t.Machine, t.ID)
+					u.removeConfigTab(t.Machine, t.ID)
+				}
+				_ = u.save()
+				if skippedDefault > 0 {
+					u.print(fmt.Sprintf("\nPreserved %d persistent Default tmux session(s).\n", skippedDefault))
+					_, _ = u.prompt("Enter to continue: ")
+				}
+			}
+			continue
 		}
-		return e
-	}
-	for i, m := range machines {
-		u.print(fmt.Sprintf("Machine %d: %s (%s)\n", i+1, Safe(m.Name), Safe(m.ID)))
-	}
-	for i, t := range ts {
-		u.print(fmt.Sprintf("%d: %s [%s] %s\n", i+1, Safe(t.Title), Safe(t.Machine), Safe(t.Cwd)))
-	}
-	s, e := u.prompt("Terminal number, n=new, q=quit: ")
-	if e != nil {
-		return e
-	}
-	if s == "q" {
-		return io.EOF
-	}
-	if s == "n" {
-		s, e = u.prompt("Machine number: ")
-		if e != nil {
-			return e
+		if cmd == "d" {
+			if arg == "all" {
+				for _, t := range ts {
+					u.detachTab(config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)})
+				}
+				_ = u.save()
+				continue
+			}
+			indices := parseIndices(arg, len(ts))
+			if len(indices) == 0 {
+				u.print("Specify terminal number(s) to detach (e.g. d 1, d 1,2, d all).\n")
+				_, _ = u.prompt("Enter to continue: ")
+				continue
+			}
+			for _, idx := range indices {
+				t := ts[idx-1]
+				u.detachTab(config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)})
+			}
+			_ = u.save()
+			continue
 		}
-		n, _ := strconv.Atoi(s)
-		if n < 1 || n > len(machines) {
-			return errors.New("invalid machine")
+		if cmd == "a" {
+			if arg == "all" {
+				for _, t := range ts {
+					label := terminalLabel(t.Title)
+					sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: label})
+				}
+				if len(u.Config.Tabs) > 0 {
+					u.Config.Active = 0
+				}
+				return u.save()
+			}
+			indices := parseIndices(arg, len(ts))
+			if len(indices) == 0 {
+				u.print("Specify terminal number(s) to attach (e.g. a 1, a 1,2, a all).\n")
+				_, _ = u.prompt("Enter to continue: ")
+				continue
+			}
+			for _, idx := range indices {
+				t := ts[idx-1]
+				label := terminalLabel(t.Title)
+				sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: label})
+			}
+			first := ts[indices[0]-1]
+			for i, tab := range u.Config.Tabs {
+				if tab.Machine == first.Machine && tab.Terminal == first.ID {
+					u.Config.Active = i
+					break
+				}
+			}
+			return u.save()
 		}
-		m := machines[n-1]
-		cwd, e := u.prompt("Working directory (empty = machine home): ")
-		if e != nil {
-			return e
+		indices := parseIndices(s, len(ts))
+		if len(indices) > 0 {
+			for _, idx := range indices {
+				t := ts[idx-1]
+				label := terminalLabel(t.Title)
+				sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: label})
+			}
+			first := ts[indices[0]-1]
+			for i, tab := range u.Config.Tabs {
+				if tab.Machine == first.Machine && tab.Terminal == first.ID {
+					u.Config.Active = i
+					break
+				}
+			}
+			return u.save()
 		}
-		if cwd == "" {
-			cwd = m.Home
-		}
-		return u.createTerminal(m, cwd, false)
+		u.print("Invalid choice.\n")
+		_, _ = u.prompt("Enter to continue: ")
 	}
-	n, _ := strconv.Atoi(s)
-	if n < 1 || n > len(ts) {
-		return errors.New("invalid terminal")
-	}
-	t := ts[n-1]
-	sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: t.Title})
-	return u.save()
 }
 
 // New terminals bypass the existing-terminal picker.
@@ -331,6 +666,11 @@ func (u *UI) local(cmd byte) (quit bool, err error) {
 	case 'x':
 		u.clear()
 		t := u.Config.Tabs[u.Config.Active]
+		if t.Socket == "default" || terminalLabel(t.Label) == "Default tmux" {
+			u.print("Default tmux sessions are persistent and cannot be terminated.\nUse 'd' to detach the tab instead.\n\n")
+			_, _ = u.prompt("Enter to return: ")
+			return false, nil
+		}
 		u.print("Terminate " + Safe(terminalLabel(t.Label)) + "? This closes the Offdesk terminal and may stop its programs.\n")
 		s, e := u.prompt("Type yes to terminate; Enter cancels: ")
 		if e != nil {
@@ -376,7 +716,7 @@ func (u *UI) local(cmd byte) (quit bool, err error) {
 				u.print("  " + Safe(d.Server) + "  [" + Safe(d.Machine) + "]\n")
 			}
 		}
-		u.print("Prefix defaults to Ctrl+] (0x1d). Then:\nf files; c control; n new; s terminals; [ / ] or 1..9 switch\nr rename; d detach tab; x terminate with confirmation\nq quit; ? help; prefix twice sends itself\nCtrl+C, Ctrl+B, Alt+M and other keys go to the remote terminal.\n")
+		u.print("Prefix defaults to Ctrl+] (0x1d). Then:\nf files; n new; s terminals; [ / ] or 1..9 switch\nr rename; d detach tab; x terminate with confirmation\nq quit; ? help; prefix twice sends itself\nCtrl+C, Ctrl+B, Alt+M and other keys go to the remote terminal.\n")
 		_, err = u.prompt("Enter to return: ")
 		return false, err
 	default:

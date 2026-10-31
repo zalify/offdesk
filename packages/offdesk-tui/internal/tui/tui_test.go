@@ -425,3 +425,200 @@ func TestDetachedTerminalShowsStatusAndPreservesSocketOnReopen(t *testing.T) {
 		t.Fatal("detach changed remote terminal")
 	}
 }
+
+func TestChooseTerminateAllTerminatesAndPromptsNew(t *testing.T) {
+	h := testhub.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 4), readErr: make(chan error, 1)}
+	u.input <- []byte("x all\r")
+	u.input <- []byte("yes\r")
+	u.input <- []byte("\r") // for the auto-create socket prompt
+	if err = u.choose(true); err != nil {
+		t.Fatal(err)
+	}
+	_, _, _, remaining, _ := h.Stats()
+	// "existing" was deleted, "new" was created
+	if remaining != 1 || len(cfg.Tabs) != 1 || cfg.Tabs[0].Terminal != "new" {
+		t.Fatalf("expected 1 remaining auto-created terminal, got %d, tabs: %+v", remaining, cfg.Tabs)
+	}
+}
+
+func TestChooseTerminateSingleTerminal(t *testing.T) {
+	h := testhub.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 4), readErr: make(chan error, 1)}
+	u.input <- []byte("x 1\r")
+	u.input <- []byte("yes\r")
+	u.input <- []byte("q\r")
+	if err = u.choose(false); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF after q, got %v", err)
+	}
+	_, _, _, remaining, _ := h.Stats()
+	if remaining != 0 {
+		t.Fatalf("expected 0 remaining terminals, got %d", remaining)
+	}
+}
+
+func TestParseCommandAndIndices(t *testing.T) {
+	cmd, arg := parseCommand("x all")
+	if cmd != "x" || arg != "all" {
+		t.Fatalf("expected x all, got %q %q", cmd, arg)
+	}
+	cmd, arg = parseCommand("x all -y")
+	if cmd != "x" || arg != "all -y" {
+		t.Fatalf("expected x all -y, got %q %q", cmd, arg)
+	}
+	cmd, arg = parseCommand("x 1,2,3")
+	if cmd != "x" || arg != "1,2,3" {
+		t.Fatalf("expected x 1,2,3, got %q %q", cmd, arg)
+	}
+	cmd, arg = parseCommand("d 1, 2")
+	if cmd != "d" || arg != "1, 2" {
+		t.Fatalf("expected d 1, 2, got %q %q", cmd, arg)
+	}
+	cmd, arg = parseCommand("a 3-5")
+	if cmd != "a" || arg != "3-5" {
+		t.Fatalf("expected a 3-5, got %q %q", cmd, arg)
+	}
+	cmd, arg = parseCommand("1,2")
+	if cmd != "" || arg != "1,2" {
+		t.Fatalf("expected '' 1,2, got %q %q", cmd, arg)
+	}
+
+	indices := parseIndices("1,2,3", 5)
+	if len(indices) != 3 || indices[0] != 1 || indices[1] != 2 || indices[2] != 3 {
+		t.Fatalf("expected [1 2 3], got %v", indices)
+	}
+	indices = parseIndices("1, 3, 2, 1", 5)
+	if len(indices) != 3 || indices[0] != 1 || indices[1] != 3 || indices[2] != 2 {
+		t.Fatalf("expected [1 3 2] deduplicated, got %v", indices)
+	}
+	indices = parseIndices("2-4", 5)
+	if len(indices) != 3 || indices[0] != 2 || indices[1] != 3 || indices[2] != 4 {
+		t.Fatalf("expected [2 3 4] from range, got %v", indices)
+	}
+	indices = parseIndices("0, 6, -1", 5)
+	if len(indices) != 0 {
+		t.Fatalf("expected empty for out-of-range, got %v", indices)
+	}
+}
+
+func TestTabMenuAttachAndDetachCommaSeparated(t *testing.T) {
+	h := testhub.Start(t)
+	h.SetTerminals("tab1", "tab2")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{
+		Tabs: []config.Tab{
+			{Machine: "machine", Terminal: "tab1", Label: "Tab 1"},
+			{Machine: "machine", Terminal: "tab2", Label: "Tab 2"},
+		},
+	}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 5), readErr: make(chan error, 1)}
+
+	// 1. Detach tabs 1 and 2 using comma separated selection "d 1,2"
+	u.input <- []byte("d 1,2\r")
+	// 2. Attach tab 1 using "a 1"
+	u.input <- []byte("a 1\r")
+	// 3. Exit menu by hitting Enter (empty input)
+	u.input <- []byte("\r")
+
+	if err = u.tabMenu(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cfg.Tabs) != 1 || cfg.Tabs[0].Terminal != "tab1" {
+		t.Fatalf("expected tab1 attached, got tabs: %+v", cfg.Tabs)
+	}
+	if len(cfg.DetachedTabs) != 1 || cfg.DetachedTabs[0].Terminal != "tab2" {
+		t.Fatalf("expected tab2 detached, got detached: %+v", cfg.DetachedTabs)
+	}
+}
+
+func TestChooseAttachMultipleCommaSeparated(t *testing.T) {
+	h := testhub.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 2), readErr: make(chan error, 1)}
+	// Attach via "a 1" (testhub has 1 existing terminal)
+	u.input <- []byte("a 1\r")
+	if err = u.choose(false); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tabs) != 1 || cfg.Tabs[0].Terminal != "existing" {
+		t.Fatalf("expected 'existing' terminal attached, got %+v", cfg.Tabs)
+	}
+}
+
+func TestTabMenuTerminateCommaSeparated(t *testing.T) {
+	h := testhub.Start(t)
+	h.SetTerminals("t1", "t2", "t3")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{
+		Tabs: []config.Tab{
+			{Machine: "machine", Terminal: "t1", Label: "T1"},
+			{Machine: "machine", Terminal: "t2", Label: "T2"},
+			{Machine: "machine", Terminal: "t3", Label: "T3"},
+		},
+	}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 5), readErr: make(chan error, 1)}
+
+	// Terminate terminals 1 and 2 with comma separation "x 1,2"
+	u.input <- []byte("x 1,2\r")
+	u.input <- []byte("yes\r")
+	// Exit menu
+	u.input <- []byte("q\r")
+
+	if err = u.tabMenu(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cfg.Tabs) != 1 || cfg.Tabs[0].Terminal != "t3" {
+		t.Fatalf("expected only t3 remaining, got %+v", cfg.Tabs)
+	}
+	_, _, _, remaining, _ := h.Stats()
+	if remaining != 1 {
+		t.Fatalf("expected 1 remaining terminal on hub, got %d", remaining)
+	}
+}

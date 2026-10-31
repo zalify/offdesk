@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"offdesk-tui/internal/transport"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,14 @@ type Hub struct {
 }
 
 func (h *Hub) ClearTerminals()   { h.mu.Lock(); defer h.mu.Unlock(); h.terminals = map[string]bool{} }
+func (h *Hub) SetTerminals(ids ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.terminals = make(map[string]bool)
+	for _, id := range ids {
+		h.terminals[id] = true
+	}
+}
 func (h *Hub) Startup() string   { h.mu.Lock(); defer h.mu.Unlock(); return h.startup }
 func (h *Hub) AddSecondMachine() { h.mu.Lock(); defer h.mu.Unlock(); h.secondMachine = true }
 func (h *Hub) DelayExitRemoval() { h.mu.Lock(); defer h.mu.Unlock(); h.delayExitRemoval = true }
@@ -303,8 +312,13 @@ func (h *Hub) request(m transport.Message) (int, string) {
 		}
 		result = list
 	case m.Path == "/api/terminals":
-		var ts []map[string]any
+		var ids []string
 		for id := range h.terminals {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		var ts []map[string]any
+		for _, id := range ids {
 			ts = append(ts, map[string]any{"id": id, "machine_id": "machine", "title": "Test", "cols": 80, "rows": 24, "reachable": true})
 		}
 		result = ts
@@ -340,8 +354,12 @@ func (h *Hub) request(m transport.Message) (int, string) {
 			machine = "machine-b"
 		}
 		result = map[string]string{"id": id, "machine_id": machine, "title": "Shell"}
-	case strings.HasPrefix(m.Path, "/api/machines/machine/terminals/new") && m.Method == "DELETE":
-		delete(h.terminals, "new")
+	case strings.HasPrefix(m.Path, "/api/machines/machine/terminals/") && m.Method == "DELETE":
+		id := strings.TrimPrefix(m.Path, "/api/machines/machine/terminals/")
+		if idx := strings.Index(id, "?"); idx != -1 {
+			id = id[:idx]
+		}
+		delete(h.terminals, id)
 		return 204, ""
 	case strings.Contains(m.Path, "/foreground-process"):
 		result = map[string]any{"has_foreground_process": true, "process_name": "codex"}

@@ -97,6 +97,7 @@ under offdesk-tui/config.json. Keep links and credentials private.
 
 Commands:
   machines | terminals   list remote resources
+  terminate ID|all       close remote terminal(s)
   ls MACHINE /path       browse remote files
   download MACHINE /remote /local [--overwrite]
   upload MACHINE /local /remote --replace
@@ -229,6 +230,72 @@ Inside terminal: Ctrl+] then ? for local shortcuts.`)
 			return e
 		}
 		return json.NewEncoder(os.Stdout).Encode(v)
+	case "close", "terminate":
+		if len(args) == 0 {
+			return errors.New("usage: terminate <terminal-id | all> [--machine MACHINE]")
+		}
+		target := args[0]
+		filterMachine := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--machine" && i+1 < len(args) {
+				filterMachine = args[i+1]
+				i++
+			}
+		}
+		terminals, e := a.Terminals(ctx)
+		if e != nil {
+			return e
+		}
+		if target == "all" {
+			count := 0
+			skipped := 0
+			for _, t := range terminals {
+				if filterMachine != "" && t.Machine != filterMachine {
+					continue
+				}
+				if t.Title == "Default tmux" || strings.Contains(t.Title, "tmux -L default") {
+					skipped++
+					continue
+				}
+				_ = a.Control(ctx, t.Machine, true)
+				if err := a.Destroy(ctx, t.Machine, t.ID); err != nil {
+					fmt.Fprintf(os.Stderr, "failed to terminate %s: %v\n", t.ID, err)
+				} else {
+					count++
+				}
+			}
+			if skipped > 0 {
+				fmt.Printf("Terminated %d terminal(s); preserved %d persistent Default tmux session(s).\n", count, skipped)
+			} else {
+				fmt.Printf("Terminated %d terminal(s).\n", count)
+			}
+			return nil
+		}
+		var matched []api.Terminal
+		for _, t := range terminals {
+			if filterMachine != "" && t.Machine != filterMachine {
+				continue
+			}
+			if t.ID == target || strings.HasPrefix(t.ID, target) {
+				matched = append(matched, t)
+			}
+		}
+		if len(matched) == 0 {
+			return fmt.Errorf("no terminal matching %q", target)
+		}
+		if len(matched) > 1 {
+			return fmt.Errorf("ambiguous terminal %q matches %d terminals", target, len(matched))
+		}
+		t := matched[0]
+		if t.Title == "Default tmux" || strings.Contains(t.Title, "tmux -L default") {
+			return errors.New("default tmux sessions are persistent and cannot be terminated; detach instead")
+		}
+		_ = a.Control(ctx, t.Machine, true)
+		if err := a.Destroy(ctx, t.Machine, t.ID); err != nil {
+			return err
+		}
+		fmt.Printf("Terminated terminal %s\n", t.ID)
+		return nil
 	case "ls":
 		if len(args) != 2 {
 			return errors.New("usage: ls MACHINE /path")

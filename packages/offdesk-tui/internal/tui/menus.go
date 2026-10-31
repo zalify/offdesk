@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,7 +25,7 @@ func (u *UI) commandMenu() (bool, error) {
 	if u.Config.Active >= 0 && u.Config.Active < len(u.Config.Tabs) {
 		u.print("Terminal: " + Safe(u.Config.Tabs[u.Config.Active].Label) + "\n\n")
 	}
-	u.print(" f  Files          c  Control\n n  New terminal   s  Terminals\n d  Detach tab     r  Rename\n [  Previous tab   ]  Next tab\n 1–9  Switch tab   x  Terminate\n ?  Help           q  Quit\n Esc  Return\n\n")
+	u.print(" f  Files          s  Terminals\n n  New terminal   r  Rename\n d  Detach tab     x  Terminate\n [  Previous tab   ]  Next tab\n 1–9  Switch tab   q  Quit\n ?  Help           Esc  Return\n\n")
 	u.print(fmt.Sprintf("Press a key; Ctrl+%c again sends the prefix.\n", u.Config.Prefix+64))
 	for {
 		select {
@@ -102,82 +101,84 @@ func (u *UI) foregroundNames(terminals []api.Terminal) map[string]string {
 }
 
 func (u *UI) tabMenu() error {
-	ctx, cancel := context.WithTimeout(u.ctx, 5*time.Second)
-	remote, discoveryErr := u.API.Terminals(ctx)
-	machines, machinesErr := u.API.Machines(ctx)
-	cancel()
-	var names map[string]string
-	if discoveryErr == nil {
-		names = u.foregroundNames(remote)
-	}
-	var other []api.Terminal
-	for _, t := range remote {
-		found := false
-		for _, tab := range u.Config.Tabs {
-			if tab.Machine == t.Machine && tab.Terminal == t.ID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			other = append(other, t)
-		}
-	}
-	machineNames := make(map[string]string)
-	for _, m := range machines {
-		machineNames[m.ID] = m.Name
-	}
-	remoteByKey := make(map[string]api.Terminal)
-	for _, t := range remote {
-		remoteByKey[t.Machine+"\x00"+t.ID] = t
-	}
-	if discoveryErr == nil && machinesErr == nil {
-		online := make(map[string]bool)
-		for _, m := range machines {
-			online[m.ID] = true
-		}
-		kept := u.Config.DetachedTabs[:0]
-		for _, tab := range u.Config.DetachedTabs {
-			_, present := remoteByKey[tab.Machine+"\x00"+tab.Terminal]
-			if present || !online[tab.Machine] {
-				kept = append(kept, tab)
-			}
-		}
-		changed := len(kept) != len(u.Config.DetachedTabs)
-		u.Config.DetachedTabs = kept
-		if changed {
-			if e := u.save(); e != nil {
-				return e
-			}
-		}
-	}
-	type row struct {
-		tab      config.Tab
-		saved    int
-		current  bool
-		detached bool
-		group    string
-	}
-	var rows []row
-	for i, tab := range u.Config.Tabs {
-		group := socketGroup(tab, remoteByKey[tab.Machine+"\x00"+tab.Terminal].Title)
-		rows = append(rows, row{tab: tab, saved: i, current: i == u.Config.Active, group: group})
-	}
-	for _, t := range other {
-		tab := config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)}
-		detached := false
-		for _, d := range u.Config.DetachedTabs {
-			if d.Machine == t.Machine && d.Terminal == t.ID {
-				tab = d
-				detached = true
-				break
-			}
-		}
-		rows = append(rows, row{tab: tab, saved: -1, detached: detached, group: socketGroup(tab, t.Title)})
-	}
-	rank := map[string]int{"Default tmux": 0, "Offdesk shell": 1, "Other / unknown": 2}
-	sort.SliceStable(rows, func(i, j int) bool { return rank[rows[i].group] < rank[rows[j].group] })
+	var notice string
 	for {
+		ctx, cancel := context.WithTimeout(u.ctx, 5*time.Second)
+		remote, discoveryErr := u.API.Terminals(ctx)
+		machines, machinesErr := u.API.Machines(ctx)
+		cancel()
+		var names map[string]string
+		if discoveryErr == nil {
+			names = u.foregroundNames(remote)
+		}
+		var other []api.Terminal
+		for _, t := range remote {
+			found := false
+			for _, tab := range u.Config.Tabs {
+				if tab.Machine == t.Machine && tab.Terminal == t.ID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				other = append(other, t)
+			}
+		}
+		machineNames := make(map[string]string)
+		for _, m := range machines {
+			machineNames[m.ID] = m.Name
+		}
+		remoteByKey := make(map[string]api.Terminal)
+		for _, t := range remote {
+			remoteByKey[t.Machine+"\x00"+t.ID] = t
+		}
+		if discoveryErr == nil && machinesErr == nil {
+			online := make(map[string]bool)
+			for _, m := range machines {
+				online[m.ID] = true
+			}
+			kept := u.Config.DetachedTabs[:0]
+			for _, tab := range u.Config.DetachedTabs {
+				_, present := remoteByKey[tab.Machine+"\x00"+tab.Terminal]
+				if present || !online[tab.Machine] {
+					kept = append(kept, tab)
+				}
+			}
+			changed := len(kept) != len(u.Config.DetachedTabs)
+			u.Config.DetachedTabs = kept
+			if changed {
+				if e := u.save(); e != nil {
+					return e
+				}
+			}
+		}
+		type row struct {
+			tab      config.Tab
+			saved    int
+			current  bool
+			detached bool
+			group    string
+		}
+		var rows []row
+		for i, tab := range u.Config.Tabs {
+			group := socketGroup(tab, remoteByKey[tab.Machine+"\x00"+tab.Terminal].Title)
+			rows = append(rows, row{tab: tab, saved: i, current: i == u.Config.Active, group: group})
+		}
+		for _, t := range other {
+			tab := config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)}
+			detached := false
+			for _, d := range u.Config.DetachedTabs {
+				if d.Machine == t.Machine && d.Terminal == t.ID {
+					tab = d
+					detached = true
+					break
+				}
+			}
+			rows = append(rows, row{tab: tab, saved: -1, detached: detached, group: socketGroup(tab, t.Title)})
+		}
+		rank := map[string]int{"Default tmux": 0, "Offdesk shell": 1, "Other / unknown": 2}
+		sort.SliceStable(rows, func(i, j int) bool { return rank[rows[i].group] < rank[rows[j].group] })
+
 		u.clear()
 		u.print("Offdesk · Terminals\n")
 		for _, group := range []string{"Default tmux", "Offdesk shell", "Other / unknown"} {
@@ -225,7 +226,11 @@ func (u *UI) tabMenu() error {
 			u.print("\nCould not load other terminals; saved tabs are still shown.\n")
 		}
 		u.print("\nDefault tmux windows: attach, then Ctrl+B w.\n")
-		choice, e := u.prompt("\nTerminal number (Enter to return): ")
+		if notice != "" {
+			u.print("\n" + notice + "\n")
+			notice = ""
+		}
+		choice, e := u.prompt("\nTerminal number, a=attach, d=detach, x=terminate (e.g. 1, 1,2, a all, d all, x all; Enter to return): ")
 		if e != nil {
 			return e
 		}
@@ -233,20 +238,148 @@ func (u *UI) tabMenu() error {
 		if choice == "" || strings.EqualFold(choice, "q") {
 			return nil
 		}
-		n, e := strconv.Atoi(choice)
-		if e == nil && n >= 1 && n <= len(rows) {
-			selected := rows[n-1]
-			if selected.saved >= 0 {
-				u.Config.Active = selected.saved
-			} else {
-				sessions.Add(u.Config, selected.tab)
+		cmd, arg := parseCommand(choice)
+		if cmd == "x" {
+			if arg == "all" || arg == "all -y" {
+				proceed := arg == "all -y"
+				if !proceed {
+					confirm, err := u.prompt(fmt.Sprintf("Terminate all %d terminal(s)? [y/n]: ", len(rows)))
+					if err != nil {
+						return err
+					}
+					c := strings.TrimSpace(strings.ToLower(confirm))
+					proceed = c == "y" || c == "yes"
+				}
+				if proceed {
+					skippedDefault := 0
+					termCount := 0
+					for _, r := range rows {
+						if r.group == "Default tmux" || r.tab.Socket == "default" {
+							skippedDefault++
+							continue
+						}
+						_ = u.terminateTerminal(r.tab.Machine, r.tab.Terminal)
+						u.removeConfigTab(r.tab.Machine, r.tab.Terminal)
+						termCount++
+					}
+					_ = u.save()
+					msg := fmt.Sprintf("Terminated %d terminal(s).", termCount)
+					if skippedDefault > 0 {
+						msg += fmt.Sprintf(" Preserved %d persistent Default tmux session(s).", skippedDefault)
+					}
+					notice = msg
+				}
+				continue
+			}
+			indices := parseIndices(arg, len(rows))
+			if len(indices) == 0 {
+				notice = "Specify terminal number(s) to terminate (e.g. x 1, x 1,2, x all)."
+				continue
+			}
+			var targets []row
+			skippedDefault := 0
+			for _, idx := range indices {
+				target := rows[idx-1]
+				if target.group == "Default tmux" || target.tab.Socket == "default" {
+					skippedDefault++
+					continue
+				}
+				targets = append(targets, target)
+			}
+			if len(targets) == 0 {
+				u.print("\nDefault tmux sessions are persistent and cannot be terminated.\nUse detach instead.\n")
+				_, _ = u.prompt("Enter to continue: ")
+				continue
+			}
+			promptMsg := fmt.Sprintf("Terminate %s? [y/n]: ", terminalLabel(targets[0].tab.Label))
+			if len(targets) > 1 {
+				promptMsg = fmt.Sprintf("Terminate %d terminal(s)? [y/n]: ", len(targets))
+			}
+			confirm, err := u.prompt(promptMsg)
+			if err != nil {
+				return err
+			}
+			c := strings.TrimSpace(strings.ToLower(confirm))
+			if c == "y" || c == "yes" {
+				for _, target := range targets {
+					_ = u.terminateTerminal(target.tab.Machine, target.tab.Terminal)
+					u.removeConfigTab(target.tab.Machine, target.tab.Terminal)
+				}
+				_ = u.save()
+				msg := fmt.Sprintf("Terminated %d terminal(s).", len(targets))
+				if skippedDefault > 0 {
+					msg += fmt.Sprintf(" Preserved %d persistent Default tmux session(s).", skippedDefault)
+				}
+				notice = msg
+			}
+			continue
+		}
+		if cmd == "d" {
+			if arg == "all" {
+				detachedCount := 0
+				for _, r := range rows {
+					if r.saved >= 0 {
+						u.detachTab(r.tab)
+						detachedCount++
+					}
+				}
+				for len(u.Config.Tabs) > 0 {
+					u.detachTab(u.Config.Tabs[0])
+				}
+				_ = u.save()
+				notice = fmt.Sprintf("Detached %d open terminal(s).", detachedCount)
+				continue
+			}
+			indices := parseIndices(arg, len(rows))
+			if len(indices) == 0 {
+				notice = "Specify terminal number(s) to detach (e.g. d 1, d 1,2, d all)."
+				continue
+			}
+			for _, idx := range indices {
+				u.detachTab(rows[idx-1].tab)
+			}
+			_ = u.save()
+			notice = fmt.Sprintf("Detached %d terminal(s).", len(indices))
+			continue
+		}
+		if cmd == "a" {
+			if arg == "all" {
+				for _, r := range rows {
+					sessions.Add(u.Config, r.tab)
+				}
+				_ = u.save()
+				notice = fmt.Sprintf("Attached all %d terminal(s). (Enter to return to active terminal)", len(rows))
+				continue
+			}
+			indices := parseIndices(arg, len(rows))
+			if len(indices) == 0 {
+				notice = "Specify terminal number(s) to attach (e.g. a 1, a 1,2, a all)."
+				continue
+			}
+			for _, idx := range indices {
+				r := rows[idx-1]
+				sessions.Add(u.Config, r.tab)
+			}
+			_ = u.save()
+			notice = fmt.Sprintf("Attached %d terminal(s). (Enter to return to active terminal)", len(indices))
+			continue
+		}
+		indices := parseIndices(choice, len(rows))
+		if len(indices) > 0 {
+			for _, idx := range indices {
+				r := rows[idx-1]
+				sessions.Add(u.Config, r.tab)
+			}
+			first := rows[indices[0]-1]
+			for i, tab := range u.Config.Tabs {
+				if tab.Machine == first.tab.Machine && tab.Terminal == first.tab.Terminal {
+					u.Config.Active = i
+					break
+				}
 			}
 			return u.save()
 		}
-		u.print("Invalid terminal.\n")
-		if _, e = u.prompt("Enter to try again: "); e != nil {
-			return e
-		}
+		notice = "Invalid choice. Enter terminal number(s), or a, d, x commands."
 	}
 }
 

@@ -74,17 +74,34 @@ Press the local prefix **Ctrl+]** to display the command menu, then press a list
 | --- | --- |
 | `?` or `b` | Show local tabs and help |
 | `f` | File menu: list, download, attach a file or replace text |
-| `c` | Show ownership and take or release control |
 | `n` | Create a new terminal |
-| `s` | List saved tabs and other Offdesk terminals, and select by number |
+| `s` | Terminals menu: manage saved tabs and remote terminals |
 | `[` / `]`, `1`–`9` | Switch saved local terminal |
 | `r` | Rename the local label |
-| `d` | Remove the local tab without killing its terminal |
+| `d` | Detach the local tab without killing its terminal |
 | `x` | Terminate the remote terminal after confirmation |
 | `q` | Quit and preserve local tabs and remote processes |
 | Ctrl+] again | Send a literal Ctrl+] |
 
-Configure the prefix with a hex byte, for example `offdesk-tui prefix 1e` for Ctrl+^. Ctrl+C, Ctrl+B, and Escape cannot be selected as the prefix. A local command detaches the current view; it reconnects when returning. No terminal screen buffer is saved locally. When control belongs to another device, the Hub permits observation and the first input claims control; the client sends a resize after that input. The control menu lets you take or release control. Terminal-generated responses may also be treated as input by this client and claim control; see known limitations.
+Configure the prefix with a hex byte, for example `offdesk-tui prefix 1e` for Ctrl+^. Ctrl+C, Ctrl+B, and Escape cannot be selected as the prefix. A local command detaches the current view; it reconnects when returning. No terminal screen buffer is saved locally.
+
+### Terminal Management & Batch Selection
+
+Both the interactive terminals menu (`Ctrl+] s`) and the initial startup terminal picker support flexible terminal management with bulk actions and multi-selection:
+
+- **Connect / Switch**: Type a terminal number (`1` or `2`) or comma-separated numbers (`1,2`) to attach and immediately connect to the active session.
+- **Attach (`a`)**: Attach remote terminal(s) locally without exiting the menu (`a 1`, `a 1,2`, `a 1-3`, `a all`).
+- **Detach (`d`)**: Detach local tabs without terminating remote processes (`d 1`, `d 1,2`, `d all`). Detached sessions display as `· detached here` and continue running on the host.
+- **Terminate (`x`)**: Terminate remote terminals after `[y/n]` confirmation (`x 1`, `x 1,2`, `x all`).
+- **Selection Syntax**: Select multiple terminals using commas (`1,2,3`), spaces (`1 2 3`), or ranges (`1-3`).
+- **Default tmux Protection**: The user's persistent Default tmux session is automatically protected from deletion or duplicate creation. If an existing Default tmux session is running, starting a new Default tmux session reattaches to it instead of spawning redundant sessions.
+
+Terminals can also be managed directly from the command line:
+
+```fish
+offdesk-tui terminals
+offdesk-tui terminate <terminal-id | all> [-y]
+```
 
 The terminal list marks terminals detached from this TUI as “detached here” and other terminals without local tabs as “not open here”. It groups terminals by known socket choice and keeps unidentifiable older terminals under Other / unknown. It shows the foreground process name when the Hub and machine provide it. This is best effort and describes the Offdesk-managed pane; when that pane runs a client for the default tmux server, it may say `tmux` rather than the program in a nested window. The Hub does not enumerate windows on external tmux sockets. Once attached to the default tmux session, use its window chooser (normally `Ctrl+B w`) or session chooser (`Ctrl+B s`).
 
