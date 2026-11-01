@@ -246,7 +246,7 @@ function DesktopSetupFrame({ children }: { children: ReactNode }) {
 
 // ── The frame ─────────────────────────────────────────────────────
 
-const HUB_STEPS = ["this machine", "set up", "your phone", "first session"];
+const HUB_STEPS = ["this machine", "set up", "your phone"];
 
 /**
  * The workspace before it has tabs: the steps stand where the tab bar goes and
@@ -686,7 +686,6 @@ export function HubReadyScreen({
         </div>
         {error ? <div role="alert" style={errorBox}>{error}</div> : null}
         {phone ? null : purpose === "browser" || !link?.secure_url ? <AddressField link={link} code={code} /> : null}
-        {phone ? null : <Body size={13} style={{ marginTop: "auto" }}>Away from home? Remote access is on your Getting started list.</Body>}
       </div>
       <div className="odk-setup-col" style={{ gap: 16 }}>
         {phone ? (
