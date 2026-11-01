@@ -346,14 +346,43 @@ export function Body({ children, size = 15, style }: { children: ReactNode; size
   );
 }
 
-/** A setup step's state, the way a checklist prints it: [✓] [~] [ ]. */
-export function StepMark({ state, label }: { state: "done" | "active" | "todo"; label?: string }) {
-  const text = state === "done" ? "[✓]" : state === "active" ? "[~]" : "[ ]";
-  const name = label ?? (state === "done" ? "Done" : state === "active" ? "In progress" : "Not started");
+/** A setup step's state, the way a checklist prints it: [✓] [~] [!] [ ]. */
+export function StepMark({ state, label }: { state: "done" | "active" | "failed" | "todo"; label?: string }) {
+  const text = state === "done" ? "[✓]" : state === "active" ? "[~]" : state === "failed" ? "[!]" : "[ ]";
+  const name = label ?? (state === "done" ? "Done" : state === "active" ? "In progress" : state === "failed" ? "Needs attention" : "Not started");
   return (
     <span className={`odk-step-mark${state === "done" ? "" : ` odk-step-mark--${state}`}`} role="img" aria-label={name}>
       {text}
     </span>
+  );
+}
+
+/** Onboarding's progress, in the place the tab bar will take once there are
+ *  tabs. `currentDone`: the step is finished but still on screen (D5). */
+export function StepBar({
+  steps,
+  current,
+  currentDone = false,
+  failed = false,
+}: {
+  steps: string[];
+  current: number;
+  currentDone?: boolean;
+  failed?: boolean;
+}) {
+  return (
+    <ol className="odk-steps" aria-label="Setup progress" data-testid="setup-steps">
+      {steps.map((step, index) => {
+        const on = index === current;
+        const state = index < current || (on && currentDone) ? "done" : !on ? "todo" : failed ? "failed" : "active";
+        return (
+          <li key={step} className={`odk-tab${on ? " odk-tab--on" : ""}${on && failed ? " odk-tab--failed" : ""}${index < current ? " odk-tab--done" : ""}`} aria-current={on ? "step" : undefined}>
+            <StepMark state={state} />
+            <span className="odk-steps-label">{step}</span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 

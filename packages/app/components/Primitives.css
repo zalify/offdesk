@@ -100,6 +100,18 @@ button.odk-status-end--active.odk-status-btn--end{border-left:0;background:rgb(v
 .odk-tab-alert{color:rgb(var(--color-err))}
 @media(hover:hover){.odk-tab:hover{color:rgb(var(--color-fg-0))}}
 
+/* Onboarding's steps sit where the tab bar goes. They aren't tabs to click. */
+.odk-steps{box-sizing:border-box;flex-shrink:0;display:flex;min-height:40px;margin:0;padding:0 0 0 8px;overflow-x:auto;list-style:none;background:rgb(var(--color-bg-1));border-bottom:1px solid rgb(var(--color-line-soft));scrollbar-width:none}
+.odk-steps .odk-tab{cursor:default}
+.odk-steps .odk-tab--done{color:rgb(var(--color-fg-2))}
+.odk-steps .odk-tab--on{border-bottom-color:rgb(var(--color-accent));color:rgb(var(--color-fg-0))}
+.odk-steps .odk-tab--failed{border-bottom-color:rgb(var(--color-err))}
+.odk-steps .odk-step-mark{color:inherit}
+.odk-steps .odk-step-mark--active{color:rgb(var(--color-accent))}
+.odk-steps .odk-step-mark--failed{color:rgb(var(--color-err))}
+/* All four won't fit on a phone: the marks stay, and the current step's name. */
+@media(max-width:520px){.odk-steps .odk-tab{padding:0 8px}.odk-steps .odk-tab:not(.odk-tab--on) .odk-steps-label{display:none}}
+
 /* ── Key bar keys (phone, Fold) ─────────────────────────────────── */
 .odk-key{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;height:36px;min-width:36px;padding:0 10px;border:1px solid rgb(var(--color-line));border-radius:3px;background:transparent;color:rgb(var(--color-fg-0));font-family:var(--font-display);font-size:.75rem;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;user-select:none;-webkit-user-select:none}
 .odk-key--accent{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
@@ -113,7 +125,19 @@ button.odk-status-end--active.odk-status-btn--end{border-left:0;background:rgb(v
 .odk-step:last-child{border-bottom:0}
 .odk-step-mark{flex-shrink:0;color:rgb(var(--color-fg-0))}
 .odk-step-mark--active{color:rgb(var(--color-accent))}
+.odk-step-mark--failed{color:rgb(var(--color-err))}
 .odk-step-mark--todo{color:rgb(var(--color-fg-3))}
+
+/* Onboarding's two columns: what's happening, then the thing to do. */
+.odk-setup{flex:1;min-height:0;overflow:auto}
+.odk-setup-grid{box-sizing:border-box;display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:72px;width:100%;max-width:1280px;min-height:100%;margin:0 auto;padding:48px 72px 32px}
+.odk-setup-col{display:flex;flex-direction:column;gap:20px;min-width:0}
+.odk-setup-foot{margin-top:auto}
+@media(max-width:900px){.odk-setup-grid{grid-template-columns:minmax(0,1fr);gap:28px;padding:24px 16px}.odk-setup-foot{margin-top:0}}
+.odk-setup-fail{box-sizing:border-box;display:flex;flex-direction:column;gap:10px;margin:6px 0;padding:16px;border:1px solid rgb(var(--color-err));border-radius:4px}
+.odk-setup-fail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.odk-setup-diagram{flex-shrink:0;margin:0;font-family:'JetBrains Mono',var(--font-mono);font-size:.8125rem;line-height:1.5;color:rgb(var(--color-fg-2))}
+.odk-setup-pair{display:flex;flex-wrap:wrap;align-items:flex-start;gap:28px}
 
 /* The lockup's /dev: lime text on dark, a lime highlight on paper. */
 .odk-wordmark-dev{color:rgb(var(--color-accent))}

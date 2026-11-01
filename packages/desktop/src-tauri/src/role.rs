@@ -12,7 +12,8 @@
 //! sidecars live in is what lets a Mac with no Homebrew find tmux.
 
 use std::fs;
-use std::net::{SocketAddr, TcpStream};
+use std::collections::HashMap;
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -21,7 +22,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Runtime};
 
 const STORE_FILE: &str = "desktop.json";
-pub(crate) const HUB_PORT: u16 = 4317;
+const HUB_PORT: u16 = 4317;
+/// How far past a taken port to look for a free one.
+const PORT_SEARCH: u16 = 20;
 
 // ── The first-run answer ──────────────────────────────────────────
 
@@ -126,10 +129,19 @@ fn prepend_path(dir: Option<&Path>, existing: Option<&str>) -> String {
 }
 
 fn hub_command(args: &[&str], base_url: Option<&str>) -> Result<Command, String> {
+    hub_command_on(args, base_url, hub_port())
+}
+
+/// `--listen` is global on the hub's CLI and defaults to 4317, so every
+/// command has to name a hub that was installed on another port.
+fn hub_command_on(args: &[&str], base_url: Option<&str>, port: u16) -> Result<Command, String> {
     let (binary, dir) = hub_binary()?;
     let mut command = Command::new(binary);
+    command.args(args);
+    if port != HUB_PORT {
+        command.args(["--listen", &format!("0.0.0.0:{port}")]);
+    }
     command
-        .args(args)
         .env(
             "PATH",
             prepend_path(dir.as_deref(), std::env::var("PATH").ok().as_deref()),
@@ -193,6 +205,8 @@ pub struct HubStatus {
     pub node_installed: bool,
     /// Something answers on the hub's port on this machine.
     pub listening: bool,
+    /// The port the hub is installed on.
+    pub port: u16,
     pub setup: SetupStatus,
 }
 
@@ -231,6 +245,7 @@ fn read_status() -> HubStatus {
         .map(PathBuf::from)
         .unwrap_or_default();
     let (hub, node) = service_files(&home);
+    let port = hub_port();
     let bundled = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("offdesk-hub").is_file()))
@@ -245,12 +260,104 @@ fn read_status() -> HubStatus {
         hub_installed: hub.is_file(),
         node_installed: node.is_file(),
         listening: TcpStream::connect_timeout(
-            &SocketAddr::from(([127, 0, 0, 1], HUB_PORT)),
+            &SocketAddr::from(([127, 0, 0, 1], port)),
             Duration::from_millis(500),
         )
         .is_ok(),
+        port,
         setup,
     }
+}
+
+// ── The port ──────────────────────────────────────────────────────
+
+/// The `--listen` port baked into a launchd plist or systemd unit.
+fn port_in_service_file(text: &str) -> Option<u16> {
+    let after = &text[text.find("--listen")? + "--listen".len()..];
+    let digits: String = after[after.find(':')? + 1..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+/// The port this machine's hub is installed on. The service file is the
+/// record: it is what the hub really starts with, whoever installed it.
+pub(crate) fn hub_port() -> u16 {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return HUB_PORT;
+    };
+    let (hub, _) = service_files(&home);
+    fs::read_to_string(hub)
+        .ok()
+        .and_then(|text| port_in_service_file(&text))
+        .unwrap_or(HUB_PORT)
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+pub struct PortHolder {
+    pub name: String,
+    pub pid: u32,
+}
+
+/// Whether the hub can have its port. `service install` can't tell: it counts
+/// anything that answers on the port as the hub having started.
+#[derive(Serialize, Debug)]
+pub struct PortCheck {
+    pub port: u16,
+    pub conflict: bool,
+    /// Who has the port, when this user may see that.
+    pub holder: Option<PortHolder>,
+    pub next_free: Option<u16>,
+}
+
+fn port_is_free(port: u16) -> bool {
+    TcpListener::bind(("0.0.0.0", port)).is_ok() && TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+/// `lsof -F pc` prints a `p<pid>` line and a `c<command>` line per process.
+fn parse_lsof(stdout: &str) -> Option<PortHolder> {
+    let mut lines = stdout.lines();
+    let pid = lines.find_map(|line| line.strip_prefix('p')?.parse().ok())?;
+    let name = lines.find_map(|line| line.strip_prefix('c'))?.to_string();
+    Some(PortHolder { name, pid })
+}
+
+fn port_holder(port: u16) -> Option<PortHolder> {
+    let lsof = if Path::new("/usr/sbin/lsof").is_file() { "/usr/sbin/lsof" } else { "lsof" };
+    let output = Command::new(lsof)
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-Fpc"])
+        .output()
+        .ok()?;
+    parse_lsof(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// A hub that's restarting holds the port as well. An unnamed holder is only
+/// a stranger when no hub is installed here to be it.
+fn is_conflict(holder: Option<&PortHolder>, hub_installed: bool) -> bool {
+    match holder {
+        Some(holder) => !holder.name.starts_with("offdesk-hub"),
+        None => !hub_installed,
+    }
+}
+
+fn check_port() -> PortCheck {
+    let port = hub_port();
+    if port_is_free(port) {
+        return PortCheck { port, conflict: false, holder: None, next_free: None };
+    }
+    let holder = port_holder(port);
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let conflict = is_conflict(holder.as_ref(), service_files(&home).0.is_file());
+    let next_free = conflict
+        .then(|| (1..=PORT_SEARCH).filter_map(|n| port.checked_add(n)).find(|&next| port_is_free(next)))
+        .flatten();
+    PortCheck { port, conflict, holder, next_free }
+}
+
+#[tauri::command]
+pub async fn hub_port_check() -> Result<PortCheck, String> {
+    tauri::async_runtime::spawn_blocking(check_port).await.map_err(|e| e.to_string())
 }
 
 // ── The link, and taking the role ─────────────────────────────────
@@ -281,6 +388,60 @@ pub struct HubLink {
 pub struct Candidate {
     pub interface: String,
     pub address: String,
+    /// What a person calls this interface: `Wi-Fi "Home-5G"`, `Ethernet`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// `networksetup -listallhardwareports`: `Hardware Port:` then `Device:`.
+fn parse_hardware_ports(stdout: &str) -> HashMap<String, String> {
+    let mut ports = HashMap::new();
+    let mut name = None;
+    for line in stdout.lines() {
+        if let Some(value) = line.strip_prefix("Hardware Port: ") {
+            name = Some(value.trim().to_string());
+        } else if let (Some(device), Some(port)) = (line.strip_prefix("Device: "), name.take()) {
+            ports.insert(device.trim().to_string(), port);
+        }
+    }
+    ports
+}
+
+/// The ` SSID : name` line of `ipconfig getsummary`. macOS redacts the name
+/// from an app without Location access; then there is no name to show.
+fn parse_ssid(stdout: &str) -> Option<String> {
+    let ssid = stdout
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("SSID : "))?
+        .trim();
+    (!ssid.is_empty() && ssid != "<redacted>").then(|| ssid.to_string())
+}
+
+fn stdout_of(program: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(program).args(args).output().ok()?;
+    output.status.success().then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+fn label_candidates(candidates: &mut [Candidate]) {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let Some(ports) = stdout_of("/usr/sbin/networksetup", &["-listallhardwareports"])
+        .map(|stdout| parse_hardware_ports(&stdout))
+    else {
+        return;
+    };
+    for candidate in candidates {
+        let Some(port) = ports.get(&candidate.interface) else { continue };
+        let ssid = (port == "Wi-Fi")
+            .then(|| stdout_of("/usr/sbin/ipconfig", &["getsummary", &candidate.interface]))
+            .flatten()
+            .and_then(|stdout| parse_ssid(&stdout));
+        candidate.label = Some(match ssid {
+            Some(ssid) => format!("{port} \u{201c}{ssid}\u{201d}"),
+            None => port.clone(),
+        });
+    }
 }
 
 fn parse_link(stdout: &str) -> Result<HubLink, String> {
@@ -300,7 +461,8 @@ pub fn read_link(base_url: Option<&str>) -> Result<HubLink, String> {
     )?;
     let mut link = parse_link(&stdout)?;
     link.public_url = public_url;
-    link.local_url = Some(format!("http://127.0.0.1:{HUB_PORT}"));
+    link.local_url = Some(format!("http://127.0.0.1:{}", hub_port()));
+    label_candidates(&mut link.candidates);
     Ok(link)
 }
 
@@ -342,15 +504,16 @@ pub async fn hub_link(base_url: Option<String>) -> Result<HubLink, String> {
 
 /// Make this machine the hub: install the hub and node services, register
 /// this machine, and return the link. `base_url` is the address the person
-/// picked for their phone; none means the hub's own pick.
+/// picked for their phone; none means the hub's own pick. `port` moves the hub
+/// off a port something else has; none keeps the one it's installed on.
 #[tauri::command]
-pub async fn hub_install(base_url: Option<String>) -> Result<HubLink, String> {
+pub async fn hub_install(base_url: Option<String>, port: Option<u16>) -> Result<HubLink, String> {
     if !cfg!(any(target_os = "macos", target_os = "linux")) {
         return Err("the hub runs on macOS and Linux; on Windows this app is a client".into());
     }
     tauri::async_runtime::spawn_blocking(move || {
         run(
-            hub_command(&["service", "install"], base_url.as_deref())?,
+            hub_command_on(&["service", "install"], base_url.as_deref(), port.unwrap_or_else(hub_port))?,
             "offdesk-hub service install",
         )?;
         read_link(base_url.as_deref())
@@ -385,6 +548,53 @@ pub async fn hub_uninstall() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_port_comes_from_either_kind_of_service_file() {
+        let plist = "<array>\n        <string>/app/offdesk-hub</string>\n        <string>--listen</string>\n        <string>0.0.0.0:4318</string>\n</array>";
+        assert_eq!(port_in_service_file(plist), Some(4318));
+        assert_eq!(port_in_service_file("ExecStart=/usr/bin/offdesk-hub --listen 0.0.0.0:4319 --allow-idle-sleep"), Some(4319));
+        assert_eq!(port_in_service_file("ExecStart=/usr/bin/offdesk-hub"), None);
+    }
+
+    #[test]
+    fn lsof_output_names_the_holder() {
+        assert_eq!(parse_lsof("p81234\ncnode\n"), Some(PortHolder { name: "node".into(), pid: 81234 }));
+        assert_eq!(parse_lsof(""), None);
+    }
+
+    #[test]
+    fn only_a_stranger_on_the_port_is_a_conflict() {
+        let hub = PortHolder { name: "offdesk-hub".into(), pid: 1 };
+        let node = PortHolder { name: "node".into(), pid: 2 };
+        assert!(!is_conflict(Some(&hub), false));
+        assert!(is_conflict(Some(&node), true));
+        // Another user's process hides from lsof.
+        assert!(is_conflict(None, false));
+        assert!(!is_conflict(None, true));
+    }
+
+    #[test]
+    fn a_taken_port_is_not_free() {
+        let taken = TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        assert!(!port_is_free(taken.local_addr().unwrap().port()));
+    }
+
+    #[test]
+    fn hardware_ports_map_devices_to_names() {
+        let printed = "\nHardware Port: Ethernet\nDevice: en0\nEthernet Address: 5c:1b\n\nHardware Port: Wi-Fi\nDevice: en1\nEthernet Address: 5e:1f\n\nVLAN Configurations\n===\n";
+        let ports = parse_hardware_ports(printed);
+        assert_eq!(ports.get("en0").map(String::as_str), Some("Ethernet"));
+        assert_eq!(ports.get("en1").map(String::as_str), Some("Wi-Fi"));
+        assert_eq!(ports.len(), 2);
+    }
+
+    #[test]
+    fn a_redacted_wifi_name_is_no_name() {
+        assert_eq!(parse_ssid("  BSSID : <redacted>\n  SSID : Home-5G\n"), Some("Home-5G".into()));
+        assert_eq!(parse_ssid("  SSID : <redacted>\n"), None);
+        assert_eq!(parse_ssid("  State : BOUND\n"), None);
+    }
 
     #[test]
     fn public_addresses_preserve_https_and_reject_credentials() {
@@ -434,7 +644,8 @@ mod tests {
             link.candidates,
             vec![Candidate {
                 interface: "en0".into(),
-                address: "192.168.1.10".into()
+                address: "192.168.1.10".into(),
+                label: None,
             }]
         );
     }
