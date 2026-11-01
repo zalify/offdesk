@@ -4394,6 +4394,97 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_handed_over_run_stays_over_until_the_next_prompt() {
+        use offdesk_protocol::{AgentReportKind, AgentRunStatus, AgentSignal, RunAgent};
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        let manager = MachineManager::new(pool.clone());
+        manager.register_machine(machine("machine-a"), Some("user-a".into())).await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-a")] },
+            )
+            .await;
+        let signal = |signal| MachineToHub::AgentSignal {
+            terminal_id: "term-a".into(),
+            agent: Some(RunAgent::Claude),
+            source: "hooks".into(),
+            signal,
+        };
+        let runs = || {
+            let db = pool.get().unwrap();
+            let mut runs = crate::db::agent_runs::list_for_user(&db, "user-a", 0, None, 50).unwrap();
+            runs.sort_by_key(|run| run.started_at);
+            runs
+        };
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        let run = runs().remove(0);
+        crate::db::agent_runs::set_origin(&pool.get().unwrap(), &run.id, Some("OFF-28 reports"), Some("OFF-28")).unwrap();
+        manager
+            .handle_machine_message(
+                "machine-a",
+                signal(AgentSignal::Report { kind: AgentReportKind::Finished, text: "Shipped".into(), link: None }),
+            )
+            .await;
+
+        // The tool call that reported it, the rest of the turn, the poll after a reconnect
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        manager
+            .handle_machine_message("machine-a", MachineToHub::TerminalAgent { terminal_id: "term-a".into(), agent: Some(RunAgent::Claude) })
+            .await;
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Idle)).await;
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Idle)).await;
+        assert_eq!(runs().len(), 1, "nothing new after a handover");
+
+        // The next prompt is new work: it keeps the name, and leaves the task with its person
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        let all = runs();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all[1].status, AgentRunStatus::Working);
+        assert_eq!((all[1].label.as_deref(), all[1].external_ref.as_deref()), (Some("OFF-28 reports"), None));
+    }
+
+    #[tokio::test]
+    async fn a_run_that_ends_by_mistake_goes_on_with_its_task() {
+        use offdesk_protocol::{AgentSignal, RunAgent};
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        let manager = MachineManager::new(pool.clone());
+        manager.register_machine(machine("machine-a"), Some("user-a".into())).await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals { terminals: vec![terminal("machine-a", "term-a")] },
+            )
+            .await;
+        let signal = |signal| MachineToHub::AgentSignal {
+            terminal_id: "term-a".into(),
+            agent: Some(RunAgent::Claude),
+            source: "hooks".into(),
+            signal,
+        };
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Idle)).await;
+        let first = crate::db::agent_runs::latest_for_terminal(&pool.get().unwrap(), "term-a").unwrap().unwrap();
+        crate::db::agent_runs::set_origin(&pool.get().unwrap(), &first.id, Some("OFF-28 reports"), Some("OFF-28")).unwrap();
+
+        // The agent seemed to leave; its next hook comes a moment later
+        manager
+            .handle_machine_message("machine-a", MachineToHub::TerminalAgent { terminal_id: "term-a".into(), agent: None })
+            .await;
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        let next = crate::db::agent_runs::latest_for_terminal(&pool.get().unwrap(), "term-a").unwrap().unwrap();
+        assert_ne!(next.id, first.id);
+        assert_eq!((next.label.as_deref(), next.external_ref.as_deref()), (Some("OFF-28 reports"), Some("OFF-28")));
+
+        // Long after, it's other work
+        pool.get().unwrap().execute("UPDATE agent_runs SET ended_at = 1", []).unwrap();
+        manager.handle_machine_message("machine-a", signal(AgentSignal::Working)).await;
+        let later = crate::db::agent_runs::latest_for_terminal(&pool.get().unwrap(), "term-a").unwrap().unwrap();
+        assert_eq!((later.label.as_deref(), later.external_ref.as_deref()), (None, None));
+    }
+
+    #[tokio::test]
     async fn started_runs_wait_for_their_agent_and_expire_without_it() {
         use super::StartError;
         use offdesk_protocol::{

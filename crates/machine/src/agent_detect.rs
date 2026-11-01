@@ -2,10 +2,20 @@
 //! (docs/plans/2026-10-14-agent-runs.md). From the pane's foreground command; a
 //! `node` foreground is an agent only when a process named `claude` or `codex` runs
 //! under the pane (npm's codex shim starts the native binary as a child). Any other
-//! `node` program isn't an agent.
+//! `node` program isn't an agent. Claude Code's native install is a binary named after
+//! its version (`~/.local/share/claude/versions/2.1.307`), which is what tmux shows.
 use offdesk_protocol::RunAgent;
 
 use crate::codex_title::{find_named_descendants, Process};
+
+/// A foreground command that is Claude Code's native binary: a bare `2.1.307`.
+pub fn is_native_claude(command: &str) -> bool {
+    let parts: Vec<&str> = command.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
 
 /// The agent a pane runs, from its foreground command; `processes` (one snapshot,
 /// taken only when some pane needs it) settles `node`.
@@ -17,6 +27,7 @@ pub fn agent_for_pane(
     match command? {
         "claude" | "claude.exe" => Some(RunAgent::Claude),
         "codex" => Some(RunAgent::Codex),
+        command if is_native_claude(command) => Some(RunAgent::Claude),
         "node" => {
             let pid = pane_pid?;
             [
@@ -63,7 +74,14 @@ mod tests {
             agent_for_pane(Some("codex"), Some(1), &[]),
             Some(RunAgent::Codex)
         );
+        assert_eq!(
+            agent_for_pane(Some("2.1.307"), Some(1), &[]),
+            Some(RunAgent::Claude)
+        );
         assert_eq!(agent_for_pane(Some("vim"), Some(1), &[]), None);
+        for other in ["2.1", "2.1.307.4", "python3.12", "1..2", "v2.1.307"] {
+            assert_eq!(agent_for_pane(Some(other), Some(1), &[]), None, "{other}");
+        }
         assert_eq!(agent_for_pane(None, Some(1), &[]), None);
     }
 

@@ -170,6 +170,20 @@ pub fn insert_started(
     Ok(row)
 }
 
+/// Gives a run what a person named it and the task it's for.
+pub fn set_origin(
+    conn: &Connection,
+    id: &str,
+    label: Option<&str>,
+    external_ref: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE agent_runs SET label = ?1, external_ref = ?2 WHERE id = ?3",
+        params![label, external_ref, id],
+    )?;
+    Ok(())
+}
+
 fn insert_row(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO agent_runs
@@ -276,6 +290,15 @@ pub fn insert_event(
 }
 
 /// A run's history after `after_seq`, oldest first.
+/// Whether a run has an event of this kind.
+pub fn has_event(conn: &Connection, run_id: &str, kind: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM agent_run_events WHERE run_id = ?1 AND kind = ?2)",
+        params![run_id, kind],
+        |row| row.get(0),
+    )
+}
+
 pub fn list_events(
     conn: &Connection,
     run_id: &str,

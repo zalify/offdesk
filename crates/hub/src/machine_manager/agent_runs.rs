@@ -16,6 +16,7 @@ use offdesk_protocol::{
 
 use super::MachineManager;
 use crate::db::agent_runs::{self, AgentRunRow};
+use crate::db::now_ms;
 
 /// Why an answer wasn't typed in.
 #[derive(Debug, PartialEq, Eq)]
@@ -120,6 +121,11 @@ pub fn keys_for(
     }
 }
 
+/// How soon a new run in a terminal is the same work as the one that just ended.
+const SAME_WORK_MS: i64 = 60 * 1000;
+/// An event on a handed-over run: the turn that handed it over has stopped.
+const TURN_ENDED: &str = "turn_ended";
+
 /// How long ended runs stay in the bootstrap snapshot.
 pub(super) const RECENT_RUNS_MS: i64 = 24 * 3600 * 1000;
 const SNAPSHOT_RUN_LIMIT: i64 = 200;
@@ -162,6 +168,8 @@ impl MachineManager {
                 (Some(run), None) if run.status == AgentRunStatus::Starting => {}
                 // The same agent still running: nothing new
                 (Some(run), Some(agent)) if run.agent == agent && run.ended_at.is_none() => {}
+                // It handed its work over and stays in the terminal: no new work yet
+                (Some(run), Some(agent)) if run.agent == agent && handed_over(&run) => {}
                 // Its machine came back with the same agent in the terminal: carry the run on
                 (Some(run), Some(agent))
                     if run.agent == agent && run.status == AgentRunStatus::Gone =>
@@ -169,7 +177,7 @@ impl MachineManager {
                     changed.extend(begin(&db, &run.id, attention)?);
                 }
                 (latest, Some(agent)) => {
-                    if let Some(open) = latest.filter(|run| run.ended_at.is_none()) {
+                    if let Some(open) = latest.as_ref().filter(|run| run.ended_at.is_none()) {
                         changed.extend(agent_runs::set_status(
                             &db,
                             &open.id,
@@ -184,6 +192,7 @@ impl MachineManager {
                         &cwd,
                         AgentRunStatus::Working,
                     )?;
+                    inherit(&db, &run.id, latest.as_ref())?;
                     changed.extend(begin(&db, &run.id, attention)?);
                 }
                 // The agent left the foreground: it exited (the exit code isn't known yet)
@@ -219,9 +228,8 @@ impl MachineManager {
         };
         let Ok(db) = self.db.get() else { return };
         let result = (|| -> rusqlite::Result<Vec<AgentRunRow>> {
-            let open = agent_runs::latest_for_terminal(&db, terminal_id)?
-                .filter(|run| run.ended_at.is_none());
-            let (run, opened) = match open {
+            let latest = agent_runs::latest_for_terminal(&db, terminal_id)?;
+            let (run, opened) = match latest.clone().filter(|run| run.ended_at.is_none()) {
                 Some(run) => (run, false),
                 // Nothing to open a run for: an unknown signal, or a finish with no work open
                 None if matches!(
@@ -235,6 +243,11 @@ impl MachineManager {
                 {
                     return Ok(Vec::new())
                 }
+                // The rest of the turn that handed its work over isn't new work: that's
+                // what comes after it stopped, the next prompt
+                None if after_handover(&db, latest.as_ref(), &signal)? => {
+                    return Ok(Vec::new())
+                }
                 None => {
                     let run = agent_runs::insert(
                         &db,
@@ -244,6 +257,7 @@ impl MachineManager {
                         &cwd,
                         AgentRunStatus::Working,
                     )?;
+                    inherit(&db, &run.id, latest.as_ref())?;
                     (run, true)
                 }
             };
@@ -656,6 +670,63 @@ impl MachineManager {
             }
             Err(e) => tracing::warn!("Failed to update agent runs of {}: {}", subject, e),
         }
+    }
+}
+
+/// Whether a run ended by its agent reporting its work finished.
+fn handed_over(run: &AgentRunRow) -> bool {
+    run.ended_at.is_some()
+        && matches!(&run.report, Some(report) if report.kind == AgentReportKind::Finished)
+}
+
+/// Whether a signal opens nothing because it's what's left of a handed-over turn. Its end
+/// is noted on the run: work after it is new, and what needs a person always shows.
+fn after_handover(
+    db: &rusqlite::Connection,
+    latest: Option<&AgentRunRow>,
+    signal: &AgentSignal,
+) -> rusqlite::Result<bool> {
+    let Some(run) = latest.filter(|run| handed_over(run)) else {
+        return Ok(false);
+    };
+    let ended = agent_runs::has_event(db, &run.id, TURN_ENDED)?;
+    Ok(match signal {
+        AgentSignal::Idle => {
+            if !ended {
+                agent_runs::insert_event(db, &run.id, TURN_ENDED, &serde_json::json!({}))?;
+            }
+            true
+        }
+        AgentSignal::Working | AgentSignal::Progress(_) => !ended,
+        _ => false,
+    })
+}
+
+/// What a new run in a terminal takes from the one before it. A run that ended on its own a
+/// moment ago is the same work, whatever made it look over, so it stays on its task. After
+/// a handover the task is with its person: later work there keeps the name, not the task.
+fn inherit(
+    db: &rusqlite::Connection,
+    run_id: &str,
+    previous: Option<&AgentRunRow>,
+) -> rusqlite::Result<()> {
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let moment_ago = previous
+        .ended_at
+        .is_some_and(|ended| now_ms() - ended < SAME_WORK_MS);
+    if handed_over(previous) {
+        agent_runs::set_origin(db, run_id, previous.label.as_deref(), None)
+    } else if moment_ago {
+        agent_runs::set_origin(
+            db,
+            run_id,
+            previous.label.as_deref(),
+            previous.external_ref.as_deref(),
+        )
+    } else {
+        Ok(())
     }
 }
 
