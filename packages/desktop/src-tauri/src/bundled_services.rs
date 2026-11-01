@@ -235,7 +235,7 @@ fn binary_version(binary: &Path) -> Option<String> {
 }
 
 fn hub_url(path: &str) -> String {
-    format!("http://127.0.0.1:{}{path}", role::HUB_PORT)
+    format!("http://127.0.0.1:{}{path}", role::hub_port())
 }
 
 async fn running_hub(client: &reqwest::Client) -> Running {
