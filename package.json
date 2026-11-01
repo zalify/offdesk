@@ -8,7 +8,7 @@
     "dev": "pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app dev:web",
     "build": "pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app build",
     "test": "vitest run",
-    "test:scripts": "node --test site/install.test.mjs site/worker.test.mjs packages/app/lib/nodeInstaller.test.mjs",
+    "test:scripts": "node --test site/install.test.mjs site/worker.test.mjs packages/app/lib/nodeInstaller.test.mjs packages/app/lib/terminalReconnect.test.mjs",
     "typecheck": "tsc -b",
     "e2e:up": "docker compose -f e2e/docker-compose.yml up -d --build hub node",
     "e2e:down": "docker compose -f e2e/docker-compose.yml down --remove-orphans",
