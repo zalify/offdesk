@@ -28,17 +28,32 @@ test.use({
 
 interface WsInputLogWindow {
   __wsInputLog?: string[];
+  // Every socket the page opened, and the ones turned into zombies: still
+  // OPEN, but what they send goes nowhere (and is not logged) — a mobile
+  // socket that died in the background without noticing.
+  __wsSockets?: WebSocket[];
+  __wsZombies?: WeakSet<WebSocket>;
 }
 
 async function installWsInputLog(page: Page): Promise<void> {
   await page.context().addInitScript(() => {
     const win = window as unknown as WsInputLogWindow;
     win.__wsInputLog = [];
+    win.__wsSockets = [];
+    win.__wsZombies = new WeakSet();
+    window.WebSocket = new Proxy(WebSocket, {
+      construct(target, args) {
+        const socket = Reflect.construct(target, args) as WebSocket;
+        win.__wsSockets!.push(socket);
+        return socket;
+      },
+    });
     const originalSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function (
       this: WebSocket,
       data: string | ArrayBufferLike | Blob | ArrayBufferView,
     ) {
+      if (win.__wsZombies!.has(this)) return;
       if (typeof data === "string") {
         try {
           const payload = JSON.parse(data) as {
@@ -263,4 +278,67 @@ test("IME English composition commits plain ASCII exactly once", async ({
   await commit(cdp, "hello");
 
   await expectWsInput(page, "hello");
+});
+
+async function setPageVisibility(
+  page: Page,
+  visibilityState: "hidden" | "visible",
+): Promise<void> {
+  await page.evaluate((nextVisibilityState) => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => nextVisibilityState,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, visibilityState);
+}
+
+// Coming back from the background always replaces the terminal socket: the
+// old one may have died silently while still reporting OPEN. Keys typed right
+// away used to go to that dead socket, or be dropped while the new one was
+// connecting.
+test("typing right after resume from background reaches the shell exactly once", async ({
+  page,
+}) => {
+  const terminalSocketUrls: string[] = [];
+  page.on("websocket", (socket) => {
+    if (socket.url().includes("/ws/terminal/")) {
+      terminalSocketUrls.push(socket.url());
+    }
+  });
+
+  const terminalId = await setupShellTerminal(page);
+  await expect.poll(() => terminalSocketUrls.length).toBeGreaterThan(0);
+  const socketsBefore = terminalSocketUrls.length;
+
+  // The terminal socket dies in the background without closing.
+  const zombies = await page.evaluate(() => {
+    const win = window as unknown as WsInputLogWindow;
+    let count = 0;
+    for (const socket of win.__wsSockets ?? []) {
+      if (
+        socket.url.includes("/ws/terminal/") &&
+        socket.readyState === WebSocket.OPEN
+      ) {
+        win.__wsZombies!.add(socket);
+        count += 1;
+      }
+    }
+    return count;
+  });
+  expect(zombies).toBe(1);
+
+  await setPageVisibility(page, "hidden");
+  await setPageVisibility(page, "visible");
+  await page.keyboard.type("echo resumed-ok");
+
+  await expect
+    .poll(() => terminalSocketUrls.length, { timeout: 10_000 })
+    .toBeGreaterThan(socketsBefore);
+  await expectWsInput(page, "echo resumed-ok");
+
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => readTerminalBuffer(page, terminalId), { timeout: 10_000 })
+    .toMatch(/^resumed-ok\s*$/m);
 });

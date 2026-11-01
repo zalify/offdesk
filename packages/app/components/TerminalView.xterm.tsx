@@ -63,6 +63,10 @@ import {
   type InputBatcher,
 } from "@/lib/terminalInputBatcher";
 import { createWheelDirectionGate } from "@/lib/terminalWheelGate";
+import {
+  createPendingTerminalInput,
+  type PendingTerminalInput,
+} from "@/lib/pendingTerminalInput";
 import { activateGpuRenderer } from "@/lib/terminalGpuRenderer";
 import { readTerminalFontPreferences, subscribeFontPreferences } from "@/lib/fontPreferences";
 
@@ -80,6 +84,8 @@ const TERMINAL_SCROLL_SENSITIVITY = 3;
 // resize the hub drops (control moved meanwhile) never brings a redraw.
 // Generous, since the redraw needs a full round trip over remote links.
 const RESIZE_REDRAW_WAIT_MS = 3000;
+// SGR (1006) and X10 mouse reports, which xterm emits through onData.
+const MOUSE_REPORT_RE = /\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/g;
 
 // Invoke a Tauri command through the internals global rather than
 // dynamic-importing the plugin's JS package. Metro turns
@@ -378,6 +384,41 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     // probe is enabled (localStorage offdesk:echo-probe=1); the live socket
     // turns the first output after it into a round-trip sample.
     const echoProbeSentAtRef = useRef<number | null>(null);
+    const echoProbeEnabledRef = useRef(false);
+    // True from when the live socket schedules a reconnect until the next
+    // socket opens. Input typed meanwhile waits in pendingInputRef instead of
+    // going to a socket that is about to be replaced (after the app returns
+    // from the background it may be dead while still reporting OPEN), and is
+    // sent on the new socket when it opens.
+    const reconnectPendingRef = useRef(false);
+    const pendingInputRef = useRef<PendingTerminalInput | null>(null);
+    if (pendingInputRef.current === null) {
+      pendingInputRef.current = createPendingTerminalInput({
+        now: () => performance.now(),
+      });
+    }
+    const sendInputFrame = useCallback((ws: WebSocket, data: string) => {
+      ws.send(JSON.stringify({ type: "input", data }));
+      if (echoProbeEnabledRef.current) {
+        echoProbeSentAtRef.current = performance.now();
+      }
+    }, []);
+    const deliverInput = useCallback(
+      (data: string) => {
+        if (!canTypeRef.current) return;
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN && !reconnectPendingRef.current) {
+          sendInputFrame(ws, data);
+          return;
+        }
+        // Mouse reports are not replayed: they describe a pointer the new
+        // attach knows nothing about, and a burst of wheel reports would
+        // drop tmux into copy-mode.
+        const keys = data.replace(MOUSE_REPORT_RE, "");
+        if (keys) pendingInputRef.current?.push(keys);
+      },
+      [sendInputFrame],
+    );
     const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
     const [sessionGeneration, setSessionGeneration] = useState(0);
@@ -628,6 +669,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     onReconnectingChangeRef.current = onReconnectingChange;
     const handleReconnectingChange = useCallback(
       (reconnecting: boolean) => {
+        reconnectPendingRef.current = reconnecting;
         if (reconnecting) reportReady();
         onReconnectingChangeRef.current?.(reconnecting);
       },
@@ -649,8 +691,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const runFitAwaitingOpenRef = useRef(runFitAwaitingOpen);
     runFitAwaitingOpenRef.current = runFitAwaitingOpen;
     const handleSocketOpen = useCallback(() => {
+      // A fit waiting for the socket goes first, so a controller's resize
+      // reaches the PTY before the input queued for it.
       runFitAwaitingOpenRef.current();
-    }, []);
+      reconnectPendingRef.current = false;
+      const queued = pendingInputRef.current?.drain() ?? "";
+      const ws = wsRef.current;
+      if (queued && canTypeRef.current && ws?.readyState === WebSocket.OPEN) {
+        sendInputFrame(ws, queued);
+      }
+    }, [sendInputFrame]);
 
     // Keep the long-lived ResizeObserver connected to the current fit handler.
     const fitToContainerRef = useRef(fitToContainer);
@@ -676,10 +726,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             batcher.push(data);
             return;
           }
-          const ws = wsRef.current;
-          if (ws?.readyState === WebSocket.OPEN && canTypeRef.current) {
-            ws.send(JSON.stringify({ type: "input", data }));
-          }
+          deliverInput(data);
         },
         sendCommandInput(data: string) {
           inputBatcherRef.current?.flush();
@@ -717,7 +764,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         getSelection,
         getSelectionSnapshot,
       }),
-      [fitToContainer, measureLayout, sendImageFile, setMouseTrackingEnabled, getSelection, getSelectionSnapshot],
+      [deliverInput, fitToContainer, measureLayout, sendImageFile, setMouseTrackingEnabled, getSelection, getSelectionSnapshot],
     );
 
     // Create terminal once on mount — never recreated during reconnections
@@ -927,17 +974,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // so keystroke latency is unchanged. Guards are evaluated at flush
       // time inside the send callback. Command/image sends flush first so
       // cross-type message ordering is preserved.
-      const echoProbeEnabled =
+      //
+      // While the socket is connecting or a reconnect is pending, input is
+      // queued and sent on the next socket when it opens (deliverInput).
+      echoProbeEnabledRef.current =
         localStorage.getItem("offdesk:echo-probe") === "1";
-      const batcher = createInputBatcher((data) => {
-        const ws = wsRef.current;
-        if (ws?.readyState === WebSocket.OPEN && canTypeRef.current) {
-          ws.send(JSON.stringify({ type: "input", data }));
-          if (echoProbeEnabled) {
-            echoProbeSentAtRef.current = performance.now();
-          }
-        }
-      });
+      const batcher = createInputBatcher(deliverInput);
       inputBatcherRef.current = batcher;
       term.onData((data) => {
         const userInput = filterBrowserGeneratedTerminalInput(data);
@@ -1341,6 +1383,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (inputBatcherRef.current === batcher) {
           inputBatcherRef.current = null;
         }
+        // After the flush: it may have queued input that has nowhere to go.
+        pendingInputRef.current?.clear();
         resizeObserver.disconnect();
         viewportFit.dispose();
         if (measureRafRef.current) {
@@ -1429,6 +1473,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const unsubscribe = subscribeFontPreferences(() => { void update(true); });
       return () => { disposed = true; unsubscribe(); };
     }, [fitToContainer, scheduleMeasure]);
+
+    // Input queued for one socket URL must not be replayed into another.
+    useEffect(() => () => pendingInputRef.current?.clear(), [wsUrl]);
 
     useTerminalLiveSocket({
       termRef,

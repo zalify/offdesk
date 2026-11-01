@@ -7,7 +7,11 @@ export interface TerminalReconnectController {
 }
 
 interface TerminalReconnectControllerOptions<TimerHandle> {
+  /** Delay before reconnecting after the socket closes. */
   delayMs: number;
+  /** Delay before reconnecting when the page comes back to the foreground
+   * (or is visible with a socket that is not open). Defaults to delayMs. */
+  resumeDelayMs?: number;
   openReadyState: number;
   onReconnect: () => void;
   schedule: (callback: () => void, delayMs: number) => TimerHandle;
@@ -16,12 +20,14 @@ interface TerminalReconnectControllerOptions<TimerHandle> {
 
 export function createTerminalReconnectController<TimerHandle>({
   delayMs,
+  resumeDelayMs = delayMs,
   openReadyState,
   onReconnect,
   schedule,
   cancel,
 }: TerminalReconnectControllerOptions<TimerHandle>): TerminalReconnectController {
   let reconnectTimer: TimerHandle | null = null;
+  let reconnectTimerDelayMs = 0;
   let wasHidden = false;
 
   const cancelReconnect = () => {
@@ -32,14 +38,24 @@ export function createTerminalReconnectController<TimerHandle>({
     reconnectTimer = null;
   };
 
-  const scheduleReconnect = () => {
+  // One reconnect at a time: a request while one is pending is a no-op,
+  // unless it wants a shorter delay — then the pending one is rescheduled.
+  const requestReconnect = (requestedDelayMs: number) => {
     if (reconnectTimer !== null) {
-      return;
+      if (reconnectTimerDelayMs <= requestedDelayMs) {
+        return;
+      }
+      cancelReconnect();
     }
+    reconnectTimerDelayMs = requestedDelayMs;
     reconnectTimer = schedule(() => {
       reconnectTimer = null;
       onReconnect();
-    }, delayMs);
+    }, requestedDelayMs);
+  };
+
+  const scheduleReconnect = () => {
+    requestReconnect(delayMs);
   };
 
   return {
@@ -55,7 +71,7 @@ export function createTerminalReconnectController<TimerHandle>({
       const shouldReconnect = wasHidden || readyState !== openReadyState;
       wasHidden = false;
       if (!shouldReconnect) return;
-      scheduleReconnect();
+      requestReconnect(resumeDelayMs);
     },
     hasPendingReconnect() {
       return reconnectTimer !== null;
