@@ -62,7 +62,7 @@ export function SecurePairingPanel({ baseUrl, managed = false, auto = false }: {
     const clock = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
     return <div data-testid="secure-pairing-panel" className="odk-setup-pair">
       <div style={{ flexShrink: 0, width: 208, height: 208, boxSizing: "border-box", display: "flex", alignItems: "center", justifyContent: "center", padding: 12, background: "#ffffff", borderRadius: 4, border: `1px solid ${colors.lineSoft}` }}>
-        {qr && !expired ? <QrImage svg={qr} size={184} label="Encrypted device pairing QR code" /> : <span role="status" style={{ fontSize: rem(12), color: "#0c0c0b" }}>Creating a code…</span>}
+        {qr && !expired ? <QrImage svg={qr} size={182} label="Encrypted device pairing QR code" /> : <span role="status" style={{ fontSize: rem(12), color: "#0c0c0b" }}>Creating a code…</span>}
       </div>
       <div style={{ flex: "1 1 220px", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ fontFamily: "var(--font-display)", fontSize: rem(20), fontWeight: 600, letterSpacing: "-0.02em" }}>Scan it with the app</div>

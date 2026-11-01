@@ -553,10 +553,10 @@ test("a port something else holds is named, and the fix moves the hub", async ({
   expect(await page.evaluate(() => (window as any).__desktopTest.calls)).not.toContain("hub_install");
   await page.getByTestId("hub-setup-diagnostics").click();
   await expect(page.getByTestId("hub-setup-diagnostics")).toHaveText(/copied/i);
-  await page.evaluate(() => { (window as any).__desktopTest.installed = true; });
   await page.getByRole("button", { name: "Use port 4318 and retry", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__desktopTest.installPort)).toBe(4318);
+  await page.evaluate(() => { (window as any).__desktopTest.installed = true; });
   await expect(page.getByTestId("hub-ready-open")).toBeVisible();
-  expect(await page.evaluate(() => (window as any).__desktopTest.installPort)).toBe(4318);
 });
 
 test("tmux stopping setup offers its repair, once", async ({ page }) => {
