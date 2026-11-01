@@ -164,6 +164,7 @@ impl PtyManager {
 
         let cols_s = cols.to_string();
         let rows_s = rows.to_string();
+        let session = session_env(id);
         let mut tmux_args = tmux_base_args();
         tmux_args.extend(
             [
@@ -179,6 +180,8 @@ impl PtyManager {
                 &rows_s,
                 "-c",
                 &resolved_cwd,
+                "env",
+                &session,
                 &shell,
             ]
             .into_iter()
@@ -1022,6 +1025,14 @@ pub fn check_tmux_available() -> bool {
         .unwrap_or(false)
 }
 
+/// What a terminal's shell, and so any agent started in it, gets as `OFFDESK_SESSION`: the
+/// terminal's id. It outlives the agent runs in that terminal, and an agent passes it on
+/// so Cloud can tell which session it reports from. Set with `env` on the shell because
+/// `set-environment` comes too late for the first shell, and `new-session -e` needs tmux 3.2.
+fn session_env(terminal_id: &str) -> String {
+    format!("OFFDESK_SESSION={terminal_id}")
+}
+
 pub fn tmux_session_name(id: &str) -> String {
     format!("{}{}", tmux_prefix(), id)
 }
@@ -1659,6 +1670,11 @@ mod tests {
         assert!(!is_shell_name("python"));
         assert!(!is_shell_name("cargo"));
         assert!(!is_shell_name("node"));
+    }
+
+    #[test]
+    fn a_terminal_names_its_session() {
+        assert_eq!(session_env("4ec9c855"), "OFFDESK_SESSION=4ec9c855");
     }
 
     #[test]

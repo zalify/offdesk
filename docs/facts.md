@@ -110,7 +110,10 @@ rename mapping is at the bottom.
 - The node builds the command (`crates/machine/src/agent_start.rs`): the prompt and
   reference go to 0600 files under `<config dir>/agent-start/` and are read with
   `"$(cat '<file>')"`, so the shell never parses them; a prompt can't start with `-`.
-  The agent gets `OFFDESK_RUN_ID` and `OFFDESK_EXTERNAL_REF`.
+  The agent gets `OFFDESK_RUN_ID` and `OFFDESK_EXTERNAL_REF`. Every terminal's shell,
+  and so any agent started in it by hand too, gets `OFFDESK_SESSION`, the terminal's id
+  (`crates/machine/src/pty.rs` `session_env`). A run's id changes within one agent's
+  session (a handover ends the run, the next prompt opens another); the terminal's doesn't.
 - Hooks for that session: Claude gets `--settings` with Offdesk's hooks unless its
   user settings have them already; Codex gets `-c notify=[offdesk, hook, codex,
   notify, <the person's own notify program…>]`, and `offdesk hook codex notify`
