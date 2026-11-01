@@ -12,6 +12,7 @@ pub mod agent_sessions;
 pub mod bookmarks;
 pub mod hub_state;
 pub mod machines;
+pub mod onboarding;
 pub mod settings;
 pub mod terminal_sessions;
 pub mod tokens;
@@ -134,6 +135,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             terminal_id TEXT NOT NULL,
             machine_id TEXT NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS onboarding_marks (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            mark TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, mark)
         );
 
         CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);

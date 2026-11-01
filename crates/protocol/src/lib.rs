@@ -1585,6 +1585,10 @@ pub enum AgentBrowserCommand {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum HubToMachine {
+    /// Look for the coding agents again, after one was installed; answered with
+    /// `MachineToHub::InstalledAgents`.
+    #[serde(rename = "probe_agents")]
+    ProbeAgents,
     #[serde(rename = "open_preview_stream")]
     OpenPreviewStream {
         stream_id: String,

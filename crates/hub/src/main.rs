@@ -513,6 +513,7 @@ async fn main() {
 
     let inner = routes::router()
         .merge(connections::router(args.listen.clone(), env_opt("OFFDESK_SECURE_BASE_URL"), database.clone()))
+        .merge(routes::onboarding::router(env_opt("OFFDESK_SECURE_BASE_URL"), database.clone()))
         .merge(ws::router())
         .merge(web_preview::router())
         .with_state(state.clone());

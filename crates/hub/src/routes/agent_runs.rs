@@ -12,8 +12,8 @@ use axum::{
 use std::collections::HashSet;
 
 use offdesk_protocol::{
-    AgentAnswer, AgentRequestKind, AgentRunInfo, ContentLevel, InstalledAgent, StartAgentRun,
-    StartedAgentRun, TokenScope,
+    AgentAnswer, AgentRequestKind, AgentRunInfo, ContentLevel, HubToMachine, InstalledAgent,
+    StartAgentRun, StartedAgentRun, TokenScope,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -422,6 +422,27 @@ async fn machine_agents(
     ))
 }
 
+/// Asks a machine to look again, after someone installed an agent. The new list arrives
+/// a few seconds later on `GET /api/machines/{id}/agents`.
+async fn refresh_machine_agents(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+) -> Response {
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, &machine_id)
+        .await
+        || !auth_user.may_reach_machine(&state.db, &machine_id)
+    {
+        return (StatusCode::NOT_FOUND, "Machine not found").into_response();
+    }
+    match state.manager.send_to_machine(&machine_id, HubToMachine::ProbeAgents).await {
+        Ok(()) => StatusCode::ACCEPTED.into_response(),
+        Err(_) => (StatusCode::NOT_FOUND, "Machine not found").into_response(),
+    }
+}
+
 fn internal(error: impl std::fmt::Display) -> Response {
     tracing::warn!("agent runs: {}", error);
     (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
@@ -431,6 +452,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/agent-runs", get(list_runs).post(start_run))
         .route("/api/machines/{machine_id}/agents", get(machine_agents))
+        .route("/api/machines/{machine_id}/agents/refresh", post(refresh_machine_agents))
         .route("/api/agent-runs/{run_id}", get(get_run))
         .route("/api/agent-runs/{run_id}/events", get(run_events))
         .route("/api/agent-runs/{run_id}/answer", post(answer_run))
@@ -568,6 +590,31 @@ mod tests {
         assert_eq!((status, agents), (StatusCode::OK, serde_json::json!([])));
         let (status, _) = get_json(&state, "user-b", "/api/machines/machine-a/agents").await;
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn looking_for_agents_again_reaches_the_machine() {
+        let state = test_state();
+        let refresh = "/api/machines/machine-a/agents/refresh";
+        let (status, _) = post_json(&state, "user-a", refresh, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let machine = offdesk_protocol::MachineInfo {
+            id: "machine-a".into(),
+            name: "machine-a".into(),
+            os: "linux".into(),
+            home_dir: "/tmp".into(),
+            production: false,
+        };
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(machine, Some("user-a".into()), vec![])
+            .await;
+        let (status, _) = post_json(&state, "user-b", refresh, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = post_json(&state, "user-a", refresh, serde_json::json!({})).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(matches!(commands.recv().await, Some(HubToMachine::ProbeAgents)));
     }
 
     /// A request through every route, as the hub serves them, with a raw bearer token.
