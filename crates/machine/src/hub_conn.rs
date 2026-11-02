@@ -478,8 +478,10 @@ impl HubConnection {
                 for terminal_id in terminal_ids {
                     // The agent first: the hub opens a run for it, then attention
                     // can make that run wait on a person
+                    // No agent seen yet says nothing: to the hub, "none" after a run began
+                    // through its hooks would mean the agent left
                     let agent = agents.get(&terminal_id).copied().flatten();
-                    if last_sent_agent.get(&terminal_id) != Some(&agent) {
+                    if last_sent_agent.get(&terminal_id).copied().flatten() != agent {
                         if send_tx_for_titles
                             .send(OutboundHubMessage::Json(MachineToHub::TerminalAgent {
                                 terminal_id: terminal_id.clone(),
