@@ -70,7 +70,7 @@ async function copyText(text: string) {
  * install, the code for the phone, the sign-in, or the app itself.
  */
 export function DesktopGate({ children }: { children: ReactNode }) {
-  const { isLoading, isAuthenticated, login, loginWithToken } = useAuth();
+  const { isLoading, isAuthenticated, login, loginWithToken, logout } = useAuth();
   // undefined: not read yet. null: never answered.
   const [role, setRole] = useState<DesktopRole | null | undefined>(undefined);
   const [status, setStatus] = useState<HubStatus | null>(null);
@@ -228,7 +228,20 @@ export function DesktopGate({ children }: { children: ReactNode }) {
     return <>{children}</>;
   }
 
-  if (isLoading) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
+  if (isLoading) {
+    if (!reconnectExpired) return <DesktopSetupFrame><Spinner /></DesktopSetupFrame>;
+    const hubUrl = getServerUrl();
+    return <DesktopSetupFrame><Screen>
+      <div role="status"><Body>Could not reach your Hub{hubUrl ? ` at ${hubUrl}` : ""}. Still trying…</Body></div>
+      {/* The sign-in stays until someone leaves: this may only be a Hub
+          restarting. Leaving drops it, so it never reaches another address,
+          and an encrypted pairing is not forgotten from here. */}
+      {!isSecureConnection() && <>
+        <Body>If its address changed, connect again with the new one. You will need to sign in again.</Body>
+        <Button kind="secondary" onClick={() => void logout()} testId="hub-unreachable-change">Connect to a different Hub</Button>
+      </>}
+    </Screen></DesktopSetupFrame>;
+  }
   if (!isAuthenticated) return <DesktopSetupFrame><LoginScreen onBecomeHub={windows ? undefined : () => void pick("hub")} onBackToSetup={windows ? undefined : () => setRole(null)} /></DesktopSetupFrame>;
   return <>{children}</>;
 }
