@@ -631,4 +631,10 @@ export interface SecureDevice {
   id: string; name: string; created_at: number; last_seen_at: number | null; revoked_at: number | null;
 }
 export const listSecureDevices = () => request<SecureDevice[]>("GET", "/api/security/devices");
+/** For a screen that has the hub's link but hasn't signed in with it yet. */
+export async function listSecureDevicesAt(baseUrl: string, token: string): Promise<SecureDevice[]> {
+  const res = await fetch(`${baseUrl}/api/security/devices`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new ApiError(res.status, await res.text());
+  return await res.json() as SecureDevice[];
+}
 export const revokeSecureDevice = (id: string) => request<void>("DELETE", `/api/security/devices/${encodeURIComponent(id)}`);

@@ -12,6 +12,8 @@ export interface HubStatus {
   hub_installed: boolean;
   node_installed: boolean;
   listening: boolean;
+  // Absent on shells released before a hub could move off 4317.
+  port?: number;
   // Optional only for compatibility with shells released before diagnostics.
   setup?: {
     hub_running: boolean;
@@ -25,6 +27,15 @@ export interface HubStatus {
 export interface HubCandidate {
   interface: string;
   address: string;
+  /** What a person calls it: `Wi-Fi “Home-5G”`, `Ethernet`. */
+  label?: string | null;
+}
+
+export interface HubPortCheck {
+  port: number;
+  conflict: boolean;
+  holder: { name: string; pid: number } | null;
+  next_free: number | null;
 }
 
 export interface HubLink {
@@ -51,7 +62,9 @@ export const desktopRole = () => invoke<DesktopRole | null>("desktop_role");
 export const setDesktopRole = (role: DesktopRole) => invoke<void>("set_desktop_role", { role });
 export const hubStatus = () => invoke<HubStatus>("hub_status");
 export const hubLink = (baseUrl?: string) => invoke<HubLink>("hub_link", { baseUrl: baseUrl ?? null });
-export const hubInstall = (baseUrl?: string) => invoke<HubLink>("hub_install", { baseUrl: baseUrl ?? null });
+export const hubInstall = (baseUrl?: string, port?: number) => invoke<HubLink>("hub_install", { baseUrl: baseUrl ?? null, port: port ?? null });
+/** Null from a shell that can't check: setup then goes on as it did before. */
+export const hubPortCheck = () => invoke<HubPortCheck | undefined>("hub_port_check").then((check) => check ?? null, () => null);
 export const hubUninstall = () => invoke<void>("hub_uninstall");
 
 /** Modern shells verify the registered node is live, not just a listening port. */
@@ -102,7 +115,7 @@ export function hubAddressOptions(link: HubLink): { url: string; label: string }
   if (link.public_url) options.set(link.public_url, "Internet");
   const port = portOf(link.local_url ?? (link.public_url ? "" : link.url));
   for (const candidate of link.candidates) {
-    options.set(baseUrlFor(candidate.address, port), candidate.interface);
+    options.set(baseUrlFor(candidate.address, port), candidate.label ? `${candidate.label} · ${candidate.interface}` : candidate.interface);
   }
   if (!options.has(link.url)) options.set(link.url, "Current address");
   return [...options].map(([url, label]) => ({ url, label }));

@@ -53,7 +53,9 @@ async function desktopBridge(page: Page, role: "client" | "hub" | null = "client
             if (error) throw new Error(error);
             return { pairing_uri: "offdesk://pair?v=2&hub=" + encodeURIComponent(hub_url) + "&key=" + "A".repeat(43) + "&code=" + "B".repeat(43), hub_url, expires_at: Date.now() + 300000, connection_check: { identity_verified: true, handshake_ms: 850, legacy_routes_hidden: false } };
           }
+          if (command === "hub_port_check") return (state as any).portCheck;
           if (command === "hub_install") {
+            (state as any).installPort = args?.port;
             if (state.holdInstall) await new Promise<void>(resolve => { state.finishInstall = resolve; });
             if (state.installError) throw new Error(state.installError);
             return { url: "http://192.168.1.10:4317", link: "http://192.168.1.10:4317/?token=test-token", short: null, candidates: [] };
@@ -527,6 +529,83 @@ test("first-run failure stays actionable and retries without manual terminal com
   await expect(page.getByTestId("hub-ready-open")).toBeVisible();
 });
 
+
+test("first-run steps follow the setup, in the tab bar's place", async ({ page }) => {
+  await desktopBridge(page, null);
+  await page.goto("/");
+  const steps = page.getByTestId("setup-steps");
+  await expect(steps.locator("[aria-current=step]")).toHaveText(/this machine/);
+  await page.keyboard.press("1");
+  await expect(steps.locator("[aria-current=step]")).toHaveText(/your phone/);
+  await expect(page.getByTestId("setup-status")).toContainText("no phone yet");
+});
+
+test("a port something else holds is named, and the fix moves the hub", async ({ page }) => {
+  await desktopBridge(page, null);
+  await page.goto("/");
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.installed = false;
+    state.portCheck = { port: 4317, conflict: true, holder: { name: "node", pid: 81234 }, next_free: 4318 };
+  });
+  await page.getByTestId("first-run-hub").click();
+  await expect(page.getByText("Port 4317 is in use by node (pid 81234).", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__desktopTest.calls)).not.toContain("hub_install");
+  await page.getByTestId("hub-setup-diagnostics").click();
+  await expect(page.getByTestId("hub-setup-diagnostics")).toHaveText(/copied/i);
+  await page.getByRole("button", { name: "Use port 4318 and retry", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__desktopTest.installPort)).toBe(4318);
+  await page.evaluate(() => { (window as any).__desktopTest.installed = true; });
+  await expect(page.getByTestId("hub-ready-open")).toBeVisible();
+});
+
+test("tmux stopping setup offers its repair, once", async ({ page }) => {
+  await desktopBridge(page, null);
+  await page.goto("/");
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.setup.tmux_available = false;
+    state.installError = "tmux failed";
+  });
+  await page.getByTestId("first-run-hub").click();
+  await expect(page.getByText("tmux can’t run from where the app is now.", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("hub-setup-retry")).toHaveCount(0);
+  await page.evaluate(() => {
+    const state = (window as any).__desktopTest;
+    state.setup.tmux_available = true;
+    state.installError = "";
+  });
+  await page.getByTestId("hub-setup-fix").click();
+  await expect(page.getByTestId("hub-ready-open")).toBeVisible();
+});
+
+test("hub ready shows a code unasked, and turns to the phone once it pairs", async ({ page }) => {
+  await desktopBridge(page, null);
+  let devices: unknown[] = [{ id: "old", name: "Old phone", created_at: 1, last_seen_at: null, revoked_at: null }];
+  await page.route("**/api/security/devices", (route) => route.fulfill({ json: devices, headers: { "access-control-allow-origin": "*" } }));
+  await page.goto("/");
+  await page.getByTestId("first-run-hub").click();
+  await expectPaintedQr(page.getByRole("img", { name: "Encrypted device pairing QR code", exact: true }));
+  await expect(page.getByText("waiting for your phone…", { exact: true })).toBeVisible();
+  // A phone paired before this screen opened is not the news.
+  await page.waitForTimeout(2500);
+  await expect(page.getByText("Old phone is connected")).toHaveCount(0);
+  devices = [...devices, { id: "new", name: "Ryan’s iPhone", created_at: 2, last_seen_at: null, revoked_at: null }];
+  await expect(page.getByText("Ryan’s iPhone is connected", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("hub-ready-open")).toHaveText(/continue/i);
+  await expect(page.getByTestId("setup-status")).toContainText("1 phone");
+  await page.getByRole("button", { name: "Connect another phone", exact: true }).click();
+  await expect(page.getByText("waiting for your phone…", { exact: true })).toBeVisible();
+});
+
+test("windows has no hub to offer, so it opens on connecting", async ({ page }) => {
+  await desktopBridge(page, null);
+  await page.addInitScript(() => Object.defineProperty(navigator, "userAgent", { value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" }));
+  await page.goto("/");
+  await expect(page.getByTestId("desktop-link-input")).toBeVisible();
+  await expect(page.getByTestId("first-run-hub")).toHaveCount(0);
+  await expect(page.getByTestId("login-become-hub")).toHaveCount(0);
+});
 
 test("desktop connection setup has a visible way back before any form fields", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 600 });
