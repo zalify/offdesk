@@ -24,6 +24,13 @@ pub fn router(listen: String, remote_url: Option<String>, database: String) -> R
     )
 }
 
+/// Whether the Hub has an address that works away from home.
+pub fn has_remote_route(remote_url: Option<&String>, base_url: &str, database: &str) -> bool {
+    let managed = crate::cloud::advertised_url(database);
+    let public_url = managed.as_ref().or(remote_url).map_or(base_url, String::as_str);
+    Route::from_url(public_url).is_ok_and(|route| route.kind == RouteKind::Remote)
+}
+
 fn advertise(
     listen: &str,
     public_url: &str,
