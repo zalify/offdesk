@@ -692,6 +692,35 @@ test("desktop saved-address recovery reconnects locally without reinstalling", a
 });
 
 
+test("a client whose hub stopped answering keeps trying and picks up when it returns", async ({ page }) => {
+  await desktopBridge(page);
+  await openApp(page);
+  const token = await page.evaluate(() => localStorage.getItem("offdesk:token"));
+  let unavailable = true;
+  await page.route("**/api/auth/me", route => unavailable
+    ? route.fulfill({ status: 503, body: "Hub unavailable" }) : route.continue());
+  await page.reload();
+  await expect(page.getByRole("status")).toContainText("Could not reach your Hub", { timeout: 15000 });
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:token"))).toBe(token);
+  unavailable = false;
+  await expect(page.getByTestId("tab-bar")).toBeVisible({ timeout: 15000 });
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:token"))).toBe(token);
+});
+
+test("a client stuck on a dead hub address can leave for another hub", async ({ page }) => {
+  await desktopBridge(page);
+  await openApp(page);
+  await page.evaluate(() => localStorage.setItem("offdesk:server_url", "http://192.168.1.190:4317"));
+  await page.route("**/api/auth/me", route => route.fulfill({ status: 503, body: "Old address unavailable" }));
+  await page.reload();
+  await expect(page.getByRole("status")).toContainText("Could not reach your Hub", { timeout: 15000 });
+  await page.getByTestId("hub-unreachable-change").click();
+  await expect(page.getByTestId("desktop-link-input")).toBeVisible();
+  await expect(page.getByTestId("login-back-to-setup")).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:token"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("offdesk:server_url"))).toBe("http://192.168.1.190:4317");
+});
+
 test("desktop setup recovery also replaces the stale desktop address", async ({ page }) => {
   await desktopBridge(page, "hub");
   await openApp(page);

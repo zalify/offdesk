@@ -390,6 +390,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     configure(currentServerUrl(), null);
     setToken(null);
     setUser(null);
+    // A saved login still being checked has nothing left to finish it.
+    setIsLoading(false);
   }, [currentServerUrl]);
 
   const value = useMemo<AuthContextType>(
