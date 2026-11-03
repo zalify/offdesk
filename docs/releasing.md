@@ -31,6 +31,12 @@ browsers get.
    git push origin v0.23.0
    ```
 
+   A lightweight tag, as here: with an annotated one (`git tag -a`), the
+   Android build in the tag's own run can't fetch the tag ("would clobber
+   existing tag") and nothing publishes. If that happened, dispatch `Release`
+   with `components: android` (below); it checks out main first, so the fetch
+   works.
+
 Never move a tag that has been pushed. If a release needs another code change,
 ship the next patch version.
 
