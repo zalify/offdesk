@@ -68,7 +68,7 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   hasn't acknowledged, oldest first, then events as they happen.
 - `event.seq` increases for this bridge (gaps are fine). `event.event` is exactly a
   webhook body (`docs/webhooks.md`): `run.started`, `run.request`,
-  `run.request_resolved`, `run.status`, `run.progress`, `run.report`, `run.ended`,
+  `run.request_resolved`, `run.status`, `run.progress`, `run.report`, `run.title`, `run.ended`,
   plus `machine.online` / `machine.offline` (`data.machine`). Runs are the objects of
   `GET /api/agent-runs`, cut to the bridge's content level.
 - `ping` every 30 s; the hub reconnects when it hears nothing for 90 s.
