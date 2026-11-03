@@ -41,6 +41,9 @@ pub fn apply_cwd_update(conn: &Connection, id: &str, cwd: &str) -> rusqlite::Res
     Ok(updated > 0)
 }
 
+/// Upsert a terminal row. On conflict the row is revived (`destroyed_at`
+/// cleared) and a non-empty stored title is kept when the reported title is
+/// empty (a restarted node has no titles); `title_source` stays as stored.
 pub fn insert(
     conn: &Connection,
     id: &str,
@@ -56,10 +59,12 @@ pub fn insert(
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT(id) DO UPDATE SET
              machine_id = excluded.machine_id,
-             title = excluded.title,
+             title = CASE WHEN excluded.title = '' THEN terminal_sessions.title
+                          ELSE excluded.title END,
              cwd = excluded.cwd,
              cols = excluded.cols,
-             rows = excluded.rows",
+             rows = excluded.rows,
+             destroyed_at = NULL",
         params![
             id,
             machine_id,
@@ -208,6 +213,15 @@ pub fn find_active_by_machine(
     rows.collect()
 }
 
+/// Look a row up by id, including destroyed ones.
+pub fn find_by_id(conn: &Connection, id: &str) -> rusqlite::Result<Option<TerminalSessionRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SESSION_COLUMNS} FROM terminal_sessions WHERE id = ?1"
+    ))?;
+    let mut rows = stmt.query_map(params![id], session_row)?;
+    rows.next().transpose()
+}
+
 pub fn find_all_active(conn: &Connection) -> rusqlite::Result<Vec<TerminalSessionRow>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {SESSION_COLUMNS}
@@ -248,8 +262,8 @@ mod tests {
     use offdesk_protocol::TerminalTitleSource;
 
     use super::{
-        apply_cwd_update, apply_title_update, find_active_by_machine, find_all_active,
-        TitleUpdateOutcome,
+        apply_cwd_update, apply_title_update, find_active_by_machine, find_all_active, find_by_id,
+        insert, mark_destroyed, TitleUpdateOutcome,
     };
 
     fn insert_session(conn: &Connection, id: &str, created_at: i64) {
@@ -260,6 +274,47 @@ mod tests {
             params![id, format!("Terminal {id}"), created_at],
         )
         .unwrap();
+    }
+
+    #[test]
+    fn insert_on_conflict_revives_row_and_keeps_nonempty_title() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::db::init_db(&conn).unwrap();
+        crate::db::users::create_user(&conn, "user-a", "test", "user-a", "User A", None, "admin")
+            .unwrap();
+        crate::db::machines::ensure_machine_for_user(
+            &conn,
+            "machine-a",
+            "user-a",
+            "Machine A",
+            Some("linux"),
+            Some("/tmp"),
+        )
+        .unwrap();
+
+        insert(&conn, "t1", "machine-a", "", "/tmp", 80, 24).unwrap();
+        apply_title_update(&conn, "t1", "vim", TerminalTitleSource::Osc).unwrap();
+        mark_destroyed(&conn, "t1").unwrap();
+        assert!(find_by_id(&conn, "t1").unwrap().unwrap().destroyed_at.is_some());
+        assert!(find_active_by_machine(&conn, "machine-a").unwrap().is_empty());
+
+        // Empty reported title: revive, keep stored title and source.
+        insert(&conn, "t1", "machine-a", "", "/home", 100, 30).unwrap();
+        let row = find_by_id(&conn, "t1").unwrap().unwrap();
+        assert!(row.destroyed_at.is_none());
+        assert_eq!(row.title, "vim");
+        assert_eq!(row.title_source, "osc");
+        assert_eq!(row.cwd, "/home");
+        assert_eq!(find_active_by_machine(&conn, "machine-a").unwrap().len(), 1);
+        assert_eq!(
+            apply_title_update(&conn, "t1", "htop", TerminalTitleSource::Osc).unwrap(),
+            TitleUpdateOutcome::Updated
+        );
+
+        // Non-empty reported title still overwrites.
+        insert(&conn, "t1", "machine-a", "named", "/home", 100, 30).unwrap();
+        assert_eq!(find_by_id(&conn, "t1").unwrap().unwrap().title, "named");
+        assert!(find_by_id(&conn, "missing").unwrap().is_none());
     }
 
     #[test]

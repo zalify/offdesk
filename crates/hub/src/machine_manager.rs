@@ -2433,6 +2433,35 @@ impl MachineManager {
                             terminal.title = persisted_terminal.title.clone();
                             terminal.title_source = persisted_terminal.title_source;
                             terminal.opened_by = persisted_terminal.opened_by.clone();
+                        } else if let Ok(db_conn) = self.db.get() {
+                            // Not in the in-memory stash (e.g. hub restarted
+                            // or the row was marked destroyed): adopt the
+                            // stored row so hub-authoritative fields survive.
+                            match crate::db::terminal_sessions::find_by_id(&db_conn, &terminal.id)
+                            {
+                                Ok(Some(row)) => {
+                                    if row.destroyed_at.is_some() {
+                                        tracing::warn!(
+                                            machine_id = %machine_id,
+                                            terminal_id = %terminal.id,
+                                            "Reviving terminal previously marked destroyed; machine reports it as existing"
+                                        );
+                                    }
+                                    terminal.title = row.title.clone();
+                                    terminal.title_source =
+                                        crate::db::terminal_sessions::title_source_from_name(
+                                            &row.title_source,
+                                        );
+                                    terminal.workspace_group_id = row.workspace_group_id.clone();
+                                    terminal.opened_by =
+                                        crate::db::terminal_sessions::opener_from_row(&row);
+                                }
+                                Ok(None) => {}
+                                Err(e) => tracing::warn!(
+                                    "Failed to look up terminal session on reconnect: {}",
+                                    e
+                                ),
+                            }
                         }
                         conn.terminals.insert(terminal.id.clone(), terminal.clone());
 
@@ -4260,6 +4289,82 @@ mod tests {
         );
         assert!(keys_for(&request_of(AgentRequestKind::Input), &with(None, Some("two\nlines"))).is_err());
         assert!(keys_for(&request_of(AgentRequestKind::Question), &with(None, None)).is_err());
+    }
+
+    #[tokio::test]
+    async fn existing_terminals_revives_destroyed_row_and_keeps_title() {
+        use offdesk_protocol::TerminalTitleSource;
+        let pool = test_db();
+        seed_machine(&pool, "user-a", "machine-a");
+        let manager = MachineManager::new(pool.clone());
+        let (_conn_id, _cmd_rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![terminal("machine-a", "term-a")],
+                },
+            )
+            .await;
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::TerminalTitle {
+                    terminal_id: "term-a".to_string(),
+                    title: "vim main.rs".to_string(),
+                    source: TerminalTitleSource::Osc,
+                },
+            )
+            .await;
+
+        // Incident: row marked destroyed while the terminal lives on.
+        {
+            let conn = pool.get().unwrap();
+            crate::db::terminal_sessions::mark_destroyed(&conn, "term-a").unwrap();
+        }
+
+        // Fresh manager (hub restart) with nothing in the persisted stash.
+        let manager = MachineManager::new(pool.clone());
+        let (_conn_id, _cmd_rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let mut reported = terminal("machine-a", "term-a");
+        reported.title = String::new();
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![reported],
+                },
+            )
+            .await;
+
+        {
+            let conn = pool.get().unwrap();
+            let active =
+                crate::db::terminal_sessions::find_active_by_machine(&conn, "machine-a").unwrap();
+            assert_eq!(active.len(), 1);
+            assert_eq!(active[0].id, "term-a");
+        }
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(snapshot.terminals.len(), 1);
+        assert_eq!(snapshot.terminals[0].title, "vim main.rs");
+        assert_eq!(snapshot.terminals[0].title_source, TerminalTitleSource::Osc);
+
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::TerminalTitle {
+                    terminal_id: "term-a".to_string(),
+                    title: "htop".to_string(),
+                    source: TerminalTitleSource::Osc,
+                },
+            )
+            .await;
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        assert_eq!(snapshot.terminals[0].title, "htop");
     }
 
     #[tokio::test]
