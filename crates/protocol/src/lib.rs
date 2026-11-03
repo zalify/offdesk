@@ -594,7 +594,7 @@ pub enum ContentLevel {
     Metadata,
     /// Also what a request asks: its text, options and command.
     Requests,
-    /// Also the agent's own notes and handover, and the step it's on.
+    /// Also the agent's own notes and handover, the step it's on, and its session's title.
     Notes,
 }
 
@@ -1094,6 +1094,11 @@ pub struct AgentRunInfo {
     /// The starter's own reference (an issue, a task).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_ref: Option<String>,
+    /// What the agent calls its session while it runs: its terminal's title as the agent
+    /// set it (Claude Code names the conversation). How to tell runs apart that weren't
+    /// started with a label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub started_at_ms: i64,
     pub updated_at_ms: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -2204,14 +2204,22 @@ impl MachineManager {
                         if let Some(conn) = machines.get_mut(machine_id) {
                             let target_user_id = conn.user_id.clone();
                             if let Some(terminal) = conn.terminals.get_mut(&terminal_id) {
+                                // A new name for its agent's session, not only a new mark
+                                // in front of the same one
+                                let renamed = source == offdesk_protocol::TerminalTitleSource::Osc
+                                    && crate::db::agent_runs::session_title(&terminal.title)
+                                        != crate::db::agent_runs::session_title(&title);
                                 terminal.title = title;
                                 terminal.title_source = source;
                                 let terminal = terminal.clone();
                                 drop(machines);
                                 self.send_event(
-                                    target_user_id,
+                                    target_user_id.clone(),
                                     BrowserEvent::TerminalUpdated { terminal },
                                 );
+                                if renamed {
+                                    self.on_terminal_title(target_user_id, &terminal_id);
+                                }
                             }
                         }
                     }

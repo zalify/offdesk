@@ -24,6 +24,7 @@ offdesk webhooks off phone | on phone | rm phone
 | `run.status` | Its status changed otherwise (working, idle…) |
 | `run.progress` | Its task list moved (e.g. 3 of 7) |
 | `run.report` | It reported a note, that it's blocked, or that it finished |
+| `run.title` | Its session got a new title (Claude Code names the conversation); `notes` content only |
 | `run.ended` | It ended: done, error, or gone |
 | `integration.test` | You pressed Test |
 
@@ -56,7 +57,7 @@ content level:
 
 - **status only** (`metadata`): status, agent, folder, machine, times, label, reference.
 - **what they ask** (`requests`): also a request's text and options.
-- **their notes** (`notes`): also the agent's reports and the step it's on.
+- **their notes** (`notes`): also the agent's reports, the step it's on, and its session's title.
 
 Terminal output is never sent.
 

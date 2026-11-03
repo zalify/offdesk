@@ -373,6 +373,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     ",
     )?;
 
+    // Webhooks: the session title last described, so a new one is an event of its own
+    if !column_exists(conn, "webhook_run_state", "title")? {
+        conn.execute("ALTER TABLE webhook_run_state ADD COLUMN title TEXT", [])?;
+    }
+
     // Agent runs: the name and reference a run was started with (A4)
     for column in ["label", "external_ref"] {
         if !column_exists(conn, "agent_runs", column)? {

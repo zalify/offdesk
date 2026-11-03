@@ -91,6 +91,7 @@ pub fn changes(previous: Option<&RunState>, run: &AgentRunInfo) -> (Vec<&'static
         report_at: run.report.as_ref().map(|r| r.at_ms),
         progress: run.progress.as_ref().map(|p| (p.done, p.total)),
         ended: run.ended_at_ms.is_some(),
+        title: run.title.clone(),
     };
     let Some(previous) = previous else {
         let mut events = vec!["run.started"];
@@ -121,6 +122,9 @@ pub fn changes(previous: Option<&RunState>, run: &AgentRunInfo) -> (Vec<&'static
     }
     if next.report_at != previous.report_at && next.report_at.is_some() {
         events.push("run.report");
+    }
+    if next.title != previous.title && next.title.is_some() && !next.ended {
+        events.push("run.title");
     }
     if next.ended && !previous.ended {
         events.push("run.ended");
@@ -187,6 +191,10 @@ pub fn on_run(conn: &rusqlite::Connection, user_id: &str, run: &AgentRunInfo) ->
         for (offset, event_type) in events.iter().enumerate() {
             // A bridge gets every event; a webhook the ones it picked
             if hook.kind == "webhook" && !hook.events.is_empty() && !hook.events.iter().any(|e| e == event_type) {
+                continue;
+            }
+            // A title the integration can't see is no news
+            if *event_type == "run.title" && shown.title.is_none() {
                 continue;
             }
             let body = body(event_type, first_seq + offset as i64, &shown, &machine_name);
@@ -431,6 +439,16 @@ mod tests {
         assert_eq!(events, ["run.report", "run.ended"]);
         // An ended run says nothing more
         assert!(changes(Some(&ended), &done).0.is_empty());
+    }
+
+    #[test]
+    fn a_new_session_title_is_an_event() {
+        let (_, started) = changes(None, &run(AgentRunStatus::Working));
+        let mut named = run(AgentRunStatus::Working);
+        named.title = Some("Fix the login page".into());
+        let (events, titled) = changes(Some(&started), &named);
+        assert_eq!(events, ["run.title"]);
+        assert!(changes(Some(&titled), &named).0.is_empty(), "the same title again");
     }
 
     #[test]

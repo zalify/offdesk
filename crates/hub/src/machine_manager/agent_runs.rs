@@ -626,6 +626,14 @@ impl MachineManager {
         self.announce_runs(user_id, &db, result, terminal_id);
     }
 
+    /// A terminal's title changed: its open run is called something new (`AgentRunInfo::title`).
+    pub(super) fn on_terminal_title(&self, user_id: Option<String>, terminal_id: &str) {
+        let Ok(db) = self.db.get() else { return };
+        let result = agent_runs::latest_for_terminal(&db, terminal_id)
+            .map(|run| run.filter(|run| run.ended_at.is_none()).into_iter().collect());
+        self.announce_runs(user_id, &db, result, terminal_id);
+    }
+
     /// A machine disconnected: its open runs are Gone until it comes back.
     pub(super) fn end_machine_runs(&self, user_id: Option<String>, machine_id: &str) {
         let Ok(db) = self.db.get() else { return };

@@ -290,6 +290,7 @@ mod tests {
             report: None,
             label: None,
             external_ref: None,
+            title: None,
             started_at_ms: started,
             updated_at_ms: started,
             ended_at_ms: ended,

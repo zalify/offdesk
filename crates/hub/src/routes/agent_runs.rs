@@ -59,6 +59,7 @@ pub(crate) fn shown_run(mut run: AgentRunInfo, level: Option<ContentLevel>) -> A
             report.text.clear();
             report.link = None;
         }
+        run.title = None;
     }
     run
 }
