@@ -277,9 +277,12 @@ jobs:
       - name: Publish as Latest
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
 
+  # The steps after publishing say when they run: by default a job is skipped when
+  # any job before it was, as the other components are when one is rebuilt.
   updater-channel:
     name: Point desktop-latest at this release
     needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     uses: ./.github/workflows/desktop-updater-channel.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
@@ -295,6 +298,7 @@ jobs:
   android-legacy-release:
     name: Copy the APKs to app-vX.Y.Z for Android apps up to 0.9.x
     needs: [prepare, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -334,6 +338,7 @@ jobs:
   mirror:
     name: Mirror the release to offdesk.dev
     needs: [prepare, updater-channel, android-legacy-release]
+    if: ${{ !cancelled() && needs.updater-channel.result == 'success' && needs.android-legacy-release.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
