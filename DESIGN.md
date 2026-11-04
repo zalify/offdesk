@@ -152,7 +152,11 @@ Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
 - **Tabs** (`Tab`): `0:app` + muted program; active = `fg-0` and a 2px
   accent underline; a waiting tab shows a red `!`.
 - **Setup steps** (`StepMark`): `[✓]` done, `[~]` in progress (accent),
-  `[ ]` not started (`fg-3`).
+  `[!]` needs attention (`err`), `[ ]` not started (`fg-3`).
+- **Onboarding** (`StepBar`, `SetupFrame`): the workspace before it has tabs.
+  The steps stand where the tab bar goes, the status line carries live state,
+  and two columns (`.odk-setup-grid`) hold what's happening and the thing to
+  do. On a phone-width window only the current step keeps its name.
 - **Logo** (`Logo`, `Wordmark`): v1 mark — a desk with a terminal window
   flying off it, `>_` in the accent. Below 24px the speed lines and the
   underscore drop.

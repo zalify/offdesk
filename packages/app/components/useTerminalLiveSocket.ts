@@ -70,6 +70,10 @@ export function useTerminalLiveSocket({
 
     const reconnectController = createTerminalReconnectController<number>({
       delayMs: 1000,
+      // Coming back from the background reconnects right away: the old
+      // socket may be dead without knowing it, and input typed meanwhile
+      // waits in TerminalView's pending-input queue for the new one.
+      resumeDelayMs: 0,
       openReadyState: WebSocket.OPEN,
       onReconnect: () => {
         if (!disposed) {

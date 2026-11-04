@@ -8,6 +8,7 @@ mod bootstrap;
 mod focus;
 mod integrations;
 mod mode;
+pub(crate) mod onboarding;
 mod registration;
 mod settings;
 mod terminals;

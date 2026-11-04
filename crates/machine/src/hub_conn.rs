@@ -330,18 +330,7 @@ impl HubConnection {
             }))
             .await;
 
-        // The coding agents installed here, found in the person's login shell (slow:
-        // off the connection's path)
-        let send_tx_for_agents = send_tx.clone();
-        tokio::spawn(async move {
-            if let Ok(agents) = tokio::task::spawn_blocking(crate::agent_start::probe).await {
-                let _ = send_tx_for_agents
-                    .send(OutboundHubMessage::Json(MachineToHub::InstalledAgents {
-                        agents,
-                    }))
-                    .await;
-            }
-        });
+        report_installed_agents(send_tx.clone());
 
         // Agent browsers: subscribe before listing so nothing falls in
         // between, report the full list (like ExistingTerminals), then
@@ -481,8 +470,10 @@ impl HubConnection {
                 for terminal_id in terminal_ids {
                     // The agent first: the hub opens a run for it, then attention
                     // can make that run wait on a person
+                    // No agent seen yet says nothing: to the hub, "none" after a run began
+                    // through its hooks would mean the agent left
                     let agent = agents.get(&terminal_id).copied().flatten();
-                    if last_sent_agent.get(&terminal_id) != Some(&agent) {
+                    if last_sent_agent.get(&terminal_id).copied().flatten() != agent {
                         if send_tx_for_titles
                             .send(OutboundHubMessage::Json(MachineToHub::TerminalAgent {
                                 terminal_id: terminal_id.clone(),
@@ -740,6 +731,20 @@ impl HubConnection {
     }
 }
 
+/// Reports the coding agents installed here, found in the person's login shell (slow: off
+/// the connection's path).
+fn report_installed_agents(send_tx: mpsc::Sender<OutboundHubMessage>) {
+    tokio::spawn(async move {
+        if let Ok(agents) = tokio::task::spawn_blocking(crate::agent_start::probe).await {
+            let _ = send_tx
+                .send(OutboundHubMessage::Json(MachineToHub::InstalledAgents {
+                    agents,
+                }))
+                .await;
+        }
+    });
+}
+
 async fn handle_hub_message(
     msg: HubToMachine,
     pty: &Arc<PtyManager>,
@@ -751,6 +756,7 @@ async fn handle_hub_message(
 ) {
     match msg {
         HubToMachine::OpenPreviewStream { .. } => {}, // handled by connection-owned JoinSet
+        HubToMachine::ProbeAgents => report_installed_agents(send_tx.clone()),
         HubToMachine::CreateTerminal {
             request_id,
             cwd,

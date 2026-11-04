@@ -46,7 +46,7 @@ import { createSelectionAutoCopyController } from "@/lib/selectionAutoCopy";
 import { createTerminalClipboardProvider } from "@/lib/terminalClipboard";
 import { isTauri } from "@/lib/platform";
 import { bulkKeypressText } from "@/lib/terminalBulkKey";
-import { attachAppleTerminalInput } from "@/lib/appleTerminalInput";
+import { patchCompositionHelperSendRace, type TerminalWithCompositionHelper } from "@/lib/compositionHelperPatch";
 import { readClipboardText } from "@/lib/readClipboardText";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { fetchRemoteFile } from "@/lib/fetchRemoteFile";
@@ -65,6 +65,10 @@ import {
   type InputBatcher,
 } from "@/lib/terminalInputBatcher";
 import { createWheelDirectionGate } from "@/lib/terminalWheelGate";
+import {
+  createPendingTerminalInput,
+  type PendingTerminalInput,
+} from "@/lib/pendingTerminalInput";
 import { activateGpuRenderer } from "@/lib/terminalGpuRenderer";
 import { readTerminalFontPreferences, subscribeFontPreferences } from "@/lib/fontPreferences";
 
@@ -82,6 +86,8 @@ const TERMINAL_SCROLL_SENSITIVITY = 3;
 // resize the hub drops (control moved meanwhile) never brings a redraw.
 // Generous, since the redraw needs a full round trip over remote links.
 const RESIZE_REDRAW_WAIT_MS = 3000;
+// SGR (1006) and X10 mouse reports, which xterm emits through onData.
+const MOUSE_REPORT_RE = /\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/g;
 
 // Invoke a Tauri command through the internals global rather than
 // dynamic-importing the plugin's JS package. Metro turns
@@ -231,194 +237,6 @@ function patchScaledMouseCoordinates(term: Terminal): () => void {
   return () => {
     mouseService.getCoords = originalGetCoords;
     mouseService.getMouseReportCoords = originalGetMouseReportCoords;
-  };
-}
-
-interface XtermCompositionHelper {
-  _isComposing: boolean;
-  _compositionPosition: { start: number; end: number };
-  _compositionSuffix: string;
-  _isSendingComposition: boolean;
-  _dataAlreadySent: string;
-  _textareaChangeTimer?: number;
-  _textarea: HTMLTextAreaElement;
-  _compositionView: HTMLElement;
-  _coreService: { triggerDataEvent(data: string, wasUserInput?: boolean): void };
-  compositionstart(): void;
-  _finalizeComposition(waitForPropagation: boolean): void;
-  _handleAnyTextareaChanges(): void;
-}
-
-type TerminalWithCompositionHelper = Terminal & {
-  _core?: { _compositionHelper?: XtermCompositionHelper; _keyPressHandled?: boolean; _keyDownHandled?: boolean };
-};
-
-function patchCompositionHelperSendRace(term: Terminal): () => void {
-  // xterm's CompositionHelper finalizes a composition with a setTimeout(0)
-  // that computes the text to send from LIVE textarea state at run time:
-  // the region end comes from the newest composition's live position (or
-  // live value.length), the #3191 dedup offset from live _dataAlreadySent,
-  // and cancellation is one shared _isSendingComposition boolean that every
-  // compositionend re-arms. On a starved main thread (slow phones, CI) the
-  // 0ms timers queue behind input tasks; a stale timer then fires with an
-  // over-wide region covering later commits, and the timers that owned
-  // those commits are cancelled — the same commit reaches onData twice
-  // (upstream xterm.js#5023, unfixed as of 6.1.0-beta.303).
-  //
-  // Workaround: track how much of the textarea prefix has already been
-  // emitted (`emittedPrefixLength`) and clamp every deferred send region to
-  // start at or after it. Content is never compared, so legitimate repeated
-  // text (测测) still flows; each textarea position is simply emitted at
-  // most once. The watermark is resynced when the textarea is cleared
-  // (blur / Enter clears value, detected at the next compositionstart).
-  const helper = (term as TerminalWithCompositionHelper)._core
-    ?._compositionHelper;
-  if (
-    !helper ||
-    typeof helper._finalizeComposition !== "function" ||
-    typeof helper._handleAnyTextareaChanges !== "function" ||
-    !helper._textarea
-  ) {
-    return () => {};
-  }
-
-  let emittedPrefixLength = 0;
-
-  const originalCompositionStart = helper.compositionstart.bind(helper);
-  const originalFinalize = helper._finalizeComposition.bind(helper);
-  const originalHandleAnyTextareaChanges =
-    helper._handleAnyTextareaChanges.bind(helper);
-
-  helper.compositionstart = () => {
-    originalCompositionStart();
-    if (helper._textarea.value.length < emittedPrefixLength) {
-      emittedPrefixLength = helper._compositionPosition.start;
-    }
-  };
-
-  helper._finalizeComposition = (waitForPropagation: boolean): void => {
-    helper._compositionView.classList.remove("active");
-    helper._isComposing = false;
-
-    if (!waitForPropagation) {
-      // Cancel any delayed composition send requests and send the input
-      // immediately (upstream verbatim, plus watermark advance).
-      helper._isSendingComposition = false;
-      const input = helper._textarea.value.substring(
-        helper._compositionPosition.start,
-        helper._compositionPosition.end,
-      );
-      emittedPrefixLength = Math.max(
-        emittedPrefixLength,
-        helper._compositionPosition.start + input.length,
-      );
-      helper._coreService.triggerDataEvent(input, true);
-      return;
-    }
-
-    const currentCompositionPosition = {
-      start: helper._compositionPosition.start,
-      end: helper._compositionPosition.end,
-    };
-    const currentCompositionSuffix = helper._compositionSuffix;
-
-    helper._isSendingComposition = true;
-    setTimeout(() => {
-      if (!helper._isSendingComposition) {
-        return;
-      }
-      helper._isSendingComposition = false;
-      // Upstream #3191 guard, then the watermark clamp: never re-emit a
-      // textarea prefix any sender (this timer, the 229 diff timer, or the
-      // sync finalize) has already accounted for — even if a newer
-      // compositionstart reset _dataAlreadySent in between.
-      const start = Math.max(
-        currentCompositionPosition.start + helper._dataAlreadySent.length,
-        emittedPrefixLength,
-      );
-      let input: string;
-      if (helper._isComposing) {
-        // Use the start position of the new composition to get the string
-        // if a new composition has started. Math.max guards against
-        // substring's argument-swap when the watermark is past it.
-        input = helper._textarea.value.substring(
-          start,
-          Math.max(start, helper._compositionPosition.start),
-        );
-      } else {
-        const value = helper._textarea.value;
-        const valueEnd =
-          currentCompositionSuffix.length > 0 &&
-          value.endsWith(currentCompositionSuffix)
-            ? value.length - currentCompositionSuffix.length
-            : value.length;
-        input = value.substring(start, Math.max(start, valueEnd));
-      }
-      if (input.length > 0) {
-        emittedPrefixLength = start + input.length;
-        helper._coreService.triggerDataEvent(input, true);
-      }
-    }, 0);
-  };
-
-  helper._handleAnyTextareaChanges = (): void => {
-    if (helper._textareaChangeTimer) {
-      return;
-    }
-    const oldValue = helper._textarea.value;
-    helper._textareaChangeTimer = window.setTimeout(() => {
-      helper._textareaChangeTimer = undefined;
-      // Ignore if a composition has started since the timeout
-      if (helper._isComposing) {
-        return;
-      }
-      const newValue = helper._textarea.value;
-      if (newValue.length > oldValue.length) {
-        // IMEs append at the caret; skip any prefix a composition finalize
-        // already emitted while this timer was starved.
-        const input = newValue.substring(
-          Math.max(emittedPrefixLength, oldValue.length),
-        );
-        helper._dataAlreadySent = input;
-        if (input.length > 0) {
-          helper._coreService.triggerDataEvent(input, true);
-        }
-      } else if (newValue.length < oldValue.length) {
-        helper._dataAlreadySent = newValue.replace(oldValue, "");
-        // C0.DEL, matching upstream's shrink branch.
-        helper._coreService.triggerDataEvent("\x7f", true);
-      } else if (newValue !== oldValue) {
-        helper._dataAlreadySent = newValue;
-        helper._coreService.triggerDataEvent(newValue, true);
-      } else {
-        return;
-      }
-      // Whatever is now in the textarea has been accounted for.
-      emittedPrefixLength = newValue.length;
-    }, 0);
-  };
-
-  const apple = /Mac|iPad|iPhone|iPod/.test(navigator.userAgent) || navigator.platform === "MacIntel";
-  const core = (term as TerminalWithCompositionHelper)._core;
-  const removeAppleInput = apple ? attachAppleTerminalInput({
-    textarea: helper._textarea,
-    composing: () => helper._isComposing || helper._isSendingComposition,
-    keyHandled: () => !!core?._keyPressHandled || !!core?._keyDownHandled,
-    disabled: () => !!term.options.screenReaderMode,
-    commit: (text) => {
-      if (helper._textareaChangeTimer !== undefined) window.clearTimeout(helper._textareaChangeTimer);
-      helper._textareaChangeTimer = undefined;
-      helper._dataAlreadySent = "";
-      emittedPrefixLength = helper._textarea.value.length;
-      if (text) helper._coreService.triggerDataEvent(text, true);
-    },
-  }) : () => {};
-
-  return () => {
-    removeAppleInput();
-    helper.compositionstart = originalCompositionStart;
-    helper._finalizeComposition = originalFinalize;
-    helper._handleAnyTextareaChanges = originalHandleAnyTextareaChanges;
   };
 }
 
@@ -577,6 +395,41 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     // probe is enabled (localStorage offdesk:echo-probe=1); the live socket
     // turns the first output after it into a round-trip sample.
     const echoProbeSentAtRef = useRef<number | null>(null);
+    const echoProbeEnabledRef = useRef(false);
+    // True from when the live socket schedules a reconnect until the next
+    // socket opens. Input typed meanwhile waits in pendingInputRef instead of
+    // going to a socket that is about to be replaced (after the app returns
+    // from the background it may be dead while still reporting OPEN), and is
+    // sent on the new socket when it opens.
+    const reconnectPendingRef = useRef(false);
+    const pendingInputRef = useRef<PendingTerminalInput | null>(null);
+    if (pendingInputRef.current === null) {
+      pendingInputRef.current = createPendingTerminalInput({
+        now: () => performance.now(),
+      });
+    }
+    const sendInputFrame = useCallback((ws: WebSocket, data: string) => {
+      ws.send(JSON.stringify({ type: "input", data }));
+      if (echoProbeEnabledRef.current) {
+        echoProbeSentAtRef.current = performance.now();
+      }
+    }, []);
+    const deliverInput = useCallback(
+      (data: string) => {
+        if (!canTypeRef.current) return;
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN && !reconnectPendingRef.current) {
+          sendInputFrame(ws, data);
+          return;
+        }
+        // Mouse reports are not replayed: they describe a pointer the new
+        // attach knows nothing about, and a burst of wheel reports would
+        // drop tmux into copy-mode.
+        const keys = data.replace(MOUSE_REPORT_RE, "");
+        if (keys) pendingInputRef.current?.push(keys);
+      },
+      [sendInputFrame],
+    );
     const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
     const [sessionGeneration, setSessionGeneration] = useState(0);
@@ -879,6 +732,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     onReconnectingChangeRef.current = onReconnectingChange;
     const handleReconnectingChange = useCallback(
       (reconnecting: boolean) => {
+        reconnectPendingRef.current = reconnecting;
         if (reconnecting) reportReady();
         onReconnectingChangeRef.current?.(reconnecting);
       },
@@ -900,8 +754,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const runFitAwaitingOpenRef = useRef(runFitAwaitingOpen);
     runFitAwaitingOpenRef.current = runFitAwaitingOpen;
     const handleSocketOpen = useCallback(() => {
+      // A fit waiting for the socket goes first, so a controller's resize
+      // reaches the PTY before the input queued for it.
       runFitAwaitingOpenRef.current();
-    }, []);
+      reconnectPendingRef.current = false;
+      const queued = pendingInputRef.current?.drain() ?? "";
+      const ws = wsRef.current;
+      if (queued && canTypeRef.current && ws?.readyState === WebSocket.OPEN) {
+        sendInputFrame(ws, queued);
+      }
+    }, [sendInputFrame]);
 
     // Keep the long-lived ResizeObserver connected to the current fit handler.
     const fitToContainerRef = useRef(fitToContainer);
@@ -927,10 +789,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             batcher.push(data);
             return;
           }
-          const ws = wsRef.current;
-          if (ws?.readyState === WebSocket.OPEN && canTypeRef.current) {
-            ws.send(JSON.stringify({ type: "input", data }));
-          }
+          deliverInput(data);
         },
         sendCommandInput(data: string) {
           inputBatcherRef.current?.flush();
@@ -968,7 +827,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         getSelection,
         getSelectionSnapshot,
       }),
-      [fitToContainer, measureLayout, sendImageFile, setMouseTrackingEnabled, getSelection, getSelectionSnapshot],
+      [deliverInput, fitToContainer, measureLayout, sendImageFile, setMouseTrackingEnabled, getSelection, getSelectionSnapshot],
     );
 
     // Create terminal once on mount — never recreated during reconnections
@@ -1178,17 +1037,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // so keystroke latency is unchanged. Guards are evaluated at flush
       // time inside the send callback. Command/image sends flush first so
       // cross-type message ordering is preserved.
-      const echoProbeEnabled =
+      //
+      // While the socket is connecting or a reconnect is pending, input is
+      // queued and sent on the next socket when it opens (deliverInput).
+      echoProbeEnabledRef.current =
         localStorage.getItem("offdesk:echo-probe") === "1";
-      const batcher = createInputBatcher((data) => {
-        const ws = wsRef.current;
-        if (ws?.readyState === WebSocket.OPEN && canTypeRef.current) {
-          ws.send(JSON.stringify({ type: "input", data }));
-          if (echoProbeEnabled) {
-            echoProbeSentAtRef.current = performance.now();
-          }
-        }
-      });
+      const batcher = createInputBatcher(deliverInput);
       inputBatcherRef.current = batcher;
       term.onData((data) => {
         const userInput = filterBrowserGeneratedTerminalInput(data);
@@ -1569,6 +1423,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (inputBatcherRef.current === batcher) {
           inputBatcherRef.current = null;
         }
+        // After the flush: it may have queued input that has nowhere to go.
+        pendingInputRef.current?.clear();
         resizeObserver.disconnect();
         viewportFit.dispose();
         if (measureRafRef.current) {
@@ -1657,6 +1513,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const unsubscribe = subscribeFontPreferences(() => { void update(true); });
       return () => { disposed = true; unsubscribe(); };
     }, [fitToContainer, scheduleMeasure]);
+
+    // Input queued for one socket URL must not be replayed into another.
+    useEffect(() => () => pendingInputRef.current?.clear(), [wsUrl]);
 
     useTerminalLiveSocket({
       termRef,

@@ -244,6 +244,8 @@ export interface AgentRunInfo {
   label?: string
   /** The starter's own reference (an issue, a task). */
   external_ref?: string
+  /** What the agent calls its session while it runs: its terminal's title as the agent set it. */
+  title?: string
   started_at_ms: number
   updated_at_ms: number
   ended_at_ms?: number

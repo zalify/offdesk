@@ -6,6 +6,7 @@ use offdesk_protocol::TerminalAttention;
 /// report `claude.exe` as pane_current_command even on macOS.
 pub fn supports_command(command: Option<&str>) -> bool {
     matches!(command, Some("claude" | "claude.exe" | "codex" | "node"))
+        || command.is_some_and(crate::agent_detect::is_native_claude)
 }
 
 /// A menu line without its highlight marker ("❯ No, exit" → "No, exit").
@@ -105,6 +106,7 @@ mod tests {
     #[test]
     fn recognizes_claude_folder_trust_apart_from_confirmations() {
         assert_eq!(detect(Some("claude.exe"), TRUST), Some(TerminalAttention::FolderTrust));
+        assert_eq!(detect(Some("2.1.307"), TRUST), Some(TerminalAttention::FolderTrust));
         let moved = TRUST.replace("❯ No, exit", "  No, exit").replace("  Yes, I trust", "❯ Yes, I trust");
         assert_eq!(detect(Some("claude"), &moved), Some(TerminalAttention::FolderTrust));
         // Not while something else is on top, not without its footer, not in a shell

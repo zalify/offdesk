@@ -15,6 +15,13 @@ describe("phone addresses", () => {
     ]);
   });
 
+  it("names an interface the way a person would, when the shell knows", () => {
+    expect(hubAddressOptions({
+      url: "http://192.168.1.2:4317", link: null, short: null,
+      candidates: [{ interface: "en0", address: "192.168.1.2", label: "Wi-Fi “Home-5G”" }],
+    })[0].label).toBe("Wi-Fi “Home-5G” · en0");
+  });
+
   it("brackets IPv6 LAN addresses", () => {
     expect(baseUrlFor("fd00::2", "4317")).toBe("http://[fd00::2]:4317");
   });

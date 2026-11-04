@@ -139,6 +139,7 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
             role::set_desktop_role,
             role::hub_status,
             role::hub_link,
+            role::hub_port_check,
             role::hub_install,
             role::hub_uninstall,
             role::hub_pair,

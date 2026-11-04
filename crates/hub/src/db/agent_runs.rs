@@ -170,6 +170,20 @@ pub fn insert_started(
     Ok(row)
 }
 
+/// Gives a run what a person named it and the task it's for.
+pub fn set_origin(
+    conn: &Connection,
+    id: &str,
+    label: Option<&str>,
+    external_ref: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE agent_runs SET label = ?1, external_ref = ?2 WHERE id = ?3",
+        params![label, external_ref, id],
+    )?;
+    Ok(())
+}
+
 fn insert_row(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO agent_runs
@@ -276,6 +290,15 @@ pub fn insert_event(
 }
 
 /// A run's history after `after_seq`, oldest first.
+/// Whether a run has an event of this kind.
+pub fn has_event(conn: &Connection, run_id: &str, kind: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM agent_run_events WHERE run_id = ?1 AND kind = ?2)",
+        params![run_id, kind],
+        |row| row.get(0),
+    )
+}
+
 pub fn list_events(
     conn: &Connection,
     run_id: &str,
@@ -446,11 +469,52 @@ pub fn resolve_open_request(
     Ok(changed > 0)
 }
 
+/// What an agent calls its session, from its terminal's title as the agent set it (Claude
+/// Code names the conversation: "✳ Fix the login page") without the mark in front that
+/// says what it's doing. None for a shell's own title ("ryan@mac:~/shop"), a path, or the
+/// agent's bare name, which it shows before it has named anything.
+pub fn session_title(title: &str) -> Option<String> {
+    let title = title
+        .trim_start_matches(|c: char| {
+            c.is_whitespace()
+                // Dingbats (✳ ✶ ✻ ✽) and Braille spinners (⠂ ⠐)
+                || ('\u{2700}'..='\u{27BF}').contains(&c)
+                || ('\u{2800}'..='\u{28FF}').contains(&c)
+                || matches!(c, '*' | '·' | '•')
+        })
+        .trim();
+    let shell = title
+        .split_once(':')
+        .is_some_and(|(prompt, _)| prompt.contains('@') && !prompt.contains(' '));
+    let bare_name = matches!(
+        title.to_lowercase().as_str(),
+        "claude" | "claude code" | "codex" | "gemini" | "gemini cli"
+    );
+    if title.is_empty() || shell || bare_name || title.starts_with(['~', '/']) {
+        return None;
+    }
+    Some(clip(title))
+}
+
 pub fn to_info(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<AgentRunInfo> {
     let request = if row.ended_at.is_none() {
         open_request(conn, &row.id)?
     } else {
         None
+    };
+    // Only while it runs: once it ends, the title is the next run's or the shell's
+    let title = match (&row.terminal_id, row.ended_at) {
+        (Some(terminal_id), None) => conn
+            .query_row(
+                "SELECT title FROM terminal_sessions
+                 WHERE id = ?1 AND title_source = 'osc' AND destroyed_at IS NULL",
+                params![terminal_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?
+            .as_deref()
+            .and_then(session_title),
+        _ => None,
     };
     Ok(AgentRunInfo {
         id: row.id.clone(),
@@ -464,6 +528,7 @@ pub fn to_info(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<AgentRu
         report: row.report.clone(),
         label: row.label.clone(),
         external_ref: row.external_ref.clone(),
+        title,
         started_at_ms: row.started_at,
         updated_at_ms: row.updated_at,
         ended_at_ms: row.ended_at,
@@ -473,7 +538,8 @@ pub fn to_info(conn: &Connection, row: &AgentRunRow) -> rusqlite::Result<AgentRu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{init_db, machines, users};
+    use crate::db::{init_db, machines, terminal_sessions, users};
+    use offdesk_protocol::TerminalTitleSource;
 
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -551,6 +617,31 @@ mod tests {
             .is_empty());
         assert!(find_for_user(&conn, &run.id, "user-b").unwrap().is_none());
         assert!(find_for_user(&conn, &run.id, "user-a").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_session_is_called_what_its_agent_titled_it() {
+        assert_eq!(session_title("✳ Fix the login page").as_deref(), Some("Fix the login page"));
+        assert_eq!(session_title("⠐ 磁盘空间清理").as_deref(), Some("磁盘空间清理"));
+        assert_eq!(session_title("ZAL-88 新产品定位 wireframe").as_deref(), Some("ZAL-88 新产品定位 wireframe"));
+        assert_eq!(session_title("✳ Claude Code"), None, "its bare name names nothing yet");
+        assert_eq!(session_title("ryan@Mac-mini-2:~/work/shop"), None, "the shell's own title");
+        assert_eq!(session_title("~/work/shop"), None);
+        assert_eq!(session_title(" ✳ "), None);
+    }
+
+    #[test]
+    fn an_open_run_has_its_terminals_title_and_an_ended_one_does_not() {
+        let conn = test_db();
+        terminal_sessions::insert(&conn, "t1", "machine-a", "shell", "/w", 80, 24).unwrap();
+        let run = insert(&conn, "machine-a", "t1", RunAgent::Claude, "/w", AgentRunStatus::Working).unwrap();
+        assert_eq!(to_info(&conn, &run).unwrap().title, None, "a title the agent didn't set");
+
+        terminal_sessions::apply_title_update(&conn, "t1", "✳ Onboarding UX", TerminalTitleSource::Osc).unwrap();
+        assert_eq!(to_info(&conn, &run).unwrap().title.as_deref(), Some("Onboarding UX"));
+
+        let done = set_status(&conn, &run.id, AgentRunStatus::Done).unwrap().unwrap();
+        assert_eq!(to_info(&conn, &done).unwrap().title, None);
     }
 
     #[test]

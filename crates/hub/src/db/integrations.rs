@@ -226,11 +226,12 @@ pub struct RunState {
     pub report_at: Option<i64>,
     pub progress: Option<(u32, u32)>,
     pub ended: bool,
+    pub title: Option<String>,
 }
 
 pub fn run_state(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<RunState>> {
     conn.query_row(
-        "SELECT seq, status, request_id, report_at, progress_done, progress_total, ended
+        "SELECT seq, status, request_id, report_at, progress_done, progress_total, ended, title
          FROM webhook_run_state WHERE run_id = ?1",
         params![run_id],
         |row| {
@@ -244,6 +245,7 @@ pub fn run_state(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<Run
                     _ => None,
                 },
                 ended: row.get::<_, i64>(6)? != 0,
+                title: row.get(7)?,
             })
         },
     )
@@ -252,10 +254,10 @@ pub fn run_state(conn: &Connection, run_id: &str) -> rusqlite::Result<Option<Run
 
 pub fn save_run_state(conn: &Connection, run_id: &str, state: &RunState) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO webhook_run_state (run_id, seq, status, request_id, report_at, progress_done, progress_total, ended, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO webhook_run_state (run_id, seq, status, request_id, report_at, progress_done, progress_total, ended, updated_at, title)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(run_id) DO UPDATE SET seq = ?2, status = ?3, request_id = ?4, report_at = ?5,
-             progress_done = ?6, progress_total = ?7, ended = ?8, updated_at = ?9",
+             progress_done = ?6, progress_total = ?7, ended = ?8, updated_at = ?9, title = ?10",
         params![
             run_id,
             state.seq,
@@ -265,7 +267,8 @@ pub fn save_run_state(conn: &Connection, run_id: &str, state: &RunState) -> rusq
             state.progress.map(|p| p.0),
             state.progress.map(|p| p.1),
             state.ended as i64,
-            now_ms()
+            now_ms(),
+            state.title
         ],
     )?;
     // Runs that ended a week ago won't change again

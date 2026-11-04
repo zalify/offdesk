@@ -12,6 +12,7 @@ pub mod agent_sessions;
 pub mod bookmarks;
 pub mod hub_state;
 pub mod machines;
+pub mod onboarding;
 pub mod settings;
 pub mod terminal_sessions;
 pub mod tokens;
@@ -134,6 +135,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             terminal_id TEXT NOT NULL,
             machine_id TEXT NOT NULL,
             updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS onboarding_marks (
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            mark TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (user_id, mark)
         );
 
         CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
@@ -364,6 +372,11 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         );
     ",
     )?;
+
+    // Webhooks: the session title last described, so a new one is an event of its own
+    if !column_exists(conn, "webhook_run_state", "title")? {
+        conn.execute("ALTER TABLE webhook_run_state ADD COLUMN title TEXT", [])?;
+    }
 
     // Agent runs: the name and reference a run was started with (A4)
     for column in ["label", "external_ref"] {
