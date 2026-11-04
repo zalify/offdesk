@@ -10,7 +10,7 @@ export interface ExtendedKeyBarProps {
   onKey: (data: string) => void;
   onToggleKeyboard: () => void;
   onPasteText?: (text: string) => void;
-  onAttachFile?: (file: File) => void | Promise<void>;
+  onAttachFile?: (file: File, onProgress?: (sent: number, total: number) => void) => void | Promise<void>;
   onEnterSelectMode?: () => void;
   onExitSelectMode?: () => void;
   onCopySelection?: () => Promise<string | null> | string | null;
@@ -70,6 +70,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [reviewingAttachments, setReviewingAttachments] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ index: number; sent: number; total: number } | null>(null);
   const uploadPending = useRef(false);
   const attachHandler = useRef(onAttachFile); attachHandler.current = onAttachFile;
   const controller = useRef(isController); controller.current = isController;
@@ -120,7 +121,9 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       for (const file of batch) {
         if (!mounted.current) return;
         if (!controller.current || !attachHandler.current) throw new Error("Take control to send the remaining attachments.");
-        await attachHandler.current(file);
+        // Sent files leave pendingFiles one by one, so the one in flight is always first.
+        setUploadProgress({ index: 0, sent: 0, total: file.size });
+        await attachHandler.current(file, (sent, total) => { if (mounted.current) setUploadProgress({ index: 0, sent, total }); });
         if (!mounted.current) return;
         setPendingFiles(current => current.slice(1));
       }
@@ -133,7 +136,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       if (mounted.current) setUploadError(error instanceof Error ? error.message : "Could not send the file. Try again.");
     } finally {
       uploadPending.current = false;
-      if (mounted.current) setUploading(false);
+      if (mounted.current) { setUploading(false); setUploadProgress(null); }
     }
   };
   const key = (label: string, data: string, id?: string, icon?: ReactNode, repeat: boolean | "hold" = false) => <KeyButton key={data} label={label} testid={id}
@@ -209,7 +212,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
     </>}
     <input ref={fileInput} type="file" accept="image/*,video/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
     <input ref={documentInput} type="file" multiple hidden onChange={attach} data-testid="extended-keybar-document-input" disabled={!onAttachFile} />
-    {reviewingAttachments && <AttachmentReview files={pendingFiles} uploading={uploading} error={uploadError}
+    {reviewingAttachments && <AttachmentReview files={pendingFiles} uploading={uploading} error={uploadError} progress={uploadProgress}
       canSend={isController && !!onAttachFile} onSend={() => void sendAttachments()}
       onRemove={index => setPendingFiles(current => current.filter((_, i) => i !== index))}
       onCancel={() => { if (!uploadPending.current) { setPendingFiles([]); setReviewingAttachments(false); setUploadError(null); } }} />}

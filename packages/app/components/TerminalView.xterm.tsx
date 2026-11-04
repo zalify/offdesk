@@ -35,6 +35,8 @@ import {
   safeFilename,
   waitForWsOpen,
 } from "@/lib/terminalImagePaste";
+import { UploadError, uploadFallsBackToLegacy, uploadFileChunked } from "@/lib/terminalUpload";
+import { formatAttachmentSize } from "@/lib/formatAttachmentSize";
 import {
   mergeWrappedRows,
   trimTrailingBlankLines,
@@ -511,6 +513,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const timer = window.setTimeout(() => setPreviewNotice(null), 8000);
       return () => window.clearTimeout(timer);
     }, [previewNotice]);
+    // Control text frames (upload replies) fan out to whoever is listening.
+    const controlListenersRef = useRef(new Set<(text: string) => void>());
+    const handleControlMessage = useCallback((text: string) => {
+      for (const listener of Array.from(controlListenersRef.current)) listener(text);
+    }, []);
+    const subscribeControl = useCallback((listener: (text: string) => void) => {
+      controlListenersRef.current.add(listener);
+      return () => { controlListenersRef.current.delete(listener); };
+    }, []);
     const previewTap = useRef<{ url: string; at: number; pending: boolean } | null>(null);
     const openTerminalLink = useCallback((url: string) => {
       // `file://` OSC 8 links (from `offdesk fetch` / `ls --hyperlink`) and
@@ -677,18 +688,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
     const clipboardRead = readClipboardText;
 
-    // Forward a picked file (mobile attach button, drag-drop, etc.) over
-    // the live WS using the same `image_paste` protocol that clipboard
-    // pastes use. Throws on failure so the caller can surface a message —
-    // mobile users can't see console.warn.
+    // Upload a picked/dropped file over the live WS with the chunked upload
+    // protocol (stop-and-wait, one chunk in memory at a time). An old hub
+    // ignores it, so small files fall back to the one-message `image_paste`.
+    // Throws on failure so the caller can surface a message — mobile users
+    // can't see console.warn.
     const sendImageFile = useCallback(
-      async (file: Blob & { name?: string }): Promise<void> => {
+      async (file: Blob & { name?: string }, onProgress?: (sent: number, total: number) => void): Promise<void> => {
         if (!canTypeRef.current) {
           throw new Error("Unlock view only to attach a file.");
-        }
-        if (file.size > MAX_IMAGE_PASTE_BYTES) {
-          const mb = Math.round(MAX_IMAGE_PASTE_BYTES / (1024 * 1024));
-          throw new Error(`File too large (max ${mb} MB).`);
         }
         // Mobile browsers commonly close the WebSocket while a file picker
         // sits in the foreground. Wait for the reconnect to land before
@@ -698,7 +706,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           throw new Error("Connection unavailable. Try again.");
         }
         // Multi-selection must not fill the native encrypted queue with
-        // several Base64 files at once. A timeout leaves this file unsent.
+        // several files at once. A timeout leaves this file unsent.
         const deadline = Date.now() + 30_000;
         while (ws.bufferedAmount > 0) {
           if (ws.readyState !== WebSocket.OPEN || Date.now() >= deadline) {
@@ -706,18 +714,73 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
           await new Promise(resolve => setTimeout(resolve, 100));
         }
-        const { base64, mime } = await readFileAsBase64(file);
-        if (!canTypeRef.current || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) {
-          throw new Error("Connection or control changed. Try the remaining files again.");
-        }
-        const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : "";
-        const filename = safeFilename(file.name ?? "", ext);
         inputBatcherRef.current?.flush();
-        ws.send(JSON.stringify(buildImagePasteMessage(base64, mime, filename)));
-        if (ws.readyState !== WebSocket.OPEN) throw new Error("Upload could not be queued. Try a smaller file or reconnect.");
+        try {
+          await uploadFileChunked({
+            file,
+            onProgress,
+            subscribe: subscribeControl,
+            send: (text) => {
+              // The hub/node discard the partial upload when the attach closes.
+              if (ws.readyState !== WebSocket.OPEN) throw new UploadError("disconnected", "Connection lost during upload. Try again.");
+              ws.send(text);
+            },
+          });
+        } catch (error) {
+          if (uploadFallsBackToLegacy(error, file.size)) {
+            const { base64, mime } = await readFileAsBase64(file);
+            if (!canTypeRef.current || wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) {
+              throw new Error("Connection or control changed. Try the remaining files again.");
+            }
+            const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : "";
+            const filename = safeFilename(file.name ?? "", ext);
+            inputBatcherRef.current?.flush();
+            ws.send(JSON.stringify(buildImagePasteMessage(base64, mime, filename)));
+            if (ws.readyState !== WebSocket.OPEN) throw new Error("Upload could not be queued. Try a smaller file or reconnect.");
+            return;
+          }
+          if (error instanceof UploadError && (error.code === "no_reply" || error.code === "outdated")) {
+            throw new Error("Update the hub and node to send files over 23 MB.");
+          }
+          throw error;
+        }
       },
-      [],
+      [subscribeControl],
     );
+
+    // Drag-drop uploads: one at a time, progress in a status strip.
+    const [uploadStatus, setUploadStatus] = useState<{ text: string; sent?: number; total?: number; error?: boolean } | null>(null);
+    useEffect(() => {
+      if (!uploadStatus || uploadStatus.total !== undefined) return;
+      const timer = window.setTimeout(() => setUploadStatus(null), uploadStatus.error ? 8000 : 3000);
+      return () => window.clearTimeout(timer);
+    }, [uploadStatus]);
+    const dropUploadingRef = useRef(false);
+    const uploadDroppedFiles = useCallback(async (files: File[]) => {
+      if (dropUploadingRef.current) {
+        // eslint-disable-next-line no-console
+        console.warn("[offdesk] an upload is already running; ignoring the dropped files");
+        return;
+      }
+      dropUploadingRef.current = true;
+      try {
+        for (const file of files) {
+          const name = file.name || "file";
+          try {
+            setUploadStatus({ text: `Uploading ${name}`, sent: 0, total: file.size });
+            await sendImageFile(file, (sent, total) => setUploadStatus({ text: `Uploading ${name}`, sent, total }));
+            setUploadStatus({ text: `Uploaded ${name}` });
+          } catch (error) {
+            setUploadStatus({ text: `${name}: ${error instanceof Error ? error.message : "Upload failed."}`, error: true });
+            break;
+          }
+        }
+      } finally {
+        dropUploadingRef.current = false;
+      }
+    }, [sendImageFile]);
+    const uploadDroppedFilesRef = useRef(uploadDroppedFiles);
+    uploadDroppedFilesRef.current = uploadDroppedFiles;
 
     // Toggle DEC mouse-tracking modes locally so touch users can drag-select
     // text while in "select mode". We only flip the locally-written modes;
@@ -1135,13 +1198,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         batcher.push(transformed);
       });
 
-      // Per-file cap so the Base64 message fits the 32 MiB WS limit (see
-      // MAX_IMAGE_PASTE_BYTES). Drag-drop a bigger file: we skip it
-      // and surface a console.warn so the user knows why it didn't land.
-      const MAX_DROP_BYTES = MAX_IMAGE_PASTE_BYTES;
-
-      // Send file bytes over the current WS using the shared `image_paste`
-      // protocol. The machine handler writes to /tmp/<filename> and
+      // Send clipboard image bytes over the current WS using the legacy `image_paste`
+      // message (the paste path stays on it). The machine handler writes to /tmp/<filename> and
       // bracketed-pastes the path, which both Claude Code and Codex accept.
       const sendFileToWs = (
         base64: string,
@@ -1243,9 +1301,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
       container.addEventListener("paste", handlePaste, { capture: true });
 
-      // Drag-and-drop file upload. Dropped files go through the same
-      // image-paste pipeline on the machine side (save to /tmp, inject
-      // the path as a bracketed paste into the PTY), which works for any
+      // Drag-and-drop file upload. Dropped files go through the chunked
+      // upload pipeline (node saves to /tmp, injects the path as a
+      // bracketed paste into the PTY), which works for any
       // file type: Claude Code and Codex both accept a pasted path and
       // figure out whether it's an image / PDF / text themselves.
       const handleDragOver = (e: DragEvent) => {
@@ -1258,25 +1316,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (!files || files.length === 0) return;
         e.preventDefault();
         e.stopPropagation();
-        for (const file of Array.from(files)) {
-          if (file.size > MAX_DROP_BYTES) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              `[offdesk] skipping ${file.name}: ${file.size} bytes exceeds ${MAX_DROP_BYTES}`,
-            );
-            continue;
-          }
-          const reader = new FileReader();
-          reader.onload = () => {
-            const base64 = (reader.result as string).split(",")[1];
-            sendFileToWs(
-              base64,
-              file.type || "application/octet-stream",
-              safeFilename(file.name),
-            );
-          };
-          reader.readAsDataURL(file);
-        }
+        void uploadDroppedFilesRef.current(Array.from(files));
       };
       container.addEventListener("dragover", handleDragOver);
       container.addEventListener("drop", handleDrop);
@@ -1625,6 +1665,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       terminalId,
       echoProbeSentAtRef,
       scheduleMeasure,
+      onControlMessage: handleControlMessage,
       sessionGeneration,
       setSessionGeneration,
       onReconnectingChange: handleReconnectingChange,
@@ -1664,6 +1705,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 8, borderRadius: 6, background: colorAlpha.warningSubtle }}>
           <span style={{ flex: 1 }}>{previewNotice.message} {previewNotice.url && <a href={previewNotice.url} target="_blank" rel="noopener noreferrer" style={{ color: colors.accent }}>open preview here</a>}</span>
           <button aria-label="Dismiss preview message" onClick={() => setPreviewNotice(null)} style={{ color: colors.foreground, background: "transparent", border: 0, cursor: "pointer", padding: 8 }}>×</button>
+        </div>
+      </div>}
+      {uploadStatus && <div role="status" data-testid="terminal-upload-status" style={{ flexShrink: 0, padding: "8px 12px", background: colors.surface, color: colors.foreground }}>
+        <div style={{ padding: 8, borderRadius: 6, background: uploadStatus.error ? colorAlpha.warningSubtle : colors.surface }}>
+          <div style={{ overflowWrap: "anywhere" }}>
+            {uploadStatus.text}{uploadStatus.total !== undefined && ` · ${formatAttachmentSize(uploadStatus.sent ?? 0)} / ${formatAttachmentSize(uploadStatus.total)}`}
+          </div>
+          {uploadStatus.total !== undefined && uploadStatus.total > 0 && <div style={{ height: 3, marginTop: 6, borderRadius: 2, background: colors.line }}>
+            <div role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, Math.floor((uploadStatus.sent ?? 0) / uploadStatus.total * 100))} style={{ height: "100%", borderRadius: 2, background: colors.accent, width: `${Math.min(100, (uploadStatus.sent ?? 0) / uploadStatus.total * 100)}%` }} />
+          </div>}
         </div>
       </div>}
       <div

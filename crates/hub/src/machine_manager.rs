@@ -52,9 +52,41 @@ pub enum PendingResult {
     },
     FsRead(Result<FsReadData, FsReadFailure>),
     FsWrite(Result<FsWriteData, FsWriteFailure>),
+    Upload(Result<UploadReply, UploadFailure>),
     /// Node's reply to an agent browser command: its `data`, or its error text.
     AgentBrowser(Result<serde_json::Value, String>),
 }
+
+/// A machine's answer to one chunked-upload step.
+#[derive(Debug, Clone)]
+pub enum UploadReply {
+    /// Reply to begin / chunk: bytes on disk so far.
+    Ack { upload_id: String, received: u64 },
+    /// Reply to end: the file was saved and its path pasted.
+    Done {
+        upload_id: String,
+        path: String,
+        size: u64,
+    },
+}
+
+/// Why a chunked-upload step failed.
+#[derive(Debug)]
+pub enum UploadFailure {
+    Machine {
+        upload_id: String,
+        code: offdesk_protocol::UploadErrorCode,
+        message: String,
+    },
+    /// The machine predates `upload-chunked-v1`.
+    Outdated,
+    NoMachine,
+    Disconnected,
+    Timeout,
+}
+
+/// How long the hub waits for the machine to answer one upload step.
+const UPLOAD_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A file the machine read for us.
 #[derive(Debug, Clone)]
@@ -2017,6 +2049,90 @@ impl MachineManager {
         }
     }
 
+    /// Fail unless the machine is connected and understands chunked uploads.
+    pub async fn supports_chunked_upload(&self, machine_id: &str) -> Result<(), UploadFailure> {
+        if self
+            .machine_supports(machine_id, offdesk_protocol::UPLOAD_CHUNKED_CAPABILITY)
+            .await
+        {
+            return Ok(());
+        }
+        let known = self.machines.lock().await.contains_key(machine_id);
+        Err(if known {
+            UploadFailure::Outdated
+        } else {
+            UploadFailure::NoMachine
+        })
+    }
+
+    /// Register the pending entry for `request_id` and hand `msg` to the
+    /// machine's command channel. Split from `upload_await` so the caller can
+    /// do this part in order (the channel send is what fixes chunk order) and
+    /// await the reply elsewhere.
+    pub async fn upload_send(
+        &self,
+        machine_id: &str,
+        request_id: &str,
+        msg: HubToMachine,
+    ) -> Result<oneshot::Receiver<Result<PendingResult, String>>, UploadFailure> {
+        let rx = self.register_pending(request_id).await;
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(request_id).await;
+                return Err(UploadFailure::NoMachine);
+            };
+            conn.cmd_tx.clone()
+        };
+        if cmd_tx.send(msg).await.is_err() {
+            self.remove_pending(request_id).await;
+            return Err(UploadFailure::Disconnected);
+        }
+        Ok(rx)
+    }
+
+    /// Wait for the machine's answer to a step sent with `upload_send`.
+    pub async fn upload_await(
+        &self,
+        request_id: &str,
+        rx: oneshot::Receiver<Result<PendingResult, String>>,
+    ) -> Result<UploadReply, UploadFailure> {
+        self.upload_await_within(request_id, rx, UPLOAD_STEP_TIMEOUT)
+            .await
+    }
+
+    async fn upload_await_within(
+        &self,
+        request_id: &str,
+        rx: oneshot::Receiver<Result<PendingResult, String>>,
+        timeout: std::time::Duration,
+    ) -> Result<UploadReply, UploadFailure> {
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(PendingResult::Upload(result)))) => result,
+            Ok(Ok(_)) => Err(UploadFailure::Disconnected),
+            Ok(Err(_)) => {
+                self.remove_pending(request_id).await;
+                Err(UploadFailure::Disconnected)
+            }
+            Err(_) => {
+                self.remove_pending(request_id).await;
+                Err(UploadFailure::Timeout)
+            }
+        }
+    }
+
+    /// Send one upload step and wait for the machine's reply.
+    pub async fn upload_request(
+        &self,
+        machine_id: &str,
+        request_id: String,
+        msg: HubToMachine,
+    ) -> Result<UploadReply, UploadFailure> {
+        let rx = self.upload_send(machine_id, &request_id, msg).await?;
+        self.upload_await(&request_id, rx).await
+    }
+
     /// Request directory listing from a machine
     pub async fn list_directory(
         &self,
@@ -2372,6 +2488,46 @@ impl MachineManager {
                         code,
                         message,
                         sha256,
+                    }))));
+                }
+            }
+            MachineToHub::AttachUploadAck {
+                request_id,
+                upload_id,
+                received,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::Upload(Ok(UploadReply::Ack {
+                        upload_id,
+                        received,
+                    }))));
+                }
+            }
+            MachineToHub::AttachUploadResult {
+                request_id,
+                upload_id,
+                path,
+                size,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::Upload(Ok(UploadReply::Done {
+                        upload_id,
+                        path,
+                        size,
+                    }))));
+                }
+            }
+            MachineToHub::AttachUploadError {
+                request_id,
+                upload_id,
+                code,
+                message,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::Upload(Err(UploadFailure::Machine {
+                        upload_id,
+                        code,
+                        message,
                     }))));
                 }
             }
@@ -4646,6 +4802,178 @@ mod tests {
             failure,
             FsWriteFailure::Machine { sha256: Some(ref s), .. } if s == "cd"
         ));
+        assert_eq!(manager.pending_count_for_tests().await, 0);
+    }
+
+    fn upload_begin(request_id: &str) -> HubToMachine {
+        HubToMachine::AttachUploadBegin {
+            request_id: request_id.to_string(),
+            attach_id: "att".into(),
+            upload_id: "up".into(),
+            filename: "a.bin".into(),
+            mime: "application/octet-stream".into(),
+            size: 4,
+        }
+    }
+
+    #[tokio::test]
+    async fn upload_steps_round_trip_ack_result_and_error() {
+        let manager = std::sync::Arc::new(MachineManager::new(test_db()));
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::UPLOAD_CHUNKED_CAPABILITY.to_string()],
+            )
+            .await;
+        assert!(manager.supports_chunked_upload("machine-a").await.is_ok());
+
+        // Ack
+        let task = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .upload_request("machine-a", "r1".into(), upload_begin("r1"))
+                    .await
+            })
+        };
+        let Some(HubToMachine::AttachUploadBegin { request_id, .. }) = commands.recv().await else {
+            panic!("expected AttachUploadBegin");
+        };
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AttachUploadAck {
+                    request_id,
+                    upload_id: "up".into(),
+                    received: 7,
+                },
+            )
+            .await;
+        assert!(matches!(
+            task.await.unwrap(),
+            Ok(UploadReply::Ack { received: 7, .. })
+        ));
+
+        // Result
+        let task = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .upload_request(
+                        "machine-a",
+                        "r2".into(),
+                        HubToMachine::AttachUploadEnd {
+                            request_id: "r2".into(),
+                            attach_id: "att".into(),
+                            upload_id: "up".into(),
+                        },
+                    )
+                    .await
+            })
+        };
+        let Some(HubToMachine::AttachUploadEnd { request_id, .. }) = commands.recv().await else {
+            panic!("expected AttachUploadEnd");
+        };
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AttachUploadResult {
+                    request_id,
+                    upload_id: "up".into(),
+                    path: "/tmp/a.bin".into(),
+                    size: 4,
+                },
+            )
+            .await;
+        match task.await.unwrap() {
+            Ok(UploadReply::Done { path, size, .. }) => {
+                assert_eq!(path, "/tmp/a.bin");
+                assert_eq!(size, 4);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+
+        // Error
+        let task = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .upload_request("machine-a", "r3".into(), upload_begin("r3"))
+                    .await
+            })
+        };
+        let Some(HubToMachine::AttachUploadBegin { request_id, .. }) = commands.recv().await else {
+            panic!("expected AttachUploadBegin");
+        };
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AttachUploadError {
+                    request_id,
+                    upload_id: "up".into(),
+                    code: offdesk_protocol::UploadErrorCode::NoSpace,
+                    message: "full".into(),
+                },
+            )
+            .await;
+        assert!(matches!(
+            task.await.unwrap(),
+            Err(UploadFailure::Machine {
+                code: offdesk_protocol::UploadErrorCode::NoSpace,
+                ..
+            })
+        ));
+        assert_eq!(manager.pending_count_for_tests().await, 0);
+    }
+
+    #[tokio::test]
+    async fn upload_needs_the_capability_and_a_known_machine() {
+        let manager = MachineManager::new(test_db());
+        manager
+            .register_machine_with_capabilities(
+                machine("machine-old"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_READ_CAPABILITY.to_string()],
+            )
+            .await;
+        assert!(matches!(
+            manager.supports_chunked_upload("machine-old").await,
+            Err(UploadFailure::Outdated)
+        ));
+        assert!(matches!(
+            manager.supports_chunked_upload("nobody").await,
+            Err(UploadFailure::NoMachine)
+        ));
+        assert!(matches!(
+            manager
+                .upload_request("nobody", "r".into(), upload_begin("r"))
+                .await,
+            Err(UploadFailure::NoMachine)
+        ));
+        assert_eq!(manager.pending_count_for_tests().await, 0);
+    }
+
+    #[tokio::test]
+    async fn upload_times_out_and_clears_the_pending_entry() {
+        let manager = MachineManager::new(test_db());
+        let (_, mut commands) = manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::UPLOAD_CHUNKED_CAPABILITY.to_string()],
+            )
+            .await;
+        let rx = manager
+            .upload_send("machine-a", "r1", upload_begin("r1"))
+            .await
+            .ok()
+            .unwrap();
+        assert!(commands.recv().await.is_some());
+        let result = manager
+            .upload_await_within("r1", rx, std::time::Duration::from_millis(20))
+            .await;
+        assert!(matches!(result, Err(UploadFailure::Timeout)));
         assert_eq!(manager.pending_count_for_tests().await, 0);
     }
 

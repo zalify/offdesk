@@ -14,6 +14,7 @@ use tokio_tungstenite::{
 
 use crate::acp::AcpManager;
 use crate::agent_browser::{AgentBrowserEvent, AgentBrowserManager};
+use crate::upload::UploadManager;
 use crate::attach::{AttachEvent, AttachManager};
 use crate::osc_title::OscTitleScanner;
 use crate::pty::{tmux_resize_window, tmux_window_size, PtyManager};
@@ -183,6 +184,7 @@ impl HubConnection {
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
                 offdesk_protocol::FS_WRITE_CAPABILITY.to_string(),
+                offdesk_protocol::UPLOAD_CHUNKED_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_CHOOSE_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_CAPABILITY.to_string(),
@@ -238,6 +240,7 @@ impl HubConnection {
 
         let pty = self.pty_manager.clone();
         let attach_mgr = Arc::new(AttachManager::new());
+        let upload_mgr = Arc::new(UploadManager::new());
 
         // Agent sessions: per-connection ACP manager. Agent processes are not
         // tmux-backed — when the hub connection drops they are killed (the hub
@@ -637,11 +640,22 @@ impl HubConnection {
             }
         });
 
+        // Task: drop uploads whose sender went quiet, with their partial files
+        let upload_reaper = upload_mgr.clone();
+        let mut upload_reap_task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                interval.tick().await;
+                upload_reaper.reap_idle(Duration::from_secs(120)).await;
+            }
+        });
+
         // Task: receive Hub messages with read timeout
         let pty_recv = pty.clone();
         let agent_browser_recv = self.agent_browser.clone();
         let send_tx_recv = send_tx.clone();
         let attach_mgr_recv = attach_mgr.clone();
+        let upload_mgr_recv = upload_mgr.clone();
         let acp_manager_recv = acp_manager.clone();
         let preview_hub = self.hub_url.clone();
         let mut recv_task = tokio::spawn(async move {
@@ -668,6 +682,7 @@ impl HubConnection {
                                     &attach_mgr_recv,
                                     &acp_manager_recv,
                                     &agent_browser_recv,
+                                    &upload_mgr_recv,
                                 )
                                 .await;
                             }
@@ -696,6 +711,7 @@ impl HubConnection {
             _ = &mut acp_forward_task => {},
             _ = &mut agent_browser_task => {},
             _ = &mut agent_signal_task => {},
+            _ = &mut upload_reap_task => {},
         }
 
         // Abort all tasks to ensure full cleanup
@@ -706,12 +722,14 @@ impl HubConnection {
         acp_forward_task.abort();
         agent_browser_task.abort();
         agent_signal_task.abort();
+        upload_reap_task.abort();
         // Nobody is watching once the hub connection is gone.
         self.agent_browser.stop_all_screencasts().await;
 
         // Kill every per-attach tmux client we spawned for this hub
         // connection — when hub comes back, browsers will reattach freshly.
         attach_mgr.close_all().await;
+        upload_mgr.abort_all().await;
         // Agent processes are not tmux; a dropped hub connection orphans
         // them, and the hub has already marked their sessions Disconnected.
         acp_manager.kill_all().await;
@@ -729,6 +747,7 @@ async fn handle_hub_message(
     attach_mgr: &Arc<AttachManager>,
     acp_manager: &Arc<AcpManager>,
     agent_browser: &Arc<AgentBrowserManager>,
+    upload_mgr: &Arc<UploadManager>,
 ) {
     match msg {
         HubToMachine::OpenPreviewStream { .. } => {}, // handled by connection-owned JoinSet
@@ -1018,6 +1037,7 @@ async fn handle_hub_message(
                     .await;
             }
             let scanner_terminal_id = terminal_id.clone();
+            let upload_mgr = upload_mgr.clone();
             // The window's real size, for the hub's record and for this
             // client: with `window-size manual` it is whatever the last
             // controller set, and a client that assumes its own size sees
@@ -1084,6 +1104,7 @@ async fn handle_hub_message(
                             }
                         }
                         AttachEvent::Died(reason) => {
+                            upload_mgr.abort_attach(&attach_id).await;
                             let _ = send_tx
                                 .send(OutboundHubMessage::Json(MachineToHub::AttachDied {
                                     attach_id: attach_id.clone(),
@@ -1106,6 +1127,7 @@ async fn handle_hub_message(
         }
         HubToMachine::CloseAttach { attach_id } => {
             attach_mgr.close(&attach_id).await;
+            upload_mgr.abort_attach(&attach_id).await;
             // Any AttachOutput queued before this point is still compressed
             // with the live compressor; this drops it afterwards.
             let _ = send_tx
@@ -1204,6 +1226,74 @@ async fn handle_hub_message(
                     }
                 }
             }
+        }
+        HubToMachine::AttachUploadBegin {
+            request_id,
+            attach_id,
+            upload_id,
+            filename,
+            mime: _,
+            size,
+        } => {
+            let reply = if attach_mgr.session_of(&attach_id).await.is_none() {
+                upload_not_found(request_id, upload_id)
+            } else {
+                match upload_mgr.begin(&attach_id, &upload_id, &filename, size).await {
+                    Ok(()) => MachineToHub::AttachUploadAck { request_id, upload_id, received: 0 },
+                    Err((code, message)) => MachineToHub::AttachUploadError { request_id, upload_id, code, message },
+                }
+            };
+            let _ = send_tx.send(OutboundHubMessage::Json(reply)).await;
+        }
+        HubToMachine::AttachUploadChunk {
+            request_id,
+            attach_id,
+            upload_id,
+            index,
+            data,
+        } => {
+            let reply = if attach_mgr.session_of(&attach_id).await.is_none() {
+                // The attach is gone; its partial file must not linger.
+                upload_mgr.abort_attach(&attach_id).await;
+                upload_not_found(request_id, upload_id)
+            } else {
+                match upload_mgr.chunk(&attach_id, &upload_id, index, &data).await {
+                    Ok(received) => MachineToHub::AttachUploadAck { request_id, upload_id, received },
+                    Err((code, message)) => MachineToHub::AttachUploadError { request_id, upload_id, code, message },
+                }
+            };
+            let _ = send_tx.send(OutboundHubMessage::Json(reply)).await;
+        }
+        HubToMachine::AttachUploadEnd {
+            request_id,
+            attach_id,
+            upload_id,
+        } => {
+            let reply = if attach_mgr.session_of(&attach_id).await.is_none() {
+                upload_mgr.abort_attach(&attach_id).await;
+                upload_not_found(request_id, upload_id)
+            } else {
+                match upload_mgr.finish(&attach_id, &upload_id).await {
+                    Ok((path, size)) => {
+                        // Same single-channel paste as handle_image_paste.
+                        let paste = format!("\x1b[200~{}\x1b[201~", attachment_path_text(&path));
+                        attach_mgr
+                            .write_input(&attach_id, Bytes::from(paste.into_bytes()))
+                            .await;
+                        MachineToHub::AttachUploadResult {
+                            request_id,
+                            upload_id,
+                            path: path.to_string_lossy().into_owned(),
+                            size,
+                        }
+                    }
+                    Err((code, message)) => MachineToHub::AttachUploadError { request_id, upload_id, code, message },
+                }
+            };
+            let _ = send_tx.send(OutboundHubMessage::Json(reply)).await;
+        }
+        HubToMachine::AttachUploadAbort { attach_id, upload_id } => {
+            upload_mgr.abort(&attach_id, &upload_id).await;
         }
         HubToMachine::AgentSessionStart {
             session_id,
@@ -1333,14 +1423,23 @@ fn prepare_composer(message: &offdesk_protocol::ComposerMessage) -> Result<Strin
     Ok(format!("\x1b[200~{text}\x1b[201~"))
 }
 
-fn safe_attachment_name(name: &str) -> String {
+fn upload_not_found(request_id: String, upload_id: String) -> MachineToHub {
+    MachineToHub::AttachUploadError {
+        request_id,
+        upload_id,
+        code: offdesk_protocol::UploadErrorCode::NotFound,
+        message: "Terminal attach is gone".into(),
+    }
+}
+
+pub(crate) fn safe_attachment_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let cleaned: String = base.chars().filter(|c| !c.is_control()).take(180).collect();
     let cleaned = cleaned.trim_start_matches('.').trim();
     if cleaned.is_empty() { "attachment.bin".into() } else { cleaned.into() }
 }
 
-fn attachment_path_text(path: &std::path::Path) -> String {
+pub(crate) fn attachment_path_text(path: &std::path::Path) -> String {
     let text = path.to_string_lossy();
     if text.chars().all(|c| c.is_alphanumeric() || matches!(c, '/' | '_' | '-' | '.')) {
         text.into_owned()
@@ -1352,13 +1451,9 @@ fn attachment_path_text(path: &std::path::Path) -> String {
 /// Largest upload (pasted attachment or browser upload) the node will save.
 pub(crate) const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 
-/// Save `files` (name, bytes) into one fresh private directory and return
-/// their paths in order. Each call has a unique 0o700 directory: never trust
-/// a client path, overwrite an existing file, or follow a pre-created
-/// temporary symlink. A name used twice gets its index as a prefix. The
-/// files stay on disk; the caller decides when they are no longer needed.
-pub(crate) fn save_upload_files(files: &[(&str, &[u8])]) -> Result<Vec<std::path::PathBuf>, String> {
-    use std::io::Write;
+/// A new, empty `offdesk-upload-<uuid>` directory under the temp dir, mode
+/// 0o700 so other local users cannot read or pre-create anything inside it.
+pub(crate) fn create_private_upload_dir() -> std::io::Result<std::path::PathBuf> {
     let dir = std::env::temp_dir().join(format!("offdesk-upload-{}", uuid::Uuid::new_v4()));
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
@@ -1366,7 +1461,18 @@ pub(crate) fn save_upload_files(files: &[(&str, &[u8])]) -> Result<Vec<std::path
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder.create(&dir).map_err(|e| format!("Could not save attachment: {e}"))?;
+    builder.create(&dir)?;
+    Ok(dir)
+}
+
+/// Save `files` (name, bytes) into one fresh private directory and return
+/// their paths in order. Each call has a unique 0o700 directory: never trust
+/// a client path, overwrite an existing file, or follow a pre-created
+/// temporary symlink. A name used twice gets its index as a prefix. The
+/// files stay on disk; the caller decides when they are no longer needed.
+pub(crate) fn save_upload_files(files: &[(&str, &[u8])]) -> Result<Vec<std::path::PathBuf>, String> {
+    use std::io::Write;
+    let dir = create_private_upload_dir().map_err(|e| format!("Could not save attachment: {e}"))?;
     let result = (|| -> Result<Vec<std::path::PathBuf>, String> {
         let mut used = std::collections::HashSet::new();
         let mut paths = Vec::new();
