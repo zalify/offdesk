@@ -1,6 +1,6 @@
 # Chunked terminal uploads (no size cap, with progress)
 
-Status: implemented 2026-11-04 (PR pending)
+Status: shipped in 0.25.12 (PR #623, 2026-11-04)
 
 ## Problem
 
