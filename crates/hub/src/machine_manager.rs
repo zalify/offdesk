@@ -4683,7 +4683,10 @@ mod tests {
         };
         let runs = || {
             let db = pool.get().unwrap();
+            // Newest first from the db; two runs started in the same millisecond
+            // keep that order through the stable sort, so flip to oldest first.
             let mut runs = crate::db::agent_runs::list_for_user(&db, "user-a", 0, None, 50).unwrap();
+            runs.reverse();
             runs.sort_by_key(|run| run.started_at);
             runs
         };
