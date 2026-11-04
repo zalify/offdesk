@@ -16,6 +16,7 @@ mod revive;
 mod service;
 mod session_watcher;
 mod stats;
+mod upload;
 
 use std::sync::Arc;
 

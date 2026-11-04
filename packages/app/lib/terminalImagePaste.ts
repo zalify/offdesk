@@ -21,7 +21,7 @@ export async function readFileAsBase64(
   return { base64, mime: file.type || "application/octet-stream" };
 }
 
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   // Chunk to stay clear of String.fromCharCode argument limits on large
   // payloads (Safari trips around ~100 KB if we feed bytes in one shot).

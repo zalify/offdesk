@@ -237,11 +237,11 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
     termViewRef.current?.sendCommandInput(modifiers.transform(data));
   }, [canType, modifiers.transform]);
 
-  const handleAttachFile = useCallback(async (file: File) => {
+  const handleAttachFile = useCallback(async (file: File, onProgress?: (sent: number, total: number) => void) => {
     if (!canType) throw new Error("Unlock view only to attach a file.");
     const view = termViewRef.current;
     if (!view) throw new Error("Reconnect to the terminal before attaching a file.");
-    await view.sendImageFile(file);
+    await view.sendImageFile(file, onProgress);
   }, [canType]);
 
   const handleToggleKeyboard = useCallback(() => {

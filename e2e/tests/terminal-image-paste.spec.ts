@@ -111,7 +111,8 @@ test("dropping a document sends it once and injects one remote path", async ({
         filename?: string;
         mime?: string;
       };
-      if (payload.type === "image_paste") {
+      // Dropped files go over the chunked upload; one upload_begin per drop.
+      if (payload.type === "upload_begin") {
         filePasteFrames.push(payload);
       }
     });

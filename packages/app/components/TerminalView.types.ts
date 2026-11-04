@@ -12,10 +12,13 @@ export interface TerminalViewRef {
   scrollToBottom: () => void;
   focus: () => void;
   blur: () => void;
-  // Forward an image / file picked from a system picker into the terminal
-  // session via the existing `image_paste` WS protocol. Returns once the
-  // frame has been queued (or rejects with the reason it was skipped).
-  sendImageFile: (file: Blob & { name?: string }) => Promise<void>;
+  // Upload a file picked from a system picker (or dropped) into the terminal
+  // session over the chunked upload protocol; the node bracket-pastes the
+  // resulting path. Falls back to the legacy single-message `image_paste` on
+  // an old hub/node for files that fit. Resolves once the node has the whole
+  // file (rejects with the reason otherwise); `onProgress` reports bytes the
+  // node has received.
+  sendImageFile: (file: Blob & { name?: string }, onProgress?: (sent: number, total: number) => void) => Promise<void>;
   // Toggle mouse-tracking mode (DECSET 1003 + 1006). Disabling lets the
   // terminal capture drag/long-press for native text selection on touch
   // devices. Re-enable to restore mouse forwarding when leaving select

@@ -1,8 +1,31 @@
 import { createHash } from "node:crypto";
 import { test, expect, devices } from "@playwright/test";
-import { openApp, resetMachineState, requestMachineControl, createTerminalViaApi, expandTerminalById, readTerminalBuffer } from "./helpers";
+import { openApp, resetMachineState, requestMachineControl, createTerminalViaApi, expandTerminalById, readTerminalBuffer, getImmersiveTerminal, takeControlFromHeader } from "./helpers";
 
 test.use({ ...devices["iPhone 14"], browserName: "chromium" });
+
+const BIG_SIZE = 35 * 1024 * 1024;
+const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+// Reads the pasted path from stdin, then reports the saved file's hash and name.
+const hashScript = [
+  "import os,sys,tty,termios,hashlib,pathlib,shutil,shlex,time",
+  "old=termios.tcgetattr(0);tty.setraw(0)",
+  "sys.stdout.write('\\x1b[?2004h\\x1b[2J\\x1b[H'+'FILE_'+'READY\\r\\n');sys.stdout.flush()",
+  "data=b''",
+  `while not data.endswith(b'\\x1b[201~'): data+=os.read(0,65536)`,
+  "body=data.split(b'\\x1b[200~',1)[1].split(b'\\x1b[201~',1)[0].decode()",
+  "path=pathlib.Path(shlex.split(body.rsplit('\\n',1)[-1])[0])",
+  "contents=path.read_bytes()",
+  "sys.stdout.write('\\r\\nFILE_SHA256='+hashlib.sha256(contents).hexdigest()+'\\r\\nFILE_NAME='+path.name+'\\r\\n');sys.stdout.flush()",
+  "shutil.rmtree(path.parent);termios.tcsetattr(0,termios.TCSANOW,old);time.sleep(600)",
+].join("\n");
+
+// Same byte pattern the browser-side drop test generates in the page.
+function patternBuffer(size: number): Buffer {
+  const bytes = Buffer.alloc(size);
+  for (let i = 0; i < size; i++) bytes[i] = (i * 7 + 13) & 0xff;
+  return bytes;
+}
 
 test("uploads a named document intact through the system file picker", async ({ page }) => {
   const script = [
@@ -55,10 +78,10 @@ for (const source of ["photos", "files"] as const) {
     await requestMachineControl(page);
     const id = await createTerminalViaApi(page, { cwd: "/tmp" });
     await expandTerminalById(page, id);
-    const sent: { filename: string; data: string }[] = [];
+    const sent: { filename: string; mime: string; size: number }[] = [];
     page.on("websocket", socket => socket.on("framesent", frame => {
       if (typeof frame.payload !== "string") return;
-      try { const message = JSON.parse(frame.payload); if (message.type === "image_paste") sent.push(message); } catch {}
+      try { const message = JSON.parse(frame.payload); if (message.type === "upload_begin") sent.push(message); } catch {}
     }));
     // Reload to attach the frame listener to the terminal's new connection.
     await page.reload();
@@ -112,41 +135,104 @@ for (const source of ["photos", "files"] as const) {
     await review.getByRole("button", { name: "Send attachments", exact: true }).click();
     await expect(review).toHaveCount(0);
     await expect.poll(() => sent.length).toBe(2);
-    expect(sent.map(file => Buffer.from(file.data, "base64").toString())).toEqual(["attachment 1", "attachment 2"]);
+    expect(sent.map(file => file.size)).toEqual([12, 12]);
+    expect(sent.map(file => file.filename)).toEqual([1, 2].map(n => `file-${n}.${source === "photos" ? "png" : "txt"}`));
+    expect(sent.map(file => file.mime)).toEqual(Array(2).fill(source === "photos" ? "image/png" : "text/plain"));
     expect(new Set(sent.map(file => file.filename)).size).toBe(2);
   });
 }
 
-test("marks a screen recording over the size limit and does not send it", async ({ page }) => {
+test("sends a 24 MB screen recording through the picker", async ({ page }) => {
+  test.setTimeout(120_000);
+  const buffer = patternBuffer(24 * 1024 * 1024);
+  const sha = createHash("sha256").update(buffer).digest("hex");
   await openApp(page);
   await resetMachineState(page);
   await requestMachineControl(page);
-  const id = await createTerminalViaApi(page, { cwd: "/tmp" });
+  const id = await createTerminalViaApi(page, { cwd: "/tmp", startupCommand: `python3 -u -c ${quote(hashScript)}` });
   await expandTerminalById(page, id);
-  const sent: string[] = [];
-  page.on("websocket", socket => socket.on("framesent", frame => {
-    if (typeof frame.payload !== "string") return;
-    try { if (JSON.parse(frame.payload).type === "image_paste") sent.push(frame.payload); } catch {}
-  }));
-  await page.reload();
+  await expect.poll(() => readTerminalBuffer(page, id)).toContain("FILE_READY");
   await page.getByTestId("extended-keybar-attach").click();
   const chooserEvent = page.waitForEvent("filechooser");
   await page.getByRole("button", { name: "Choose photos or videos", exact: true }).click();
   const chooser = await chooserEvent;
-  // 24 MiB passes the machine's 25 MB check but its Base64 message would not
-  // fit the 32 MiB connection limit.
-  await chooser.setFiles([
-    { name: "recording.mov", mimeType: "video/quicktime", buffer: Buffer.alloc(24 * 1024 * 1024) },
-    { name: "clip.mp4", mimeType: "video/mp4", buffer: Buffer.from("small clip") },
-  ]);
+  await chooser.setFiles([{ name: "recording.mov", mimeType: "video/quicktime", buffer }]);
   const review = page.getByRole("dialog", { name: "Review attachments" });
-  await expect(review).toContainText("over the 23.0 MB limit");
-  const send = review.getByRole("button", { name: "Send attachments", exact: true });
-  await expect(send).toBeDisabled();
-  await review.getByRole("button", { name: "Remove recording.mov", exact: true }).click();
-  await expect(review).not.toContainText("over the 23.0 MB limit");
+  await expect(review).toContainText("recording.mov");
+  await expect(review).not.toContainText(/over the .* limit/);
+  const send = review.getByRole("button", { name: "Send attachment", exact: true });
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expect.poll(async () => (await readTerminalBuffer(page, id)).replaceAll("\n", ""), { timeout: 90_000 })
+    .toContain(`FILE_SHA256=${sha}`);
+  await expect.poll(async () => (await readTerminalBuffer(page, id)).replaceAll("\n", "")).toContain("FILE_NAME=recording.mov");
+});
+
+test("uploads a 35 MiB document through the attachment picker and shows progress", async ({ page }) => {
+  test.setTimeout(120_000);
+  const buffer = patternBuffer(BIG_SIZE);
+  const sha = createHash("sha256").update(buffer).digest("hex");
+  const name = "big report.pdf";
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+  const id = await createTerminalViaApi(page, { cwd: "/tmp", startupCommand: `python3 -u -c ${quote(hashScript)}` });
+  await expandTerminalById(page, id);
+  await expect.poll(() => readTerminalBuffer(page, id)).toContain("FILE_READY");
+  await page.getByTestId("extended-keybar-attach").click();
+  const chooserEvent = page.waitForEvent("filechooser");
+  await page.getByRole("dialog", { name: "Add attachment" }).getByRole("button", { name: "Choose files" }).click();
+  const chooser = await chooserEvent;
+  await chooser.setFiles([{ name, mimeType: "application/pdf", buffer }]);
+  const review = page.getByRole("dialog", { name: "Review attachments" });
+  await expect(review).toContainText("Attachments · 1");
+  // Record whether a percentage/progress bar was ever rendered; a local upload
+  // can finish between polls, so observe DOM mutations instead of sampling.
+  await page.evaluate(() => {
+    const w = window as unknown as { __sawProgress?: boolean };
+    w.__sawProgress = false;
+    new MutationObserver(() => {
+      const dialog = document.querySelector("dialog[aria-label='Review attachments']");
+      if (dialog && (dialog.querySelector("[role='progressbar']") || /\d+%/.test(dialog.textContent ?? ""))) w.__sawProgress = true;
+    }).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
   await review.getByRole("button", { name: "Send attachment", exact: true }).click();
-  await expect(review).toHaveCount(0);
-  await expect.poll(() => sent.length).toBe(1);
-  expect(JSON.parse(sent[0])).toMatchObject({ filename: "clip.mp4", mime: "video/mp4" });
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __sawProgress?: boolean }).__sawProgress), { timeout: 60_000 }).toBe(true);
+  await expect.poll(async () => (await readTerminalBuffer(page, id)).replaceAll("\n", ""), { timeout: 90_000 })
+    .toContain(`FILE_SHA256=${sha}`);
+  await expect.poll(async () => (await readTerminalBuffer(page, id)).replaceAll("\n", ""))
+    .toContain(`FILE_NAME=${name}`);
+});
+
+test.describe("desktop drag-drop", () => {
+  test.use({ viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: false });
+
+  test("drag-drops a 35 MiB file into a desktop terminal with a progress strip", async ({ page }) => {
+    test.setTimeout(120_000);
+    const sha = createHash("sha256").update(patternBuffer(BIG_SIZE)).digest("hex");
+    const name = "dropped report.pdf";
+    await openApp(page);
+    await resetMachineState(page);
+    await takeControlFromHeader(page);
+    const id = await createTerminalViaApi(page, { cwd: "/tmp", startupCommand: `python3 -u -c ${quote(hashScript)}` });
+    await expandTerminalById(page, id);
+    await expect(getImmersiveTerminal(page)).toBeVisible();
+    await expect.poll(() => readTerminalBuffer(page, id)).toContain("FILE_READY");
+    const dt = await page.evaluateHandle(size => {
+      const bytes = new Uint8Array(size);
+      for (let i = 0; i < size; i++) bytes[i] = (i * 7 + 13) & 0xff;
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], "dropped report.pdf", { type: "application/pdf" }));
+      return dt;
+    }, BIG_SIZE);
+    const target = getImmersiveTerminal(page).locator(".xterm").first();
+    await target.dispatchEvent("dragover", { dataTransfer: dt });
+    await target.dispatchEvent("drop", { dataTransfer: dt });
+    const strip = page.getByTestId("terminal-upload-status");
+    await expect(strip).toContainText("Uploading", { timeout: 30_000 });
+    await expect(strip).toContainText("Uploaded", { timeout: 90_000 });
+    await expect.poll(async () => (await readTerminalBuffer(page, id)).replaceAll("\n", ""), { timeout: 60_000 })
+      .toContain(`FILE_SHA256=${sha}`);
+    await expect.poll(async () => (await readTerminalBuffer(page, id)).replaceAll("\n", "")).toContain(`FILE_NAME=${name}`);
+  });
 });

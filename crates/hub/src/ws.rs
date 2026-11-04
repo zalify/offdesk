@@ -67,6 +67,69 @@ enum ClientMessage {
         mime: String,
         filename: String,
     },
+    /// Chunked upload (large files): begin, then ordered chunks, then end.
+    #[serde(rename = "upload_begin")]
+    UploadBegin {
+        upload_id: String,
+        filename: String,
+        mime: String,
+        size: u64,
+    },
+    #[serde(rename = "upload_chunk")]
+    UploadChunk {
+        upload_id: String,
+        index: u32,
+        data: String,
+    },
+    #[serde(rename = "upload_end")]
+    UploadEnd { upload_id: String },
+    #[serde(rename = "upload_abort")]
+    UploadAbort { upload_id: String },
+}
+
+/// The text frame the browser gets for a finished upload step.
+fn upload_reply_frame(
+    upload_id: &str,
+    result: Result<crate::machine_manager::UploadReply, crate::machine_manager::UploadFailure>,
+) -> String {
+    use crate::machine_manager::{UploadFailure, UploadReply};
+    let (code, message) = match result {
+        Ok(UploadReply::Ack {
+            upload_id,
+            received,
+        }) => {
+            return serde_json::json!({"type":"upload_progress","upload_id":upload_id,"received":received})
+                .to_string();
+        }
+        Ok(UploadReply::Done {
+            upload_id,
+            path,
+            size,
+        }) => {
+            return serde_json::json!({"type":"upload_result","upload_id":upload_id,"path":path,"size":size})
+                .to_string();
+        }
+        Err(UploadFailure::Machine {
+            upload_id,
+            code,
+            message,
+        }) => {
+            return serde_json::json!({"type":"upload_error","upload_id":upload_id,"code":code,"message":message})
+                .to_string();
+        }
+        Err(UploadFailure::Outdated) => (
+            "outdated",
+            "This machine needs an update to receive large uploads.",
+        ),
+        Err(UploadFailure::NoMachine) => ("no_machine", "The machine is not connected."),
+        Err(UploadFailure::Disconnected) => (
+            "disconnected",
+            "The machine disconnected during the upload.",
+        ),
+        Err(UploadFailure::Timeout) => ("timeout", "The machine did not answer in time."),
+    };
+    serde_json::json!({"type":"upload_error","upload_id":upload_id,"code":code,"message":message})
+        .to_string()
 }
 
 #[derive(Serialize)]
@@ -122,6 +185,10 @@ fn client_message_allowed(
         | ClientMessage::CommandInput { .. }
         | ClientMessage::Resize { .. }
         | ClientMessage::ImagePaste { .. }
+        | ClientMessage::UploadBegin { .. }
+        | ClientMessage::UploadChunk { .. }
+        | ClientMessage::UploadEnd { .. }
+        | ClientMessage::UploadAbort { .. }
         | ClientMessage::Composer { .. } => is_controller,
     }
 }
@@ -140,6 +207,10 @@ fn client_message_claims_control(
             ClientMessage::Input { .. }
                 | ClientMessage::CommandInput { .. }
                 | ClientMessage::ImagePaste { .. }
+                | ClientMessage::UploadBegin { .. }
+                | ClientMessage::UploadChunk { .. }
+                | ClientMessage::UploadEnd { .. }
+                | ClientMessage::UploadAbort { .. }
         )
 }
 
@@ -375,8 +446,107 @@ async fn handle_terminal_ws(
                             continue;
                         }
 
+                        // Chunked uploads. The command is queued to the machine
+                        // here, in arrival order; only the wait for its reply
+                        // runs in a spawned task, so a slow machine never
+                        // stalls keystrokes and chunks cannot be reordered.
+                        // Nothing is buffered: each chunk is relayed and dropped.
+                        if matches!(
+                            client_msg,
+                            ClientMessage::UploadBegin { .. }
+                                | ClientMessage::UploadChunk { .. }
+                                | ClientMessage::UploadEnd { .. }
+                                | ClientMessage::UploadAbort { .. }
+                        ) {
+                            let (upload_id, request_id, msg) = match client_msg {
+                                ClientMessage::UploadBegin {
+                                    upload_id,
+                                    filename,
+                                    mime,
+                                    size,
+                                } => {
+                                    if let Err(failure) =
+                                        manager.supports_chunked_upload(&mid).await
+                                    {
+                                        let frame = upload_reply_frame(&upload_id, Err(failure));
+                                        let _ = receipt_tx.send(frame).await;
+                                        continue;
+                                    }
+                                    let request_id = uuid::Uuid::new_v4().to_string();
+                                    let msg = HubToMachine::AttachUploadBegin {
+                                        request_id: request_id.clone(),
+                                        attach_id: aid_for_in.clone(),
+                                        upload_id: upload_id.clone(),
+                                        filename,
+                                        mime,
+                                        size,
+                                    };
+                                    (upload_id, request_id, msg)
+                                }
+                                ClientMessage::UploadChunk {
+                                    upload_id,
+                                    index,
+                                    data,
+                                } => {
+                                    let request_id = uuid::Uuid::new_v4().to_string();
+                                    let msg = HubToMachine::AttachUploadChunk {
+                                        request_id: request_id.clone(),
+                                        attach_id: aid_for_in.clone(),
+                                        upload_id: upload_id.clone(),
+                                        index,
+                                        data,
+                                    };
+                                    (upload_id, request_id, msg)
+                                }
+                                ClientMessage::UploadEnd { upload_id } => {
+                                    let request_id = uuid::Uuid::new_v4().to_string();
+                                    let msg = HubToMachine::AttachUploadEnd {
+                                        request_id: request_id.clone(),
+                                        attach_id: aid_for_in.clone(),
+                                        upload_id: upload_id.clone(),
+                                    };
+                                    (upload_id, request_id, msg)
+                                }
+                                ClientMessage::UploadAbort { upload_id } => {
+                                    let _ = manager
+                                        .send_to_machine(
+                                            &mid,
+                                            HubToMachine::AttachUploadAbort {
+                                                attach_id: aid_for_in.clone(),
+                                                upload_id,
+                                            },
+                                        )
+                                        .await;
+                                    continue;
+                                }
+                                _ => unreachable!(),
+                            };
+                            match manager.upload_send(&mid, &request_id, msg).await {
+                                Ok(rx) => {
+                                    let manager = manager.clone();
+                                    let receipts = receipt_tx.clone();
+                                    tokio::spawn(async move {
+                                        let result = manager.upload_await(&request_id, rx).await;
+                                        let _ = receipts
+                                            .send(upload_reply_frame(&upload_id, result))
+                                            .await;
+                                    });
+                                }
+                                Err(failure) => {
+                                    let _ = receipt_tx
+                                        .send(upload_reply_frame(&upload_id, Err(failure)))
+                                        .await;
+                                }
+                            }
+                            continue;
+                        }
+
                         let to_send = match client_msg {
                             ClientMessage::Composer { .. } => unreachable!(),
+                            ClientMessage::UploadBegin { .. }
+                            | ClientMessage::UploadChunk { .. }
+                            | ClientMessage::UploadEnd { .. }
+                            | ClientMessage::UploadAbort { .. } => unreachable!(),
                             ClientMessage::Input { data }
                             | ClientMessage::CommandInput { data }
                             | ClientMessage::TerminalResponse { data } => {
@@ -1507,5 +1677,72 @@ mod tests {
             false,
             true,
         ));
+    }
+
+    #[test]
+    fn upload_messages_are_controller_only_and_claim_control() {
+        let messages = [
+            ClientMessage::UploadBegin {
+                upload_id: "u".into(),
+                filename: "a.bin".into(),
+                mime: "application/octet-stream".into(),
+                size: 1,
+            },
+            ClientMessage::UploadChunk {
+                upload_id: "u".into(),
+                index: 0,
+                data: "AA==".into(),
+            },
+            ClientMessage::UploadEnd {
+                upload_id: "u".into(),
+            },
+            ClientMessage::UploadAbort {
+                upload_id: "u".into(),
+            },
+        ];
+        for message in &messages {
+            assert!(!client_message_allowed(message, "watcher", false, true));
+            assert!(client_message_allowed(message, "controller", true, true));
+            assert!(client_message_claims_control(
+                message, "watcher", false, true
+            ));
+            assert!(!client_message_claims_control(message, "", false, true));
+        }
+    }
+
+    #[test]
+    fn upload_client_messages_parse_and_replies_use_the_wire_names() {
+        use crate::machine_manager::{UploadFailure, UploadReply};
+        let parsed: ClientMessage = serde_json::from_str(
+            r#"{"type":"upload_chunk","upload_id":"u","index":2,"data":"AA=="}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            parsed,
+            ClientMessage::UploadChunk { index: 2, .. }
+        ));
+
+        let ack = upload_reply_frame(
+            "u",
+            Ok(UploadReply::Ack {
+                upload_id: "u".into(),
+                received: 5,
+            }),
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&ack).unwrap(),
+            serde_json::json!({"type":"upload_progress","upload_id":"u","received":5})
+        );
+        let err = upload_reply_frame(
+            "u",
+            Err(UploadFailure::Machine {
+                upload_id: "u".into(),
+                code: offdesk_protocol::UploadErrorCode::NoSpace,
+                message: "full".into(),
+            }),
+        );
+        assert!(err.contains(r#""code":"no_space""#));
+        let timeout = upload_reply_frame("u", Err(UploadFailure::Timeout));
+        assert!(timeout.contains(r#""code":"timeout""#) && timeout.contains(r#""upload_id":"u""#));
     }
 }

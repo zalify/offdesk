@@ -184,6 +184,29 @@ pub enum FsWriteErrorCode {
     Io,
 }
 
+/// Capability a machine advertises when it understands the chunked
+/// `HubToMachine::AttachUpload*` messages.
+pub const UPLOAD_CHUNKED_CAPABILITY: &str = "upload-chunked-v1";
+
+/// Most decoded bytes one `AttachUploadChunk` may carry.
+pub const UPLOAD_CHUNK_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Why a chunked upload step failed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UploadErrorCode {
+    /// A chunk exceeds `UPLOAD_CHUNK_MAX_BYTES`, or the bytes sent exceed the
+    /// size announced in `AttachUploadBegin`.
+    TooLarge,
+    /// The node's temp directory cannot hold the file.
+    NoSpace,
+    /// Chunk out of order, or `AttachUploadEnd` before all bytes arrived.
+    BadSequence,
+    /// Unknown attach or upload (never begun, aborted, or timed out).
+    NotFound,
+    Io,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResourceStats {
     /// CPU usage percentage (0.0 - 100.0), averaged across all cores
@@ -1650,6 +1673,39 @@ pub enum HubToMachine {
         /// Hex SHA-256 of the content the edit started from.
         base_sha256: String,
     },
+    /// Start a chunked upload into an attach. Needs `UPLOAD_CHUNKED_CAPABILITY`.
+    /// Answered by `AttachUploadAck { received: 0 }`.
+    #[serde(rename = "attach_upload_begin")]
+    AttachUploadBegin {
+        request_id: String,
+        attach_id: String,
+        upload_id: String,
+        filename: String,
+        mime: String,
+        size: u64,
+    },
+    /// Next piece of an upload; `index` counts from 0 and must arrive in
+    /// order. `data` is this chunk's own Base64 (<= `UPLOAD_CHUNK_MAX_BYTES`
+    /// decoded). Answered by `AttachUploadAck`.
+    #[serde(rename = "attach_upload_chunk")]
+    AttachUploadChunk {
+        request_id: String,
+        attach_id: String,
+        upload_id: String,
+        index: u32,
+        data: String,
+    },
+    /// Finish an upload: the node pastes the saved path into the attach and
+    /// answers `AttachUploadResult`.
+    #[serde(rename = "attach_upload_end")]
+    AttachUploadEnd {
+        request_id: String,
+        attach_id: String,
+        upload_id: String,
+    },
+    /// Drop a partial upload. No reply.
+    #[serde(rename = "attach_upload_abort")]
+    AttachUploadAbort { attach_id: String, upload_id: String },
     #[serde(rename = "auth_result")]
     AuthResult { ok: bool, message: Option<String> },
     #[serde(rename = "check_foreground_process")]
@@ -1840,6 +1896,30 @@ pub enum MachineToHub {
         /// Hex SHA-256 of the content, from nodes with `FS_WRITE_CAPABILITY`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
+    },
+    /// Reply to `AttachUploadBegin` (`received` = 0) and every chunk
+    /// (`received` = bytes on disk so far).
+    #[serde(rename = "attach_upload_ack")]
+    AttachUploadAck {
+        request_id: String,
+        upload_id: String,
+        received: u64,
+    },
+    /// Reply to `AttachUploadEnd`, after the path was pasted into the attach.
+    #[serde(rename = "attach_upload_result")]
+    AttachUploadResult {
+        request_id: String,
+        upload_id: String,
+        /// Absolute path of the saved file on the node.
+        path: String,
+        size: u64,
+    },
+    #[serde(rename = "attach_upload_error")]
+    AttachUploadError {
+        request_id: String,
+        upload_id: String,
+        code: UploadErrorCode,
+        message: String,
     },
     #[serde(rename = "fs_write_result")]
     FsWriteResult {
@@ -2963,6 +3043,91 @@ mod tests {
                 sha256: Some(_),
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn attach_upload_messages_round_trip() {
+        use super::{MachineToHub, UploadErrorCode};
+        let begin = HubToMachine::AttachUploadBegin {
+            request_id: "r".into(),
+            attach_id: "a".into(),
+            upload_id: "u".into(),
+            filename: "x.pdf".into(),
+            mime: "application/pdf".into(),
+            size: 5,
+        };
+        let json = serde_json::to_string(&begin).unwrap();
+        assert!(json.contains(r#""type":"attach_upload_begin""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::AttachUploadBegin { size: 5, .. }
+        ));
+        let chunk = HubToMachine::AttachUploadChunk {
+            request_id: "r".into(),
+            attach_id: "a".into(),
+            upload_id: "u".into(),
+            index: 3,
+            data: "aGk=".into(),
+        };
+        let json = serde_json::to_string(&chunk).unwrap();
+        assert!(json.contains(r#""type":"attach_upload_chunk""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::AttachUploadChunk { index: 3, .. }
+        ));
+        let end = HubToMachine::AttachUploadEnd {
+            request_id: "r".into(),
+            attach_id: "a".into(),
+            upload_id: "u".into(),
+        };
+        assert!(serde_json::to_string(&end).unwrap().contains(r#""type":"attach_upload_end""#));
+        let abort = HubToMachine::AttachUploadAbort {
+            attach_id: "a".into(),
+            upload_id: "u".into(),
+        };
+        let json = serde_json::to_string(&abort).unwrap();
+        assert!(json.contains(r#""type":"attach_upload_abort""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::AttachUploadAbort { .. }
+        ));
+
+        let ack = MachineToHub::AttachUploadAck {
+            request_id: "r".into(),
+            upload_id: "u".into(),
+            received: 9,
+        };
+        let json = serde_json::to_string(&ack).unwrap();
+        assert!(json.contains(r#""type":"attach_upload_ack""#));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::AttachUploadAck { received: 9, .. }
+        ));
+        let result = MachineToHub::AttachUploadResult {
+            request_id: "r".into(),
+            upload_id: "u".into(),
+            path: "/tmp/x.pdf".into(),
+            size: 5,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains(r#""type":"attach_upload_result""#));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::AttachUploadResult { size: 5, .. }
+        ));
+        let err = MachineToHub::AttachUploadError {
+            request_id: "r".into(),
+            upload_id: "u".into(),
+            code: UploadErrorCode::NoSpace,
+            message: "full".into(),
+        };
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(json.contains(r#""type":"attach_upload_error""#));
+        assert!(json.contains(r#""code":"no_space""#));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::AttachUploadError { code: UploadErrorCode::NoSpace, .. }
         ));
     }
 

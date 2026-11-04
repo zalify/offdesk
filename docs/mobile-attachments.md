@@ -11,12 +11,13 @@ if a submission fails, the failed and remaining files stay available to retry
 or remove. Do not reselect already submitted files. The terminal receives each
 uploaded file's path; submission does not press Enter or execute that path.
 
-The sender waits for earlier queued data before reading the next file, keeping
-multiple large Base64 payloads out of the encrypted transport queue. If that wait
-exceeds 30 seconds, let the previous transfer finish and retry the remaining
-selection. Each file is limited to 23 MiB so its Base64 message fits the 32 MiB
-connection limit; the review dialog marks larger files and will not send them. “Submitted” means queued to the connection, not proof
-of durable delivery after a network failure. Check the paths in the terminal.
+Files are uploaded in chunks, one at a time. The review dialog shows a
+percentage and progress bar for the file currently uploading; the percentage
+reflects bytes the node has written. There is no per-file size limit; free disk
+space on the node is the only bound. (Older nodes or hubs without chunked
+uploads fall back to the legacy single-message path, which keeps a 23 MiB limit
+and marks larger files in the review dialog.) If an upload fails, check the
+paths in the terminal and retry the remaining selection.
 
 ## Verification
 
@@ -27,5 +28,5 @@ record OS, app and WebView/browser versions; select multiple photos and files;
 remove one before sending; verify paths and contents; cancel and retry a failed
 submission. Do not treat desktop browser emulation as native-picker acceptance.
 
-中文：附件支持多选，发送前可逐个移除；取消不上传。失败后仅保留尚未提交的
+中文：附件支持多选，发送前可逐个移除；取消不上传。上传时逐个文件显示百分比，无固定大小上限；失败后仅保留尚未提交的
 附件。原生 Android/iOS 系统选择器仍需真机验收。
