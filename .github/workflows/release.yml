@@ -22,7 +22,7 @@ on:
       components:
         description: "What to build; the rest keep the assets already on the draft"
         type: choice
-        options: [all, hub, desktop, android, ios]
+        options: [all, hub, desktop, android, ios, tui]
         default: all
 
 permissions:
@@ -108,6 +108,7 @@ jobs:
           | Component | Assets |
           |---|---|
           | Hub, node and CLI — Linux and macOS, x64 and arm64 | `offdesk-<os>-<arch>`, `offdesk-node-<os>-<arch>`, `offdesk-hub-<os>-<arch>` (`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`) |
+          | Terminal client — Linux and macOS, x64 and arm64; Termux arm64 | `offdesk-tui-<os>-<arch>` (`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `android-arm64`) |
           | Desktop app — macOS (universal) | `Offdesk.Dev___VERSION___universal.dmg`; updater: `Offdesk.Dev_universal.app.tar.gz` |
           | Desktop app — Windows | `Offdesk.Dev___VERSION___x64_en-US.msi`, `Offdesk.Dev___VERSION___x64-setup.exe` |
           | Desktop app — Linux | `Offdesk.Dev___VERSION___amd64.AppImage`, `Offdesk.Dev___VERSION___amd64.deb`, `Offdesk.Dev-__VERSION__-1.x86_64.rpm` |
@@ -149,7 +150,47 @@ jobs:
           esac
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
-  # The four builds run in parallel, each uploading its assets into the draft.
+  # Component builds run in parallel, each uploading its assets into the draft.
+  tui:
+    name: Terminal client
+    needs: prepare
+    if: ${{ !inputs.components || inputs.components == 'all' || inputs.components == 'tui' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, asset: linux-x64 }
+          - { goos: linux, goarch: arm64, asset: linux-arm64 }
+          - { goos: darwin, goarch: amd64, asset: darwin-x64 }
+          - { goos: darwin, goarch: arm64, asset: darwin-arm64 }
+          - { goos: android, goarch: arm64, asset: android-arm64 }
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: packages/offdesk-tui/go.mod
+          cache-dependency-path: packages/offdesk-tui/go.sum
+      - name: Build terminal client
+        working-directory: packages/offdesk-tui
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          ASSET: ${{ matrix.asset }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: go build -trimpath -ldflags "-X main.version=$VERSION" -o "$RUNNER_TEMP/offdesk-tui-$ASSET" ./cmd/offdesk-tui
+      - name: Upload to draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ASSET: ${{ matrix.asset }}
+        run: gh release upload "$TAG" "$RUNNER_TEMP/offdesk-tui-$ASSET" --repo "$GITHUB_REPOSITORY" --clobber
+
   hub:
     name: Hub, node and CLI
     needs: prepare
@@ -197,7 +238,7 @@ jobs:
 
   publish:
     name: Publish the release
-    needs: [prepare, hub, desktop, android, ios]
+    needs: [prepare, tui, hub, desktop, android, ios]
     # Builds left out of a dispatch are skipped; any that failed or were
     # cancelled leave the release a draft.
     if: >-
@@ -237,6 +278,9 @@ jobs:
             for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
               has "$binary-$platform"
             done
+          done
+          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64 android-arm64; do
+            has "offdesk-tui-$platform"
           done
           for suffix in _universal.dmg _universal.app.tar.gz _universal.app.tar.gz.sig \
             _x64_en-US.msi _x64_en-US.msi.sig _x64-setup.exe _x64-setup.exe.sig \

@@ -1,0 +1,7 @@
+{
+  "note": "Example only: run offdesk-tui pair to generate real credentials securely.",
+  "credentials": {"hub": "https://hub.example.com", "public_key": "", "private_key": "", "device_id": ""},
+  "prefix": 29,
+  "tabs": [],
+  "active": 0
+}

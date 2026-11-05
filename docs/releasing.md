@@ -2,7 +2,7 @@
 
 One release per version. A `vX.Y.Z` tag builds every component from the same
 commit into one GitHub release: the Hub, node and CLI, the desktop app for
-macOS, Windows and Linux, the Android APKs and the iOS app. All of them carry
+macOS, Windows and Linux, the Android APKs, the iOS app, and the terminal client. All of them carry
 the same version. The first release made this way is `v0.23.0`.
 
 Interface-only changes need no release: the `Publish Web UI` workflow ships
@@ -55,12 +55,13 @@ Pushing the tag starts the `Release` workflow (`.github/workflows/release.yml`):
    | Workflow | Builds | Checks before the upload counts |
    |---|---|---|
    | `build.yml` (Build & Release) | `offdesk`, `offdesk-node`, `offdesk-hub` for `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64` (the Hub with the web UI built in) | |
+   | `release.yml` (Terminal client) | `offdesk-tui` for `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, and `android-arm64` | Go tests and Android build in CI; laptop runtime depends on platform CI |
    | `desktop.yml` (Desktop Build) | macOS universal `.dmg` and updater `.app.tar.gz`, Windows `.msi` and `-setup.exe`, Linux `.AppImage`, `.deb`, `.rpm`, the `.sig` beside each updater bundle, and `latest.json` | macOS signing and notarization, the DMG's drag-to-install layout |
    | `mobile-android.yml` (Build Android APK) | `offdesk-X.Y.Z-arm64-v8a.apk`, `-x86_64.apk`, `-universal.apk`, signed with the release key | the signed x86_64 APK starts on an emulator |
    | `mobile-ios.yml` (Mobile (iOS)) | `offdesk-X.Y.Z.ipa`, also uploaded to TestFlight | the app contains the Web UI public key |
 
    Release builds take the `stable` Web UI channel.
-3. **publish** runs once all four succeed. It checks that the draft holds
+3. **publish** runs once all component builds succeed. It checks that the draft holds
    every asset, and that `latest.json` names this version, every desktop
    platform, and download links under `/releases/download/vX.Y.Z/`. Then it
    publishes the release and marks it Latest.
@@ -90,7 +91,7 @@ already have the iOS build.
 - **A flaky failure:** open the Release run and choose **Re-run failed
   jobs**. That runs the failed build again, then the publish steps.
 - **One component again, later:** dispatch the `Release` workflow with `tag`
-  `vX.Y.Z` and `components` set to `hub`, `desktop`, `android` or `ios`. It
+  `vX.Y.Z` and `components` set to `hub`, `desktop`, `android`, `ios` or `tui`. It
   rebuilds that component from the tag into the same draft, replacing its
   assets, and publishes once the draft is complete. `components: all`
   rebuilds everything. The workflow refuses a tag whose release is already
