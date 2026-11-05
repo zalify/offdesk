@@ -123,6 +123,10 @@ func TestNativePTYInteractionAndReconnect(t *testing.T) {
 	defer cmd.Process.Kill()
 	var output capture
 	go func() { _, _ = io.Copy(&output, master) }()
+	await(t, "startup picker", func() bool { return output.contains("Terminal number, tN=default socket") })
+	if _, e = master.Write([]byte("2\r")); e != nil {
+		t.Fatal(e)
+	}
 	await(t, "initial output", func() bool { return output.contains("hello  世界") })
 	await(t, "terminal bell forwarded", func() bool { return output.contains("\x1b[0m\x07") })
 	if !output.contains("Press Ctrl+] for commands and tabs.") {
@@ -132,7 +136,7 @@ func TestNativePTYInteractionAndReconnect(t *testing.T) {
 		t.Fatal(e)
 	}
 	await(t, "tab list", func() bool { return output.contains("Offdesk · Terminals") })
-	if _, e = master.Write([]byte("1\r")); e != nil {
+	if _, e = master.Write([]byte("2\r")); e != nil {
 		t.Fatal(e)
 	}
 	await(t, "terminal after tab selection", func() bool { return output.count("hello  世界") >= 2 })

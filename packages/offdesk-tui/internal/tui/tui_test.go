@@ -259,11 +259,11 @@ func TestTabMenuSelectsAnySavedTab(t *testing.T) {
 	}
 	var out bytes.Buffer
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 1), readErr: make(chan error, 1)}
-	u.input <- []byte("11\r")
+	u.input <- []byte("12\r")
 	if err := u.tabMenu(); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Active != 10 || !strings.Contains(out.String(), "11  Tab 11") {
+	if cfg.Active != 10 || !strings.Contains(out.String(), "12  Tab 11") {
 		t.Fatal("tab selection failed")
 	}
 	saved, err := config.Load()
@@ -285,7 +285,7 @@ func TestTerminalListAddsDiscoveredTerminalOnce(t *testing.T) {
 	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "another", Label: "Saved"}}}
 	var out bytes.Buffer
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 2), readErr: make(chan error, 1)}
-	u.input <- []byte("2\r")
+	u.input <- []byte("3\r")
 	if err = u.tabMenu(); err != nil {
 		t.Fatal(err)
 	}
@@ -299,7 +299,7 @@ func TestTerminalListAddsDiscoveredTerminalOnce(t *testing.T) {
 		t.Fatal("foreground process was not displayed")
 	}
 	out.Reset()
-	u.input <- []byte("2\r")
+	u.input <- []byte("3\r")
 	if err = u.tabMenu(); err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +465,7 @@ func TestChooseTerminateSingleTerminal(t *testing.T) {
 	cfg := config.Config{}
 	var out bytes.Buffer
 	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 4), readErr: make(chan error, 1)}
-	u.input <- []byte("x 1\r")
+	u.input <- []byte("x 2\r")
 	u.input <- []byte("yes\r")
 	u.input <- []byte("q\r")
 	if err = u.choose(false); !errors.Is(err, io.EOF) {
@@ -542,9 +542,9 @@ func TestTabMenuAttachAndDetachCommaSeparated(t *testing.T) {
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 5), readErr: make(chan error, 1)}
 
 	// 1. Detach tabs 1 and 2 using comma separated selection "d 1,2"
-	u.input <- []byte("d 1,2\r")
+	u.input <- []byte("d 2,3\r")
 	// 2. Attach tab 1 using "a 1"
-	u.input <- []byte("a 1\r")
+	u.input <- []byte("a 2\r")
 	// 3. Exit menu by hitting Enter (empty input)
 	u.input <- []byte("\r")
 
@@ -574,7 +574,7 @@ func TestChooseAttachMultipleCommaSeparated(t *testing.T) {
 	var out bytes.Buffer
 	u := UI{Config: &cfg, Client: c, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 2), readErr: make(chan error, 1)}
 	// Attach via "a 1" (testhub has 1 existing terminal)
-	u.input <- []byte("a 1\r")
+	u.input <- []byte("a 2\r")
 	if err = u.choose(false); err != nil {
 		t.Fatal(err)
 	}
@@ -605,7 +605,7 @@ func TestTabMenuTerminateCommaSeparated(t *testing.T) {
 	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 5), readErr: make(chan error, 1)}
 
 	// Terminate terminals 1 and 2 with comma separation "x 1,2"
-	u.input <- []byte("x 1,2\r")
+	u.input <- []byte("x 2,3\r")
 	u.input <- []byte("yes\r")
 	// Exit menu
 	u.input <- []byte("q\r")
@@ -620,5 +620,107 @@ func TestTabMenuTerminateCommaSeparated(t *testing.T) {
 	_, _, _, remaining, _ := h.Stats()
 	if remaining != 1 {
 		t.Fatalf("expected 1 remaining terminal on hub, got %d", remaining)
+	}
+}
+
+func TestTerminalListAttachesExternalDefaultSocket(t *testing.T) {
+	h := testhub.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 1), readErr: make(chan error, 1)}
+	u.input <- []byte("1\r")
+	if err := u.tabMenu(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tabs) != 1 || cfg.Tabs[0].Socket != "default" || cfg.Tabs[0].Terminal == "existing" || !strings.Contains(h.Startup(), "tmux -L default attach-session") {
+		t.Fatalf("default socket was not opened: %+v", cfg.Tabs)
+	}
+	if !strings.Contains(out.String(), "t1  Default tmux") {
+		t.Fatal("external default socket entry missing")
+	}
+}
+
+func TestStartupPickerOffersDefaultSocketWithExistingShells(t *testing.T) {
+	h := testhub.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 1), readErr: make(chan error, 1)}
+	u.input <- []byte("1\r")
+	if err := u.choose(true); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tabs) != 1 || cfg.Tabs[0].Socket != "default" || cfg.Tabs[0].Terminal == "existing" || !strings.Contains(h.Startup(), "tmux -L default attach-session") {
+		t.Fatalf("unexpected startup tabs: %+v", cfg.Tabs)
+	}
+	if !strings.Contains(out.String(), "t1  Default tmux") || !strings.Contains(out.String(), "not open here") {
+		t.Fatal(out.String())
+	}
+}
+
+func TestStartupKeepsKnownDefaultAttachmentFirstAndReusesIt(t *testing.T) {
+	h := testhub.Start(t)
+	h.SetTerminals("existing", "zz-default")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{Tabs: []config.Tab{{Machine: "machine", Terminal: "zz-default", Label: "Work", Socket: "default"}}}
+	var out bytes.Buffer
+	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &out, input: make(chan []byte, 1), readErr: make(chan error, 1)}
+	u.input <- []byte("1\r")
+	if err := u.choose(true); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tabs) != 1 || cfg.Tabs[cfg.Active].Terminal != "zz-default" || h.Startup() != "" {
+		t.Fatalf("did not reuse default attachment: %+v", cfg.Tabs)
+	}
+	if !strings.Contains(out.String(), "1  Default tmux") {
+		t.Fatal(out.String())
+	}
+}
+
+func TestSocketChoiceDetachNeverSavesEmptyTerminalID(t *testing.T) {
+	h := testhub.Start(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, id, err := transport.Connect(ctx, h.Cred, "test-code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	testConfigHome(t)
+	cfg := config.Config{}
+	u := UI{Config: &cfg, API: api.API{C: c, Device: id}, ctx: ctx, output: &bytes.Buffer{}, input: make(chan []byte, 2), readErr: make(chan error, 1)}
+	u.input <- []byte("d 1\r")
+	u.input <- []byte("q\r")
+	if err := u.tabMenu(); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Tabs) != 0 || len(cfg.DetachedTabs) != 0 {
+		t.Fatalf("saved synthetic socket as terminal: %+v", cfg)
+	}
+	_, _, _, remaining, _ := h.Stats()
+	if remaining != 1 {
+		t.Fatal("socket detach modified running terminals")
 	}
 }

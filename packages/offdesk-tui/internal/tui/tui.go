@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -131,7 +132,7 @@ func (u *UI) isDefaultTmux(machine, terminalID, title string) bool {
 
 func (u *UI) findDefaultTmux(machineID string, ts []api.Terminal) (api.Terminal, bool) {
 	for _, t := range ts {
-		if t.Machine == machineID && u.isDefaultTmux(t.Machine, t.ID, t.Title) {
+		if t.ID != "" && t.Machine == machineID && u.isDefaultTmux(t.Machine, t.ID, t.Title) {
 			return t, true
 		}
 	}
@@ -156,7 +157,53 @@ func (u *UI) findDefaultTmux(machineID string, ts []api.Terminal) (api.Terminal,
 	return api.Terminal{}, false
 }
 
+// Default sockets can exist without an Offdesk terminal hosting a client.
+func (u *UI) defaultSocketChoices(machines []api.Machine, terminals []api.Terminal) []api.Terminal {
+	var choices []api.Terminal
+	for _, m := range machines {
+		if _, found := u.findDefaultTmux(m.ID, terminals); !found {
+			choices = append(choices, api.Terminal{Machine: m.ID, Title: "Default tmux", Cwd: m.Home, Reachable: true})
+		}
+	}
+	return choices
+}
+
+// Empty terminal IDs are socket choices, never saved terminal identities.
+func (u *UI) attachChoices(tabs []config.Tab, machines []api.Machine) error {
+	first := -1
+	for _, tab := range tabs {
+		if tab.Terminal == "" {
+			found := false
+			for _, m := range machines {
+				if m.ID == tab.Machine {
+					if err := u.createTerminalWithSocket(m, m.Home, false, "1"); err != nil {
+						return err
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				return errors.New("selected machine is no longer online")
+			}
+		} else {
+			sessions.Add(u.Config, tab)
+		}
+		if first < 0 {
+			first = u.Config.Active
+		}
+	}
+	if first >= 0 {
+		u.Config.Active = first
+	}
+	return u.save()
+}
+
 func (u *UI) createTerminal(m api.Machine, cwd string, initial bool) error {
+	return u.createTerminalWithSocket(m, cwd, initial, "")
+}
+
+func (u *UI) createTerminalWithSocket(m api.Machine, cwd string, initial bool, selected string) error {
 	ts, _ := u.API.Terminals(u.ctx)
 	existingTmux, hasExisting := u.findDefaultTmux(m.ID, ts)
 	if hasExisting {
@@ -166,7 +213,11 @@ func (u *UI) createTerminal(m api.Machine, cwd string, initial bool) error {
 	}
 	var startup, server, socket string
 	for {
-		choice, e := u.prompt("Socket [1/2, Enter=1, q=cancel]: ")
+		choice := selected
+		var e error
+		if choice == "" {
+			choice, e = u.prompt("Socket [1/2, Enter=1, q=cancel]: ")
+		}
 		if e != nil {
 			return e
 		}
@@ -381,6 +432,10 @@ func (u *UI) choose(startup bool) error {
 			machineNames[m.ID] = m.Name
 		}
 		names := u.foregroundNames(ts)
+		ts = append(u.defaultSocketChoices(machines, ts), ts...)
+		sort.SliceStable(ts, func(i, j int) bool {
+			return u.isDefaultTmux(ts[i].Machine, ts[i].ID, ts[i].Title) && !u.isDefaultTmux(ts[j].Machine, ts[j].ID, ts[j].Title)
+		})
 		if len(machines) == 1 {
 			u.print(fmt.Sprintf("Machine: %s\n\n", Safe(machines[0].Name)))
 		} else {
@@ -391,6 +446,14 @@ func (u *UI) choose(startup bool) error {
 		}
 		for i, t := range ts {
 			label := terminalLabel(t.Title)
+			if u.isDefaultTmux(t.Machine, t.ID, t.Title) {
+				label = "Default tmux — existing session"
+				if t.ID == "" {
+					label = "Default tmux — attach or create"
+				}
+			} else if label == "Shell" {
+				label = "Offdesk shell"
+			}
 			proc := names[t.Machine+"\x00"+t.ID]
 			if proc != "" && proc != "tmux" {
 				if label == "Shell" || strings.HasPrefix(label, "Shell ") {
@@ -414,7 +477,13 @@ func (u *UI) choose(startup bool) error {
 					break
 				}
 			}
-			status := ""
+			status := " · not open here"
+			for _, tab := range u.Config.Tabs {
+				if tab.Machine == t.Machine && tab.Terminal == t.ID {
+					status = " · saved tab"
+					break
+				}
+			}
 			if !t.Reachable {
 				status = " · unreachable"
 			} else if detached {
@@ -422,13 +491,26 @@ func (u *UI) choose(startup bool) error {
 			}
 			u.print(fmt.Sprintf("  %d  %s%s  (%s)%s\n", i+1, Safe(label), Safe(machineTag), Safe(t.Cwd), status))
 		}
-		s, e := u.prompt("\nTerminal number, a=attach, d=detach, x=terminate, n=new, q=quit (e.g. 1, 1,2, a all, d all, x all): ")
+		for i, m := range machines {
+			if _, found := u.findDefaultTmux(m.ID, ts); !found {
+				u.print(fmt.Sprintf("  t%d  Default tmux (%s) — attach existing session or create\n", i+1, Safe(m.Name)))
+			}
+		}
+		s, e := u.prompt("\nTerminal number, tN=default socket, a=attach, d=detach, x=terminate, n=new, q=quit (e.g. 1, 1,2, a all, d all, x all): ")
 		if e != nil {
 			return e
 		}
 		s = strings.TrimSpace(s)
 		if s == "q" {
 			return io.EOF
+		}
+		if strings.HasPrefix(strings.ToLower(s), "t") {
+			n, err := strconv.Atoi(strings.TrimSpace(s[1:]))
+			if err == nil && n >= 1 && n <= len(machines) {
+				m := machines[n-1]
+				return u.createTerminalWithSocket(m, m.Home, false, "1")
+			}
+			continue
 		}
 		if s == "n" {
 			m := machines[0]
@@ -467,6 +549,9 @@ func (u *UI) choose(startup bool) error {
 				if proceed {
 					skippedDefault := 0
 					for _, t := range ts {
+						if t.ID == "" {
+							continue
+						}
 						if u.isDefaultTmux(t.Machine, t.ID, t.Title) {
 							skippedDefault++
 							continue
@@ -528,6 +613,9 @@ func (u *UI) choose(startup bool) error {
 		if cmd == "d" {
 			if arg == "all" {
 				for _, t := range ts {
+					if t.ID == "" {
+						continue
+					}
 					u.detachTab(config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)})
 				}
 				_ = u.save()
@@ -541,58 +629,33 @@ func (u *UI) choose(startup bool) error {
 			}
 			for _, idx := range indices {
 				t := ts[idx-1]
+				if t.ID == "" {
+					continue
+				}
 				u.detachTab(config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)})
 			}
 			_ = u.save()
 			continue
 		}
-		if cmd == "a" {
-			if arg == "all" {
-				for _, t := range ts {
-					label := terminalLabel(t.Title)
-					sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: label})
-				}
-				if len(u.Config.Tabs) > 0 {
-					u.Config.Active = 0
-				}
-				return u.save()
+		var selectedTabs []config.Tab
+		if cmd == "a" && arg == "all" {
+			for _, t := range ts {
+				selectedTabs = append(selectedTabs, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)})
 			}
-			indices := parseIndices(arg, len(ts))
-			if len(indices) == 0 {
-				u.print("Specify terminal number(s) to attach (e.g. a 1, a 1,2, a all).\n")
-				_, _ = u.prompt("Enter to continue: ")
-				continue
+		} else {
+			selection := s
+			if cmd == "a" {
+				selection = arg
 			}
-			for _, idx := range indices {
+			for _, idx := range parseIndices(selection, len(ts)) {
 				t := ts[idx-1]
-				label := terminalLabel(t.Title)
-				sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: label})
+				selectedTabs = append(selectedTabs, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: terminalLabel(t.Title)})
 			}
-			first := ts[indices[0]-1]
-			for i, tab := range u.Config.Tabs {
-				if tab.Machine == first.Machine && tab.Terminal == first.ID {
-					u.Config.Active = i
-					break
-				}
-			}
-			return u.save()
 		}
-		indices := parseIndices(s, len(ts))
-		if len(indices) > 0 {
-			for _, idx := range indices {
-				t := ts[idx-1]
-				label := terminalLabel(t.Title)
-				sessions.Add(u.Config, config.Tab{Machine: t.Machine, Terminal: t.ID, Label: label})
-			}
-			first := ts[indices[0]-1]
-			for i, tab := range u.Config.Tabs {
-				if tab.Machine == first.Machine && tab.Terminal == first.ID {
-					u.Config.Active = i
-					break
-				}
-			}
-			return u.save()
+		if len(selectedTabs) > 0 {
+			return u.attachChoices(selectedTabs, machines)
 		}
+
 		u.print("Invalid choice.\n")
 		_, _ = u.prompt("Enter to continue: ")
 	}
@@ -968,6 +1031,7 @@ func (u *UI) Run(ctx context.Context) error {
 	retryDelay := 2 * time.Second
 	attachFailures := 0
 	reconciled := false
+	startupSelected := false
 	for {
 		if u.Client == nil {
 			u.print("Connecting directly to Hub…\n")
@@ -1002,7 +1066,7 @@ func (u *UI) Run(ctx context.Context) error {
 				reconciled = true
 			}
 		}
-		if len(u.Config.Tabs) == 0 {
+		if !startupSelected || len(u.Config.Tabs) == 0 {
 			if e = u.choose(true); e != nil {
 				if e == io.EOF {
 					return nil
@@ -1018,6 +1082,7 @@ func (u *UI) Run(ctx context.Context) error {
 				continue
 			}
 		}
+		startupSelected = true
 		if u.Config.Active < 0 || u.Config.Active >= len(u.Config.Tabs) {
 			u.Config.Active = 0
 		}
