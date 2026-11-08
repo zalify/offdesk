@@ -80,6 +80,12 @@ pub fn resolve_agent_command(
         .or_else(|| defaults.get(agent_kind_key(kind)))
         .cloned()
         .expect("every agent kind has a default command");
+    // npx and npm-installed CLIs are npx.cmd and the like there: spawn needs the full path
+    #[cfg(windows)]
+    if let Some(found) = windows_path_lookup(&argv[0]) {
+        argv[0] = found;
+        return argv;
+    }
     if !argv[0].contains('/') && !on_path(&argv[0]) {
         if let Some(found) = well_known_binary(&argv[0]) {
             argv[0] = found;
@@ -93,6 +99,26 @@ fn on_path(name: &str) -> bool {
         return false;
     };
     std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+}
+
+/// `name` on PATH with each PATHEXT extension, as cmd.exe would find it.
+#[cfg(windows)]
+fn windows_path_lookup(name: &str) -> Option<String> {
+    if name.contains(['/', '\\']) {
+        return None;
+    }
+    let path = std::env::var_os("PATH")?;
+    let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    std::env::split_paths(&path)
+        .flat_map(|dir| {
+            extensions
+                .split(';')
+                .filter(|ext| !ext.is_empty())
+                .map(move |ext| dir.join(format!("{name}{ext}")))
+                .collect::<Vec<_>>()
+        })
+        .find(|candidate| candidate.is_file())
+        .map(|found| found.to_string_lossy().into_owned())
 }
 
 /// Per-user install locations the agent CLIs use, tried in order.
