@@ -363,6 +363,8 @@ fn build_ws_url(hub_url: &str) -> String {
 async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<String>) {
     // Mandatory tmux check before doing any other work — fail fast with an
     // actionable message instead of falling back / running half-broken.
+    // Windows has no tmux: a node there runs agent sessions only, no terminals.
+    #[cfg(unix)]
     if !pty::check_tmux_available() {
         eprintln!(
             "error: tmux is not installed or not in PATH.\n\

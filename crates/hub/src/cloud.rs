@@ -507,6 +507,21 @@ impl Store {
         }
         Ok(file)
     }
+    #[cfg(not(unix))]
+    fn lock(&self, name: &str) -> Result<fs::File, String> {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join(name))
+            .map_err(|e| e.to_string())?;
+        if file.try_lock().is_err() {
+            return Err(
+                "Another managed connection operation is running. Try again shortly".into(),
+            );
+        }
+        Ok(file)
+    }
 }
 struct Api {
     client: Client,
@@ -669,7 +684,7 @@ fn service(database: &str, id: &str) -> Result<offdesk_protocol::service::Servic
 }
 
 fn service_is_owned(spec: &offdesk_protocol::service::ServiceSpec, id: &str) -> Result<(), String> {
-    let home = std::env::var("HOME").map_err(|_| "Could not find the user's service directory")?;
+    let home = offdesk_protocol::service::home().map_err(|_| "Could not find the user's service directory")?;
     let path = offdesk_protocol::service::service_file_path(spec, &home);
     match fs::read_to_string(path) {
         Ok(config) if service_has_owner(&config, id) => Ok(()),
@@ -687,11 +702,10 @@ fn service_has_owner(config: &str, id: &str) -> bool {
             || config.contains(&format!("\"{id}\"")))
 }
 
-#[cfg(unix)]
 fn service_operation_lock(
     spec: &offdesk_protocol::service::ServiceSpec,
 ) -> Result<fs::File, String> {
-    let home = std::env::var("HOME").map_err(|_| "Could not find the user's service directory")?;
+    let home = offdesk_protocol::service::home().map_err(|_| "Could not find the user's service directory")?;
     let path = PathBuf::from(offdesk_protocol::service::service_file_path(spec, &home));
     let dir = path
         .parent()
@@ -799,7 +813,6 @@ async fn check_local(database: &str, registration: &Registration) -> Result<(), 
     Ok(())
 }
 
-#[cfg(unix)]
 pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
     let store = Store::new(database)?;
     let _lock = if matches!(
@@ -1018,6 +1031,10 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             if let Some(saved) = registration.relay.clone() {
                 return run_relay(&api, &registration, saved).await;
             }
+            #[cfg(not(unix))]
+            return Err("The Cloudflare tunnel connector needs a macOS or Linux Hub".into());
+            #[cfg(unix)]
+            {
             let config: Configuration = api
                 .request(
                     Method::GET,
@@ -1062,12 +1079,7 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
             let remote = crate::tunnel_check::local_endpoint(database, &format!("https://{}", config.hostname))?;
             let local = crate::tunnel_check::local_endpoint(database, ORIGIN)?;
             use crate::cloud_connector::{Health, Policy};
-            use tokio::signal::unix::{signal, SignalKind};
-            let mut terminate = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
-            let mut interrupt = signal(SignalKind::interrupt()).map_err(|e| e.to_string())?;
-            let shutdown = async move {
-                tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {} }
-            };
+            let shutdown = shutdown_signal()?;
             crate::cloud_connector::supervise(command, || async {
                 if crate::tunnel_check::check(&remote).await.passed(true) {
                     Health::Connected
@@ -1078,15 +1090,31 @@ pub async fn execute(action: &Action, database: &str) -> Result<(), String> {
                     Health::OriginUnavailable
                 }
             }, shutdown, Policy::default()).await?;
+            }
         }
         Action::Enroll | Action::Login => unreachable!(),
     }
     Ok(())
 }
+/// Resolves when the service manager stops the connector (SIGTERM, or Ctrl+C).
+#[cfg(unix)]
+fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, String> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut terminate = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(|e| e.to_string())?;
+    Ok(async move {
+        tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {} }
+    })
+}
+#[cfg(not(unix))]
+fn shutdown_signal() -> Result<impl std::future::Future<Output = ()>, String> {
+    Ok(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+}
 /// The relay connector until a signal. Cloud has the last word on the addresses (a slug or
 /// region changed elsewhere); the saved ones keep the Hub reachable while Cloud isn't. Nothing
 /// is saved here: `disable` may be rewriting the registration meanwhile.
-#[cfg(unix)]
 async fn run_relay(api: &Api, registration: &Registration, saved: Relay) -> Result<(), String> {
     let relay = match api.relay(registration, &saved.home, saved.backup.as_deref()).await {
         Ok((_, relay)) => relay,
@@ -1095,12 +1123,7 @@ async fn run_relay(api: &Api, registration: &Registration, saved: Relay) -> Resu
             saved
         }
     };
-    use tokio::signal::unix::{signal, SignalKind};
-    let mut terminate = signal(SignalKind::terminate()).map_err(|e| e.to_string())?;
-    let mut interrupt = signal(SignalKind::interrupt()).map_err(|e| e.to_string())?;
-    let shutdown = async move {
-        tokio::select! { _ = terminate.recv() => {}, _ = interrupt.recv() => {} }
-    };
+    let shutdown = shutdown_signal()?;
     crate::cloud_relay::run(
         relay.regions(),
         Zeroizing::new(registration.control_token.clone()),
@@ -1109,10 +1132,6 @@ async fn run_relay(api: &Api, registration: &Registration, saved: Relay) -> Resu
     )
     .await;
     Ok(())
-}
-#[cfg(not(unix))]
-pub async fn execute(_action: &Action, _database: &str) -> Result<(), String> {
-    Err("The managed connection beta currently supports macOS and Linux Hubs".into())
 }
 
 #[cfg(test)]

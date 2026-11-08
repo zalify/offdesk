@@ -133,14 +133,18 @@ impl PtyManager {
     /// `offdesk-node start` for the user-facing check that fails fast on
     /// missing tmux. tmux is mandatory in this build.
     pub fn new() -> Self {
-        if !check_tmux_available() {
-            panic!(
-                "tmux not found in PATH. offdesk-node requires tmux. \
-                 Install tmux via your package manager and try again."
-            );
+        // Windows: no tmux, so no terminals; agent sessions don't need them
+        #[cfg(unix)]
+        {
+            if !check_tmux_available() {
+                panic!(
+                    "tmux not found in PATH. offdesk-node requires tmux. \
+                     Install tmux via your package manager and try again."
+                );
+            }
+            resolve_tmux_naming();
+            ensure_tmux_config();
         }
-        resolve_tmux_naming();
-        ensure_tmux_config();
         Self {
             codex_titles: Default::default(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
