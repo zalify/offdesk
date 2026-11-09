@@ -73,7 +73,7 @@ one 12px mark. States (R02), all from data the hub already sends:
 | working | `last_activity_ms` within a minute | `now` + accent arc |
 | quiet | older output | `4m` + hollow `fg-3` ring |
 | can't reach | `reachable: false` | `offline` + dashed ring; muted title |
-| opened by an agent | `opened_by` | `⌁` before the title, detail in the tooltip |
+| opened by an agent | `opened_by` | a robot icon before the title, detail in the tooltip |
 
 Selected (focused pane) = `bg-3` fill and `fg-0`; hover = `bg-2` and a close
 button in place of the age and mark. Rename is inline (double-click). The
@@ -81,8 +81,10 @@ cwd moves to the tooltip and the pane header. Everything else (rename, move
 to ▸, split right, open in a new tab, close) is on right-click.
 
 **Agent marker.** `⌁ opened by agent · cli` is too long for a pane header.
-It becomes a short badge, `⌁ agent` (18px, 3px radius, `line` edge, `fg-2`,
-no accent), and in sidebar rows just `⌁` before the title. Which agent opened
+`⌁` doesn't read as "agent" either, so the mark is a 12px robot icon
+(Lucide `bot`, stroke, `fg-3`): a short badge, robot + `agent` (18px, 3px
+radius, `line` edge, `fg-2`, no accent), in pane headers, and the robot
+alone before the title in sidebar and phone rows. Which agent opened
 it (cli, the token's name) moves to the tooltip. This replaces DESIGN.md's
 `AgentMarker` wording everywhere it appears, including the phone.
 
