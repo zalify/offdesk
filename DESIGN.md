@@ -207,6 +207,13 @@ retired large-touch workspace: `docs/plans/2026-08-13-fold-touch-workspace.md`.
   `0:app · machine`, plus `· watching` or `· view only` when this device is
   not in control (in control shows nothing), then 44px bracket buttons (`[f]`, `[b]`, `[m]`). Attention strip below it
   on `bg-1`: `n waiting` badge, then chips with `[enter]`.
+- **Phone sessions sheet** (wireframe R05): one header row, `sessions`, the
+  position (`3/7`) and the machine (`mac-mini ▾ 18ms`, opening Machines,
+  where its load is). Then the sidebar's groups and rows at touch height
+  (44px): a tab's header is a button to its actions (new terminal here, new
+  tab, rename, move up/down, close), and holding a row opens its own (close,
+  new terminal here, move to another tab). No close button per row. The foot
+  stays put under the list: a one-line hint and `new terminal`.
 - **Key bar**: `bg-1`, 3px keys with `line` edges, `enter` on lime; latched
   `ctrl` in the accent. In view only the keys give way to `view only` and a
   `turn off` button, since none of them would type.

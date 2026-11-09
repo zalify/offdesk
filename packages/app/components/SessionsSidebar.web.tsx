@@ -349,16 +349,7 @@ function SessionsSidebarComponent({
             <span className="odk-sessions-title-text">{title}</span>
             {showTab && <span className="odk-sessions-tab">{group.label}</span>}
           </span>
-          <span className="odk-sessions-end">
-            {state === "waiting" ? (
-              <span className="odk-sessions-meta odk-sessions-meta--waiting">waiting</span>
-            ) : state === "offline" ? (
-              <span className="odk-sessions-meta">offline</span>
-            ) : age ? (
-              <span className="odk-sessions-meta" title="Last output">{age}</span>
-            ) : null}
-            <StateMark state={state} />
-          </span>
+          <SessionRowEnd state={state} age={age} />
         </button>
         {canManage && (
           <button
@@ -619,6 +610,23 @@ function SessionsSidebarComponent({
 }
 
 export const SessionsSidebar = memo(SessionsSidebarComponent);
+
+/** A row's right end: `waiting`, `offline` or the age, then its mark. The
+ *  phone's sessions sheet (MobileWorkbench) draws its rows with it too. */
+export function SessionRowEnd({ state, age }: { state: SessionState; age: string | null }) {
+  return (
+    <span className="odk-sessions-end">
+      {state === "waiting" ? (
+        <span className="odk-sessions-meta odk-sessions-meta--waiting">waiting</span>
+      ) : state === "offline" ? (
+        <span className="odk-sessions-meta">offline</span>
+      ) : age ? (
+        <span className="odk-sessions-meta" title="Last output">{age}</span>
+      ) : null}
+      <StateMark state={state} />
+    </span>
+  );
+}
 
 /** One 12px mark: the working arc turns, waiting is a filled ring. */
 function StateMark({ state }: { state: SessionState }) {
