@@ -88,7 +88,8 @@ alone before the title in sidebar and phone rows. Which agent opened
 it (cli, the token's name) moves to the tooltip. This replaces DESIGN.md's
 `AgentMarker` wording everywhere it appears, including the phone.
 
-**Footer.** Files, agent browser (with its count), phone, and settings at the
+**Footer.** 34px, the status line's height, so their top hairlines run as
+one line across the window. Files, agent browser (with its count), phone, and settings at the
 right: the panel icons that sat at the right of the tab bar. In view only it
 reads `watching` with a `take control` button.
 
