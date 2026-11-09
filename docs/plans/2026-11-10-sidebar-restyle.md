@@ -80,6 +80,12 @@ button in place of the age and mark. Rename is inline (double-click). The
 cwd moves to the tooltip and the pane header. Everything else (rename, move
 to ▸, split right, open in a new tab, close) is on right-click.
 
+**Agent marker.** `⌁ opened by agent · cli` is too long for a pane header.
+It becomes a short badge, `⌁ agent` (18px, 3px radius, `line` edge, `fg-2`,
+no accent), and in sidebar rows just `⌁` before the title. Which agent opened
+it (cli, the token's name) moves to the tooltip. This replaces DESIGN.md's
+`AgentMarker` wording everywhere it appears, including the phone.
+
 **Footer.** Files, agent browser (with its count), phone, and settings at the
 right: the panel icons that sat at the right of the tab bar. In view only it
 reads `watching` with a `take control` button.
