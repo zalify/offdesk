@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TerminalInfo } from "@offdesk/shared";
 
-import { activityAge, sessionRows } from "./sessionList";
+import { activityAge, groupWaitingCount, sessionRows, sessionState } from "./sessionList";
 import type { WorkspaceGroup } from "./terminalWorkspaceLayout";
 
 function terminal(id: string, lastActivityMs?: number): TerminalInfo {
@@ -88,5 +88,36 @@ describe("activityAge", () => {
   it("says nothing without a time", () => {
     expect(activityAge(null, now)).toBeNull();
     expect(activityAge(undefined, now)).toBeNull();
+  });
+});
+
+describe("sessionState", () => {
+  const now = 1_000_000;
+
+  it("is waiting at a confirmation prompt, before anything else", () => {
+    expect(sessionState({ ...terminal("a", now), attention: "confirmation" }, now)).toBe("waiting");
+  });
+
+  it("is working with output in the last minute, quiet after it or without a report", () => {
+    expect(sessionState(terminal("a", now - 59_000), now)).toBe("working");
+    expect(sessionState(terminal("a", now - 60_000), now)).toBe("quiet");
+    expect(sessionState(terminal("a"), now)).toBe("quiet");
+  });
+
+  it("is offline when the node can't be reached, even if it was waiting", () => {
+    expect(
+      sessionState({ ...terminal("a", now), reachable: false, attention: "confirmation" }, now),
+    ).toBe("offline");
+  });
+});
+
+describe("groupWaitingCount", () => {
+  it("counts the tab's reachable terminals at a confirmation prompt", () => {
+    const terminals = byId(
+      { ...terminal("one"), attention: "confirmation" },
+      { ...terminal("two"), attention: "confirmation", reachable: false },
+      { ...terminal("three"), attention: "folder_trust" },
+    );
+    expect(groupWaitingCount(group("app", ["one", "two", "three"]), terminals)).toBe(1);
   });
 });

@@ -49,6 +49,7 @@
 .odk-chip--solid{border-color:transparent;background:rgb(var(--color-primary));color:rgb(var(--color-on-primary));font-weight:600}
 .odk-chip--waiting{border-color:transparent;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-weight:600}
 .odk-chip--md{height:24px}
+.odk-chip--agent{height:18px;gap:4px;padding:0 6px;font-weight:400}
 .odk-chip-glyph{color:rgb(var(--color-accent))}
 /* A square status block: `waiting`, `2 waiting`. */
 .odk-badge{flex-shrink:0;display:inline-flex;align-items:center;padding:2px 8px;background:rgb(var(--color-err));color:rgb(var(--color-on-err));font-family:var(--font-display);font-size:.75rem;font-weight:600;line-height:1.3;white-space:nowrap}

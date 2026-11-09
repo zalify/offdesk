@@ -31,6 +31,9 @@ interface HostSwitcherProps {
   trailing?: ReactNode;
   /** What `trailing` says, for the button's name and tooltip. */
   trailingLabel?: string;
+  /** Which edge the menu lines up with; the compact trigger sits at the
+   *  tab bar's right end, the sidebar's at the window's left. */
+  menuAlign?: "left" | "right";
 }
 
 function HostSwitcherComponent({
@@ -46,6 +49,7 @@ function HostSwitcherComponent({
   compact = false,
   trailing,
   trailingLabel,
+  menuAlign = compact ? "right" : "left",
 }: HostSwitcherProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -108,7 +112,7 @@ function HostSwitcherComponent({
           style={{
             position: "absolute",
             top: "calc(100% + 8px)",
-            ...(compact ? { right: 0 } : { left: 0 }),
+            ...(menuAlign === "right" ? { right: 0 } : { left: 0 }),
             minWidth: 340,
             zIndex: 20,
             padding: 8,

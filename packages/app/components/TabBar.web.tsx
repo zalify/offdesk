@@ -1,7 +1,8 @@
-// Desktop tab bar — the single permanent chrome row of the workspace, drawn
-// like tmux's window list (wireframes Main / B-Desktop). Left: ≡ shows or
-// hides the pinned sessions sidebar (or, when the window is too narrow for
-// it, opens the list as a drawer), then one `0:name` tab per workspace group (persistent groups
+// Desktop tab bar — the workspace's top row while the sessions sidebar is
+// hidden, drawn like tmux's window list (wireframes Main / B-Desktop, R03).
+// The pinned sidebar replaces it. Left: the sidebar icon shows the sidebar
+// (or, when the window is too narrow for it, opens the same list as a
+// drawer), then one `0:name` tab per workspace group (persistent groups
 // + cwd fallback groups, same grouping TerminalWorkspace computes) with its
 // programs muted after it, then [+]. Right, as plain text: the machine
 // switcher (`mac-mini ▾`), cpu/mem/disk, `files`, `browser[n]`, `phone`,
@@ -28,7 +29,7 @@ import {
   useState,
 } from "react";
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from "react";
-import { Folder, Globe, Settings as SettingsIcon, Smartphone } from "lucide-react";
+import { Bot, Folder, Globe, PanelLeft, Settings as SettingsIcon, Smartphone } from "lucide-react";
 import type {
   MachineInfo,
   ResourceStats,
@@ -38,11 +39,11 @@ import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { colors } from "@/lib/colors";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { terminalOpenerDescription } from "@/lib/terminalOpener";
-import { diskPercent, diskTooltip } from "@/lib/resourceStats";
 import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { HostSwitcher } from "./HostSwitcher.web";
+import { LoadGlyph, loadLabel } from "./MachineLoad.web";
 import { useLongPress } from "@/lib/longPress";
-import { WorkspaceManager } from "./WorkspaceManager.web";
+import { SessionsSidebar } from "./SessionsSidebar.web";
 import { TextButton } from "./Primitives.web";
 import { rem } from "@/lib/rem";
 
@@ -130,6 +131,7 @@ function TabBarComponent({
   sessionsSidebar,
 }: TabBarProps) {
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
+  const closeWorkspaceManager = useCallback(() => setWorkspaceManagerOpen(false), []);
   // Widening the window pins the list: the drawer gives way to the sidebar.
   useEffect(() => {
     if (sessionsSidebar) setWorkspaceManagerOpen(false);
@@ -340,17 +342,17 @@ function TabBarComponent({
         userSelect: "none",
       }}
     >
-      {/* Left: ≡ tabs, the tmux tabs, [+] */}
+      {/* Left: the sidebar, the tmux tabs, [+] */}
       <TextButton
         testId="desktop-workspace-manager-button"
-        label="Sessions"
+        label={sessionsSidebar ? "Show the sidebar" : "Sessions"}
         pressed={sessionsSidebar ? sessionsSidebar.shown : workspaceManagerOpen}
         onClick={() =>
           sessionsSidebar ? sessionsSidebar.onToggle() : setWorkspaceManagerOpen(true)
         }
-        style={{ alignSelf: "center", fontSize: rem(13) }}
+        style={{ alignSelf: "center", minWidth: 28 }}
       >
-        ≡
+        <PanelLeft size={15} aria-hidden />
       </TextButton>
       <div
         ref={stripRef}
@@ -468,9 +470,9 @@ function TabBarComponent({
                     role="img"
                     aria-label={opener}
                     title={opener}
-                    style={{ color: colors.accent, flexShrink: 0 }}
+                    style={{ display: "inline-flex", color: colors.fg3, flexShrink: 0 }}
                   >
-                    ⌁
+                    <Bot size={12} strokeWidth={2} aria-hidden />
                   </span>
                 )}
                 {waiting && (
@@ -513,28 +515,27 @@ function TabBarComponent({
         />
       )}
 
-      <WorkspaceManager
-        open={workspaceManagerOpen}
-        placement="drawer"
-        machineName={
-          machines.find((machine) => machine.id === activeMachineId)?.name ?? ""
-        }
-        groups={groups}
-        terminalsById={terminalsById}
-        activeGroupId={activeGroupId}
-        activeTerminalId={activeTerminalId}
-        canManage={isController}
-        onClose={() => setWorkspaceManagerOpen(false)}
-        onSelectGroup={onSelectGroup}
-        onSelectTerminal={onSelectTerminal}
-        onNewGroup={onNewGroup}
-        onNewTerminal={onNewTerminal}
-        onRenameGroup={onRenameGroup}
-        onDeleteGroup={onDeleteGroup}
-        onReorderGroups={onReorderGroups}
-        onMoveTerminal={onMoveTerminal}
-        onCloseTerminal={onCloseTerminal}
-      />
+      {workspaceManagerOpen && (
+        <SessionsSidebar
+          placement="drawer"
+          machineName={
+            machines.find((machine) => machine.id === activeMachineId)?.name ?? ""
+          }
+          groups={groups}
+          terminalsById={terminalsById}
+          activeTerminalId={activeTerminalId}
+          canManage={isController}
+          onHide={closeWorkspaceManager}
+          onSelectTerminal={onSelectTerminal}
+          onNewGroup={onNewGroup}
+          onNewTerminal={onNewTerminal}
+          onRenameGroup={onRenameGroup}
+          onDeleteGroup={onDeleteGroup}
+          onReorderGroups={onReorderGroups}
+          onMoveTerminal={onMoveTerminal}
+          onCloseTerminal={onCloseTerminal}
+        />
+      )}
 
       {/* Right: machine and its load, then the places you can open. */}
       <div
@@ -666,59 +667,6 @@ function groupOpenerDescription(
     if (description) return description;
   }
   return null;
-}
-
-/* ---------- cpu/mem/disk as text ---------- */
-
-// Over this share a resource reads as busy: its bar goes full strength.
-// Not red: the warn colour stays for a terminal waiting on you.
-const BUSY_PERCENT = 85;
-
-function loadPercents(stats: ResourceStats | undefined) {
-  return [
-    { label: "cpu", name: "cpu", percent: stats ? Math.round(stats.cpu_percent) : null },
-    {
-      label: "mem",
-      name: "memory",
-      percent: stats && stats.memory_total > 0
-        ? Math.round((stats.memory_used / stats.memory_total) * 100)
-        : null,
-    },
-    { label: "disk", name: "disk", percent: diskPercent(stats) },
-  ];
-}
-
-function loadLabel(stats: ResourceStats | undefined): string {
-  return loadPercents(stats)
-    .map(({ name, percent }) => `${name} ${percent === null ? "unknown" : `${percent}%`}`)
-    .join(", ");
-}
-
-/** cpu, mem and disk as three 3px bars, 12px tall: the machine's load at a
- *  glance. Exact values are in the switcher's title and its menu. */
-function LoadGlyph({ stats }: { stats: ResourceStats | undefined }) {
-  return (
-    <span
-      data-testid="tab-bar-meters"
-      aria-hidden="true"
-      title={diskTooltip(stats)}
-      style={{ display: "inline-flex", alignItems: "flex-end", gap: 2, height: 12, flexShrink: 0 }}
-    >
-      {loadPercents(stats).map(({ label, percent }) => (
-        <span
-          key={label}
-          data-testid={`tab-bar-meter-${label}`}
-          data-percent={percent ?? undefined}
-          style={{
-            width: 3,
-            height: `${Math.max(percent ?? 0, 8)}%`,
-            background: percent !== null && percent > BUSY_PERCENT ? colors.fg0 : colors.fg3,
-            opacity: percent === null ? 0.4 : 1,
-          }}
-        />
-      ))}
-    </span>
-  );
 }
 
 /* ---------- styles ---------- */

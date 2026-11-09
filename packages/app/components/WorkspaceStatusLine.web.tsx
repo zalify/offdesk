@@ -35,6 +35,7 @@ export function WorkspaceStatusLine({
   onEngageViewOnly,
   onDisengageViewOnly,
   browserWaiting = null,
+  rttShownElsewhere = false,
 }: {
   terminals: TerminalInfo[];
   machines: MachineInfo[];
@@ -54,6 +55,8 @@ export function WorkspaceStatusLine({
   onDisengageViewOnly: () => void;
   /** An agent browser tab that handed off to a person. */
   browserWaiting?: { label: string; reason: string; open: () => void } | null;
+  /** The sessions sidebar's machine row shows the round trip. */
+  rttShownElsewhere?: boolean;
 }) {
   const message = useWorkspaceMessage();
   const update = useDesktopUpdate();
@@ -75,11 +78,11 @@ export function WorkspaceStatusLine({
   };
 
   const online = machines.filter((m) => machineOnline[m.id]).length;
-  // The machine's name is the tab bar's switcher; here only how many are
-  // connected and the round trip.
+  // The machine's name is the switcher's (tab bar or sidebar); here only how
+  // many are connected and, unless the sidebar shows it, the round trip.
   const where = [
     machines.length > 1 ? `${online} machine${online === 1 ? "" : "s"}` : null,
-    rttMs === null ? "—" : `${Math.round(rttMs)}ms`,
+    rttShownElsewhere ? null : rttMs === null ? "—" : `${Math.round(rttMs)}ms`,
   ].filter(Boolean);
 
   return (
@@ -186,7 +189,9 @@ export function WorkspaceStatusLine({
           ↑ update {update.available}
         </button>
       ) : null}
-      <span className="odk-status-muted" data-testid="tab-bar-rtt">{where.join(" · ")}</span>
+      {where.length > 0 && (
+        <span className="odk-status-muted" data-testid="tab-bar-rtt">{where.join(" · ")}</span>
+      )}
       {viewOnlyLocked ? (
         <button
           type="button"

@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { CSSProperties } from "react";
 import type {
   AgentBrowserInfo,
   TerminalInfo,
@@ -121,7 +122,7 @@ import { BootScreen } from "./BootScreen.web";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { rem } from "@/lib/rem";
 import { readSidebarShown, useSidebarFits, writeSidebarShown } from "@/lib/sessionList";
-import { WorkspaceManager } from "./WorkspaceManager.web";
+import { SessionsSidebar } from "./SessionsSidebar.web";
 
 const EmptyMachinesView = lazy(() =>
   lazyWithReload(() =>
@@ -273,8 +274,8 @@ function TerminalCanvasInner() {
     createInitialMainLayout,
   );
   const { isCompact, isTouch } = useDisplayMode();
-  // The desktop sessions list, pinned beside the panes when the window fits;
-  // shown or hidden per device.
+  // The desktop sessions sidebar, pinned at the window's left edge in place of
+  // the tab bar when the window fits; shown or hidden per device.
   const sidebarFits = useSidebarFits() && !isTouch;
   const [sidebarShown, setSidebarShown] = useState(readSidebarShown);
   const toggleSidebar = useCallback(() => {
@@ -2032,6 +2033,54 @@ function TerminalCanvasInner() {
             </MobileWorkbench>
           ) : (
             <KeyBarSlotProvider>
+              <div style={{ flex: 1, display: "flex", minWidth: 0, minHeight: 0 }}>
+              {sessionsSidebar?.shown && (
+                <SessionsSidebar
+                  placement="sidebar"
+                  machineName={activeMachine?.name ?? ""}
+                  groups={tabGroups}
+                  terminalsById={scopedTerminalsById}
+                  activeTerminalId={workspaceTerminal?.id ?? null}
+                  canManage={isActiveController}
+                  machine={{
+                    machines,
+                    activeMachineId,
+                    controlLeases,
+                    deviceId,
+                    machineStats,
+                    terminals,
+                    stats: activeStats,
+                    rttMs,
+                    onSelectMachine: setActiveMachineId,
+                    onAddMachine: () => setAddMachineOpen(true),
+                    onRemoveHost: handleRemoveHost,
+                  }}
+                  panels={{
+                    filesButton: filesButtonProps,
+                    onToggleFiles: handleToggleFiles,
+                    browserButton:
+                      activeMachine && machineOnline[activeMachine.id]
+                        ? {
+                            count: scopedAgentBrowsers.length,
+                            needsPerson: browserNeedsYou,
+                            open: browserOverlayOpen,
+                          }
+                        : undefined,
+                    onToggleBrowser: handleToggleBrowserOverlay,
+                    onOpenPhone: () => setPhoneOpen(true),
+                    onOpenSettings: () => setShowSettings(true),
+                  }}
+                  onHide={toggleSidebar}
+                  onSelectTerminal={handleZoomTerminal}
+                  onNewGroup={handleNewGroupClick}
+                  onNewTerminal={handleMobileNewTerminal}
+                  onRenameGroup={handleRenameGroup}
+                  onDeleteGroup={handleDeleteGroup}
+                  onReorderGroups={handleRequestWorkspaceGroupReorder}
+                  onMoveTerminal={handleMoveTerminalToWorkspace}
+                  onCloseTerminal={handleMobileCloseTerminal}
+                />
+              )}
               <main
                 style={{
                   flex: 1,
@@ -2039,8 +2088,14 @@ function TerminalCanvasInner() {
                   flexDirection: "column",
                   minWidth: 0,
                   background: colors.bg0,
+                  // With no tab bar above them, the pane headers are the top
+                  // row, as tall as the sidebar's.
+                  ...(sessionsSidebar?.shown
+                    ? ({ "--pane-header-height": "40px" } as CSSProperties)
+                    : null),
                 }}
               >
+              {!sessionsSidebar?.shown && (
               <TabBar
                 groups={tabGroups}
                 activeGroupId={activeGroupId}
@@ -2085,6 +2140,7 @@ function TerminalCanvasInner() {
                 onRemoveHost={handleRemoveHost}
                 sessionsSidebar={sessionsSidebar}
               />
+              )}
               {!phoneHintDismissed && machines.length > 0 && (
                 <div
                   data-testid="phone-hint"
@@ -2114,32 +2170,7 @@ function TerminalCanvasInner() {
                 </div>
               )}
 
-              <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
-              {sessionsSidebar?.shown && (
-                <WorkspaceManager
-                  open
-                  placement="sidebar"
-                  machineName={activeMachine?.name ?? ""}
-                  groups={tabGroups}
-                  terminalsById={scopedTerminalsById}
-                  activeGroupId={activeGroupId}
-                  activeTerminalId={workspaceTerminal?.id ?? null}
-                  canManage={isActiveController}
-                  onClose={toggleSidebar}
-                  onSelectGroup={(groupId) =>
-                    workspaceCommandsRef.current.selectGroup?.(groupId)
-                  }
-                  onSelectTerminal={handleZoomTerminal}
-                  onNewGroup={handleNewGroupClick}
-                  onNewTerminal={handleMobileNewTerminal}
-                  onRenameGroup={handleRenameGroup}
-                  onDeleteGroup={handleDeleteGroup}
-                  onReorderGroups={handleRequestWorkspaceGroupReorder}
-                  onMoveTerminal={handleMoveTerminalToWorkspace}
-                  onCloseTerminal={handleMobileCloseTerminal}
-                />
-              )}
-              <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
               {scopedTerminals.length === 0 ? (
                 <EmptyState
                   scopeLabel={scopeLabel}
@@ -2177,7 +2208,6 @@ function TerminalCanvasInner() {
                 />
               )}
               </div>
-              </div>
               <WorkspaceKeyBarSlot />
               <WorkspaceStatusLine
                 terminals={terminals}
@@ -2208,8 +2238,10 @@ function TerminalCanvasInner() {
                     ? { label: browserLabel(browser), reason: browser.handoff?.reason ?? "", open: () => handleOpenBrowserTab(browser.id) }
                     : null;
                 })()}
+                rttShownElsewhere={Boolean(sessionsSidebar?.shown)}
               />
               </main>
+              </div>
             </KeyBarSlotProvider>
           )}
           {/* The resume notice is about terminals; settings, files and the
