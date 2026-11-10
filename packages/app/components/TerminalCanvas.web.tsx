@@ -845,6 +845,14 @@ function TerminalCanvasInner() {
   );
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
   const workspaceCommandsRef = useRef<WorkspaceCommandChannel>({});
+  // Showing or hiding the sidebar resizes the panes without a window resize.
+  const sidebarInLayout = Boolean(sessionsSidebar?.shown);
+  const sidebarInLayoutRef = useRef(sidebarInLayout);
+  useEffect(() => {
+    if (sidebarInLayoutRef.current === sidebarInLayout) return;
+    sidebarInLayoutRef.current = sidebarInLayout;
+    workspaceCommandsRef.current.fitVisiblePanes?.();
+  }, [sidebarInLayout]);
   const [paletteState, setPaletteState] = useState<{
     open: boolean;
     filter: PaletteFilter;
@@ -1143,6 +1151,15 @@ function TerminalCanvasInner() {
     dispatchLayout({ type: "ZOOM_TERMINAL", terminalId: id });
     pushScreenHistory(`#/t/${id}`);
   }, []);
+  // A row in the sessions sidebar or drawer: focus it the way a click on its
+  // tab or pane does, which refits the panes it brings into view.
+  const handleSelectSessionTerminal = useCallback(
+    (id: string) => {
+      if (workspaceCommandsRef.current.selectTerminal?.(id)) return;
+      handleZoomTerminal(id);
+    },
+    [handleZoomTerminal],
+  );
 
   // The agent browser overlay (desktop) / full-screen surface (phone), opened
   // from the top bar or title bar. Browsers are machine-global, so the last
@@ -2071,7 +2088,7 @@ function TerminalCanvasInner() {
                     onOpenSettings: () => setShowSettings(true),
                   }}
                   onHide={toggleSidebar}
-                  onSelectTerminal={handleZoomTerminal}
+                  onSelectTerminal={handleSelectSessionTerminal}
                   onNewGroup={handleNewGroupClick}
                   onNewTerminal={handleMobileNewTerminal}
                   onRenameGroup={handleRenameGroup}
@@ -2113,7 +2130,7 @@ function TerminalCanvasInner() {
                 onSelectGroup={(groupId) =>
                   workspaceCommandsRef.current.selectGroup?.(groupId)
                 }
-                onSelectTerminal={handleZoomTerminal}
+                onSelectTerminal={handleSelectSessionTerminal}
                 onNewGroup={handleNewGroupClick}
                 onNewTerminal={handleMobileNewTerminal}
                 onCloseTerminal={handleMobileCloseTerminal}

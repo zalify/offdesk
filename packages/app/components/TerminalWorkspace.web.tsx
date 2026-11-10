@@ -125,6 +125,11 @@ export interface WorkspaceCommandChannel {
     placement: GroupDropPlacement,
   ) => void;
   runPrefixAction?: (action: PrefixActionId) => void;
+  /** Focus a terminal as a click on its pane or tab would, refitting the
+   *  panes it brings into view. False when the workspace doesn't hold it. */
+  selectTerminal?: (terminalId: string) => boolean;
+  /** The workspace area changed size (the sidebar shown or hidden). */
+  fitVisiblePanes?: () => void;
 }
 
 export type GroupDropPlacement = "before" | "after";
@@ -494,7 +499,7 @@ function TerminalWorkspaceComponent({
   const requestPaneFit = useCallback(
     (
       terminalIds: string | string[] | null,
-      options: { focusTerminalId?: string | null } = {},
+      options: { focusTerminalId?: string | null; focus?: boolean } = {},
     ) => {
       const ids = Array.isArray(terminalIds)
         ? terminalIds
@@ -506,7 +511,10 @@ function TerminalWorkspaceComponent({
       fitRequestCounterRef.current += 1;
       setFitRequest({
         terminalIds: uniqueIds,
-        focusTerminalId: options.focusTerminalId ?? uniqueIds[0] ?? null,
+        focusTerminalId:
+          options.focus === false
+            ? null
+            : (options.focusTerminalId ?? uniqueIds[0] ?? null),
         nonce: fitRequestCounterRef.current,
       });
     },
@@ -544,6 +552,13 @@ function TerminalWorkspaceComponent({
   const activateTerminal = useCallback(
     (terminalId: string) => {
       const changedTerminal = terminalId !== workspaceRef.current.activeTerminalId;
+      const targetGroup =
+        workspaceRef.current.groups.find((candidate) =>
+          containsTerminal(candidate.root, terminalId),
+        ) ?? null;
+      const changedGroup =
+        targetGroup !== null &&
+        targetGroup.id !== workspaceRef.current.activeGroupId;
       if (changedTerminal) setMaximizedTerminalId(null);
       updateWorkspace((prev) => {
         const group =
@@ -560,12 +575,16 @@ function TerminalWorkspaceComponent({
       if (!isCompact && isController && changedTerminal) {
         // Switching focus dropped any zoom overlay above; the previously
         // zoomed pane shrank back to its rect and needs a refit too (panes
-        // no longer remount on zoom changes).
+        // no longer remount on zoom changes). A terminal in another tab (a
+        // sidebar row) brings that tab's panes into view, sized while hidden,
+        // so all of them get the refit a tab click gives.
         const previouslyZoomed = maximizedTerminalIdRef.current;
         requestPaneFit(
-          previouslyZoomed && previouslyZoomed !== terminalId
-            ? [terminalId, previouslyZoomed]
-            : terminalId,
+          changedGroup
+            ? [terminalId, ...collectIds(targetGroup.root)]
+            : previouslyZoomed && previouslyZoomed !== terminalId
+              ? [terminalId, previouslyZoomed]
+              : terminalId,
           { focusTerminalId: terminalId },
         );
       }
@@ -1014,6 +1033,18 @@ function TerminalWorkspaceComponent({
         if (activeTerminal) setWebPreviewTerminal(activeTerminal);
       },
       selectGroup: (groupId) => activateGroup(groupId),
+      selectTerminal: (terminalId) => {
+        if (
+          !workspaceRef.current.groups.some((group) =>
+            containsTerminal(group.root, terminalId),
+          )
+        ) {
+          return false;
+        }
+        activateTerminal(terminalId);
+        return true;
+      },
+      fitVisiblePanes,
       reorderGroups: (sourceGroupId, targetGroupId, placement) =>
         void handleReorderGroups(sourceGroupId, targetGroupId, placement),
       runPrefixAction: (action) =>
@@ -1044,13 +1075,37 @@ function TerminalWorkspaceComponent({
     [isCompact],
   );
 
+  // Desktop panes are fitted on explicit actions only (opening a terminal
+  // keeps the size it has), but a pane the window or the sidebar resized
+  // is refitted, without taking focus, once the resize settles.
+  const fitVisiblePanes = useCallback(() => {
+    if (isCompact || !isController) return;
+    const group = getActiveWorkspaceGroup(workspaceRef.current);
+    requestPaneFit(collectIds(group?.root ?? null), { focus: false });
+  }, [isCompact, isController, requestPaneFit]);
+  useEffect(() => {
+    if (isTouch || isCompact || !isController) return;
+    let timer: number | null = null;
+    const onResize = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        fitVisiblePanes();
+      }, 150);
+    };
+    window.addEventListener("resize", onResize);
+    return () => {
+      if (timer !== null) window.clearTimeout(timer);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [fitVisiblePanes, isCompact, isController, isTouch]);
+
   // Fold/unfold and inner-screen rotation fire window.resize. Compact chrome
   // refits on mount via the leaf effect; the large workspace must request a
   // fit here because ResizeObserver only remeasures, it does not emit resize
   // frames. The keyboard on iOS moves only the visual viewport, so that is
   // watched too, or every pane but the active one stays clipped under it.
-  // Desktop mouse is left alone so existing fit-stability contracts stay
-  // intact — only touch workspaces subscribe.
+  // Touch workspaces also fit on mount; desktop mouse ones (above) don't.
   useEffect(() => {
     if (!isTouch || isCompact || !isController) return;
     const fitVisible = () => {
