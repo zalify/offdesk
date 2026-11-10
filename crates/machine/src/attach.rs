@@ -53,6 +53,12 @@ enum AttachCommand {
     Refresh,
 }
 
+/// How long after a viewer nudged a session (attached to it, resized it,
+/// or sent it a focus report) its output counts as the redraw the nudge
+/// caused rather than as activity: full-screen programs repaint on
+/// SIGWINCH and on focus-in, and tmux counts the repaint as output.
+pub const VIEW_NUDGE_GRACE_MS: i64 = 3_000;
+
 /// Per-machine collection of live attaches.
 ///
 /// Each attach owns one `tmux attach-session` subprocess + the PTY it speaks
@@ -60,6 +66,8 @@ enum AttachCommand {
 /// each browser an independent client view of the same session.
 pub struct AttachManager {
     inner: Arc<Mutex<HashMap<String, AttachHandle>>>,
+    /// Per session: when a viewer last nudged it, in ms since the epoch.
+    view_nudges: Arc<std::sync::Mutex<HashMap<String, i64>>>,
 }
 
 struct AttachHandle {
@@ -100,6 +108,7 @@ impl AttachManager {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
+            view_nudges: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -124,6 +133,7 @@ impl AttachManager {
             },
         );
 
+        self.note_view_nudge(&session_id);
         std::thread::spawn(move || {
             run_attach_task(attach_id, session_id, cols, rows, events_tx, command_rx);
         });
@@ -135,11 +145,17 @@ impl AttachManager {
         // Clone the sender out from under the lock; awaiting send() while
         // holding the async Mutex would block close() / close_all() /
         // session_of() if the writer thread is slow to drain command_rx.
-        let command_tx = {
+        let handle = {
             let inner = self.inner.lock().await;
-            inner.get(attach_id).map(|handle| handle.command_tx.clone())
+            inner
+                .get(attach_id)
+                .map(|handle| (handle.command_tx.clone(), handle.session_id.clone()))
         };
-        if let Some(command_tx) = command_tx {
+        if let Some((command_tx, session_id)) = handle {
+            // Focusing a pane in the app sends only a focus report.
+            if is_focus_report(&data) {
+                self.note_view_nudge(&session_id);
+            }
             command_tx.send(AttachCommand::Input(data)).await.is_ok()
         } else {
             false
@@ -147,11 +163,14 @@ impl AttachManager {
     }
 
     pub async fn resize(&self, attach_id: &str, cols: u16, rows: u16) -> bool {
-        let command_tx = {
+        let handle = {
             let inner = self.inner.lock().await;
-            inner.get(attach_id).map(|handle| handle.command_tx.clone())
+            inner
+                .get(attach_id)
+                .map(|handle| (handle.command_tx.clone(), handle.session_id.clone()))
         };
-        if let Some(command_tx) = command_tx {
+        if let Some((command_tx, session_id)) = handle {
+            self.note_view_nudge(&session_id);
             command_tx
                 .send(AttachCommand::Resize { cols, rows })
                 .await
@@ -192,6 +211,52 @@ impl AttachManager {
             .get(attach_id)
             .map(|h| h.session_id.clone())
     }
+
+    fn note_view_nudge(&self, session_id: &str) {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or_default();
+        if let Ok(mut nudges) = self.view_nudges.lock() {
+            nudges.insert(session_id.to_string(), now_ms);
+        }
+    }
+
+    /// Whether a session's last output (`activity_ms`) is the redraw a
+    /// viewer caused, so it should not count as the session being active.
+    pub fn is_view_redraw(&self, session_id: &str, activity_ms: i64) -> bool {
+        let nudge_ms = self
+            .view_nudges
+            .lock()
+            .ok()
+            .and_then(|nudges| nudges.get(session_id).copied());
+        explained_by_view_nudge(nudge_ms, activity_ms)
+    }
+
+    /// Forget the nudges of sessions that no longer exist.
+    pub fn retain_view_nudges(&self, keep: impl Fn(&str) -> bool) {
+        if let Ok(mut nudges) = self.view_nudges.lock() {
+            nudges.retain(|session_id, _| keep(session_id));
+        }
+    }
+}
+
+/// Input made only of xterm focus reports (`ESC [ I` in, `ESC [ O` out).
+fn is_focus_report(data: &[u8]) -> bool {
+    !data.is_empty()
+        && data
+            .chunks(3)
+            .all(|chunk| chunk == b"\x1b[I" || chunk == b"\x1b[O")
+}
+
+/// tmux reports activity in whole seconds, so the nudge's second counts
+/// from its start.
+fn explained_by_view_nudge(nudge_ms: Option<i64>, activity_ms: i64) -> bool {
+    let Some(nudge_ms) = nudge_ms else {
+        return false;
+    };
+    activity_ms >= nudge_ms - nudge_ms.rem_euclid(1000)
+        && activity_ms <= nudge_ms + VIEW_NUDGE_GRACE_MS
 }
 
 impl Default for AttachManager {
@@ -317,6 +382,53 @@ mod tests {
     /// specs (`terminal-multi-attach`, `terminal-attach-recovery`); a unit
     /// test would need an injectable tmux socket which the current
     /// `spawn_tmux_attach` doesn't expose.
+    #[test]
+    fn focus_reports_are_recognised_alone() {
+        assert!(is_focus_report(b"\x1b[I"));
+        assert!(is_focus_report(b"\x1b[O\x1b[I"));
+        assert!(!is_focus_report(b""));
+        assert!(!is_focus_report(b"\x1b[Ia"));
+        assert!(!is_focus_report(b"ls\r"));
+        assert!(!is_focus_report(b"\x1b[A"));
+    }
+
+    #[test]
+    fn output_just_after_a_view_nudge_is_its_redraw() {
+        // Nudged at 10.7s: tmux stamps the repaint 10s, 11s, ... 13s.
+        assert!(explained_by_view_nudge(Some(10_700), 10_000));
+        assert!(explained_by_view_nudge(Some(10_700), 13_000));
+        assert!(!explained_by_view_nudge(Some(10_700), 14_000));
+        assert!(!explained_by_view_nudge(Some(10_700), 9_000));
+        assert!(!explained_by_view_nudge(None, 10_000));
+    }
+
+    #[tokio::test]
+    async fn resize_marks_the_session_nudged() {
+        let mgr = AttachManager::new();
+        let (command_tx, _command_rx) = mpsc::channel::<AttachCommand>(1);
+        mgr.inner.lock().await.insert(
+            "attach-a".to_string(),
+            AttachHandle {
+                command_tx,
+                session_id: "term-a".to_string(),
+            },
+        );
+        let now_s = || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64
+        };
+        assert!(!mgr.is_view_redraw("term-a", now_s() * 1000));
+        assert!(mgr.resize("attach-a", 132, 40).await);
+        // The repaint lands in the same second or just after.
+        let repaint_ms = now_s() * 1000;
+        assert!(mgr.is_view_redraw("term-a", repaint_ms));
+        assert!(!mgr.is_view_redraw("term-b", repaint_ms));
+        mgr.retain_view_nudges(|_| false);
+        assert!(!mgr.is_view_redraw("term-a", repaint_ms));
+    }
+
     #[tokio::test]
     async fn manager_construct_and_drop() {
         let mgr = AttachManager::new();
