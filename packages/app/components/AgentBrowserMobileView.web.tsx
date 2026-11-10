@@ -23,6 +23,7 @@ import {
   compositionEndAction,
   dragWheelEvent,
   isComposingKey,
+  stillComposing,
   isDoubleTap,
   keyEvent,
   mapZoomedClientPointToViewport,
@@ -465,6 +466,7 @@ export function AgentBrowserMobileView({
     if (!mine) return;
     const native = event.nativeEvent;
     // IME keystrokes (keyCode 229) are handled by beforeinput / compositionend.
+    composingRef.current = stillComposing(composingRef.current, native);
     if (isComposingKey(native) || composingRef.current) return;
     if (native.key === "Unidentified") return;
     if ((native.ctrlKey || native.metaKey) && native.key.toLowerCase() === "v") return;
@@ -474,6 +476,7 @@ export function AgentBrowserMobileView({
   const handleKeyUp = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (!mine) return;
     const native = event.nativeEvent;
+    composingRef.current = stillComposing(composingRef.current, native);
     if (isComposingKey(native) || composingRef.current) return;
     if (native.key === "Unidentified") return;
     if ((native.ctrlKey || native.metaKey) && native.key.toLowerCase() === "v") return;

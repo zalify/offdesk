@@ -15,6 +15,7 @@ import {
   browserShortcut,
   containedImageRect,
   isComposingKey,
+  stillComposing,
   keyEvent,
   mapClientPointToViewport,
   mouseEvent,
@@ -359,6 +360,7 @@ export function AgentBrowserPane({
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (!mine) return;
+    composingRef.current = stillComposing(composingRef.current, event.nativeEvent);
     if (isComposingKey(event.nativeEvent) || composingRef.current) return;
     if (isPasteShortcut(event)) return;
     event.preventDefault();
@@ -370,6 +372,7 @@ export function AgentBrowserPane({
   };
   const handleKeyUp = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
     if (!mine) return;
+    composingRef.current = stillComposing(composingRef.current, event.nativeEvent);
     if (isComposingKey(event.nativeEvent) || composingRef.current) return;
     if (isPasteShortcut(event)) return;
     event.preventDefault();
@@ -734,6 +737,9 @@ export function AgentBrowserPane({
               composingRef.current = true;
             }}
             onCompositionEnd={handleCompositionEnd}
+            onBlur={() => {
+              composingRef.current = false;
+            }}
             onInput={handleInput}
             onPaste={handlePaste}
             style={{

@@ -327,10 +327,11 @@ test.describe("agent browser", () => {
 
     const input = await viewportToClient(page, opened.id, 250, 315);
     await page.mouse.click(input.x, input.y);
-    await page.keyboard.type("bob");
+    // "@" (Shift+2) and what follows it arrive too (OFF-120)
+    await page.keyboard.type("bob@x.io");
     await expect
       .poll(() => agentBrowserSnapshotViaApi(page, opened.id))
-      .toContain("typed:bob");
+      .toContain("typed:bob@x.io");
 
     const button = await viewportToClient(page, opened.id, 160, 220);
     await page.mouse.click(button.x, button.y);

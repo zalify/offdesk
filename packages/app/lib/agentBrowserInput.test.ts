@@ -19,6 +19,7 @@ import {
   zoomViewAt,
   containedImageRect,
   isComposingKey,
+  stillComposing,
   keyEvent,
   mapClientPointToViewport,
   mouseEvent,
@@ -182,6 +183,15 @@ describe("keyEvent", () => {
     expect(isComposingKey({ ...base, isComposing: true })).toBe(true);
     expect(isComposingKey({ ...base, keyCode: 229 })).toBe(true);
     expect(isComposingKey(base)).toBe(false);
+  });
+
+  it("ends a composition no compositionend closed once a key isn't composing", () => {
+    const at = { ...base, key: "@", code: "Digit2", keyCode: 50, shiftKey: true };
+    expect(stillComposing(true, at)).toBe(false);
+    expect(stillComposing(true, { ...at, keyCode: 229 })).toBe(true);
+    expect(stillComposing(true, { ...at, isComposing: true })).toBe(true);
+    expect(stillComposing(false, { ...at, keyCode: 229 })).toBe(false);
+    expect(keyEvent("down", at)).toMatchObject({ key: "@", code: "Digit2", text: "@", modifiers: 8, key_code: 50 });
   });
 
   it("textEvent skips empty text", () => {

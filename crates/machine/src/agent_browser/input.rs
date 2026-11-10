@@ -13,6 +13,13 @@ use tokio::sync::mpsc;
 use super::cdp::CdpClient;
 use super::keys;
 
+/// How long one input event may wait for the page. Chrome answers
+/// `Input.dispatchKeyEvent` only once the page has handled the key, and a key
+/// it never acknowledges (a popup that took it, a stalled page) would hold up
+/// every later key and click for the full `CALL_TIMEOUT` each: the browser
+/// looks frozen (OFF-120). Later events still reach Chrome in order.
+const INPUT_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// CDP modifier bits.
 const ALT: u32 = 1;
 const CTRL: u32 = 2;
@@ -31,8 +38,13 @@ pub fn spawn(client: Arc<CdpClient>, session_id: String) -> InputTx {
             }
             for event in coalesce(batch) {
                 for (method, params) in cdp_calls(&event) {
-                    if let Err(error) = client.call(Some(&session_id), method, params).await {
-                        tracing::debug!("agent browser input {method}: {error}");
+                    let call = client.call_within(Some(&session_id), method, params, INPUT_CALL_TIMEOUT);
+                    match call.await {
+                        Ok(_) => {}
+                        Err(error) if error.ends_with("timed out") => {
+                            tracing::warn!("agent browser input {method} not acknowledged: {error}");
+                        }
+                        Err(error) => tracing::debug!("agent browser input {method}: {error}"),
                     }
                 }
             }
