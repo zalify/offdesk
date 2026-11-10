@@ -49,6 +49,35 @@ pub fn choose_moves(screen: &str, label: &str) -> Option<i32> {
     (current.abs_diff(target) <= 9).then(|| target as i32 - current as i32)
 }
 
+/// Whether Claude Code or Codex shows a turn in progress. Claude keeps a
+/// spinner line at the left edge while it works ("✻ Sprouting…", later
+/// "· Sprouting… (6s · ↓ 80 tokens)") and turns it into "✻ Crunched for 19s"
+/// when the turn ends; Codex shows "• Working (11s • esc to interrupt)" just
+/// above its prompt. Their other screen changes (hints, recaps, the status
+/// line, a repaint on focus) don't mean the agent is working.
+pub fn agent_working(screen: &str) -> bool {
+    let spinner = screen.lines().any(|line| {
+        let mut chars = line.trim_end().chars();
+        let glyph = chars.next();
+        let Some(text) = chars.as_str().strip_prefix(' ') else {
+            return false;
+        };
+        let Some((label, after)) = text.split_once('…') else {
+            return false;
+        };
+        matches!(glyph, Some('·' | '✢' | '✳' | '✶' | '✻' | '✽' | '*'))
+            && !label.trim().is_empty()
+            && (after.is_empty() || (after.starts_with(" (") && after.ends_with(')')))
+    });
+    let interrupt = screen
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(8)
+        .any(|line| line.to_ascii_lowercase().contains("esc to interrupt"));
+    spinner || interrupt
+}
+
 pub fn detect(command: Option<&str>, screen: &str) -> Option<TerminalAttention> {
     if !supports_command(command) {
         return None;
@@ -210,5 +239,36 @@ mod tests {
             None
         );
         assert_eq!(detect(Some("claude"), ""), None);
+    }
+
+    #[test]
+    fn agent_working_reads_the_turn_in_progress() {
+        const RULE: &str = "────────────────────────────────────────";
+        let claude = |spinner: &str| {
+            format!(
+                "❯ Run sleep 12\n⏺ Waiting · 2s\n  ⎿  $ sleep 12\n{spinner}\n{RULE}\n❯ \n{RULE}\n  ⏵⏵ auto mode on (shift+tab to cycle)\n"
+            )
+        };
+        assert!(agent_working(&claude("✻ Sprouting…")));
+        assert!(agent_working(&claude("· Sprouting… (6s · ↓ 80 tokens)")));
+        assert!(agent_working(&claude("✶ Updating the release notes… (2m 3s · ↓ 3.1k tokens · esc to interrupt)")));
+        // A finished turn, the clipboard hint and a recap are not work.
+        assert!(!agent_working(&claude("✻ Crunched for 19s · done 3:39 PM")));
+        assert!(!agent_working(&format!(
+            "{}  Image in clipboard · ctrl+v to paste\n",
+            claude("✻ Baked for 1m 7s · done 10:28 PM")
+        )));
+        assert!(!agent_working(&claude("※ recap: The ad renders cleanly at every size…")));
+        // Transcript lines are indented, so quoted spinner text doesn't count.
+        assert!(!agent_working(&claude("  ⎿  ✻ Sprouting… (6s · ↓ 80 tokens)")));
+
+        let codex = |status: &str| {
+            format!("• I'll run sleep 12 now.\n{status}\n\n› Ask Codex to do anything\n\n  gpt-6.1-sol high · ~/repo\n")
+        };
+        assert!(agent_working(&codex("◦ Working (6s • esc to interrupt) · 1 background terminal running")));
+        assert!(!agent_working(&codex("• ok")));
+        // "esc to interrupt" far up the screen is history, not the live status.
+        let history = format!("esc to interrupt\n{}", "line\n".repeat(10));
+        assert!(!agent_working(&history));
     }
 }

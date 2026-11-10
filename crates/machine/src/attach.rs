@@ -53,10 +53,11 @@ enum AttachCommand {
     Refresh,
 }
 
-/// How long after a viewer nudged a session (resized it or sent it a focus
-/// report) its output counts as the repaint the nudge caused rather than as
-/// activity: full-screen programs repaint on SIGWINCH and on focus-in, and
-/// tmux counts the repaint as output. Attaching repaints only the client.
+/// How long after a viewer nudged a session (resized it, or its terminal sent
+/// a focus or mouse report) its output counts as the repaint the nudge caused
+/// rather than as activity: full-screen programs repaint on SIGWINCH and on
+/// focus-in, and tmux counts the repaint as output. Attaching repaints only
+/// the client.
 pub const VIEW_NUDGE_GRACE_MS: i64 = 3_000;
 
 /// Per-machine collection of live attaches.
@@ -68,6 +69,8 @@ pub struct AttachManager {
     inner: Arc<Mutex<HashMap<String, AttachHandle>>>,
     /// Per session: when a viewer last nudged it, in ms since the epoch.
     view_nudges: Arc<std::sync::Mutex<HashMap<String, i64>>>,
+    /// Per session: when someone last typed into it, in ms since the epoch.
+    typed_inputs: Arc<std::sync::Mutex<HashMap<String, i64>>>,
 }
 
 struct AttachHandle {
@@ -88,13 +91,14 @@ impl AttachManager {
         paste: Bytes,
     ) -> Result<(), offdesk_protocol::ComposerStatus> {
         use offdesk_protocol::ComposerStatus;
-        let sender = self
+        let (sender, session_id) = self
             .inner
             .lock()
             .await
             .get(attach_id)
-            .map(|h| h.command_tx.clone())
+            .map(|h| (h.command_tx.clone(), h.session_id.clone()))
             .ok_or(ComposerStatus::Failed)?;
+        self.note_typed_input(&session_id);
         let (ack, rx) = tokio::sync::oneshot::channel();
         sender
             .send(AttachCommand::Composer { paste, ack })
@@ -109,6 +113,7 @@ impl AttachManager {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
             view_nudges: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            typed_inputs: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -152,7 +157,9 @@ impl AttachManager {
         };
         if let Some((command_tx, session_id)) = handle {
             // Focusing a pane in the app sends only a focus report.
-            if is_focus_report(&data) {
+            if is_typed_input(&data) {
+                self.note_typed_input(&session_id);
+            } else {
                 self.note_view_nudge(&session_id);
             }
             command_tx.send(AttachCommand::Input(data)).await.is_ok()
@@ -212,13 +219,21 @@ impl AttachManager {
     }
 
     fn note_view_nudge(&self, session_id: &str) {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|elapsed| elapsed.as_millis() as i64)
-            .unwrap_or_default();
-        if let Ok(mut nudges) = self.view_nudges.lock() {
-            nudges.insert(session_id.to_string(), now_ms);
-        }
+        stamp_now(&self.view_nudges, session_id);
+    }
+
+    /// Record that someone typed into a session: a person in an app, or an
+    /// answer sent to its agent.
+    pub fn note_typed_input(&self, session_id: &str) {
+        stamp_now(&self.typed_inputs, session_id);
+    }
+
+    /// When someone last typed into a session, in ms since the epoch.
+    pub fn last_typed_input(&self, session_id: &str) -> Option<i64> {
+        self.typed_inputs
+            .lock()
+            .ok()
+            .and_then(|inputs| inputs.get(session_id).copied())
     }
 
     /// Whether a session's last output (`activity_ms`) is the redraw a
@@ -232,20 +247,92 @@ impl AttachManager {
         explained_by_view_nudge(nudge_ms, activity_ms)
     }
 
-    /// Forget the nudges of sessions that no longer exist.
-    pub fn retain_view_nudges(&self, keep: impl Fn(&str) -> bool) {
-        if let Ok(mut nudges) = self.view_nudges.lock() {
-            nudges.retain(|session_id, _| keep(session_id));
+    /// Forget the nudges and input times of sessions that no longer exist.
+    pub fn retain_sessions(&self, keep: impl Fn(&str) -> bool) {
+        for map in [&self.view_nudges, &self.typed_inputs] {
+            if let Ok(mut times) = map.lock() {
+                times.retain(|session_id, _| keep(session_id));
+            }
         }
     }
 }
 
-/// Input made only of xterm focus reports (`ESC [ I` in, `ESC [ O` out).
-fn is_focus_report(data: &[u8]) -> bool {
-    !data.is_empty()
-        && data
-            .chunks(3)
-            .all(|chunk| chunk == b"\x1b[I" || chunk == b"\x1b[O")
+fn stamp_now(times: &std::sync::Mutex<HashMap<String, i64>>, session_id: &str) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or_default();
+    if let Ok(mut times) = times.lock() {
+        times.insert(session_id.to_string(), now_ms);
+    }
+}
+
+/// Whether input holds something typed (keys, a paste) rather than only what
+/// the viewing terminal sends by itself: focus reports, mouse reports, and
+/// replies to the program's queries (cursor position, device attributes,
+/// colours). A modified F3 (`ESC [ 1 ; 2 R`) reads as a cursor report.
+fn is_typed_input(data: &[u8]) -> bool {
+    let mut i = 0;
+    while i < data.len() {
+        if data[i] != 0x1b {
+            return true;
+        }
+        match data.get(i + 1) {
+            // A lone Escape key.
+            None => return true,
+            Some(b'[') => {
+                let start = i + 2;
+                let mut end = start;
+                while data.get(end).is_some_and(|b| (0x20..=0x3f).contains(b)) {
+                    end += 1;
+                }
+                let Some(&last) = data.get(end) else {
+                    return true;
+                };
+                let params = &data[start..end];
+                let reply = match last {
+                    // X10 mouse report: three bytes follow.
+                    b'M' if params.is_empty() => {
+                        i = end + 4;
+                        continue;
+                    }
+                    b'I' | b'O' => params.is_empty(),
+                    b'M' | b'm' => params.first() == Some(&b'<'),
+                    b'c' => matches!(params.first(), Some(b'?' | b'>' | b'=')),
+                    b'u' => params.first() == Some(&b'?'),
+                    b'y' => params.ends_with(b"$"),
+                    b'R' | b'n' | b't' => true,
+                    _ => false,
+                };
+                if !reply {
+                    return true;
+                }
+                i = end + 1;
+            }
+            // OSC, DCS, APC and PM replies, ended by BEL or ST.
+            Some(b']' | b'P' | b'_' | b'^') => {
+                let mut end = i + 2;
+                loop {
+                    match data.get(end) {
+                        None => return false,
+                        Some(0x07) => {
+                            end += 1;
+                            break;
+                        }
+                        Some(0x1b) if data.get(end + 1) == Some(&b'\\') => {
+                            end += 2;
+                            break;
+                        }
+                        Some(_) => end += 1,
+                    }
+                }
+                i = end;
+            }
+            // Alt+key, and the SS3 keys (`ESC O A`).
+            Some(_) => return true,
+        }
+    }
+    false
 }
 
 /// tmux reports activity in whole seconds, so the nudge's second counts
@@ -382,13 +469,39 @@ mod tests {
     /// test would need an injectable tmux socket which the current
     /// `spawn_tmux_attach` doesn't expose.
     #[test]
-    fn focus_reports_are_recognised_alone() {
-        assert!(is_focus_report(b"\x1b[I"));
-        assert!(is_focus_report(b"\x1b[O\x1b[I"));
-        assert!(!is_focus_report(b""));
-        assert!(!is_focus_report(b"\x1b[Ia"));
-        assert!(!is_focus_report(b"ls\r"));
-        assert!(!is_focus_report(b"\x1b[A"));
+    fn typed_input_is_told_from_what_the_terminal_sends_itself() {
+        for typed in [
+            &b"ls\r"[..],
+            b"\r",
+            b"\x03",
+            b"\x1b",
+            b"\x1b[A",
+            b"\x1bOA",
+            b"\x1bb",
+            b"\x1b[3~",
+            b"\x1b[200~pasted\x1b[201~",
+            b"\x1b[Ia",
+        ] {
+            assert!(is_typed_input(typed), "{typed:?}");
+        }
+        for own in [
+            &b""[..],
+            b"\x1b[I",
+            b"\x1b[O\x1b[I",
+            b"\x1b[<35;10;5M",
+            b"\x1b[<0;10;5m",
+            b"\x1b[M #!",
+            b"\x1b[12;40R",
+            b"\x1b[?1;2c",
+            b"\x1b[>0;276;0c",
+            b"\x1b[?2026;2$y",
+            b"\x1b[?0u",
+            b"\x1b]11;rgb:1e1e/1e1e/1e1e\x07",
+            b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+            b"\x1bP>|xterm.js(5.5.0)\x1b\\",
+        ] {
+            assert!(!is_typed_input(own), "{own:?}");
+        }
     }
 
     #[test]
@@ -424,8 +537,28 @@ mod tests {
         let repaint_ms = now_s() * 1000;
         assert!(mgr.is_view_redraw("term-a", repaint_ms));
         assert!(!mgr.is_view_redraw("term-b", repaint_ms));
-        mgr.retain_view_nudges(|_| false);
+        mgr.retain_sessions(|_| false);
         assert!(!mgr.is_view_redraw("term-a", repaint_ms));
+    }
+
+    #[tokio::test]
+    async fn typing_is_recorded_and_focusing_is_not() {
+        let mgr = AttachManager::new();
+        let (command_tx, _command_rx) = mpsc::channel::<AttachCommand>(4);
+        mgr.inner.lock().await.insert(
+            "attach-a".to_string(),
+            AttachHandle {
+                command_tx,
+                session_id: "term-a".to_string(),
+            },
+        );
+        assert!(mgr.write_input("attach-a", Bytes::from_static(b"\x1b[I")).await);
+        assert_eq!(mgr.last_typed_input("term-a"), None);
+        assert!(mgr.write_input("attach-a", Bytes::from_static(b"y")).await);
+        assert!(mgr.last_typed_input("term-a").is_some());
+        assert_eq!(mgr.last_typed_input("term-b"), None);
+        mgr.retain_sessions(|_| false);
+        assert_eq!(mgr.last_typed_input("term-a"), None);
     }
 
     #[tokio::test]

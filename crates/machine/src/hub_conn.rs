@@ -424,8 +424,8 @@ impl HubConnection {
         // Titles, cwds and attention are reported only when they
         // change — every report used to trigger a synchronous SQLite write
         // on the hub — and the dedup maps reset with each hub connection,
-        // so a reconnected hub always gets a full refresh. Activity (tmux's
-        // window_activity, for sorting sessions by recent) is reported in
+        // so a reconnected hub always gets a full refresh. Activity (for
+        // sorting sessions by recent; see `terminal_activity`) is reported in
         // 30-second steps.
         let pty_for_titles = pty.clone();
         let send_tx_for_titles = send_tx.clone();
@@ -446,11 +446,11 @@ impl HubConnection {
             loop {
                 interval.tick().await;
                 let poll_pty = pty_for_titles.clone();
-                let (pane_infos, attentions, agents) = match tokio::task::spawn_blocking(move || {
+                let (pane_infos, screens, agents) = match tokio::task::spawn_blocking(move || {
                     let panes = poll_pty.pane_infos();
-                    let attention = poll_pty.terminal_attentions(&panes);
+                    let screens = poll_pty.terminal_screens(&panes);
                     let agents = poll_pty.terminal_agents(&panes);
-                    (panes, attention, agents)
+                    (panes, screens, agents)
                 })
                 .await
                 {
@@ -468,7 +468,11 @@ impl HubConnection {
                 last_sent_attention.retain(|id, _| terminal_ids.contains(id));
                 last_sent_agent.retain(|id, _| terminal_ids.contains(id));
                 last_sent_activity.retain(|id, _| terminal_ids.contains(id));
-                attach_mgr_for_titles.retain_view_nudges(|id| terminal_ids.iter().any(|t| t == id));
+                attach_mgr_for_titles.retain_sessions(|id| terminal_ids.iter().any(|t| t == id));
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.as_millis() as i64)
+                    .unwrap_or_default();
                 for terminal_id in terminal_ids {
                     // The agent first: the hub opens a run for it, then attention
                     // can make that run wait on a person
@@ -488,7 +492,8 @@ impl HubConnection {
                         }
                         last_sent_agent.insert(terminal_id.clone(), agent);
                     }
-                    let attention = attentions.get(&terminal_id).copied().flatten();
+                    let screen = screens.get(&terminal_id).copied().unwrap_or_default();
+                    let attention = screen.attention;
                     if last_sent_attention.get(&terminal_id) != Some(&attention) {
                         if send_tx_for_titles
                             .send(OutboundHubMessage::Json(MachineToHub::TerminalAttention {
@@ -503,18 +508,24 @@ impl HubConnection {
                         last_sent_attention.insert(terminal_id.clone(), attention);
                     }
                     let pane_info = pane_infos.get(&terminal_id);
+                    let last_sent = last_sent_activity.get(&terminal_id).copied();
                     // Output that is only the repaint after a viewer resized or
                     // focused the terminal is not activity: the "recent" order
-                    // would otherwise lift whatever you click. The first time
-                    // is always reported, so a new terminal starts as recent.
-                    let activity_ms = pane_info.and_then(|info| info.activity_ms).filter(|at| {
-                        !last_sent_activity.contains_key(&terminal_id)
-                            || !attach_mgr_for_titles.is_view_redraw(&terminal_id, *at)
+                    // would otherwise lift whatever you click.
+                    let output_ms = pane_info.and_then(|info| info.activity_ms).filter(|at| {
+                        last_sent.is_none() || !attach_mgr_for_titles.is_view_redraw(&terminal_id, *at)
                     });
-                    if let Some(at_ms) = activity_to_report(
-                        last_sent_activity.get(&terminal_id).copied(),
-                        activity_ms,
-                    ) {
+                    let agent_working = agent
+                        .filter(|agent| matches!(agent, offdesk_protocol::RunAgent::Claude | offdesk_protocol::RunAgent::Codex))
+                        .and(screen.agent_working);
+                    let activity_ms = terminal_activity(
+                        last_sent,
+                        output_ms,
+                        agent_working,
+                        attach_mgr_for_titles.last_typed_input(&terminal_id),
+                        now_ms,
+                    );
+                    if let Some(at_ms) = activity_to_report(last_sent, activity_ms) {
                         if send_tx_for_titles
                             .send(OutboundHubMessage::Json(MachineToHub::TerminalActivity {
                                 terminal_id: terminal_id.clone(),
@@ -864,6 +875,7 @@ async fn handle_hub_message(
         // own signals (hooks, the screen) say whether it took
         HubToMachine::SendAgentKeys { terminal_id, keys } => {
             let pty = pty.clone();
+            attach_mgr.note_typed_input(&terminal_id);
             tokio::task::spawn_blocking(move || {
                 if let Err(error) = pty.send_agent_keys(&terminal_id, &keys) {
                     tracing::warn!("answer for {terminal_id} not typed: {error}");
@@ -1365,6 +1377,29 @@ fn fallback_title(process_name: Option<String>) -> Option<(String, TerminalTitle
     process_name
         .filter(|name| !name.is_empty())
         .map(|name| (name, TerminalTitleSource::Process))
+}
+
+/// When a terminal was last active, for the "recent" order: when someone
+/// typed into it, or its output (`output_ms`, tmux's time without a viewer's
+/// repaint). Claude Code and Codex print without working (a hint, a recap,
+/// their status line), so for them (`agent_working` is their screen read)
+/// only a turn in progress counts, as the poll's time. The first report
+/// takes the output time as it is, so a terminal starts where tmux has it.
+fn terminal_activity(
+    last_sent: Option<i64>,
+    output_ms: Option<i64>,
+    agent_working: Option<bool>,
+    typed_ms: Option<i64>,
+    now_ms: i64,
+) -> Option<i64> {
+    let Some(last_sent) = last_sent else {
+        return output_ms.max(typed_ms);
+    };
+    let own = match agent_working {
+        Some(working) => working.then_some(now_ms),
+        None => output_ms,
+    };
+    own.max(typed_ms.filter(|at| *at > last_sent))
 }
 
 /// The activity time to report for a terminal, if any: the first one seen,
@@ -1920,6 +1955,24 @@ mod tests {
                 data: "truncated!".into(),
             });
         assert!(prepare_composer(&invalid).is_err());
+    }
+
+    #[test]
+    fn an_agent_is_active_while_it_works_or_is_typed_into() {
+        let last = Some(1_000_000);
+        // First report: tmux's time, even for an agent.
+        assert_eq!(terminal_activity(None, Some(900_000), Some(false), None, 2_000_000), Some(900_000));
+        // An idle agent's output (a hint going away, a recap) is not activity.
+        assert_eq!(terminal_activity(last, Some(1_900_000), Some(false), None, 2_000_000), None);
+        // Working, it is active now.
+        assert_eq!(terminal_activity(last, None, Some(true), None, 2_000_000), Some(2_000_000));
+        // Typing into it is, and an old keystroke doesn't move it back.
+        assert_eq!(terminal_activity(last, None, Some(false), Some(1_500_000), 2_000_000), Some(1_500_000));
+        assert_eq!(terminal_activity(last, None, Some(false), Some(800_000), 2_000_000), None);
+        // Any other program: its output, or typing if later.
+        assert_eq!(terminal_activity(last, Some(1_900_000), None, None, 2_000_000), Some(1_900_000));
+        assert_eq!(terminal_activity(last, Some(1_200_000), None, Some(1_500_000), 2_000_000), Some(1_500_000));
+        assert_eq!(terminal_activity(last, None, None, None, 2_000_000), None);
     }
 
     #[test]
