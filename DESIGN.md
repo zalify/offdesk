@@ -139,7 +139,10 @@ Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
 - **Toasts and floating cards** (`Toast`, `FloatCard`): 4px and 6px radii,
   `bg-2` with a `line` edge. Never pills.
 - **Chips** (`Chip`): 22px, 3px radius. `outline` ("watching"), `solid`
-  ("in control"), `waiting`. `AgentMarker` = `⌁ opened by agent · cli`.
+  ("in control"), `waiting`. `AgentMarker` = an 18px chip, a 12px robot
+  (Lucide `bot`) and `agent`, in `fg-2` with no accent; which agent opened
+  the terminal (cli, the token's name) is in its tooltip. Where a row has no
+  room for the chip, the robot stands alone before the title.
 - **Fields** (`Field`): lowercase mono label above, 38px input on `bg-1`,
   help text in Geist `fg-3`, errors in `err` with `role="alert"`.
 - **Panels** (`Card`): `bg-1`, `line-soft` edge, 6px, 24px padding.
@@ -147,8 +150,9 @@ Space: 4 · 8 · 12 · 16 · 24 · 32 · 48. Shadows only on things that float
   you"`, then `[enter]` and `take control`.
 - **Status line** (`StatusLine`, `StatusBadge`, `StatusEnd`): 34px, `bg-2`,
   hairline above. Left: `waiting` badge, the terminal, `[enter]` / `open ↵`.
-  Right: machine · latency, then the control state block (`in control` on
-  lime, otherwise `watching`).
+  Right: how many machines and the latency (the sidebar shows the latency
+  when it is pinned), then the control state block (`in control` on lime,
+  otherwise `watching`).
 - **Tabs** (`Tab`): `0:app` + muted program; active = `fg-0` and a 2px
   accent underline; a waiting tab shows a red `!`.
 - **Setup steps** (`StepMark`): `[✓]` done, `[~]` in progress (accent),
@@ -169,20 +173,35 @@ gets the single-column mobile layout — folding, rotation, or a soft keyboard
 cannot flip chrome); non-touch keeps `innerWidth ≤ 768`. History and the
 retired large-touch workspace: `docs/plans/2026-08-13-fold-touch-workspace.md`.
 
-- **Desktop tab bar** (40px mouse, ≥44px touch): tmux tabs filling the free
-  width (fading out under a divider when they overflow), then `+ new tab` as
-  a 26px secondary button that never moves; on the right the machine switcher
-  (`nas` plus a three-bar cpu/mem/disk load glyph; a bar over 85% turns
-  `fg-0`, never `err`) and the panel icons. The machine's name is not
-  repeated on the status line.
-- **Sessions sidebar** (desktop, windows ≥1024px): `≡` shows or hides a
-  300px list pinned left of the panes, below the tab bar, on `bg-1` with a
-  `line-soft` edge and no shadow; each device remembers it. It lists every
-  terminal, `recent` (latest output first, with its tab and `5m`) or `tabs`
-  (the tab tree, to rename, reorder and delete). Narrower windows open the
-  same list as a drawer over the panes.
+- **Desktop tab bar** (40px mouse, ≥44px touch): the top row while the
+  sessions sidebar is hidden (wireframe R03). The sidebar icon, tmux tabs
+  filling the free width (fading out under a divider when they overflow),
+  then `+ new tab` as a 26px secondary button that never moves; on the right
+  the machine switcher (`nas` plus a three-bar cpu/mem/disk load glyph; a
+  bar over 85% turns `fg-0`, never `err`) and the panel icons. The machine's
+  name is not repeated on the status line.
+- **Sessions sidebar** (`SessionsSidebar`, desktop windows ≥1024px;
+  wireframes R01/R02, plan `docs/plans/2026-11-10-sidebar-restyle.md`): a
+  248px column at the window's left edge, full height, on `bg-1` with a
+  `line-soft` edge, in place of the tab bar; each device remembers whether
+  it is shown. Top row (40px, the pane headers' height beside it): hide,
+  latest output first, new tab. Then the machine switcher with its load
+  glyph and the round trip (which leaves the status line). Then each tab as
+  a group: its name and count in `fg-3`, `n waiting` in `err`; on hover `+`
+  (new terminal here) and `⋯`; clicking the name folds it. Each terminal is
+  one 30px row: title, then `waiting`, `offline` or its age, then one 12px
+  mark — a turning accent arc while it had output in the last minute, a
+  filled `err` ring while waiting, a hollow `fg-3` ring when quiet, a dashed
+  one when its node is out of reach. The focused pane's row is filled
+  `bg-3`; hover swaps the age for close; right-click moves or closes it.
+  Tabs reorder and terminals move by dragging. Latest output first drops the
+  groups for one flat list with each row's tab after its title. The foot is
+  34px, the status line's height: files, browser, phone, and settings at the
+  right. Narrower windows open the same list as a drawer over the panes,
+  without the machine row and the foot.
 - **Pane header**: `●` (accent when it has focus), program, cwd, and the
-  agent marker on the right.
+  agent marker on the right. 30px, or 40px when it is the window's top row
+  beside the sidebar.
 - **Phone title bar**: a picker field (`bg-2`, `line` edge, 4px, `⇕` at its
   right end; the way into the sessions sheet) holding the program over
   `0:app · machine`, plus `· watching` or `· view only` when this device is

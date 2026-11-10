@@ -1804,7 +1804,9 @@ function CompactSwitchProgress({ paused }: { paused: boolean }) {
 
 // The line above each desktop pane: ● when it has the keyboard, the program,
 // where it runs, and — for terminals an agent opened through the CLI — the
-// `⌁ opened by agent · cli` marker.
+// robot `agent` marker. 30px under the tab bar; with the sessions sidebar
+// pinned instead it is the top row, as tall as the sidebar's (40px, set as
+// --pane-header-height by TerminalCanvas).
 function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: boolean }) {
   const opener = terminal.opened_by;
   return (
@@ -1815,7 +1817,7 @@ function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: bool
         display: "flex",
         alignItems: "center",
         gap: 10,
-        minHeight: 30,
+        minHeight: "var(--pane-header-height, 30px)",
         padding: "0 12px 0 16px",
         borderBottom: `1px solid ${colors.bg3}`,
         // The page colour: the same as the terminal in the dark theme, a

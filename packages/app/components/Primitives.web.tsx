@@ -4,6 +4,7 @@
 // inline-style tricks. DESIGN.md is the reference.
 
 import type { CSSProperties, ReactNode } from "react";
+import { Bot } from "lucide-react";
 
 import { colors } from "@/lib/colors";
 import {
@@ -213,13 +214,16 @@ export function Chip({
   );
 }
 
-/** "opened by agent · cli": a terminal an API token opened (see #518). */
+/** A robot and "agent": a terminal an API token opened (see #518). Which
+ *  agent (the CLI's --label or the token's name) is in the tooltip. */
 export function AgentMarker({ label, style, testId }: { label?: string | null; style?: CSSProperties; testId?: string }) {
   const via = label?.trim();
+  const description = via ? `Opened by an agent through ${via}` : "Opened by an agent";
   return (
-    <Chip glyph="⌁" title={via ? `Opened by an agent through ${via}` : "Opened by an agent"} style={style} testId={testId}>
-      {via ? `opened by agent · ${via}` : "opened by agent"}
-    </Chip>
+    <span className="odk-chip odk-chip--agent" title={description} aria-label={description} role="img" style={style} data-testid={testId}>
+      <Bot size={12} strokeWidth={2} aria-hidden />
+      agent
+    </span>
   );
 }
 

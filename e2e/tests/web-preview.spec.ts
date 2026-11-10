@@ -19,7 +19,13 @@ test('web preview: browser launch, isolated native handoff, Vite and Next hot up
   // Do not use the older helper's unscoped init script: the preview origin
   // must demonstrably never receive a Hub Bearer in its localStorage.
   await page.addInitScript(({ token, base }) => {
-    if (location.origin === base) { localStorage.setItem('offdesk:token', token); localStorage.setItem('offdesk:e2e', '1'); }
+    if (location.origin === base) {
+      localStorage.setItem('offdesk:token', token);
+      localStorage.setItem('offdesk:e2e', '1');
+      // As the helper's init script: the sessions sidebar starts hidden, so
+      // the workspace has its tab bar.
+      if (localStorage.getItem('offdesk:sessions-sidebar') === null) localStorage.setItem('offdesk:sessions-sidebar', 'hidden');
+    }
   }, { token, base });
   await page.goto('/');
   await expect(page.getByTestId('tab-bar')).toBeVisible();

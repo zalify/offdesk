@@ -1,6 +1,7 @@
-// The desktop sessions list (WorkspaceManager as a pinned sidebar): every
-// terminal of the machine as one row, in the tabs' order or by when each last
-// had output. Pure so the ordering is testable without React.
+// The desktop sessions sidebar (SessionsSidebar): every terminal of the
+// machine as a one-line row, grouped under its tab or, flat, by when each last
+// had output. Pure so the ordering and the row states are testable without
+// React.
 
 import { useEffect, useState } from "react";
 import type { TerminalInfo } from "@offdesk/shared";
@@ -37,6 +38,32 @@ export function sessionRows(
   const at = (row: SessionRow) => row.terminal.last_activity_ms ?? -Infinity;
   // Array.prototype.sort is stable, so ties keep the tab order.
   return [...rows].sort((a, b) => at(b) - at(a));
+}
+
+/**
+ * A row's one state mark. waiting: stopped at a confirmation prompt; working:
+ * output within the last minute; offline: its node can't be reached; quiet:
+ * anything else, including a node that hasn't reported activity.
+ */
+export type SessionState = "waiting" | "working" | "quiet" | "offline";
+
+export function sessionState(terminal: TerminalInfo, nowMs: number): SessionState {
+  if (!terminal.reachable) return "offline";
+  if (terminal.attention === "confirmation") return "waiting";
+  const at = terminal.last_activity_ms;
+  if (at != null && nowMs - at < 60_000) return "working";
+  return "quiet";
+}
+
+/** How many of a tab's terminals are waiting, for its header. */
+export function groupWaitingCount(
+  group: WorkspaceGroup,
+  terminalsById: Map<string, TerminalInfo>,
+): number {
+  return collectPaneTerminalIds(group.root).filter((id) => {
+    const terminal = terminalsById.get(id);
+    return Boolean(terminal?.reachable && terminal.attention === "confirmation");
+  }).length;
 }
 
 /** How long ago a terminal had output: "now", "5m", "3h", "2d". */
@@ -87,11 +114,12 @@ export function useSidebarFits(): boolean {
   return fits;
 }
 
+/** Grouped by tab unless this device chose latest output first. */
 export function readSessionOrder(): SessionOrder {
   try {
-    return localStorage.getItem(ORDER_KEY) === "tabs" ? "tabs" : "recent";
+    return localStorage.getItem(ORDER_KEY) === "recent" ? "recent" : "tabs";
   } catch {
-    return "recent";
+    return "tabs";
   }
 }
 

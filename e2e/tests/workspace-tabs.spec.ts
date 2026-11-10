@@ -1004,7 +1004,7 @@ test("tab context menu renames a workspace tab", async ({ page }) => {
     .toBe(renamed);
 });
 
-test("workspace manager organizes, renames, moves, reorders, and deletes", async ({
+test("the sessions sidebar organizes, renames, moves, reorders, and deletes", async ({
   page,
 }) => {
   await openApp(page);
@@ -1013,11 +1013,11 @@ test("workspace manager organizes, renames, moves, reorders, and deletes", async
 
   const first = await createWorkspaceGroupViaApi(
     page,
-    `Manager A ${Date.now()}`,
+    `Sidebar A ${Date.now()}`,
   );
   const second = await createWorkspaceGroupViaApi(
     page,
-    `Manager B ${Date.now()}`,
+    `Sidebar B ${Date.now()}`,
   );
   const terminalId = await createTerminalViaApi(page, {
     cwd: "/root",
@@ -1025,28 +1025,34 @@ test("workspace manager organizes, renames, moves, reorders, and deletes", async
   });
   await expandTerminalById(page, terminalId);
 
-  // On a wide window ≡ pins the list beside the panes; tab order shows the tabs.
+  // On a wide window the sidebar pins at the left edge and the tab bar goes:
+  // its tabs are the sidebar's groups, each terminal one row under its tab.
   await page.getByTestId("desktop-workspace-manager-button").click();
-  const manager = page.getByTestId("workspace-manager");
-  await expect(manager).toBeVisible();
-  await expect(manager).toHaveAttribute("data-placement", "sidebar");
-  await manager.getByTestId("workspace-manager-order-tabs").click();
-  await expect(
-    manager.getByTestId(`workspace-manager-group-${first.id}`),
-  ).toContainText("1");
+  const sidebar = page.getByTestId("sessions-sidebar");
+  await expect(sidebar).toHaveAttribute("data-placement", "sidebar");
+  await expect(page.getByTestId("tab-bar")).toHaveCount(0);
+  const firstGroup = sidebar.getByTestId(`sessions-group-${first.id}`);
+  const secondGroup = sidebar.getByTestId(`sessions-group-${second.id}`);
+  await expect(firstGroup.getByTestId(`sessions-row-${terminalId}`)).toBeVisible();
+  await expect(sidebar.getByTestId(`sessions-row-${terminalId}`)).toHaveAttribute(
+    "data-current",
+    "true",
+  );
 
-  await manager.getByTestId(`workspace-manager-rename-${second.id}`).click();
-  const renamed = `Manager renamed ${Date.now()}`;
+  // Rename from the tab's right-click menu.
+  await sidebar.getByTestId(`sessions-group-name-${second.id}`).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "rename tab" }).click();
+  const renamed = `Sidebar renamed ${Date.now()}`;
   const renameDialog = page.getByRole("dialog", { name: "Rename tab" });
   await renameDialog
     .getByRole("textbox", { name: "Tab name" })
     .fill(renamed);
   await renameDialog.getByRole("button", { name: "Rename", exact: true }).click();
-  await expect(
-    manager.getByTestId(`workspace-manager-group-${second.id}`),
-  ).toContainText(renamed);
+  await expect(secondGroup).toContainText(renamed);
 
-  await manager.getByTestId(`workspace-manager-move-${terminalId}`).click();
+  // Move the terminal from the row's right-click menu.
+  await sidebar.getByTestId(`sessions-row-${terminalId}`).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "move to" }).hover();
   await page.getByRole("menuitem", { name: renamed }).click();
   await expect
     .poll(async () =>
@@ -1054,13 +1060,28 @@ test("workspace manager organizes, renames, moves, reorders, and deletes", async
         ?.workspace_group_id,
     )
     .toBe(second.id);
+  await expect(secondGroup.getByTestId(`sessions-row-${terminalId}`)).toBeVisible();
 
-  await manager.getByTestId(`workspace-manager-up-${second.id}`).click();
+  // Drag the second tab's header above the first.
+  const from = await sidebar.getByTestId(`sessions-group-name-${second.id}`).boundingBox();
+  const to = await firstGroup.boundingBox();
+  if (!from || !to) throw new Error("sidebar groups are not laid out");
+  await page.mouse.move(from.x + 8, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + 40, to.y + 6, { steps: 8 });
+  await expect(firstGroup).toHaveAttribute("data-drop", "before");
+  await page.mouse.up();
   await expect
-    .poll(async () => (await listWorkspaceGroupsViaApi(page))[0]?.id)
-    .toBe(second.id);
+    .poll(async () => {
+      const ids = (await listWorkspaceGroupsViaApi(page)).map((group: { id: string }) => group.id);
+      return ids.indexOf(second.id) < ids.indexOf(first.id);
+    })
+    .toBe(true);
 
-  await manager.getByTestId(`workspace-manager-delete-${first.id}`).click();
+  // Close the now empty first tab from its ⋯ menu; the terminal stays.
+  await firstGroup.hover();
+  await sidebar.getByTestId(`sessions-group-menu-${first.id}`).click();
+  await page.getByRole("menuitem", { name: "close tab" }).click();
   await expect
     .poll(async () =>
       (await listWorkspaceGroupsViaApi(page)).some(
@@ -1073,7 +1094,7 @@ test("workspace manager organizes, renames, moves, reorders, and deletes", async
   );
 });
 
-test("the pinned sessions list puts the latest output first and stays as left", async ({
+test("the sessions sidebar puts the latest output first and stays as left", async ({
   page,
 }) => {
   await openApp(page);
@@ -1095,12 +1116,10 @@ test("the pinned sessions list puts the latest output first and stays as left", 
   await expandTerminalById(page, olderTerminal);
 
   await page.getByTestId("desktop-workspace-manager-button").click();
-  const manager = page.getByTestId("workspace-manager");
-  await expect(manager).toHaveAttribute("data-placement", "sidebar");
-  await manager.getByTestId("workspace-manager-order-recent").click();
-  const rows = manager
-    .getByTestId("workspace-manager-recent")
-    .locator('[data-testid^="workspace-manager-terminal-"]');
+  const sidebar = page.getByTestId("sessions-sidebar");
+  await expect(sidebar).toHaveAttribute("data-placement", "sidebar");
+  await sidebar.getByTestId("sessions-sidebar-order").click();
+  const rows = sidebar.getByTestId("sessions-recent").locator("[data-state]");
   // The node reports activity on its next 5-second poll.
   await expect
     .poll(
@@ -1108,25 +1127,27 @@ test("the pinned sessions list puts the latest output first and stays as left", 
       { timeout: 20_000 },
     )
     .toEqual([
-      `workspace-manager-terminal-${newerTerminal}`,
-      `workspace-manager-terminal-${olderTerminal}`,
+      `sessions-row-${newerTerminal}`,
+      `sessions-row-${olderTerminal}`,
     ]);
+  // Flat, so each row names its tab.
   await expect(rows.first()).toContainText(newer.name);
 
-  // Picking a session leaves the pinned list open.
+  // Picking a session leaves the pinned sidebar open.
   await rows.first().getByRole("button").first().click();
-  await expect(manager).toBeVisible();
+  await expect(sidebar).toBeVisible();
 
-  // Shown, and in recent order, after a reload; hide puts it behind ≡ again.
+  // Shown, and in recent order, after a reload; hiding brings the tab bar back.
   await page.reload();
-  await expect(page.getByTestId("workspace-manager")).toHaveAttribute("data-placement", "sidebar");
-  await expect(page.getByTestId("workspace-manager-order-recent")).toHaveAttribute(
+  await expect(page.getByTestId("sessions-sidebar")).toHaveAttribute("data-placement", "sidebar");
+  await expect(page.getByTestId("sessions-sidebar-order")).toHaveAttribute(
     "aria-pressed",
     "true",
   );
-  await page.getByTestId("workspace-manager-close").click();
-  await expect(page.getByTestId("workspace-manager")).toHaveCount(0);
+  await page.getByTestId("sessions-sidebar-hide").click();
+  await expect(page.getByTestId("sessions-sidebar")).toHaveCount(0);
+  await expect(page.getByTestId("tab-bar")).toBeVisible();
   await page.reload();
   await expect(page.getByTestId("tab-bar")).toBeVisible();
-  await expect(page.getByTestId("workspace-manager")).toHaveCount(0);
+  await expect(page.getByTestId("sessions-sidebar")).toHaveCount(0);
 });

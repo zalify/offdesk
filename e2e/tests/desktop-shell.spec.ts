@@ -146,9 +146,11 @@ test("desktop settings, theme, update recovery and menus work in a small window"
   await page.keyboard.press("Meta+,");
   await expect(page.getByRole("group", { name: "Theme", exact: true })).toBeVisible();
   await page.getByTitle("Back", { exact: true }).click();
+  // Too narrow to pin the sidebar: the same list opens as a drawer.
   await page.getByTestId("desktop-workspace-manager-button").click();
-  await expect(page.getByTestId("workspace-manager")).toBeVisible();
-  await page.getByTestId("workspace-manager-close").click();
+  await expect(page.getByTestId("sessions-sidebar")).toHaveAttribute("data-placement", "drawer");
+  await page.getByTestId("sessions-sidebar-hide").click();
+  await expect(page.getByTestId("sessions-sidebar")).toHaveCount(0);
   await page.getByTestId("tab-bar-phone").click();
   await expect(page.getByTestId("phone-dialog")).toBeVisible();
   // A client's phone panel (U03): pair on the hub; the browser code is a fallback.
