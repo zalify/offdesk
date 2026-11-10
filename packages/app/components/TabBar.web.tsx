@@ -96,6 +96,18 @@ interface TabBarProps {
   sessionsSidebar?: { shown: boolean; onToggle: () => void };
 }
 
+// The pointer's last position on the page (see pointerAtMountRef).
+let lastPointer: { x: number; y: number } | null = null;
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "mousemove",
+    (event) => {
+      lastPointer = { x: event.clientX, y: event.clientY };
+    },
+    { capture: true, passive: true },
+  );
+}
+
 function TabBarComponent({
   groups,
   activeGroupId,
@@ -154,19 +166,10 @@ function TabBarComponent({
       observer.disconnect();
     };
   }, [groups]);
-  // Hovering a tab selects it, but only once the pointer has moved since the
-  // bar appeared: hiding the sidebar puts the bar under a still cursor (the
-  // hide button sits where the first tabs land), which must not switch tabs.
-  const hoverSelectArmedRef = useRef(false);
-  useEffect(() => {
-    const arm = (event: MouseEvent) => {
-      if (event.movementX === 0 && event.movementY === 0) return;
-      hoverSelectArmedRef.current = true;
-      window.removeEventListener("mousemove", arm);
-    };
-    window.addEventListener("mousemove", arm);
-    return () => window.removeEventListener("mousemove", arm);
-  }, []);
+  // Where the pointer was when the bar appeared. Hiding the sidebar puts the
+  // bar under a still cursor (the hide button sits where the first tabs
+  // land); the hover that layout causes must not switch tabs.
+  const pointerAtMountRef = useRef(lastPointer);
   // ---- tab drag-to-reorder ----
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const groupDragRef = useRef<{ sourceGroupId: string } | null>(null);
@@ -400,8 +403,11 @@ function TabBarComponent({
             <div
               key={group.id}
               data-workspace-group-drop-id={group.id}
-              onMouseEnter={() => {
-                if (isTouch || !hoverSelectArmedRef.current) return;
+              onMouseEnter={(event) => {
+                if (isTouch) return;
+                const atMount = pointerAtMountRef.current;
+                if (atMount?.x === event.clientX && atMount.y === event.clientY) return;
+                pointerAtMountRef.current = null;
                 if (
                   group.id !== activeGroupId &&
                   groupDragRef.current === null
