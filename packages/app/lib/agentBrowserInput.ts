@@ -194,6 +194,17 @@ export function isComposingKey(event: KeyEventLike): boolean {
   return Boolean(event.isComposing) || event.keyCode === 229;
 }
 
+/**
+ * Whether a composition the viewer saw start is still open as of this key.
+ * A compositionend that never comes (WebKit can commit an IME's text on
+ * another key without one) would otherwise drop every later key and leave the
+ * page looking frozen (OFF-120): a key the browser no longer marks as
+ * composing ends it.
+ */
+export function stillComposing(wasComposing: boolean, event: KeyEventLike): boolean {
+  return wasComposing && isComposingKey(event);
+}
+
 /** One printable character (a single code point), as typed by the user. */
 function isPrintable(key: string): boolean {
   return [...key].length === 1 && key >= " " && key !== "\u007f";

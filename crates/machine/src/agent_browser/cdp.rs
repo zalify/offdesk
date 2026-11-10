@@ -137,6 +137,18 @@ impl CdpClient {
         method: &str,
         params: Value,
     ) -> Result<Value, String> {
+        self.call_within(session, method, params, CALL_TIMEOUT).await
+    }
+
+    /// `call`, giving up on the reply after `timeout`. The command still runs in
+    /// the browser; only the wait ends.
+    pub async fn call_within(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, String> {
         if self.is_closed() {
             return Err("browser connection closed".to_string());
         }
@@ -155,7 +167,7 @@ impl CdpClient {
             self.pending.lock().unwrap().remove(&id);
             return Err("browser connection closed".to_string());
         }
-        match tokio::time::timeout(CALL_TIMEOUT, rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(res)) => res,
             Ok(Err(_)) => Err("browser connection closed".to_string()),
             Err(_) => {
