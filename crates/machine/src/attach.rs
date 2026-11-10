@@ -53,10 +53,10 @@ enum AttachCommand {
     Refresh,
 }
 
-/// How long after a viewer nudged a session (attached to it, resized it,
-/// or sent it a focus report) its output counts as the redraw the nudge
-/// caused rather than as activity: full-screen programs repaint on
-/// SIGWINCH and on focus-in, and tmux counts the repaint as output.
+/// How long after a viewer nudged a session (resized it or sent it a focus
+/// report) its output counts as the repaint the nudge caused rather than as
+/// activity: full-screen programs repaint on SIGWINCH and on focus-in, and
+/// tmux counts the repaint as output. Attaching repaints only the client.
 pub const VIEW_NUDGE_GRACE_MS: i64 = 3_000;
 
 /// Per-machine collection of live attaches.
@@ -133,7 +133,6 @@ impl AttachManager {
             },
         );
 
-        self.note_view_nudge(&session_id);
         std::thread::spawn(move || {
             run_attach_task(attach_id, session_id, cols, rows, events_tx, command_rx);
         });

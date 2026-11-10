@@ -503,12 +503,14 @@ impl HubConnection {
                         last_sent_attention.insert(terminal_id.clone(), attention);
                     }
                     let pane_info = pane_infos.get(&terminal_id);
-                    // Output that is only the repaint after a viewer attached,
-                    // resized or focused the terminal is not activity: the
-                    // "recent" order would otherwise lift whatever you click.
-                    let activity_ms = pane_info
-                        .and_then(|info| info.activity_ms)
-                        .filter(|at| !attach_mgr_for_titles.is_view_redraw(&terminal_id, *at));
+                    // Output that is only the repaint after a viewer resized or
+                    // focused the terminal is not activity: the "recent" order
+                    // would otherwise lift whatever you click. The first time
+                    // is always reported, so a new terminal starts as recent.
+                    let activity_ms = pane_info.and_then(|info| info.activity_ms).filter(|at| {
+                        !last_sent_activity.contains_key(&terminal_id)
+                            || !attach_mgr_for_titles.is_view_redraw(&terminal_id, *at)
+                    });
                     if let Some(at_ms) = activity_to_report(
                         last_sent_activity.get(&terminal_id).copied(),
                         activity_ms,
