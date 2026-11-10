@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 import {
   createTerminalViaApi,
+  createWorkspaceGroupViaApi,
   expandTerminalById,
   fitPaneViaContextMenu,
   getImmersiveTerminal,
@@ -198,6 +199,55 @@ async function getLocalTerminalSize(
     return { cols: terminal.cols, rows: terminal.rows };
   }, terminalId);
 }
+
+test("desktop panes refit when the sidebar, a sidebar row or the window resizes them", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+  const page = await context.newPage();
+
+  await openApp(page);
+  await resetMachineState(page);
+  await takeControlFromHeader(page);
+  const first = await createWorkspaceGroupViaApi(page, `Fit A ${Date.now()}`);
+  const second = await createWorkspaceGroupViaApi(page, `Fit B ${Date.now()}`);
+  const firstId = await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
+    workspaceGroupId: first.id,
+  });
+  const secondId = await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    cols: 80,
+    rows: 24,
+    workspaceGroupId: second.id,
+  });
+  await expandTerminalById(page, firstId);
+  await fitPaneViaContextMenu(page, firstId);
+  await expect.poll(async () => (await terminalSize(page, firstId))?.cols ?? 0).toBeGreaterThan(80);
+  const wide = (await terminalSize(page, firstId))!;
+
+  // Showing the sidebar narrows the pane: it refits without a click.
+  await page.getByTestId("desktop-workspace-manager-button").click();
+  await expect(page.getByTestId("sessions-sidebar")).toHaveAttribute("data-placement", "sidebar");
+  await expect.poll(async () => (await terminalSize(page, firstId))?.cols ?? 0).toBeLessThan(wide.cols);
+
+  // A row in another tab fits that tab's pane, as a tab click does.
+  await page.getByTestId(`sessions-row-${secondId}`).click();
+  await expect.poll(async () => (await terminalSize(page, secondId))?.rows ?? 0).toBeGreaterThan(24);
+  const withSidebar = (await terminalSize(page, secondId))!;
+
+  // So does a smaller window.
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await expect.poll(async () => (await terminalSize(page, secondId))?.cols ?? 0).toBeLessThan(withSidebar.cols);
+
+  // Hiding the sidebar gives the width back.
+  const narrow = (await terminalSize(page, secondId))!;
+  await page.getByTestId("sessions-sidebar-hide").click();
+  await expect.poll(async () => (await terminalSize(page, secondId))?.cols ?? 0).toBeGreaterThan(narrow.cols);
+  await context.close();
+});
 
 async function readTerminalLayout(page: Page, terminalId: string): Promise<{
   term: { cols: number; rows: number } | null;

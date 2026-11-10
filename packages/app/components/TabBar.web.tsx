@@ -154,6 +154,19 @@ function TabBarComponent({
       observer.disconnect();
     };
   }, [groups]);
+  // Hovering a tab selects it, but only once the pointer has moved since the
+  // bar appeared: hiding the sidebar puts the bar under a still cursor (the
+  // hide button sits where the first tabs land), which must not switch tabs.
+  const hoverSelectArmedRef = useRef(false);
+  useEffect(() => {
+    const arm = (event: MouseEvent) => {
+      if (event.movementX === 0 && event.movementY === 0) return;
+      hoverSelectArmedRef.current = true;
+      window.removeEventListener("mousemove", arm);
+    };
+    window.addEventListener("mousemove", arm);
+    return () => window.removeEventListener("mousemove", arm);
+  }, []);
   // ---- tab drag-to-reorder ----
   const [draggingGroupId, setDraggingGroupId] = useState<string | null>(null);
   const groupDragRef = useRef<{ sourceGroupId: string } | null>(null);
@@ -388,7 +401,7 @@ function TabBarComponent({
               key={group.id}
               data-workspace-group-drop-id={group.id}
               onMouseEnter={() => {
-                if (isTouch) return;
+                if (isTouch || !hoverSelectArmedRef.current) return;
                 if (
                   group.id !== activeGroupId &&
                   groupDragRef.current === null
