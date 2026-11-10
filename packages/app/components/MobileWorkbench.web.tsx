@@ -49,18 +49,22 @@ import {
   Settings as SettingsIcon,
   Terminal as TerminalIcon,
   X,
+  Bot,
+  Ellipsis,
 } from "lucide-react";
+import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 import { colors, colorAlpha } from "@/lib/colors";
 import { pickSelectedBrowserId } from "@/lib/agentBrowserOverlay";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
-import { terminalOpenerDescription, terminalOpenerText } from "@/lib/terminalOpener";
-import { diskPercent, diskTooltip } from "@/lib/resourceStats";
+import { terminalOpenerDescription } from "@/lib/terminalOpener";
+import { activityAge, groupWaitingCount, sessionState } from "@/lib/sessionList";
+import { useLongPress } from "@/lib/longPress";
 import {
   buildMobileSessionGroups,
   type MobileSessionPane,
 } from "@/lib/mobileSessionSwitcher";
 import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
-import { WorkspaceManager } from "./WorkspaceManager.web";
+import { SessionRowEnd } from "./SessionsSidebar.web";
 import { anyNodeBehind, copyNodeUpdateCommand, nodeUpdateChip, nodeVersionLabel, NODE_UPDATE_COMMAND, useSheetVersions } from "@/lib/machineVersions";
 import { Button, Chip, TextButton, fontDisplay, fontProse } from "./Primitives.web";
 import { rem } from "@/lib/rem";
@@ -206,8 +210,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const [hubPickerOpen, setHubPickerOpen] = useState(false);
   const { switchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
-  const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   const [chipSheet, setChipSheet] = useState<MobileSessionPane | null>(null);
+  // A tab's actions, from its header in the session switcher.
+  const [groupSheet, setGroupSheet] = useState<WorkspaceGroup | null>(null);
   const sessionSwitcherScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Center the active terminal's row when the switcher opens: with a dozen
@@ -228,6 +233,27 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       containerRect.top -
       (container.clientHeight - rowRect.height) / 2;
   }, [sessionSwitcherOpen]);
+
+  // Ages read "5m" and "working" lasts a minute; refresh both while the
+  // switcher shows them.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!sessionSwitcherOpen) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [sessionSwitcherOpen]);
+
+  // Holding a switcher row opens its actions (iOS fires no contextmenu); the
+  // click that ends the hold must not also pick the row.
+  const pendingRowRef = useRef<MobileSessionPane | null>(null);
+  const suppressRowClickRef = useRef(false);
+  const rowLongPress = useLongPress(() => {
+    const pane = pendingRowRef.current;
+    if (!pane) return;
+    suppressRowClickRef.current = true;
+    setChipSheet(pane);
+  }, sessionSwitcherOpen);
 
   const activeMachine =
     machines.find((m) => m.id === activeMachineId) ?? machines[0] ?? null;
@@ -536,15 +562,16 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {controlNote && <span data-testid="mobile-title-bar-control" style={{ flexShrink: 0, whiteSpace: "pre" }}> · {controlNote}</span>}
                 </>)}
               </span>
-              {terminalOpenerText(activeChip.terminal) && (
-                // P04: the opener chip on a line of its own.
+              {terminalOpenerDescription(activeChip.terminal) && (
+                // P04: the agent marker on a line of its own; which agent is
+                // in its title.
                 <span
                   data-testid="mobile-title-bar-opener"
                   title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
                   style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: rem(10), letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
                 >
-                  <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
-                  opened by {terminalOpenerText(activeChip.terminal)}
+                  <Bot size={11} strokeWidth={2} aria-hidden />
+                  agent
                 </span>
               )}
             </>
@@ -729,233 +756,225 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         )}
       </div>
 
-      {/* Session switcher sheet */}
+      {/* Session switcher sheet (wireframe R05): the desktop sidebar's
+          one-line rows at touch height. Holding a row (or right-clicking
+          it) opens its actions, the title bar's sheet; a tab's header opens
+          the tab's. */}
       {sessionSwitcherOpen && (
         <Sheet
           header={
-            <div style={{ flexShrink: 0 }}>
-              <SessionSwitcherHeader
-                machine={activeMachine}
-                machines={machines}
-                machineOnline={machineOnline}
-                online={activeMachine ? machineOnline(activeMachine) : false}
-                stats={activeStats}
-                rttMs={rttMs}
-                onSelectMachine={(id) => {
-                  onSelectMachine(id);
-                }}
-                onOpenHostSheet={() => {
+            <div
+              data-testid="mobile-session-header"
+              style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, minWidth: 0, padding: "0 8px 4px 20px", fontFamily: fontDisplay }}
+            >
+              <h2 style={{ margin: 0, fontSize: rem(17), fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>sessions</h2>
+              <span data-testid="mobile-session-position" style={{ fontSize: rem(11.5), color: colors.fg3 }}>
+                {activePosition}/{chips.length}
+              </span>
+              <span style={{ flex: 1 }} />
+              <button
+                type="button"
+                data-testid="mobile-host-button"
+                aria-label={`Open machines (${activeMachine?.name ?? "no machine"})`}
+                disabled={!activeMachine}
+                onClick={() => {
                   setSessionSwitcherOpen(false);
                   setHostSheetOpen(true);
                 }}
-              />
-              <div style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "4px 16px 12px",
-                fontFamily: fontDisplay,
-              }}>
-                <span style={{ flex: 1, fontSize: rem(20), fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>Sessions</span>
-                <span data-testid="mobile-session-position" style={{ fontSize: rem(11.5), color: colors.fg3 }}>
-                  {activePosition}/{chips.length}
+                className="odk-text-btn odk-text-btn--strong"
+                style={{ minHeight: 44, minWidth: 0, maxWidth: "62%", gap: 8, padding: "0 8px", fontSize: rem(13), fontWeight: 500 }}
+              >
+                {activeMachine && !machineOnline(activeMachine) && (
+                  <span role="img" aria-label="Offline" style={{ color: colors.fg3 }}>○</span>
+                )}
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {activeMachine?.name ?? "no machine"}
                 </span>
-              </div>
+                <span aria-hidden="true" style={{ color: colors.fg3 }}>▾</span>
+                <span data-testid="mobile-session-header-rtt" style={{ fontSize: rem(11.5), fontWeight: 400, color: colors.fg3 }}>
+                  {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
+                </span>
+              </button>
+            </div>
+          }
+          footer={
+            <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 12px", paddingTop: 10, borderTop: `1px solid ${colors.lineSoft}` }}>
+              <span style={{ flex: 1, minWidth: 0, paddingLeft: 8, fontFamily: fontProse, fontSize: rem(12), lineHeight: 1.4, color: colors.fg3 }}>
+                Hold a row to move or close it. Tap a tab for its actions.
+              </span>
+              <Button
+                kind="primary"
+                testId="mobile-session-switcher-new-terminal"
+                ariaLabel="New terminal"
+                disabled={!canCreateTerminal}
+                onClick={() => {
+                  setSessionSwitcherOpen(false);
+                  onNewTerminal(activeGroup);
+                }}
+                style={{ height: 44, flexShrink: 0 }}
+              >
+                new terminal
+              </Button>
             </div>
           }
           testid="mobile-session-switcher"
           scrollRef={sessionSwitcherScrollRef}
           onClose={() => setSessionSwitcherOpen(false)}
         >
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8, padding: "0 16px 10px" }}>
-            <Button
-              kind="primary"
-              testId="mobile-session-switcher-new-terminal"
-              ariaLabel="New terminal"
-              disabled={!canCreateTerminal}
-              onClick={() => {
-                setSessionSwitcherOpen(false);
-                onNewTerminal(activeGroup);
-              }}
-              style={{ height: 44 }}
-            >
-              new terminal
-            </Button>
-            <Button
-              kind="secondary"
-              testId="mobile-workspace-manager-button"
-              ariaLabel="Tabs"
-              onClick={() => {
-                setSessionSwitcherOpen(false);
-                setWorkspaceManagerOpen(true);
-              }}
-              style={{ height: 44 }}
-            >
-              tabs
-            </Button>
-          </div>
-          {sessionGroups.map(({ group, panes }, groupIndex) => (
-            <section key={group.id} style={{ padding: "0 16px 4px" }}>
-              <div
-                data-testid={`mobile-session-group-${group.id}`}
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  gap: 0,
-                  padding: "8px 4px 4px",
-                  fontFamily: fontDisplay,
-                  color: colors.fg3,
-                  fontSize: rem(12),
-                  fontWeight: 500,
-                }}
-              >
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{groupIndex}:{group.label}</span>
-                <span style={{ whiteSpace: "nowrap" }}>
-                  {"\u00a0·\u00a0"}
-                  {panes.length} {panes.length === 1 ? "pane" : "panes"}
-                </span>
-              </div>
-              {panes.map(({ terminal }) => {
-                const active = terminal.id === activeTerminalId;
-                return (
-                  // Row = pick button + its own close button. Long-pressing the
-                  // title bar closes only the *active* session and nobody finds
-                  // it, so every session gets a visible ✕ here.
-                  <div
-                    key={terminal.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "stretch",
-                      minHeight: 52,
-                      marginBottom: 2,
-                      borderRadius: 4,
-                      background: active ? colors.bg3 : "transparent",
-                      borderLeft: `2px solid ${active ? colors.accent : "transparent"}`,
-                      overflow: "hidden",
-                    }}
+          <div className="odk-sessions-touch">
+            {sessionGroups.map(({ group, panes }) => {
+              const waiting = groupWaitingCount(group, scopedTerminalsById);
+              return (
+                <section key={group.id} aria-label={group.label} className="odk-sessions-section">
+                  <button
+                    type="button"
+                    data-testid={`mobile-session-group-${group.id}`}
+                    aria-haspopup="dialog"
+                    title="Tab actions"
+                    onClick={() => setGroupSheet(group)}
+                    className="odk-sessions-touch-group"
                   >
-                    <button
-                      type="button"
-                      data-testid={`mobile-session-row-${terminal.id}`}
-                      aria-current={active ? "true" : undefined}
-                      onClick={() => {
-                        onPickTerminal(terminal.id);
-                        setSessionSwitcherOpen(false);
-                      }}
-                      style={{
-                        display: "block",
-                        flex: 1,
-                        minWidth: 0,
-                        padding: "10px 4px 10px 12px",
-                        color: colors.fg1,
-                        fontFamily: fontDisplay,
-                        textAlign: "left",
-                        background: "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <span
-                        style={{
-                          display: "block",
-                          color: colors.fg0,
-                          fontFamily: fontDisplay,
-                          fontSize: rem(14),
-                          fontWeight: active ? 600 : 400,
-                          whiteSpace: "normal",
-                          overflowWrap: "anywhere",
-                        }}
+                    <span className="odk-sessions-touch-group-label">{group.label}</span>
+                    <span className="odk-sessions-group-count">{panes.length}</span>
+                    <span className="odk-sessions-group-end">
+                      {waiting > 0 && <span className="odk-sessions-group-waiting">{waiting} waiting</span>}
+                      <Ellipsis size={15} aria-hidden />
+                    </span>
+                  </button>
+                  {panes.map((pane) => {
+                    const { terminal } = pane;
+                    const state = sessionState(terminal, now);
+                    const opener = terminalOpenerDescription(terminal);
+                    const current = terminal.id === activeTerminalId;
+                    return (
+                      <div
+                        key={terminal.id}
+                        data-state={state}
+                        data-current={current ? "true" : undefined}
+                        className="odk-sessions-row"
                       >
-                        {displayTerminalTitle(terminal)}
-                        {terminal.reachable && terminal.attention === "confirmation" && (
-                          <span style={{ display: "block", marginTop: 3, fontFamily: "inherit", color: colors.err, fontSize: rem(12), fontWeight: 500 }}>? confirmation requested</span>
-                        )}
-                      </span>
-                      <span
-                        style={{
-                          display: "block",
-                          marginTop: 3,
-                          color: colors.fg3,
-                          fontSize: rem(11),
-                          whiteSpace: "normal",
-                          overflowWrap: "anywhere",
-                        }}
-                      >
-                        {terminal.cwd}
-                      </span>
-                      {terminalOpenerText(terminal) && (
-                        <span
-                          data-testid={`mobile-session-opener-${terminal.id}`}
-                          title={terminalOpenerDescription(terminal) ?? undefined}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 5,
-                            marginTop: 4,
-                            padding: "1px 6px",
-                            border: `1px solid ${colors.line}`,
-                            borderRadius: 3,
-                            color: colors.fg2,
-                            fontSize: rem(10.5),
+                        <button
+                          type="button"
+                          data-testid={`mobile-session-row-${terminal.id}`}
+                          aria-current={current ? "true" : undefined}
+                          title={terminal.cwd}
+                          className="odk-sessions-row-main"
+                          onPointerDown={(event) => {
+                            pendingRowRef.current = pane;
+                            suppressRowClickRef.current = false;
+                            rowLongPress.onPointerDown(event);
+                          }}
+                          onPointerMove={rowLongPress.onPointerMove}
+                          onPointerUp={rowLongPress.onPointerUp}
+                          onPointerCancel={rowLongPress.onPointerCancel}
+                          onContextMenu={(event) => {
+                            // Android's long-press, and a mouse's right click.
+                            event.preventDefault();
+                            setChipSheet(pane);
+                          }}
+                          onClick={() => {
+                            if (suppressRowClickRef.current) {
+                              suppressRowClickRef.current = false;
+                              return;
+                            }
+                            onPickTerminal(terminal.id);
+                            setSessionSwitcherOpen(false);
                           }}
                         >
-                          <span aria-hidden="true" style={{ color: colors.accent }}>⌁</span>
-                          opened by {terminalOpenerText(terminal)}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid={`mobile-session-close-${terminal.id}`}
-                      disabled={!canCreateTerminal}
-                      title="Close terminal"
-                      aria-label={`Close ${displayTerminalTitle(terminal)}`}
-                      onClick={() => onCloseTerminal(terminal)}
-                      style={{
-                        flexShrink: 0,
-                        width: 44,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: "transparent",
-                        border: "none",
-                        color: colors.fg3,
-                        fontFamily: fontDisplay,
-                        fontSize: rem(12),
-                        cursor: canCreateTerminal ? "pointer" : "not-allowed",
-                        opacity: canCreateTerminal ? 1 : 0.4,
-                      }}
-                    >
-                      [x]
-                    </button>
-                  </div>
-                );
-              })}
-            </section>
-          ))}
+                          <span className="odk-sessions-title">
+                            {opener && (
+                              <span
+                                role="img"
+                                aria-label={opener}
+                                title={opener}
+                                data-testid={`mobile-session-opener-${terminal.id}`}
+                                className="odk-sessions-bot"
+                              >
+                                <Bot size={13} strokeWidth={2} aria-hidden style={{ display: "block" }} />
+                              </span>
+                            )}
+                            <span className="odk-sessions-title-text">{displayTerminalTitle(terminal)}</span>
+                          </span>
+                          <SessionRowEnd state={state} age={activityAge(terminal.last_activity_ms, now)} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </section>
+              );
+            })}
+          </div>
         </Sheet>
       )}
 
-      <WorkspaceManager
-        open={workspaceManagerOpen}
-        placement="sheet"
-        machineName={activeMachine?.name ?? ""}
-        groups={groups}
-        terminalsById={scopedTerminalsById}
-        activeGroupId={activeGroup?.id ?? null}
-        activeTerminalId={activeTerminalId}
-        canManage={isController}
-        onClose={() => setWorkspaceManagerOpen(false)}
-        onSelectGroup={onSelectGroup}
-        onSelectTerminal={onPickTerminal}
-        onNewGroup={onNewGroup}
-        onNewTerminal={onNewTerminal}
-        onRenameGroup={onRenameGroup}
-        onDeleteGroup={onDeleteGroup}
-        onReorderGroups={onReorderGroups}
-        onMoveTerminal={onMoveTerminal}
-        onCloseTerminal={onCloseTerminal}
-      />
+      {/* A tab's actions: what the old tab tree sheet did, one tab at a time. */}
+      {groupSheet && (() => {
+        const index = groups.findIndex((group) => group.id === groupSheet.id);
+        const close = () => setGroupSheet(null);
+        return (
+          <Sheet title={groupSheet.label} testid="mobile-group-sheet" onClose={close}>
+            <MenuRow
+              label="New terminal here"
+              testid="mobile-group-new-terminal"
+              disabled={!canCreateTerminal || groupSheet.paneCount >= MAX_PANES_PER_TAB}
+              onClick={() => {
+                close();
+                setSessionSwitcherOpen(false);
+                onNewTerminal(groupSheet);
+              }}
+            />
+            <MenuRow
+              label="New tab"
+              testid="mobile-group-new-tab"
+              disabled={!isController}
+              onClick={() => {
+                close();
+                onNewGroup();
+              }}
+            />
+            <MenuRow
+              label="Rename tab"
+              testid="mobile-group-rename"
+              // cwd fallback groups have no persisted row to rename or close.
+              disabled={!isController || !groupSheet.persistent}
+              onClick={() => {
+                close();
+                setSessionSwitcherOpen(false);
+                onRenameGroup(groupSheet);
+              }}
+            />
+            <MenuRow
+              label="Move up"
+              testid="mobile-group-up"
+              disabled={!isController || index <= 0}
+              onClick={() => {
+                close();
+                onReorderGroups(groupSheet.id, groups[index - 1].id, "before");
+              }}
+            />
+            <MenuRow
+              label="Move down"
+              testid="mobile-group-down"
+              disabled={!isController || index < 0 || index >= groups.length - 1}
+              onClick={() => {
+                close();
+                onReorderGroups(groupSheet.id, groups[index + 1].id, "after");
+              }}
+            />
+            <MenuRow
+              label="Close tab"
+              danger
+              testid="mobile-group-close"
+              disabled={!isController || !groupSheet.persistent}
+              onClick={() => {
+                close();
+                setSessionSwitcherOpen(false);
+                onDeleteGroup(groupSheet);
+              }}
+            />
+          </Sheet>
+        );
+      })()}
 
       {hubPickerOpen && <Sheet title="Hubs & connections" backLabel="Back to Machines" onBack={() => { setHubPickerOpen(false); setHostSheetOpen(true); }} onClose={() => setHubPickerOpen(false)}><HubPickerPanel /></Sheet>}
 
@@ -1221,6 +1240,27 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               onNewTerminal(group);
             }}
           />
+          {groups
+            .filter(
+              (group) =>
+                group.id !== chipSheet.group.id &&
+                group.persistent &&
+                group.workspaceGroupId !== null &&
+                group.paneCount < MAX_PANES_PER_TAB,
+            )
+            .map((group) => (
+              <MenuRow
+                key={group.id}
+                label={`Move to ${group.label}`}
+                disabled={!isController}
+                testid={`mobile-chip-move-${group.id}`}
+                onClick={() => {
+                  const { terminal } = chipSheet;
+                  setChipSheet(null);
+                  onMoveTerminal(terminal, group);
+                }}
+              />
+            ))}
         </Sheet>
       )}
     </div>
@@ -1228,211 +1268,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
 }
 
 export const MobileWorkbench = memo(MobileWorkbenchComponent);
-
-/* ---------- title bar and sheet status ---------- */
-
-function SessionSwitcherHeader({
-  machine,
-  machines,
-  machineOnline,
-  online,
-  stats,
-  rttMs,
-  onOpenHostSheet,
-  onSelectMachine,
-}: {
-  machine: MachineInfo | null;
-  machines: MachineInfo[];
-  machineOnline: (machine: MachineInfo) => boolean;
-  online: boolean;
-  stats: ResourceStats | undefined;
-  rttMs: number | null;
-  onOpenHostSheet: () => void;
-  onSelectMachine: (id: string) => void;
-}) {
-  const cpu = stats ? Math.round(stats.cpu_percent) : null;
-  const mem =
-    stats && stats.memory_total > 0
-      ? Math.round((stats.memory_used / stats.memory_total) * 100)
-      : null;
-  const disk = diskPercent(stats);
-  // A chip per machine, the active one first and open to its sheet; the
-  // meters ride on the active chip.
-  const others = machines.filter((m) => m.id !== machine?.id);
-  return (
-    <div
-      data-testid="mobile-session-header"
-      style={{
-        flexShrink: 0,
-        display: "flex",
-        alignItems: "stretch",
-        gap: 8,
-        minWidth: 0,
-        padding: "2px 16px 6px",
-        overflowX: "auto",
-        fontFamily: "var(--font-mono)",
-        fontSize: rem(10),
-        color: colors.fg3,
-      }}
-    >
-      <button
-        type="button"
-        data-testid="mobile-host-button"
-        onClick={onOpenHostSheet}
-        disabled={!machine}
-        aria-label="Open machines"
-        style={{
-          flexShrink: 0,
-          minWidth: 140,
-          maxWidth: "100%",
-          height: "auto",
-          display: "flex",
-          flexDirection: "column",
-          gap: 4,
-          padding: "10px 14px",
-          borderRadius: 4,
-          border: `1px solid ${colors.line}`,
-          background: colors.bg1,
-          color: colors.fg0,
-          cursor: machine ? "pointer" : "default",
-          textAlign: "left",
-        }}
-      >
-        <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-          <span data-testid="mobile-session-header-dot" style={{ display: "flex" }}>
-            <HostDot online={online} isController={false} />
-          </span>
-          <span
-            style={{
-              minWidth: 0,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              fontFamily: fontDisplay,
-              fontSize: rem(14),
-              fontWeight: 600,
-            }}
-          >
-            {machine?.name ?? "No machine"}
-          </span>
-          <span aria-hidden="true" style={{ flexShrink: 0, color: colors.fg3 }}>›</span>
-        </span>
-        <span data-testid="mobile-session-header-metrics" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "2px 8px", fontFamily: "var(--font-mono)", fontSize: rem(10), lineHeight: 1.5 }}>
-          <span data-testid="mobile-session-header-rtt" style={{ color: colors.fg1 }}>
-            {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
-          </span>
-          <HeaderMetric label="cpu" percent={cpu} testid="mobile-session-header-cpu" />
-          <HeaderMetric label="mem" percent={mem} testid="mobile-session-header-mem" />
-          <HeaderMetric label="disk" percent={disk} title={diskTooltip(stats)} testid="mobile-session-header-disk" />
-        </span>
-      </button>
-      {others.map((m) => {
-        const up = machineOnline(m);
-        return (
-          <button
-            key={m.id}
-            type="button"
-            data-testid={`mobile-session-header-machine-${m.id}`}
-            onClick={() => onSelectMachine(m.id)}
-            style={{
-              flexShrink: 0,
-              display: "flex",
-              alignItems: "center",
-              gap: 7,
-              padding: "0 14px",
-              borderRadius: 4,
-              border: `1px ${up ? "solid" : "dashed"} ${colors.line}`,
-              background: "transparent",
-              color: up ? colors.fg0 : colors.fg3,
-              cursor: "pointer",
-              fontFamily: fontDisplay,
-              fontSize: rem(14),
-              fontWeight: 600,
-              whiteSpace: "nowrap",
-            }}
-          >
-            <HostDot online={up} isController={false} />
-            {m.name}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function HeaderMetric({
-  label,
-  percent,
-  testid,
-  title,
-}: {
-  label: string;
-  percent: number | null;
-  testid: string;
-  title?: string;
-}) {
-  return (
-    <span
-      data-testid={testid}
-      title={title}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3,
-        whiteSpace: "nowrap",
-        color: colors.fg1,
-      }}
-    >
-      <span>
-        {label} {percent === null ? "—" : `${percent}%`}
-      </span>
-    </span>
-  );
-}
-
-function HostDot({
-  online,
-  isController,
-}: {
-  online: boolean;
-  isController: boolean;
-}) {
-  return (
-    <span
-      style={{
-        position: "relative",
-        width: 10,
-        height: 10,
-        display: "inline-block",
-        flexShrink: 0,
-      }}
-    >
-      <span
-        style={{
-          position: "absolute",
-          inset: 0,
-          borderRadius: 999,
-          background: online ? colors.ok : colors.fg3,
-          boxShadow: online ? "0 0 0 3px rgba(99, 209, 143, 0.22)" : "none",
-        }}
-      />
-      {isController && (
-        <span
-          style={{
-            position: "absolute",
-            right: -3,
-            bottom: -3,
-            width: 5,
-            height: 5,
-            borderRadius: 999,
-            background: colors.accent,
-            border: `1.5px solid ${colors.bg1}`,
-          }}
-        />
-      )}
-    </span>
-  );
-}
 
 /* ---------- sheets ---------- */
 
@@ -1444,10 +1279,13 @@ function Sheet({
   testid,
   onClose,
   scrollRef,
+  footer,
   children,
 }: {
   title?: string;
   header?: React.ReactNode;
+  /** Stays below the scrolling list. */
+  footer?: React.ReactNode;
   backLabel?: string;
   onBack?: () => void;
   testid?: string;
@@ -1529,6 +1367,7 @@ function Sheet({
           </div>
         ))}
         <div ref={scrollRef} style={{ overflow: "auto", minHeight: 0, paddingBottom: 4 }}>{children}</div>
+        {footer}
       </div>
     </div>
   );

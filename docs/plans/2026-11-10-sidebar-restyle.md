@@ -97,8 +97,11 @@ reads `watching` with a `take control` button.
 row): the waiting prompt with `[enter]`, and the control block.
 
 **Phone (R05).** The sessions sheet uses the same groups and one-line rows at
-44px; no `[x]` per row (hold a row for the menu); the `tabs` button goes,
-`new terminal` sits at the bottom within thumb reach.
+44px; no `[x]` per row (hold a row for its actions: close, new terminal here,
+move to another tab); the `tabs` button and its tab tree sheet go, and a
+tab's header opens that tab's actions (new terminal here, new tab, rename,
+move up/down, close) instead. `new terminal` sits at the bottom within thumb
+reach. The machine's load moves out of the sheet into Machines.
 
 **Option B (R04), not the default.** Every machine in one list, herdr-style:
 machines as foldable headers (load glyph, latency, `offline 4m`), their tabs

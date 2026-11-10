@@ -589,8 +589,10 @@ test("session switcher row closes its terminal", async ({ page }) => {
   await page.getByTestId("mobile-title-bar-label").click();
   await expect(page.getByTestId("mobile-session-switcher")).toBeVisible();
 
-  // The ✕ on a non-active row closes that session without leaving the sheet.
-  await page.getByTestId(`mobile-session-close-${closedTerminalId}`).click();
+  // Holding a non-active row opens its actions; closing it there leaves the
+  // switcher open. (contextmenu is Android's long-press.)
+  await page.getByTestId(`mobile-session-row-${closedTerminalId}`).dispatchEvent("contextmenu");
+  await page.getByTestId("mobile-chip-close-terminal").click();
   await expect(
     page.getByTestId(`mobile-session-row-${closedTerminalId}`),
   ).toHaveCount(0);
@@ -662,33 +664,24 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
 
   await page.getByTestId("mobile-title-bar-label").click();
   await expect(sheet).toBeVisible();
-  await expect(
-    page.getByTestId(`mobile-session-group-${firstGroup.id}`),
-  ).toContainText(`${firstGroup.name} · 1 pane`);
-  await expect(
-    page.getByTestId(`mobile-session-group-${secondGroup.id}`),
-  ).toContainText(`${secondGroup.name} · 1 pane`);
+  // Each tab is a header: its name and how many terminals it has.
+  for (const group of [firstGroup, secondGroup]) {
+    const groupHeader = page.getByTestId(`mobile-session-group-${group.id}`);
+    await expect(groupHeader).toContainText(group.name);
+    await expect(groupHeader.locator(".odk-sessions-group-count")).toHaveText("1");
+  }
   await expect(
     page.getByTestId("mobile-session-switcher-new-terminal"),
   ).toBeVisible();
   await expect(
     page.getByTestId(`mobile-session-row-${firstTerminalId}`),
   ).toHaveAttribute("aria-current", "true");
+  // One header row: the machine and its round trip; its load is in Machines.
   const header = page.getByTestId("mobile-session-header");
   await expect(header).toBeVisible();
-  await expect(page.getByTestId("mobile-session-header-dot")).toBeVisible();
   await expect(page.getByTestId("mobile-host-button")).toContainText("e2e-machine");
   await expect(page.getByTestId("mobile-session-header-rtt")).toHaveText(
     /^(—|\d+ms)$/,
-  );
-  await expect(page.getByTestId("mobile-session-header-cpu")).toHaveText(
-    /^cpu (—|\d+%)$/,
-  );
-  await expect(page.getByTestId("mobile-session-header-mem")).toHaveText(
-    /^mem (—|\d+%)$/,
-  );
-  await expect(page.getByTestId("mobile-session-header-disk")).toHaveText(
-    /^disk (—|\d+%)$/,
   );
 
   for (const terminalId of [firstTerminalId, secondTerminalId]) {
@@ -712,77 +705,61 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
     .toEqual([created!.id]);
 });
 
-test("mobile workspace manager provides full workspace controls", async ({ page }) => {
+test("the mobile session sheet renames, moves, reorders, adds and closes tabs", async ({ page }) => {
   await openApp(page);
   await resetMachineState(page);
   await mobileTakeControl(page);
 
   const first = await createWorkspaceGroupViaApi(
     page,
-    `Mobile manager A ${Date.now()}`,
+    `Mobile tabs A ${Date.now()}`,
   );
   const second = await createWorkspaceGroupViaApi(
     page,
-    `Mobile manager B ${Date.now()}`,
+    `Mobile tabs B ${Date.now()}`,
   );
   const terminalId = await createTerminalViaApi(page, {
     cwd: "/root",
     workspaceGroupId: first.id,
   });
+  const keptId = await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    workspaceGroupId: second.id,
+  });
   await expandTerminalById(page, terminalId);
 
+  const switcher = page.getByTestId("mobile-session-switcher");
+  const tabSheet = page.getByTestId("mobile-group-sheet");
+  const openTab = async (groupId: string) => {
+    if (!(await switcher.isVisible().catch(() => false))) {
+      await page.getByTestId("mobile-title-bar-label").click();
+      await expect(switcher).toBeVisible();
+    }
+    await switcher.getByTestId(`mobile-session-group-${groupId}`).click();
+    await expect(tabSheet).toBeVisible();
+  };
+
+  // No separate tab tree: a tab's header opens its actions.
   await page.getByTestId("mobile-title-bar-label").click();
-  await page.getByTestId("mobile-workspace-manager-button").click();
-  const manager = page.getByTestId("workspace-manager");
-  await expect(manager).toBeVisible();
-  await expect(manager).toHaveAttribute("data-placement", "sheet");
-  await expect(
-    manager.getByTestId(`workspace-manager-group-${first.id}`),
-  ).toBeVisible();
-  await expect(
-    manager.getByTestId(`workspace-manager-group-${second.id}`),
-  ).toBeVisible();
-
-  // ↑ ↓ rename [x] sit evenly spaced: measure the visible ink of each
-  // action (icon geometry or text), not the button boxes.
-  const gaps = await manager
-    .getByTestId(`workspace-manager-group-${second.id}`)
-    .evaluate((group, id) => {
-      const ink = (testid: string) => {
-        const button = group.querySelector(`[data-testid="${testid}"]`)!;
-        const svg = button.querySelector("svg");
-        if (svg) {
-          const box = svg.getBBox();
-          const rect = svg.getBoundingClientRect();
-          const scale = rect.width / svg.viewBox.baseVal.width;
-          return [rect.left + box.x * scale, rect.left + (box.x + box.width) * scale];
-        }
-        const range = document.createRange();
-        range.selectNodeContents(button);
-        const rect = range.getBoundingClientRect();
-        return [rect.left, rect.right];
-      };
-      const boxes = ["up", "down", "rename", "delete"].map(action =>
-        ink(`workspace-manager-${action}-${id}`),
-      );
-      return boxes.slice(1).map((box, i) => box[0] - boxes[i][1]);
-    }, second.id);
-  expect(Math.min(...gaps)).toBeGreaterThanOrEqual(12);
-  expect(Math.max(...gaps) - Math.min(...gaps)).toBeLessThanOrEqual(4);
-
-  await manager.getByTestId(`workspace-manager-rename-${second.id}`).click();
+  await expect(switcher).toBeVisible();
+  await expect(page.getByTestId("mobile-workspace-manager-button")).toHaveCount(0);
+  await openTab(second.id);
+  await expect(tabSheet).toContainText(second.name);
+  await tabSheet.getByTestId("mobile-group-rename").click();
   const renamed = `Mobile renamed ${Date.now()}`;
   const renameDialog = page.getByRole("dialog", { name: "Rename tab" });
   await renameDialog
     .getByRole("textbox", { name: "Tab name" })
     .fill(renamed);
   await renameDialog.getByRole("button", { name: "Rename", exact: true }).click();
+  await page.getByTestId("mobile-title-bar-label").click();
   await expect(
-    manager.getByTestId(`workspace-manager-group-${second.id}`),
+    switcher.getByTestId(`mobile-session-group-${second.id}`),
   ).toContainText(renamed);
 
-  await manager.getByTestId(`workspace-manager-move-${terminalId}`).click();
-  await page.getByRole("menuitem", { name: renamed }).click();
+  // Holding a row offers the other tabs to move it to.
+  await switcher.getByTestId(`mobile-session-row-${terminalId}`).dispatchEvent("contextmenu");
+  await page.getByTestId(`mobile-chip-move-${second.id}`).click();
   await expect
     .poll(async () =>
       (await listTerminals(page)).find((terminal) => terminal.id === terminalId)
@@ -790,24 +767,33 @@ test("mobile workspace manager provides full workspace controls", async ({ page 
     )
     .toBe(second.id);
 
-  await manager.getByTestId(`workspace-manager-up-${second.id}`).click();
+  await openTab(second.id);
+  await tabSheet.getByTestId("mobile-group-up").click();
   await expect
     .poll(async () => (await listWorkspaceGroupsViaApi(page))[0]?.id)
     .toBe(second.id);
 
-  await manager.getByTestId(`workspace-manager-delete-${first.id}`).click();
-  await expect
-    .poll(async () =>
-      (await listWorkspaceGroupsViaApi(page)).some(
-        (group) => group.id === first.id,
-      ),
-    )
-    .toBe(false);
-
-  await manager.getByTestId("workspace-manager-new").click();
+  await openTab(second.id);
+  await tabSheet.getByTestId("mobile-group-new-tab").click();
   await expect
     .poll(async () => (await listWorkspaceGroupsViaApi(page)).length)
-    .toBe(2);
+    .toBe(3);
+
+  // Closing a tab with terminals asks first; ungroup keeps them.
+  await openTab(second.id);
+  await tabSheet.getByTestId("mobile-group-close").click();
+  await page
+    .getByRole("dialog", { name: `Close tab "${renamed}"?` })
+    .getByRole("button", { name: "Ungroup" })
+    .click();
+  await expect
+    .poll(async () =>
+      (await listWorkspaceGroupsViaApi(page)).some((group) => group.id === second.id),
+    )
+    .toBe(false);
+  expect((await listTerminals(page)).map((terminal) => terminal.id)).toEqual(
+    expect.arrayContaining([terminalId, keptId]),
+  );
 });
 
 test("mobile + overflows a full tab into a new tab instead of a fifth pane", async ({
@@ -1164,7 +1150,7 @@ async function terminalHasKeyboardFocus(
 }
 
 
-test("long session lists keep host metrics inside the card at narrow and short sizes", async ({ page }, testInfo) => {
+test("long session lists keep the machine button and new terminal in view at narrow and short sizes", async ({ page }, testInfo) => {
   const terminals = Array.from({ length: 12 }, (_, i) => ({ id: `layout-${i}`, title: `Long terminal title ${i}`, machine_id: "e2e-node", cwd: "/tmp/a/long/workspace/path", cols: 80, rows: 24, reachable: true }));
   await page.route("**/api/bootstrap", route => route.fulfill({ json: {
     snapshot_seq: 100, last_focused_terminal_id: terminals[0].id,
@@ -1178,18 +1164,16 @@ test("long session lists keep host metrics inside the card at narrow and short s
   await page.getByTestId("mobile-title-bar-label").click();
   for (const [width, height] of [[390, 844], [320, 480], [768, 600]]) {
     await page.setViewportSize({ width, height });
-    const card = page.getByTestId("mobile-host-button");
-    const metrics = page.getByTestId("mobile-session-header-metrics");
-    await expect(metrics).toBeVisible();
-    await expect.poll(async () => {
-      const outer = await card.boundingBox();
-      const inner = await metrics.boundingBox();
-      return !!outer && !!inner && inner.y >= outer.y && inner.y + inner.height <= outer.y + outer.height - 5;
-    }).toBe(true);
-    await expect(page.getByTestId("mobile-session-header-machine-mini")).toBeAttached();
-    await page.getByTestId("mobile-session-row-layout-11").scrollIntoViewIfNeeded();
-    await expect(card).toBeInViewport();
-    await page.screenshot({ path: testInfo.outputPath(`host-metrics-${width}.png`) });
+    const machine = page.getByTestId("mobile-host-button");
+    const create = page.getByTestId("mobile-session-switcher-new-terminal");
+    await expect(machine).toContainText("MacBook-Pro-3.local");
+    const last = page.getByTestId("mobile-session-row-layout-11");
+    await last.scrollIntoViewIfNeeded();
+    await expect(last).toBeInViewport();
+    // The list scrolls between them; neither leaves the screen.
+    await expect(machine).toBeInViewport();
+    await expect(create).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`session-sheet-${width}.png`) });
   }
 });
 
