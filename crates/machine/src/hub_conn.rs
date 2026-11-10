@@ -429,6 +429,7 @@ impl HubConnection {
         // 30-second steps.
         let pty_for_titles = pty.clone();
         let send_tx_for_titles = send_tx.clone();
+        let attach_mgr_for_titles = attach_mgr.clone();
         let mut title_fallback_task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.tick().await;
@@ -467,6 +468,7 @@ impl HubConnection {
                 last_sent_attention.retain(|id, _| terminal_ids.contains(id));
                 last_sent_agent.retain(|id, _| terminal_ids.contains(id));
                 last_sent_activity.retain(|id, _| terminal_ids.contains(id));
+                attach_mgr_for_titles.retain_view_nudges(|id| terminal_ids.iter().any(|t| t == id));
                 for terminal_id in terminal_ids {
                     // The agent first: the hub opens a run for it, then attention
                     // can make that run wait on a person
@@ -501,9 +503,17 @@ impl HubConnection {
                         last_sent_attention.insert(terminal_id.clone(), attention);
                     }
                     let pane_info = pane_infos.get(&terminal_id);
+                    // Output that is only the repaint after a viewer resized or
+                    // focused the terminal is not activity: the "recent" order
+                    // would otherwise lift whatever you click. The first time
+                    // is always reported, so a new terminal starts as recent.
+                    let activity_ms = pane_info.and_then(|info| info.activity_ms).filter(|at| {
+                        !last_sent_activity.contains_key(&terminal_id)
+                            || !attach_mgr_for_titles.is_view_redraw(&terminal_id, *at)
+                    });
                     if let Some(at_ms) = activity_to_report(
                         last_sent_activity.get(&terminal_id).copied(),
-                        pane_info.and_then(|info| info.activity_ms),
+                        activity_ms,
                     ) {
                         if send_tx_for_titles
                             .send(OutboundHubMessage::Json(MachineToHub::TerminalActivity {
