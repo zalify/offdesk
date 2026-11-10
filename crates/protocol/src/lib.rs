@@ -47,11 +47,13 @@ pub struct TerminalInfo {
     /// Hub-authoritative: machines never set it. Absent from older hubs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opened_by: Option<TerminalOpener>,
-    /// When the terminal last had output, in ms since the epoch: tmux's
-    /// `window_activity`, reported by the node at most every
-    /// `TERMINAL_ACTIVITY_STEP_MS`, leaving out the repaint a viewer causes
-    /// by resizing or focusing it. Hub memory only; absent until
-    /// the node reports it, and from older nodes.
+    /// When the terminal was last active, in ms since the epoch: someone
+    /// typed into it, or it had output (tmux's `window_activity`, leaving out
+    /// the repaint a viewer causes by resizing or focusing it). Claude Code
+    /// and Codex count only while a turn is in progress, not for what they
+    /// print while idle. Reported by the node at most every
+    /// `TERMINAL_ACTIVITY_STEP_MS`. Hub memory only; absent until the node
+    /// reports it, and from older nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<i64>,
 }

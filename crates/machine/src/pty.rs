@@ -80,6 +80,15 @@ pub struct TmuxAttach {
     pub master: Box<dyn MasterPty + Send>,
 }
 
+/// What the metadata poll read on a terminal's screen; empty when the
+/// terminal doesn't run a program the screen adapter knows.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScreenRead {
+    pub attention: Option<offdesk_protocol::TerminalAttention>,
+    /// Whether the screen shows Claude Code or Codex mid-turn.
+    pub agent_working: Option<bool>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PaneInfo {
     /// Root process of this pane, used to bind agent metadata to this pane.
@@ -371,15 +380,12 @@ impl PtyManager {
 
     /// Inspect only the visible pane on this machine; never stream inactive
     /// terminals to the phone just to discover a confirmation prompt.
-    pub fn terminal_attentions(
-        &self,
-        panes: &HashMap<String, PaneInfo>,
-    ) -> HashMap<String, Option<offdesk_protocol::TerminalAttention>> {
+    pub fn terminal_screens(&self, panes: &HashMap<String, PaneInfo>) -> HashMap<String, ScreenRead> {
         self.list_terminal_ids()
             .into_iter()
             .map(|id| {
                 let command = panes.get(&id).and_then(|p| p.current_command.as_deref());
-                let attention = if crate::terminal_attention::supports_command(command) {
+                let read = if crate::terminal_attention::supports_command(command) {
                     let target = format!("{}:0.0", tmux_session_name(&id));
                     tmux_cmd()
                         .args([
@@ -394,16 +400,18 @@ impl PtyManager {
                         .output()
                         .ok()
                         .filter(|o| o.status.success())
-                        .and_then(|o| {
-                            crate::terminal_attention::detect(
-                                command,
-                                &String::from_utf8_lossy(&o.stdout),
-                            )
+                        .map(|o| {
+                            let screen = String::from_utf8_lossy(&o.stdout);
+                            ScreenRead {
+                                attention: crate::terminal_attention::detect(command, &screen),
+                                agent_working: Some(crate::terminal_attention::agent_working(&screen)),
+                            }
                         })
+                        .unwrap_or_default()
                 } else {
-                    None
+                    ScreenRead::default()
                 };
-                (id, attention)
+                (id, read)
             })
             .collect()
     }
