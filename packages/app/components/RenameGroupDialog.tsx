@@ -22,22 +22,35 @@ export function RenameGroupDialog({
   const trimmed = name.trim();
   const canSubmit = trimmed.length > 0;
 
+  // The parent passes a new onCancel on every render, and it re-renders while
+  // the dialog is open (terminal output, presence). Keep the latest callback in
+  // a ref so those renders don't re-run the effects below.
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+  const initialNameRef = useRef(initialName);
+  initialNameRef.current = initialName;
+
+  // Only when the dialog opens: start from the current name, focused and
+  // selected so typing replaces it. Running this again later would throw away
+  // what the user has typed.
   useEffect(() => {
     if (!open) return;
-    setName(initialName);
-    // Focus the input and select the current name so typing replaces it.
+    setName(initialNameRef.current);
     inputRef.current?.focus();
     inputRef.current?.select();
+  }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onCancel();
+        onCancelRef.current();
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [open, initialName, onCancel]);
+  }, [open]);
 
   if (!open) return null;
 
