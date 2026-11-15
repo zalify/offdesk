@@ -989,7 +989,15 @@ test("tab context menu renames a workspace tab", async ({ page }) => {
 
   const renamed = `Renamed ${Date.now()}`;
   const dialog = page.getByRole("dialog", { name: "Rename tab" });
-  await dialog.getByRole("textbox", { name: "Tab name" }).fill(renamed);
+  const nameInput = dialog.getByRole("textbox", { name: "Tab name" });
+  await nameInput.fill(renamed);
+
+  // The app re-renders behind the open dialog (here: another tab appears).
+  // That must not put the old name back over what was typed.
+  const other = await createWorkspaceGroupViaApi(page, `Other ${Date.now()}`);
+  await expect(workspaceGroup(page, other.name)).toBeVisible();
+  await expect(nameInput).toHaveValue(renamed);
+
   await dialog.getByRole("button", { name: "Rename", exact: true }).click();
 
   // Tab label updates and the new name is persisted server-side.
