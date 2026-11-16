@@ -51,20 +51,31 @@ import {
   X,
   Bot,
   Ellipsis,
+  History,
 } from "lucide-react";
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 import { colors, colorAlpha } from "@/lib/colors";
 import { pickSelectedBrowserId } from "@/lib/agentBrowserOverlay";
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { terminalOpenerDescription } from "@/lib/terminalOpener";
-import { activityAge, groupWaitingCount, sessionState } from "@/lib/sessionList";
+import {
+  activityAge,
+  groupWaitingCount,
+  readSessionOrder,
+  sessionState,
+  writeSessionOrder,
+  type SessionOrder,
+} from "@/lib/sessionList";
 import { useLongPress } from "@/lib/longPress";
 import {
   buildMobileSessionGroups,
+  recentMobileSessionPanes,
   type MobileSessionPane,
 } from "@/lib/mobileSessionSwitcher";
+import { diskTooltip, loadReadout } from "@/lib/resourceStats";
 import type { WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { SessionRowEnd } from "./SessionsSidebar.web";
+import { LoadGlyph, loadLabel } from "./MachineLoad.web";
 import { anyNodeBehind, copyNodeUpdateCommand, nodeUpdateChip, nodeVersionLabel, NODE_UPDATE_COMMAND, useSheetVersions } from "@/lib/machineVersions";
 import { Button, Chip, TextButton, fontDisplay, fontProse } from "./Primitives.web";
 import { rem } from "@/lib/rem";
@@ -287,6 +298,19 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     [sessionGroups],
   );
 
+  // The sheet's order: under each tab, or flat with the latest output first.
+  // The same choice as the desktop sidebar's, kept per device.
+  const [sessionOrder, setSessionOrder] = useState<SessionOrder>(readSessionOrder);
+  const toggleSessionOrder = () => {
+    const next = sessionOrder === "recent" ? "tabs" : "recent";
+    setSessionOrder(next);
+    writeSessionOrder(next);
+  };
+  const recentPanes = useMemo(
+    () => (sessionOrder === "recent" ? recentMobileSessionPanes(sessionGroups) : []),
+    [sessionOrder, sessionGroups],
+  );
+
   const activeChip =
     chips.find((chip) => chip.terminal.id === activeTerminalId) ?? null;
   const activeGroup = activeChip?.group ?? null;
@@ -294,6 +318,67 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const activePosition = activeChip
     ? chips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
     : 0;
+
+  const renderSessionRow = (pane: MobileSessionPane, showTab: boolean) => {
+    const { terminal } = pane;
+    const state = sessionState(terminal, now);
+    const opener = terminalOpenerDescription(terminal);
+    const current = terminal.id === activeTerminalId;
+    return (
+      <div
+        key={terminal.id}
+        data-state={state}
+        data-current={current ? "true" : undefined}
+        className="odk-sessions-row"
+      >
+        <button
+          type="button"
+          data-testid={`mobile-session-row-${terminal.id}`}
+          aria-current={current ? "true" : undefined}
+          title={terminal.cwd}
+          className="odk-sessions-row-main"
+          onPointerDown={(event) => {
+            pendingRowRef.current = pane;
+            suppressRowClickRef.current = false;
+            rowLongPress.onPointerDown(event);
+          }}
+          onPointerMove={rowLongPress.onPointerMove}
+          onPointerUp={rowLongPress.onPointerUp}
+          onPointerCancel={rowLongPress.onPointerCancel}
+          onContextMenu={(event) => {
+            // Android's long-press, and a mouse's right click.
+            event.preventDefault();
+            setChipSheet(pane);
+          }}
+          onClick={() => {
+            if (suppressRowClickRef.current) {
+              suppressRowClickRef.current = false;
+              return;
+            }
+            onPickTerminal(terminal.id);
+            setSessionSwitcherOpen(false);
+          }}
+        >
+          <span className="odk-sessions-title">
+            {opener && (
+              <span
+                role="img"
+                aria-label={opener}
+                title={opener}
+                data-testid={`mobile-session-opener-${terminal.id}`}
+                className="odk-sessions-bot"
+              >
+                <Bot size={13} strokeWidth={2} aria-hidden style={{ display: "block" }} />
+              </span>
+            )}
+            <span className="odk-sessions-title-text">{displayTerminalTitle(terminal)}</span>
+            {showTab && <span className="odk-sessions-tab">{pane.group.label}</span>}
+          </span>
+          <SessionRowEnd state={state} age={activityAge(terminal.last_activity_ms, now)} />
+        </button>
+      </div>
+    );
+  };
 
   // Prev/next in strip order; no wraparound at either end.
   const switchTerminalByOffset = useCallback(
@@ -562,18 +647,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {controlNote && <span data-testid="mobile-title-bar-control" style={{ flexShrink: 0, whiteSpace: "pre" }}> · {controlNote}</span>}
                 </>)}
               </span>
-              {terminalOpenerDescription(activeChip.terminal) && (
-                // P04: the agent marker on a line of its own; which agent is
-                // in its title.
-                <span
-                  data-testid="mobile-title-bar-opener"
-                  title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
-                  style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: rem(10), letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
-                >
-                  <Bot size={11} strokeWidth={2} aria-hidden />
-                  agent
-                </span>
-              )}
             </>
           ) : (
             <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -771,6 +844,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               <span data-testid="mobile-session-position" style={{ fontSize: rem(11.5), color: colors.fg3 }}>
                 {activePosition}/{chips.length}
               </span>
+              <button
+                type="button"
+                data-testid="mobile-session-order"
+                aria-label="Latest output first"
+                aria-pressed={sessionOrder === "recent"}
+                title={sessionOrder === "recent" ? "Latest output first (on)" : "Latest output first"}
+                onClick={toggleSessionOrder}
+                className="odk-sessions-icon odk-sessions-touch-order"
+              >
+                <History size={17} aria-hidden />
+              </button>
               <span style={{ flex: 1 }} />
               <button
                 type="button"
@@ -791,6 +875,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {activeMachine?.name ?? "no machine"}
                 </span>
                 <span aria-hidden="true" style={{ color: colors.fg3 }}>▾</span>
+                {activeMachine && machineOnline(activeMachine) && (
+                  <span role="img" aria-label={loadLabel(activeStats)} style={{ display: "inline-flex" }}>
+                    <LoadGlyph stats={activeStats} />
+                  </span>
+                )}
                 <span data-testid="mobile-session-header-rtt" style={{ fontSize: rem(11.5), fontWeight: 400, color: colors.fg3 }}>
                   {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
                 </span>
@@ -800,7 +889,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           footer={
             <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 12px", paddingTop: 10, borderTop: `1px solid ${colors.lineSoft}` }}>
               <span style={{ flex: 1, minWidth: 0, paddingLeft: 8, fontFamily: fontProse, fontSize: rem(12), lineHeight: 1.4, color: colors.fg3 }}>
-                Hold a row to move or close it. Tap a tab for its actions.
+                {sessionOrder === "recent"
+                  ? "Hold a row to move or close it. Latest output first."
+                  : "Hold a row to move or close it. Tap a tab for its actions."}
               </span>
               <Button
                 kind="primary"
@@ -822,7 +913,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           onClose={() => setSessionSwitcherOpen(false)}
         >
           <div className="odk-sessions-touch">
-            {sessionGroups.map(({ group, panes }) => {
+            {sessionOrder === "recent" ? (
+              <section data-testid="mobile-session-recent" aria-label="Latest output first" className="odk-sessions-section">
+                {recentPanes.map((pane) => renderSessionRow(pane, true))}
+              </section>
+            ) : sessionGroups.map(({ group, panes }) => {
               const waiting = groupWaitingCount(group, scopedTerminalsById);
               return (
                 <section key={group.id} aria-label={group.label} className="odk-sessions-section">
@@ -841,65 +936,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                       <Ellipsis size={15} aria-hidden />
                     </span>
                   </button>
-                  {panes.map((pane) => {
-                    const { terminal } = pane;
-                    const state = sessionState(terminal, now);
-                    const opener = terminalOpenerDescription(terminal);
-                    const current = terminal.id === activeTerminalId;
-                    return (
-                      <div
-                        key={terminal.id}
-                        data-state={state}
-                        data-current={current ? "true" : undefined}
-                        className="odk-sessions-row"
-                      >
-                        <button
-                          type="button"
-                          data-testid={`mobile-session-row-${terminal.id}`}
-                          aria-current={current ? "true" : undefined}
-                          title={terminal.cwd}
-                          className="odk-sessions-row-main"
-                          onPointerDown={(event) => {
-                            pendingRowRef.current = pane;
-                            suppressRowClickRef.current = false;
-                            rowLongPress.onPointerDown(event);
-                          }}
-                          onPointerMove={rowLongPress.onPointerMove}
-                          onPointerUp={rowLongPress.onPointerUp}
-                          onPointerCancel={rowLongPress.onPointerCancel}
-                          onContextMenu={(event) => {
-                            // Android's long-press, and a mouse's right click.
-                            event.preventDefault();
-                            setChipSheet(pane);
-                          }}
-                          onClick={() => {
-                            if (suppressRowClickRef.current) {
-                              suppressRowClickRef.current = false;
-                              return;
-                            }
-                            onPickTerminal(terminal.id);
-                            setSessionSwitcherOpen(false);
-                          }}
-                        >
-                          <span className="odk-sessions-title">
-                            {opener && (
-                              <span
-                                role="img"
-                                aria-label={opener}
-                                title={opener}
-                                data-testid={`mobile-session-opener-${terminal.id}`}
-                                className="odk-sessions-bot"
-                              >
-                                <Bot size={13} strokeWidth={2} aria-hidden style={{ display: "block" }} />
-                              </span>
-                            )}
-                            <span className="odk-sessions-title-text">{displayTerminalTitle(terminal)}</span>
-                          </span>
-                          <SessionRowEnd state={state} age={activityAge(terminal.last_activity_ms, now)} />
-                        </button>
-                      </div>
-                    );
-                  })}
+                  {panes.map((pane) => renderSessionRow(pane, false))}
                 </section>
               );
             })}
@@ -1066,6 +1103,20 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   </span>
                   {nodeLabel && !node?.version ? (
                     <span style={{ fontSize: rem(12), color: colors.fg3 }}>{nodeLabel}</span>
+                  ) : null}
+                  {/* The load the desktop shows beside its switcher, as words:
+                      the phone has no hover for the bars' numbers. */}
+                  {online && loadReadout(machineStats[m.id]) ? (
+                    <span
+                      data-testid={`mobile-host-load-${m.id}`}
+                      title={diskTooltip(machineStats[m.id])}
+                      style={{ display: "flex", alignItems: "center", gap: 6, fontSize: rem(12), color: colors.fg2, fontVariantNumeric: "tabular-nums" }}
+                    >
+                      <LoadGlyph stats={machineStats[m.id]} />
+                      <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {loadReadout(machineStats[m.id])}
+                      </span>
+                    </span>
                   ) : null}
                 </span>
                 <span style={{ display: "flex", alignItems: "center", gap: 8 }}>

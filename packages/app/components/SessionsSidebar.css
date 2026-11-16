@@ -75,3 +75,4 @@
 .odk-sessions-touch .odk-sessions-meta{font-size:.75rem}
 .odk-sessions-touch-group{box-sizing:border-box;display:flex;align-items:center;gap:6px;width:100%;min-height:44px;padding:8px 8px 0 12px;border:0;background:transparent;font:inherit;font-size:.75rem;font-weight:500;color:rgb(var(--color-fg-3));text-align:left;cursor:pointer}
 .odk-sessions-touch-group-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:rgb(var(--color-fg-2))}
+.odk-sessions-touch-order{width:44px;height:44px;min-width:44px;border-radius:6px}

@@ -79,3 +79,23 @@ export function diskTooltip(stats: ResourceStats | undefined): string {
     )
     .join("\n");
 }
+
+export function memoryPercent(stats: ResourceStats | undefined): number | null {
+  if (!stats || stats.memory_total <= 0) return null;
+  return Math.round((Math.min(stats.memory_used, stats.memory_total) / stats.memory_total) * 100);
+}
+
+// One line for a machine's load where there is room for words, as on the
+// phone's machine list: "cpu 12% · mem 54% · disk 71%". Null without stats.
+export function loadReadout(stats: ResourceStats | undefined): string | null {
+  if (!stats) return null;
+  const mem = memoryPercent(stats);
+  const disk = diskPercent(stats);
+  return [
+    `cpu ${Math.round(stats.cpu_percent)}%`,
+    mem === null ? null : `mem ${mem}%`,
+    disk === null ? null : `disk ${disk}%`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}

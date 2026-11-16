@@ -33,3 +33,19 @@ export function buildMobileSessionGroups(
     return panes.length > 0 ? [{ group, panes }] : [];
   });
 }
+
+/**
+ * Every pane of the sheet as one flat list, the latest output first (the
+ * desktop sidebar's "recent" order). Terminals whose node hasn't reported
+ * activity go last, still in tab order.
+ */
+export function recentMobileSessionPanes(
+  sessionGroups: MobileSessionGroup[],
+): MobileSessionPane[] {
+  const at = (pane: MobileSessionPane) =>
+    pane.terminal.last_activity_ms ?? -Infinity;
+  // Array.prototype.sort is stable, so ties keep the tab order.
+  return sessionGroups
+    .flatMap((sessionGroup) => sessionGroup.panes)
+    .sort((a, b) => at(b) - at(a));
+}

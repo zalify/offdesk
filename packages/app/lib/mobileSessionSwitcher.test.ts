@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { TerminalInfo } from "@offdesk/shared";
 
-import { buildMobileSessionGroups } from "./mobileSessionSwitcher";
+import {
+  buildMobileSessionGroups,
+  recentMobileSessionPanes,
+} from "./mobileSessionSwitcher";
 import type { WorkspaceGroup } from "./terminalWorkspaceLayout";
 
 function terminal(id: string, title: string, cwd: string): TerminalInfo {
@@ -76,5 +79,24 @@ describe("buildMobileSessionGroups", () => {
       "one",
       "two",
     ]);
+  });
+});
+
+describe("recentMobileSessionPanes", () => {
+  it("puts the latest output first and unreported terminals last, in tab order", () => {
+    const at = (t: TerminalInfo, ms: number | null): TerminalInfo => ({ ...t, last_activity_ms: ms });
+    const groups = buildMobileSessionGroups(
+      [group("alpha", "Alpha", ["one", "two"]), group("beta", "Beta", ["three", "four"])],
+      [
+        at(terminal("one", "One", "/one"), 1_000),
+        at(terminal("two", "Two", "/two"), null),
+        at(terminal("three", "Three", "/three"), 5_000),
+        terminal("four", "Four", "/four"),
+      ],
+    );
+
+    const panes = recentMobileSessionPanes(groups);
+    expect(panes.map((pane) => pane.terminal.id)).toEqual(["three", "one", "two", "four"]);
+    expect(panes.map((pane) => pane.group.label)).toEqual(["Beta", "Alpha", "Alpha", "Beta"]);
   });
 });
