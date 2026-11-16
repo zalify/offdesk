@@ -647,18 +647,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   {controlNote && <span data-testid="mobile-title-bar-control" style={{ flexShrink: 0, whiteSpace: "pre" }}> · {controlNote}</span>}
                 </>)}
               </span>
-              {terminalOpenerDescription(activeChip.terminal) && (
-                // P04: the agent marker on a line of its own; which agent is
-                // in its title.
-                <span
-                  data-testid="mobile-title-bar-opener"
-                  title={terminalOpenerDescription(activeChip.terminal) ?? undefined}
-                  style={{ alignSelf: "flex-start", maxWidth: "100%", boxSizing: "border-box", display: "inline-flex", alignItems: "center", gap: 4, padding: "1px 5px", border: `1px solid ${colors.line}`, borderRadius: 3, fontSize: rem(10), letterSpacing: "-0.02em", color: colors.fg2, whiteSpace: "nowrap" }}
-                >
-                  <Bot size={11} strokeWidth={2} aria-hidden />
-                  agent
-                </span>
-              )}
             </>
           ) : (
             <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>
