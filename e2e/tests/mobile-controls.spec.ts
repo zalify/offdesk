@@ -705,6 +705,59 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
     .toEqual([created!.id]);
 });
 
+test("the mobile session sheet lists the latest output first and Machines shows each machine's load", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openApp(page);
+  await resetMachineState(page);
+  await requestMachineControl(page);
+
+  const suffix = Date.now();
+  const firstGroup = await createWorkspaceGroupViaApi(page, `Recent Alpha ${suffix}`);
+  const secondGroup = await createWorkspaceGroupViaApi(page, `Recent Beta ${suffix}`);
+  const firstTerminalId = await createTerminalViaApi(page, {
+    cwd: "/root",
+    workspaceGroupId: firstGroup.id,
+  });
+  const secondTerminalId = await createTerminalViaApi(page, {
+    cwd: "/tmp",
+    workspaceGroupId: secondGroup.id,
+  });
+
+  await page.getByTestId("mobile-title-bar-label").click();
+  const sheet = page.getByTestId("mobile-session-switcher");
+  await expect(sheet).toBeVisible();
+
+  // Off by default: rows sit under their tab.
+  const order = sheet.getByTestId("mobile-session-order");
+  await expect(order).toHaveAttribute("aria-pressed", "false");
+  await expect(sheet.getByTestId(`mobile-session-group-${firstGroup.id}`)).toBeVisible();
+
+  // On: one flat list, no tab headers, each row naming its tab.
+  await order.click();
+  await expect(order).toHaveAttribute("aria-pressed", "true");
+  const recent = sheet.getByTestId("mobile-session-recent");
+  await expect(recent).toBeVisible();
+  await expect(sheet.getByTestId(`mobile-session-group-${firstGroup.id}`)).toHaveCount(0);
+  await expect(recent.getByTestId(`mobile-session-row-${firstTerminalId}`)).toContainText(firstGroup.name);
+  await expect(recent.getByTestId(`mobile-session-row-${secondTerminalId}`)).toContainText(secondGroup.name);
+
+  // The choice is kept on this device, as the desktop sidebar's is.
+  await page.reload();
+  await page.getByTestId("mobile-title-bar-label").click();
+  await expect(sheet.getByTestId("mobile-session-order")).toHaveAttribute("aria-pressed", "true");
+
+  // The machine's cpu, mem and disk: bars beside its name, numbers in Machines.
+  await expect(sheet.getByTestId("tab-bar-meters")).toBeVisible({ timeout: 15_000 });
+  await page.getByTestId("mobile-host-button").click();
+  const load = page.locator('[data-testid^="mobile-host-load-"]').first();
+  await expect(load).toHaveText(/cpu \d+%( · mem \d+%)?( · disk \d+%)?/);
+
+  // Back to tabs for the tests after this one.
+  await page.evaluate(() => localStorage.removeItem("offdesk:sessions-order"));
+});
+
 test("the mobile session sheet renames, moves, reorders, adds and closes tabs", async ({ page }) => {
   await openApp(page);
   await resetMachineState(page);

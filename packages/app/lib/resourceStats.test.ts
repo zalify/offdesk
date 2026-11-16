@@ -7,6 +7,8 @@ import {
   diskTooltip,
   diskUsages,
   formatBytes,
+  loadReadout,
+  memoryPercent,
   primaryDiskUsage,
 } from "./resourceStats";
 
@@ -95,5 +97,17 @@ describe("diskTooltip", () => {
 
   it("says so when no disk was reported", () => {
     expect(diskTooltip(stats([]))).toBe("disk usage unavailable");
+  });
+});
+
+describe("loadReadout", () => {
+  it("reads cpu, memory and the primary disk as percents", () => {
+    expect(loadReadout(stats([disk("/", 100 * GB, 71 * GB)]))).toBe("cpu 12% · mem 50% · disk 71%");
+  });
+
+  it("leaves out what the machine didn't report", () => {
+    expect(loadReadout({ ...stats([]), memory_total: 0 })).toBe("cpu 12%");
+    expect(loadReadout(undefined)).toBeNull();
+    expect(memoryPercent(undefined)).toBeNull();
   });
 });
