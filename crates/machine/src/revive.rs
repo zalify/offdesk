@@ -20,13 +20,31 @@ pub struct ResumeCommand {
     pub argv: Vec<String>,
 }
 
-/// The current boot id from /proc/sys/kernel/random/boot_id; None when it
-/// cannot be read (non-Linux, permission). Used to prove a reboot happened.
+/// An id that changes on every boot of this machine; None when it cannot be
+/// read. Used to prove a reboot happened: a terminal persisted under another
+/// boot id died with the machine, not because its shell exited.
+///
+/// Linux reads /proc/sys/kernel/random/boot_id. macOS has no such file, so
+/// it uses the kernel's boot time (`kern.boottime`, fixed for the life of a
+/// boot). Without this, every terminal was persisted with no boot id and a
+/// reboot dropped them all instead of reviving them.
+#[cfg(target_os = "linux")]
 pub fn current_boot_id() -> Option<String> {
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn current_boot_id() -> Option<String> {
+    boot_id_from_boot_time(sysinfo::System::boot_time())
+}
+
+/// `boottime:<seconds since the epoch>`; None for 0 (sysinfo's "unknown").
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn boot_id_from_boot_time(seconds: u64) -> Option<String> {
+    (seconds > 0).then(|| format!("boottime:{seconds}"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -300,7 +318,6 @@ pub fn scan_claude_sessions() -> Vec<ClaudeSessionFile> {
 
 /// Full argv of a live process: /proc/<pid>/cmdline split on NUL, empty
 /// trailing element dropped. None when unreadable or empty.
-/// (Linux-only; other platforms return None — resume is best-effort.)
 #[cfg(target_os = "linux")]
 pub fn process_argv(pid: u32) -> Option<Vec<String>> {
     let raw = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
@@ -312,9 +329,26 @@ pub fn process_argv(pid: u32) -> Option<Vec<String>> {
     (!argv.is_empty()).then_some(argv)
 }
 
+/// Full argv of a live process, from sysinfo (KERN_PROCARGS2 on macOS).
+/// None when unreadable or empty. Without it no resume command was ever
+/// captured on macOS, so a revived terminal came back as a bare shell.
 #[cfg(not(target_os = "linux"))]
-pub fn process_argv(_pid: u32) -> Option<Vec<String>> {
-    None
+pub fn process_argv(pid: u32) -> Option<Vec<String>> {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut system = sysinfo::System::new();
+    system.refresh_processes_specifics(
+        sysinfo::ProcessesToUpdate::Some(&[pid]),
+        true,
+        sysinfo::ProcessRefreshKind::nothing().with_cmd(sysinfo::UpdateKind::Always),
+    );
+    let argv: Vec<String> = system
+        .process(pid)?
+        .cmd()
+        .iter()
+        .map(|part| part.to_string_lossy().into_owned())
+        .filter(|part| !part.is_empty())
+        .collect();
+    (!argv.is_empty()).then_some(argv)
 }
 
 /// True when `pid` is a strict descendant of `ancestor` via the parent chain.
@@ -502,6 +536,36 @@ mod tests {
             decide_recover(false, Some("old"), Some("new"), true),
             RecoverDecision::Revive
         );
+    }
+
+    #[test]
+    fn boot_time_boot_id() {
+        assert_eq!(
+            boot_id_from_boot_time(1_794_834_005).as_deref(),
+            Some("boottime:1794834005")
+        );
+        assert_eq!(boot_id_from_boot_time(0), None);
+    }
+
+    /// Every platform the node ships on must report a boot id, or a reboot
+    /// drops every terminal instead of reviving it.
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn this_machine_has_a_boot_id() {
+        let id = current_boot_id().expect("boot id");
+        assert!(!id.is_empty());
+        assert_eq!(
+            current_boot_id().as_deref(),
+            Some(id.as_str()),
+            "stable within a boot"
+        );
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn reads_its_own_argv() {
+        let argv = process_argv(std::process::id()).expect("own argv");
+        assert!(!argv.is_empty());
     }
 
     #[test]
