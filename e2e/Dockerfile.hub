@@ -25,9 +25,15 @@ ARG E2E_CARGO_BINS="--bin offdesk-hub"
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY crates crates
-RUN cargo build --release $E2E_CARGO_BINS \
+# Cargo's registry and target/ persist in BuildKit cache mounts shared by the hub and node
+# images, so a change to crates/ recompiles only what changed instead of every dependency.
+# sharing=locked: parallel E2E stacks (one per worktree) take turns compiling rather than
+# all compiling at once. Only the requested binaries are copied (target/ holds both).
+RUN --mount=type=cache,id=offdesk-e2e-cargo-registry,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,id=offdesk-e2e-cargo-target,target=/app/target,sharing=locked \
+    cargo build --release $E2E_CARGO_BINS \
     && mkdir /out \
-    && find target/release -maxdepth 1 -type f -name 'offdesk-*' -perm -u+x -exec cp {} /out/ \;
+    && for bin in $(echo "$E2E_CARGO_BINS" | sed 's/--bin//g'); do cp "target/release/$bin" /out/; done
 
 FROM scratch AS rust-prebuilt
 COPY e2e/.prebuilt/ /out/
