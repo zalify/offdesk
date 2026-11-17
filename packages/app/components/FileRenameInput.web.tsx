@@ -14,11 +14,14 @@ export function FileRenameInput({
   onCommit,
   onCancel,
   centered = false,
+  touch = false,
 }: {
   entry: DirEntry;
   onCommit: (entry: DirEntry, name: string) => Promise<string | null>;
   onCancel: () => void;
   centered?: boolean;
+  /** Phone: 16px text (no iOS zoom on focus) and a 40px field. */
+  touch?: boolean;
 }) {
   const [value, setValue] = useState(entry.name);
   const [error, setError] = useState<string | null>(null);
@@ -83,10 +86,10 @@ export function FileRenameInput({
         flex: 1,
         minWidth: 0,
         width: centered ? "100%" : undefined,
-        height: 24,
+        height: touch ? 40 : 24,
         padding: "0 6px",
         fontFamily: "var(--font-display)",
-        fontSize: rem(13),
+        fontSize: touch ? rem(16) : rem(13),
         textAlign: centered ? "center" : "left",
         color: colors.fg0,
         background: colors.bg0,

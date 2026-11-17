@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ChevronLeft, ChevronRight, FolderPlus, LayoutGrid, List, Pin, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, FolderPlus, LayoutGrid, List, MapPin, Pin, Plus, Upload } from "lucide-react";
 import { colors } from "@/lib/colors";
 import type { Crumb } from "@/lib/fileBrowser";
 import { rem } from "@/lib/rem";
@@ -34,6 +34,9 @@ export interface ToolbarProps {
   canEdit?: boolean;
   onNewFolder?: () => void;
   onUpload?: () => void;
+  /** Phone: the "+" sheet and the Places sheet. */
+  onAdd?: () => void;
+  onPlaces?: () => void;
 }
 
 /** Filter box and show-hidden toggle; in the toolbar on desktop, a row of their own on the phone. */
@@ -249,7 +252,9 @@ export function FileBrowserToolbar(props: ToolbarProps) {
       {!touch && button("file-browser-back", "Back (⌘[)", props.onBack, <ChevronLeft size={16} aria-hidden />, !props.canBack)}
       {!touch && button("file-browser-forward", "Forward (⌘])", props.onForward, <ChevronRight size={16} aria-hidden />, !props.canForward)}
       {button("file-browser-up", "Up one folder", () => up && onGo(up), "↑", !up)}
-      {button("file-browser-home", "Home folder", () => onGo("~"), "~")}
+      {touch
+        ? props.onPlaces && button("file-browser-places", "Places", props.onPlaces, <MapPin size={16} aria-hidden />)
+        : button("file-browser-home", "Home folder", () => onGo("~"), "~")}
       {button(
         "file-browser-refresh",
         "Refresh",
@@ -257,6 +262,7 @@ export function FileBrowserToolbar(props: ToolbarProps) {
         <span aria-hidden style={{ display: "inline-block", ...(loading ? SPIN : {}) }}>↻</span>,
       )}
       {breadcrumb}
+      {touch && props.canEdit && props.onAdd && button("file-browser-add", "Add", props.onAdd, <Plus size={18} aria-hidden />)}
       {!touch && (
         <>
           {props.canEdit && props.onNewFolder && button(

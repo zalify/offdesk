@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, MutableRefObject, PointerEvent as ReactPointerEvent } from "react";
 import type { DirEntry } from "@offdesk/shared";
 import { listDirectory } from "@/lib/api";
 import { FilePreview } from "./FilePreview.web";
@@ -40,7 +40,26 @@ import type { ArrowKey } from "@/lib/fileGrid";
 import { colors } from "@/lib/colors";
 import { FileBrowserSidebar } from "./FileBrowserSidebar.web";
 import { FileBrowserToolbar, FileFilterControls } from "./FileBrowserToolbar.web";
-import { selectionOf } from "@/lib/fileActions";
+import { selectionOf, setFileClipboard } from "@/lib/fileActions";
+import {
+  createClickSuppressor,
+  FILE_LONG_PRESS_MS,
+  FILE_LONG_PRESS_SLOP_PX,
+  mobileBarActions,
+  mobileMoreActions,
+  pasteBarState,
+} from "@/lib/fileTouch";
+import type { MobileActionId } from "@/lib/fileTouch";
+import { useLongPress } from "@/lib/longPress";
+import {
+  FileActionBar,
+  FileAddSheet,
+  FilePasteBar,
+  FilePlacesSheet,
+  FileSelectBar,
+  FileSheet,
+  FileSheetRow,
+} from "./FileMobileUi.web";
 import { FileActionMenu } from "./FileActionMenu.web";
 import { FileConflictDialog, FileTransferStrip } from "./FileTransferUi.web";
 import { useFileActions } from "./useFileActions";
@@ -78,6 +97,7 @@ export function FileBrowser({
   terminalCwds,
   onDirtyChange,
   onOpenTerminal,
+  backHandlerRef,
 }: {
   machineId: string;
   homeDir?: string;
@@ -92,6 +112,11 @@ export function FileBrowser({
   onDirtyChange?: (dirty: boolean) => void;
   /** Start a terminal in a folder ("Open in Terminal"); omitted when not allowed. */
   onOpenTerminal?: (cwd: string) => void;
+  /**
+   * Phone: filled with a function the surface's back/close calls first; it
+   * closes an open sheet or leaves selection mode and returns true when it did.
+   */
+  backHandlerRef?: MutableRefObject<(() => boolean) | null>;
 }) {
   const [path, setPath] = useState(startPath);
   const [history, setHistory] = useState(() => createHistory(startPath));
@@ -111,6 +136,11 @@ export function FileBrowser({
   const filterRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const columnsRef = useRef(1);
+  // Phone: selection mode, the open sheet, and the row a press started on.
+  const [selecting, setSelecting] = useState(false);
+  const [sheet, setSheet] = useState<"add" | "places" | "more" | null>(null);
+  const pressRow = useRef<string | null>(null);
+  const [suppressClick] = useState(createClickSuppressor);
 
   // The phone always shows the plain name-sorted list.
   const effective = touch ? DEFAULT_VIEW_PREFS : prefs;
@@ -124,12 +154,15 @@ export function FileBrowser({
     setFilter("");
     setPreviewPath(null);
     setEditingPath(false);
+    setSelecting(false);
+    setSheet(null);
+    if (touch) setSelection(emptySelection());
     // A clicked row unmounts with the listing; keep keys flowing to the root.
     const active = document.activeElement;
     if (active instanceof HTMLElement && active.hasAttribute("data-row")) {
       rootRef.current?.focus({ preventScroll: true });
     }
-  }, []);
+  }, [touch]);
 
   // The start path changes when the terminal opens a directory link while the
   // browser is already open.
@@ -174,7 +207,11 @@ export function FileBrowser({
   useEffect(() => {
     const filterChanged = lastFilter.current !== filter;
     lastFilter.current = filter;
-    if (touch || listing.status !== "ready") return;
+    if (listing.status !== "ready") return;
+    if (touch) {
+      setSelection((current) => (current.selected.size === 0 ? current : pruneSelection(current, order)));
+      return;
+    }
     setSelection((current) => {
       const pruned = pruneSelection(current, order);
       if (order.length === 0) return pruned;
@@ -282,9 +319,10 @@ export function FileBrowser({
     [order],
   );
 
+  // On the phone rows only show a selection while selection mode is on.
   const selected = useMemo(
-    () => (touch ? new Set<string>() : selection.selected),
-    [touch, selection],
+    () => (touch && !selecting ? new Set<string>() : selection.selected),
+    [touch, selecting, selection],
   );
   const selectedEntries = useMemo(
     () => visible.filter((e) => selection.selected.has(e.path)),
@@ -334,6 +372,106 @@ export function FileBrowser({
     },
     beforeCreate: () => setFilter(""),
   });
+
+  // --- phone: selection mode, action bar, paste bar ---------------------------
+
+  const exitSelecting = useCallback(() => {
+    setSelecting(false);
+    setSheet(null);
+    setSelection(emptySelection());
+  }, []);
+
+  const startSelecting = useCallback((entryPath: string) => {
+    setSelecting(true);
+    setSelection((current) => (current.selected.has(entryPath) ? current : selectionOf([entryPath])));
+  }, []);
+
+  const longPress = useLongPress(
+    () => {
+      const entryPath = pressRow.current;
+      if (!entryPath || !order.includes(entryPath)) return;
+      suppressClick.arm();
+      if (selecting) {
+        setSelection((current) =>
+          current.selected.has(entryPath) ? current : toggleSelect(current, entryPath),
+        );
+      } else {
+        startSelecting(entryPath);
+      }
+    },
+    touch && listing.status === "ready" && previewPath === null && actions.renaming === null,
+    { delayMs: FILE_LONG_PRESS_MS, slopPx: FILE_LONG_PRESS_SLOP_PX },
+  );
+
+  const barActions = useMemo(
+    () => (touch && selecting ? mobileBarActions({ targets: selectedEntries, canEdit }) : []),
+    [touch, selecting, selectedEntries, canEdit],
+  );
+  const moreActions = mobileMoreActions({
+    targets: selectedEntries,
+    canEdit,
+    canOpenTerminal: !!onOpenTerminal,
+    pinned,
+  });
+  const pasteBar = touch
+    ? pasteBarState(actions.clipboard, machineId, path, canEdit)
+    : null;
+
+  const runBarAction = (id: MobileActionId) => {
+    const targets = selectedEntries;
+    const first = targets[0];
+    switch (id) {
+      case "more":
+        setSheet("more");
+        return;
+      case "download":
+        void actions.download(targets);
+        break;
+      case "move":
+        actions.cut(targets);
+        break;
+      case "copy":
+        actions.copy(targets);
+        break;
+      case "rename":
+        if (first) actions.beginRename(first);
+        break;
+      case "trash":
+        void actions.trash(targets);
+        break;
+      case "duplicate":
+        void actions.duplicate(targets);
+        break;
+      case "copy-path":
+        void actions.copyPath(targets);
+        break;
+      case "open-terminal":
+        actions.openInTerminal(targets);
+        break;
+      case "pin":
+        if (first) actions.pinToSidebar(first, pinned.includes(first.path));
+        break;
+    }
+    exitSelecting();
+  };
+
+  useEffect(() => {
+    if (!backHandlerRef) return;
+    backHandlerRef.current = () => {
+      if (sheet !== null) {
+        setSheet(null);
+        return true;
+      }
+      if (selecting) {
+        exitSelecting();
+        return true;
+      }
+      return false;
+    };
+    return () => {
+      backHandlerRef.current = null;
+    };
+  }, [backHandlerRef, sheet, selecting, exitSelecting]);
 
   // The renamed row unmounts with its input; keep keys flowing to the root.
   const renamingNow = actions.renaming !== null;
@@ -504,6 +642,10 @@ export function FileBrowser({
     onSelect: selectEntry,
     onOpen: activate,
     interaction,
+    selecting: touch && selecting,
+    rename: touch
+      ? { path: actions.renaming, onCommit: actions.commitRename, onCancel: actions.cancelRename }
+      : undefined,
   };
 
   return (
@@ -532,7 +674,15 @@ export function FileBrowser({
         fontFamily: "var(--font-display)",
       }}
     >
-      <FileBrowserToolbar
+      {touch && selecting && (
+        <FileSelectBar
+          count={selectedEntries.length}
+          total={order.length}
+          onSelectAll={() => setSelection((current) => selectAll(current, order))}
+          onCancel={exitSelecting}
+        />
+      )}
+      {!(touch && selecting) && <FileBrowserToolbar
         {...filterProps}
         crumbs={crumbs}
         up={up}
@@ -556,7 +706,9 @@ export function FileBrowser({
           void actions.newFolder();
         }}
         onUpload={ix.openUploadPicker}
-      />
+        onAdd={() => setSheet("add")}
+        onPlaces={() => setSheet("places")}
+      />}
       <input
         ref={ix.uploadInput}
         type="file"
@@ -596,7 +748,7 @@ export function FileBrowser({
               borderRight: previewPath !== null ? `1px solid ${colors.lineSoft}` : "none",
             }}
           >
-            {touch && (
+            {touch && !selecting && (
               <div
                 style={{
                   display: "flex",
@@ -617,7 +769,38 @@ export function FileBrowser({
               className="odk-fb-list"
               data-drop={ix.hover === "list" ? "true" : undefined}
               {...(touch ? {} : ix.listDrop)}
-              onContextMenu={touch ? undefined : (event) => ix.openMenu(event, visible)}
+              onContextMenu={
+                touch
+                  ? (event) => {
+                      // The long-press must not open the system's text menu.
+                      if (!(event.target as HTMLElement).closest("input")) event.preventDefault();
+                    }
+                  : (event) => ix.openMenu(event, visible)
+              }
+              // The click that ends a long-press must not toggle the new selection.
+              onClickCapture={
+                touch
+                  ? (event) => {
+                      if (suppressClick.consume()) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                      }
+                    }
+                  : undefined
+              }
+              onPointerDown={
+                touch
+                  ? (event: ReactPointerEvent<HTMLDivElement>) => {
+                      const row = (event.target as HTMLElement).closest<HTMLElement>("[data-row]");
+                      pressRow.current = row?.dataset.path ?? null;
+                      suppressClick.clear();
+                      if (row) longPress.onPointerDown(event);
+                    }
+                  : undefined
+              }
+              onPointerMove={touch ? longPress.onPointerMove : undefined}
+              onPointerUp={touch ? longPress.onPointerUp : undefined}
+              onPointerCancel={touch ? longPress.onPointerCancel : undefined}
               onClick={(event) => {
                 // Empty space deselects.
                 if (touch) return;
@@ -663,8 +846,18 @@ export function FileBrowser({
                 <FileListView {...viewProps} touch={touch} sort={effective.sort} onSort={setSort} />
               )}
             </div>
-            {!touch && actions.transfer && (
-              <FileTransferStrip transfer={actions.transfer} onCancel={actions.cancelTransfer} />
+            {actions.transfer && (
+              <FileTransferStrip transfer={actions.transfer} onCancel={actions.cancelTransfer} touch={touch} />
+            )}
+            {touch && selecting && barActions.length > 0 && (
+              <FileActionBar actions={barActions} onAction={runBarAction} />
+            )}
+            {touch && !selecting && pasteBar?.visible && (
+              <FilePasteBar
+                state={pasteBar}
+                onPaste={() => void actions.paste(path)}
+                onCancel={() => setFileClipboard(null)}
+              />
             )}
             {!touch && listing.status === "ready" && (
               <FileStatusBar total={visible.length} selected={selectedEntries} />
@@ -696,7 +889,49 @@ export function FileBrowser({
           onClose={ix.closeMenu}
         />
       )}
-      {actions.conflict && <FileConflictDialog prompt={actions.conflict} />}
+      {touch && sheet === "add" && (
+        <FileAddSheet
+          onClose={() => setSheet(null)}
+          onNewFolder={() => {
+            setSheet(null);
+            setFilter("");
+            void actions.newFolder();
+          }}
+          onNewFile={() => {
+            setSheet(null);
+            setFilter("");
+            void actions.newFile();
+          }}
+          onUpload={() => {
+            setSheet(null);
+            ix.openUploadPicker();
+          }}
+        />
+      )}
+      {touch && sheet === "places" && (
+        <FilePlacesSheet
+          path={path}
+          homeDir={homeDir}
+          terminalCwds={terminalCwds ?? []}
+          pinned={pinned}
+          onGo={go}
+          onUnpin={unpin}
+          onClose={() => setSheet(null)}
+        />
+      )}
+      {touch && sheet === "more" && (
+        <FileSheet title="More" testid="file-browser-more-sheet" onClose={() => setSheet(null)}>
+          {moreActions.map((action) => (
+            <FileSheetRow
+              key={action.id}
+              testid={`file-mobile-action-${action.id}`}
+              label={action.label}
+              onClick={() => runBarAction(action.id)}
+            />
+          ))}
+        </FileSheet>
+      )}
+      {actions.conflict && <FileConflictDialog prompt={actions.conflict} touch={touch} />}
     </div>
   );
 }

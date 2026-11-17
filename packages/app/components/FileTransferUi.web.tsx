@@ -9,9 +9,12 @@ import type { ConflictChoice, ConflictPrompt, TransferState } from "./useFileAct
 export function FileTransferStrip({
   transfer,
   onCancel,
+  touch = false,
 }: {
   transfer: TransferState;
   onCancel: () => void;
+  /** Phone: tighter padding and a 44px cancel target. */
+  touch?: boolean;
 }) {
   const known = transfer.total > 0;
   const pct = known ? Math.min(100, Math.round((transfer.done / transfer.total) * 100)) : null;
@@ -33,7 +36,7 @@ export function FileTransferStrip({
         display: "flex",
         alignItems: "center",
         gap: 12,
-        padding: "6px 20px",
+        padding: touch ? "0 4px 0 12px" : "6px 20px",
         borderTop: `1px solid ${colors.lineSoft}`,
         background: colors.bg1,
         fontSize: rem(12),
@@ -70,6 +73,7 @@ export function FileTransferStrip({
         onClick={onCancel}
         className="odk-text-btn"
         aria-label="Cancel transfer"
+        style={touch ? { minHeight: 44, padding: "0 12px" } : undefined}
       >
         [cancel]
       </button>
@@ -80,8 +84,11 @@ export function FileTransferStrip({
 /** "An item named X already exists": Keep Both / Replace / Stop. */
 export function FileConflictDialog({
   prompt,
+  touch = false,
 }: {
   prompt: ConflictPrompt;
+  /** Phone: bottom-anchored card, full-width 44px buttons. */
+  touch?: boolean;
 }) {
   const [all, setAll] = useState(false);
   const keepRef = useRef<HTMLButtonElement | null>(null);
@@ -100,7 +107,9 @@ export function FileConflictDialog({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [prompt]);
 
-  const label = { textTransform: "lowercase" } as const;
+  const label = touch
+    ? ({ textTransform: "lowercase", height: 44, flex: "1 1 30%" } as const)
+    : ({ textTransform: "lowercase" } as const);
   return (
     <div
       role="alertdialog"
@@ -113,14 +122,14 @@ export function FileConflictDialog({
         zIndex: 1000,
         background: colorAlpha.overlay,
         display: "flex",
-        alignItems: "center",
+        alignItems: touch ? "flex-end" : "center",
         justifyContent: "center",
-        padding: 16,
+        padding: touch ? "16px 16px max(16px, env(safe-area-inset-bottom))" : 16,
       }}
     >
       <div
         className="odk-float"
-        style={{ minWidth: 280, maxWidth: 460, width: "100%", padding: 24, display: "flex", flexDirection: "column", gap: 12 }}
+        style={{ minWidth: touch ? 0 : 280, maxWidth: 460, width: "100%", padding: 24, display: "flex", flexDirection: "column", gap: 12 }}
       >
         <div
           id="file-conflict-title"
@@ -143,7 +152,7 @@ export function FileConflictDialog({
             apply to all
           </label>
         )}
-        <div style={{ display: "flex", justifyContent: "flex-end", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+        <div style={{ display: "flex", justifyContent: touch ? "stretch" : "flex-end", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
           <button type="button" data-testid="file-conflict-stop" onClick={() => answer("stop")} className="odk-btn odk-btn--secondary odk-btn--sm" style={label}>
             Stop
           </button>

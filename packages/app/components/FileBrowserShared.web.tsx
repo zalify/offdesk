@@ -46,8 +46,8 @@ export function kindLabel(entry: DirEntry): string {
 /** Square text/icon button used across the toolbar (wireframes D08, P08). */
 export function toolButtonStyle(touch: boolean, active = false) {
   return {
-    width: touch ? 40 : 32,
-    height: touch ? 40 : 32,
+    width: touch ? 44 : 32,
+    height: touch ? 44 : 32,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",

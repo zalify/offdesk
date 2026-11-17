@@ -26,6 +26,10 @@ export interface FileViewProps {
   onOpen: (entry: DirEntry) => void;
   /** Desktop: inline rename and drag & drop. */
   interaction?: RowInteraction;
+  /** Phone: selection mode (rows toggle instead of opening, with a check mark). */
+  selecting?: boolean;
+  /** Phone: the row being renamed in place. */
+  rename?: { path: string | null; onCommit: RowInteraction["onRenameCommit"]; onCancel: () => void };
 }
 
 /**
@@ -41,6 +45,8 @@ export function FileListView({
   onSelect,
   onOpen,
   interaction,
+  selecting,
+  rename,
 }: FileViewProps & { sort: SortSpec; onSort: (key: SortKey) => void }) {
   return (
     <>
@@ -95,8 +101,10 @@ export function FileListView({
         <FileListRow
           key={entry.path}
           entry={entry}
-          isSelected={!touch && selected.has(entry.path)}
+          isSelected={selected.has(entry.path)}
           touch={touch}
+          selecting={selecting}
+          rename={rename}
           onSelect={onSelect}
           onOpen={onOpen}
           interaction={interaction}
@@ -113,15 +121,19 @@ function FileListRow({
   onSelect,
   onOpen,
   interaction,
+  selecting,
+  rename,
 }: {
   entry: DirEntry;
   isSelected: boolean;
   touch: boolean;
+  selecting?: boolean;
+  rename?: FileViewProps["rename"];
   onSelect: FileViewProps["onSelect"];
   onOpen: FileViewProps["onOpen"];
   interaction?: RowInteraction;
 }) {
-  const renaming = !touch && interaction?.renamingPath === entry.path;
+  const renaming = (touch ? rename?.path : interaction?.renamingPath) === entry.path;
   // An input cannot live inside a button, so a renaming row is a plain div.
   const Root = (renaming ? "div" : "button") as "button";
   const tooLarge = isTooLarge(entry);
@@ -139,12 +151,18 @@ function FileListRow({
       data-kind={entry.is_dir ? "dir" : "file"}
       data-selected={isSelected ? "true" : "false"}
       className="odk-fb-row"
-      // Phone keeps a real disabled button; on desktop an over-limit file stays
-      // selectable (for later actions) but cannot be opened.
-      disabled={touch && tooLarge}
-      aria-disabled={tooLarge ? true : undefined}
+      // An over-limit file cannot be opened but stays selectable (for later
+      // actions, and so a long-press can start on it).
+      aria-disabled={tooLarge && !selecting ? true : undefined}
+      aria-selected={touch && selecting ? isSelected : undefined}
       title={tooLarge ? "Over 20 MB" : entry.path}
-      onClick={(event) => (touch ? onOpen(entry) : onSelect(entry, clickModifiers(event)))}
+      onClick={(event) => {
+        if (!touch) return onSelect(entry, clickModifiers(event));
+        if (renaming) return;
+        // In selection mode a tap toggles; otherwise it opens (onOpen skips over-limit files).
+        if (selecting) onSelect(entry, { toggle: true, range: false });
+        else onOpen(entry);
+      }}
       onDoubleClick={touch ? undefined : () => onOpen(entry)}
       style={{
         width: "100%",
@@ -160,36 +178,64 @@ function FileListRow({
         background: isSelected ? colors.primary : undefined,
         color: isSelected ? colors.onPrimary : tooLarge ? colors.fg3 : colors.fg0,
         fontWeight: isSelected ? 600 : 400,
-        cursor: tooLarge ? "not-allowed" : "pointer",
+        cursor: tooLarge && !selecting ? "not-allowed" : "pointer",
         textAlign: "left",
         fontFamily: "var(--font-display)",
         fontSize: rem(touch ? 14 : 13.5),
-        userSelect: touch ? undefined : "none",
+        userSelect: "none",
+        WebkitUserSelect: "none",
+        WebkitTouchCallout: "none",
         scrollMarginTop: 30,
       }}
     >
       {touch ? (
         <>
-          <span aria-hidden style={{ width: 32, flexShrink: 0, fontSize: rem(11), fontWeight: 400, color: colors.fg3 }}>
+          {selecting && (
+            <span
+              aria-hidden
+              data-testid="file-browser-row-check"
+              style={{
+                width: 22,
+                height: 22,
+                flexShrink: 0,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                borderRadius: 11,
+                border: `2px solid ${isSelected ? colors.onPrimary : colors.fg3}`,
+                background: isSelected ? colors.onPrimary : "transparent",
+                color: colors.primary,
+                fontSize: rem(13),
+                fontWeight: 700,
+              }}
+            >
+              {isSelected ? "✓" : ""}
+            </span>
+          )}
+          <span aria-hidden style={{ width: 32, flexShrink: 0, fontSize: rem(11), fontWeight: 400, color: isSelected ? colors.onPrimary : colors.fg3 }}>
             {entryType(entry)}
           </span>
-          <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {entry.is_dir ? `${entry.name}/` : entry.name}
-          </span>
+          {renaming && rename ? (
+            <FileRenameInput entry={entry} touch onCommit={rename.onCommit} onCancel={rename.onCancel} />
+          ) : (
+            <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {entry.is_dir ? `${entry.name}/` : entry.name}
+            </span>
+          )}
           {tooLarge && (
-            <span style={{ fontSize: rem(12), fontWeight: 400, color: colors.fg3, flexShrink: 0 }}>
+            <span style={{ fontSize: rem(12), fontWeight: 400, color: subtle, flexShrink: 0 }}>
               {size} · over 20 MB
             </span>
           )}
           {!tooLarge && size && (
-            <span data-testid="file-browser-size" style={{ fontSize: rem(12), fontWeight: 400, color: colors.fg3, flexShrink: 0 }}>
+            <span data-testid="file-browser-size" style={{ fontSize: rem(12), fontWeight: 400, color: subtle, flexShrink: 0 }}>
               {size}
             </span>
           )}
           {entry.is_dir && (
-            <span aria-hidden style={{ color: colors.fg3, flexShrink: 0 }}>›</span>
+            <span aria-hidden style={{ color: subtle, flexShrink: 0 }}>›</span>
           )}
-          <span style={{ width: 84, textAlign: "right", fontSize: rem(11), fontWeight: 400, color: colors.fg3, flexShrink: 0 }}>
+          <span style={{ width: 84, textAlign: "right", fontSize: rem(11), fontWeight: 400, color: subtle, flexShrink: 0 }}>
             {formatRelativeTime(entry.modified_ms)}
           </span>
         </>

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { FileBrowser } from "./FileBrowser.web";
 import { colors } from "@/lib/colors";
 import { rem } from "@/lib/rem";
@@ -13,6 +13,8 @@ export function FileBrowserMobileSurface({
   homeDir,
   startPath,
   canEdit = false,
+  terminalCwds,
+  onOpenTerminal,
   onClose: close,
 }: {
   machineId: string;
@@ -20,14 +22,28 @@ export function FileBrowserMobileSurface({
   homeDir?: string;
   startPath: string;
   canEdit?: boolean;
+  /** Working directories of this machine's open terminals (Places entries). */
+  terminalCwds?: string[];
+  /** Start a terminal in a folder and leave the surface; omitted when not allowed. */
+  onOpenTerminal?: (cwd: string) => void;
   onClose: () => void;
 }) {
   // An open editor with unsaved changes keeps the surface open.
   const [dirty, setDirty] = useState(false);
+  // Back first closes a sheet or leaves selection mode, then the surface.
+  const backHandlerRef = useRef<(() => boolean) | null>(null);
   const onClose = useCallback(() => {
+    if (backHandlerRef.current?.()) return;
     if (dirty) showNotice(UNSAVED_EDIT_NOTICE);
     else close();
   }, [dirty, close]);
+  const openTerminal = useCallback(
+    (cwd: string) => {
+      onOpenTerminal?.(cwd);
+      close();
+    },
+    [onOpenTerminal, close],
+  );
   return (
     <div
       data-testid="mobile-file-browser-surface"
@@ -71,6 +87,9 @@ export function FileBrowserMobileSurface({
         startPath={startPath}
         touch
         canEdit={canEdit}
+        terminalCwds={terminalCwds}
+        onOpenTerminal={onOpenTerminal ? openTerminal : undefined}
+        backHandlerRef={backHandlerRef}
         onDirtyChange={setDirty}
       />
     </div>

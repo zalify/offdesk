@@ -6,11 +6,28 @@ import { colors } from "@/lib/colors";
 import { basename } from "@/lib/fileManager";
 import { rem } from "@/lib/rem";
 
-interface Place {
+export interface Place {
   key: string;
   label: string;
   path: string;
   kind: "home" | "terminal" | "pinned";
+}
+
+/** Home, then the cwds of open terminals, then pinned folders (deduplicated). */
+export function buildPlaces(homeDir: string | undefined, terminalCwds: string[], pinned: string[]): Place[] {
+  const out: Place[] = [{ key: "home", label: "Home", path: "~", kind: "home" }];
+  const seen = new Set<string>(["~", ...(homeDir ? [homeDir] : [])]);
+  for (const cwd of terminalCwds) {
+    if (seen.has(cwd)) continue;
+    seen.add(cwd);
+    out.push({ key: `t:${cwd}`, label: basename(cwd), path: cwd, kind: "terminal" });
+  }
+  for (const p of pinned) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push({ key: `p:${p}`, label: basename(p), path: p, kind: "pinned" });
+  }
+  return out;
 }
 
 /**
@@ -42,21 +59,7 @@ export function FileBrowserSidebar({
   };
   dropHover?: string | null;
 }) {
-  const places = useMemo<Place[]>(() => {
-    const out: Place[] = [{ key: "home", label: "Home", path: "~", kind: "home" }];
-    const seen = new Set<string>(["~", ...(homeDir ? [homeDir] : [])]);
-    for (const cwd of terminalCwds) {
-      if (seen.has(cwd)) continue;
-      seen.add(cwd);
-      out.push({ key: `t:${cwd}`, label: basename(cwd), path: cwd, kind: "terminal" });
-    }
-    for (const p of pinned) {
-      if (seen.has(p)) continue;
-      seen.add(p);
-      out.push({ key: `p:${p}`, label: basename(p), path: p, kind: "pinned" });
-    }
-    return out;
-  }, [homeDir, terminalCwds, pinned]);
+  const places = useMemo(() => buildPlaces(homeDir, terminalCwds, pinned), [homeDir, terminalCwds, pinned]);
 
   const isActive = (place: Place) =>
     place.path === path || (place.kind === "home" && !!homeDir && path === homeDir);

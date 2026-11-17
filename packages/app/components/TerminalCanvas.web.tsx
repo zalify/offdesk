@@ -1991,6 +1991,18 @@ function TerminalCanvasInner() {
                     homeDir={filesMachine.home_dir}
                     startPath={filesState.startPath}
                     canEdit={!viewOnlyLocked}
+                    terminalCwds={filesTerminalCwds}
+                    onOpenTerminal={
+                      isMachineController(filesMachine.id)
+                        ? (cwd) => {
+                            void handleCreateTerminal(filesMachine.id, cwd).catch((err) => {
+                              showWorkspaceToast(
+                                `Could not open a terminal: ${err instanceof Error ? err.message : String(err)}`,
+                              );
+                            });
+                          }
+                        : undefined
+                    }
                     onClose={handleCloseFiles}
                   />
                 ) : null
