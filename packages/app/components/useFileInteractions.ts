@@ -123,7 +123,7 @@ export function useFileInteractions(o: InteractionOptions) {
 
   const openUploadPicker = useCallback(() => {
     if (!o_.current.canEdit) {
-      showNotice("Files are view-only while another device controls this session");
+      showNotice("Files are view-only while the view-only lock is on");
       return;
     }
     uploadInput.current?.click();

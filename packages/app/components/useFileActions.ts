@@ -145,7 +145,7 @@ export function useFileActions(options: FileActionsOptions) {
 
   const canMutate = useCallback((): boolean => {
     if (opts.current.canEdit) return true;
-    showNotice("Files are view-only while another device controls this session");
+    showNotice("Files are view-only while the view-only lock is on");
     return false;
   }, []);
 
