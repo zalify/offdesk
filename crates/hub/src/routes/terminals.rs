@@ -1284,6 +1284,325 @@ async fn write_file(
     }
 }
 
+/// Run one file operation (mkdir, create, rename, trash, copy, move) on a
+/// machine. The body is an `FsOp` tagged by `op`.
+async fn fs_op(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(op): Json<offdesk_protocol::FsOp>,
+) -> Response {
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, &machine_id)
+        .await
+    {
+        return fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine not found".into(),
+        );
+    }
+
+    match state.manager.fs_op(&machine_id, op).await {
+        Ok(paths) => Json(serde_json::json!({ "paths": paths })).into_response(),
+        Err(failure) => fs_op_failure_response(failure),
+    }
+}
+
+/// The `{error, message, path?}` response for a failed file operation.
+fn fs_op_failure_response(failure: crate::machine_manager::FsOpFailure) -> Response {
+    use crate::machine_manager::FsOpFailure;
+    use offdesk_protocol::FsOpErrorCode as Code;
+
+    match failure {
+        FsOpFailure::Machine {
+            code,
+            message,
+            path,
+        } => {
+            let (status, name) = match code {
+                Code::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+                Code::Exists => (StatusCode::CONFLICT, "exists"),
+                Code::PermissionDenied => (StatusCode::FORBIDDEN, "permission_denied"),
+                Code::Invalid => (StatusCode::BAD_REQUEST, "invalid"),
+                Code::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "too_large"),
+                Code::NoSpace => (StatusCode::INSUFFICIENT_STORAGE, "no_space"),
+                Code::Io => (StatusCode::BAD_GATEWAY, "io"),
+            };
+            let mut body = serde_json::json!({ "error": name, "message": message });
+            if let Some(path) = path {
+                body["path"] = path.into();
+            }
+            (status, Json(body)).into_response()
+        }
+        FsOpFailure::Outdated => fs_read_error(
+            StatusCode::CONFLICT,
+            "machine_outdated",
+            "This machine needs to be updated before it can manage files".into(),
+        ),
+        FsOpFailure::NoMachine => fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine is not connected".into(),
+        ),
+        FsOpFailure::Disconnected => fs_read_error(
+            StatusCode::BAD_GATEWAY,
+            "machine_disconnected",
+            "Machine disconnected".into(),
+        ),
+        FsOpFailure::Timeout => fs_read_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            "timeout",
+            "The machine took too long to finish the operation".into(),
+        ),
+    }
+}
+
+const FS_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const FS_ZIP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// One upload chunk is base64 JSON of up to `UPLOAD_CHUNK_MAX_BYTES`
+/// (~2.8 MB); axum's 2 MB default would refuse it.
+const FS_CHUNK_MAX_BODY: usize = 4 * 1024 * 1024;
+
+/// Longest `read_range` the node answers (it enforces the same cap).
+const FS_READ_RANGE_MAX: u64 = 4 * 1024 * 1024;
+
+/// Send a transfer request to a machine the caller can use.
+async fn fs_transfer(
+    state: &AppState,
+    auth_user: &AuthUser,
+    machine_id: &str,
+    msg: impl FnOnce(String) -> offdesk_protocol::HubToMachine,
+    timeout: std::time::Duration,
+) -> Result<crate::machine_manager::FsTransferReply, Response> {
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, machine_id)
+        .await
+    {
+        return Err(fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine not found".into(),
+        ));
+    }
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let msg = msg(request_id.clone());
+    state
+        .manager
+        .fs_transfer(machine_id, request_id, msg, timeout)
+        .await
+        .map_err(fs_op_failure_response)
+}
+
+fn unexpected_reply() -> Response {
+    fs_read_error(
+        StatusCode::BAD_GATEWAY,
+        "io",
+        "Unexpected reply from the machine".into(),
+    )
+}
+
+#[derive(Deserialize)]
+struct UploadBeginBody {
+    dest_dir: String,
+    filename: String,
+    size: u64,
+    #[serde(default)]
+    on_conflict: offdesk_protocol::OnConflict,
+}
+
+#[derive(Deserialize)]
+struct UploadChunkBody {
+    upload_id: String,
+    index: u32,
+    data: String,
+}
+
+#[derive(Deserialize)]
+struct UploadIdBody {
+    upload_id: String,
+}
+
+/// Start an upload into a directory; the hub picks the upload id.
+async fn fs_upload_begin(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(body): Json<UploadBeginBody>,
+) -> Response {
+    use crate::machine_manager::FsTransferReply;
+    let upload_id = uuid::Uuid::new_v4().to_string();
+    let id = upload_id.clone();
+    let msg = move |request_id| offdesk_protocol::HubToMachine::FsUploadBegin {
+        request_id,
+        upload_id: id,
+        dest_dir: body.dest_dir,
+        filename: body.filename,
+        size: body.size,
+        on_conflict: body.on_conflict,
+    };
+    match fs_transfer(&state, &auth_user, &machine_id, msg, FS_STEP_TIMEOUT).await {
+        Ok(FsTransferReply::Ack { .. }) => {
+            Json(serde_json::json!({ "upload_id": upload_id })).into_response()
+        }
+        Ok(_) => unexpected_reply(),
+        Err(response) => response,
+    }
+}
+
+async fn fs_upload_chunk(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(body): Json<UploadChunkBody>,
+) -> Response {
+    use crate::machine_manager::FsTransferReply;
+    let msg = move |request_id| offdesk_protocol::HubToMachine::FsUploadChunk {
+        request_id,
+        upload_id: body.upload_id,
+        index: body.index,
+        data: body.data,
+    };
+    match fs_transfer(&state, &auth_user, &machine_id, msg, FS_STEP_TIMEOUT).await {
+        Ok(FsTransferReply::Ack { received }) => {
+            Json(serde_json::json!({ "received": received })).into_response()
+        }
+        Ok(_) => unexpected_reply(),
+        Err(response) => response,
+    }
+}
+
+async fn fs_upload_end(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(body): Json<UploadIdBody>,
+) -> Response {
+    use crate::machine_manager::FsTransferReply;
+    let msg = move |request_id| offdesk_protocol::HubToMachine::FsUploadEnd {
+        request_id,
+        upload_id: body.upload_id,
+    };
+    match fs_transfer(&state, &auth_user, &machine_id, msg, FS_STEP_TIMEOUT).await {
+        Ok(FsTransferReply::Done { path, size }) => {
+            Json(serde_json::json!({ "path": path, "size": size })).into_response()
+        }
+        Ok(_) => unexpected_reply(),
+        Err(response) => response,
+    }
+}
+
+async fn fs_upload_abort(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(body): Json<UploadIdBody>,
+) -> Response {
+    if !state
+        .manager
+        .user_can_access_machine(&auth_user.user_id, &machine_id)
+        .await
+    {
+        return fs_read_error(
+            StatusCode::NOT_FOUND,
+            "machine_not_found",
+            "Machine not found".into(),
+        );
+    }
+    state
+        .manager
+        .fs_upload_abort(&machine_id, body.upload_id)
+        .await;
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+struct ReadRangeQuery {
+    path: String,
+    #[serde(default)]
+    offset: u64,
+    #[serde(default = "default_read_range_length")]
+    length: u64,
+}
+
+fn default_read_range_length() -> u64 {
+    FS_READ_RANGE_MAX
+}
+
+/// Read a byte range of a regular file as base64 JSON.
+async fn fs_read_range(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Query(query): Query<ReadRangeQuery>,
+) -> Response {
+    use crate::machine_manager::FsTransferReply;
+    if query.path.is_empty() {
+        return fs_read_error(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            "path is required".into(),
+        );
+    }
+    if query.length > FS_READ_RANGE_MAX {
+        return fs_read_error(
+            StatusCode::BAD_REQUEST,
+            "invalid",
+            format!("length is capped at {FS_READ_RANGE_MAX} bytes"),
+        );
+    }
+    let msg = move |request_id| offdesk_protocol::HubToMachine::FsReadRange {
+        request_id,
+        path: query.path,
+        offset: query.offset,
+        length: query.length,
+    };
+    match fs_transfer(&state, &auth_user, &machine_id, msg, FS_STEP_TIMEOUT).await {
+        Ok(FsTransferReply::Range {
+            size,
+            data_base64,
+            eof,
+        }) => Json(serde_json::json!({
+            "size": size,
+            "data_base64": data_base64,
+            "eof": eof,
+        }))
+        .into_response(),
+        Ok(_) => unexpected_reply(),
+        Err(response) => response,
+    }
+}
+
+#[derive(Deserialize)]
+struct ZipBody {
+    paths: Vec<String>,
+}
+
+/// Zip files/folders on the machine; the app then pulls the zip with
+/// `read_range`.
+async fn fs_zip(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Json(body): Json<ZipBody>,
+) -> Response {
+    use crate::machine_manager::FsTransferReply;
+    let msg = move |request_id| offdesk_protocol::HubToMachine::FsZip {
+        request_id,
+        paths: body.paths,
+    };
+    match fs_transfer(&state, &auth_user, &machine_id, msg, FS_ZIP_TIMEOUT).await {
+        Ok(FsTransferReply::Zip { path, size, name }) => {
+            Json(serde_json::json!({ "path": path, "size": size, "name": name })).into_response()
+        }
+        Ok(_) => unexpected_reply(),
+        Err(response) => response,
+    }
+}
+
 async fn get_machine_stats(
     Path(machine_id): Path<String>,
     State(state): State<AppState>,
@@ -1351,6 +1670,25 @@ pub fn router() -> Router<AppState> {
             // 2 MB default would refuse it.
             put(write_file).layer(DefaultBodyLimit::max(FS_WRITE_MAX_BODY)),
         )
+        .route("/api/machines/{machine_id}/fs/op", post(fs_op))
+        .route(
+            "/api/machines/{machine_id}/fs/upload/begin",
+            post(fs_upload_begin),
+        )
+        .route(
+            "/api/machines/{machine_id}/fs/upload/chunk",
+            post(fs_upload_chunk).layer(DefaultBodyLimit::max(FS_CHUNK_MAX_BODY)),
+        )
+        .route(
+            "/api/machines/{machine_id}/fs/upload/end",
+            post(fs_upload_end),
+        )
+        .route(
+            "/api/machines/{machine_id}/fs/upload/abort",
+            post(fs_upload_abort),
+        )
+        .route("/api/machines/{machine_id}/fs/read_range", get(fs_read_range))
+        .route("/api/machines/{machine_id}/fs/zip", post(fs_zip))
         .route("/api/machines/{machine_id}/stats", get(get_machine_stats))
 }
 
@@ -1660,6 +1998,360 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(body["error"], "conflict");
         assert_eq!(body["sha256"], "ef");
+        machine_side.await.unwrap();
+    }
+
+    async fn post_fs_op(state: &AppState, machine_id: &str, body: Value) -> (StatusCode, Value) {
+        let token = sign_jwt("user-a", &state.jwt_secret);
+        let response = super::router()
+            .with_state(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(format!("/api/machines/{machine_id}/fs/op"))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn fs_op_runs_and_maps_errors() {
+        use offdesk_protocol::{FsOp, FsOpErrorCode};
+        let state = state_with_terminals(Vec::new()).await;
+        let mkdir = serde_json::json!({ "op": "mkdir", "path": "/w/new" });
+        // machine-a registered without capabilities: it predates fs-ops-v1.
+        let (status, body) = post_fs_op(&state, "machine-a", mkdir.clone()).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "machine_outdated");
+
+        let (status, _) = post_fs_op(&state, "other", mkdir.clone()).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_OPS_CAPABILITY.to_string()],
+            )
+            .await;
+        let machine_side = {
+            let manager = state.manager.clone();
+            tokio::spawn(async move {
+                // First request succeeds, the second finds the target taken.
+                for round in 0..2 {
+                    let Some(HubToMachine::FsOp { request_id, op }) = commands.recv().await else {
+                        panic!("expected FsOp");
+                    };
+                    let reply = if round == 0 {
+                        assert_eq!(
+                            op,
+                            FsOp::Copy {
+                                sources: vec!["/w/a".into()],
+                                dest_dir: "/w".into(),
+                                on_conflict: offdesk_protocol::OnConflict::Error,
+                            }
+                        );
+                        MachineToHub::FsOpResult {
+                            request_id,
+                            paths: vec!["/w/a copy".into()],
+                        }
+                    } else {
+                        MachineToHub::FsOpError {
+                            request_id,
+                            code: FsOpErrorCode::Exists,
+                            message: "taken".into(),
+                            path: Some("/w/new".into()),
+                        }
+                    };
+                    manager.handle_machine_message("machine-a", reply).await;
+                }
+            })
+        };
+        // on_conflict is optional in the body.
+        let copy = serde_json::json!({ "op": "copy", "sources": ["/w/a"], "dest_dir": "/w" });
+        let (status, body) = post_fs_op(&state, "machine-a", copy).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["paths"], serde_json::json!(["/w/a copy"]));
+
+        let (status, body) = post_fs_op(&state, "machine-a", mkdir).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "exists");
+        assert_eq!(body["path"], "/w/new");
+        machine_side.await.unwrap();
+    }
+
+    async fn fs_request(
+        state: &AppState,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let token = sign_jwt("user-a", &state.jwt_secret);
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"));
+        let body = match body {
+            Some(body) => {
+                request = request.header(header::CONTENT_TYPE, "application/json");
+                Body::from(body.to_string())
+            }
+            None => Body::empty(),
+        };
+        let response = super::router()
+            .with_state(state.clone())
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn fs_upload_runs_begin_chunk_end_and_abort() {
+        let state = state_with_terminals(Vec::new()).await;
+        let begin_uri = "/api/machines/machine-a/fs/upload/begin";
+        let begin_body = serde_json::json!({
+            "dest_dir": "/w", "filename": "a.bin", "size": 3_000_000, "on_conflict": "keep_both"
+        });
+        // machine-a registered without capabilities: it predates fs-ops-v1.
+        let (status, body) =
+            fs_request(&state, Method::POST, begin_uri, Some(begin_body.clone())).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "machine_outdated");
+
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_OPS_CAPABILITY.to_string()],
+            )
+            .await;
+        let machine_side = {
+            let manager = state.manager.clone();
+            tokio::spawn(async move {
+                let Some(HubToMachine::FsUploadBegin {
+                    request_id,
+                    upload_id,
+                    dest_dir,
+                    filename,
+                    size,
+                    on_conflict,
+                }) = commands.recv().await
+                else {
+                    panic!("expected FsUploadBegin");
+                };
+                assert_eq!(
+                    (dest_dir.as_str(), filename.as_str(), size),
+                    ("/w", "a.bin", 3_000_000)
+                );
+                assert_eq!(on_conflict, offdesk_protocol::OnConflict::KeepBoth);
+                let reply = MachineToHub::FsUploadAck {
+                    request_id,
+                    received: 0,
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+
+                let Some(HubToMachine::FsUploadChunk {
+                    request_id,
+                    upload_id: chunk_upload,
+                    index,
+                    data,
+                }) = commands.recv().await
+                else {
+                    panic!("expected FsUploadChunk");
+                };
+                assert_eq!((chunk_upload.as_str(), index), (upload_id.as_str(), 0));
+                // A max-size chunk is bigger than axum's default body limit.
+                assert!(data.len() > 2 * 1024 * 1024);
+                let reply = MachineToHub::FsUploadAck {
+                    request_id,
+                    received: 1_000_000,
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+
+                let Some(HubToMachine::FsUploadEnd { request_id, .. }) = commands.recv().await
+                else {
+                    panic!("expected FsUploadEnd");
+                };
+                let reply = MachineToHub::FsUploadDone {
+                    request_id,
+                    path: "/w/a copy.bin".into(),
+                    size: 3_000_000,
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+
+                let Some(HubToMachine::FsUploadAbort { upload_id: aborted }) =
+                    commands.recv().await
+                else {
+                    panic!("expected FsUploadAbort");
+                };
+                assert_eq!(aborted, upload_id);
+            })
+        };
+
+        let (status, body) = fs_request(&state, Method::POST, begin_uri, Some(begin_body)).await;
+        assert_eq!(status, StatusCode::OK);
+        let upload_id = body["upload_id"].as_str().unwrap().to_string();
+        assert!(!upload_id.is_empty());
+
+        let chunk = serde_json::json!({
+            "upload_id": upload_id, "index": 0, "data": "A".repeat(2_800_000)
+        });
+        let (status, body) = fs_request(
+            &state,
+            Method::POST,
+            "/api/machines/machine-a/fs/upload/chunk",
+            Some(chunk),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["received"], 1_000_000);
+
+        let end = serde_json::json!({ "upload_id": upload_id });
+        let (status, body) = fs_request(
+            &state,
+            Method::POST,
+            "/api/machines/machine-a/fs/upload/end",
+            Some(end.clone()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["path"], "/w/a copy.bin");
+        assert_eq!(body["size"], 3_000_000);
+
+        let (status, _) = fs_request(
+            &state,
+            Method::POST,
+            "/api/machines/machine-a/fs/upload/abort",
+            Some(end),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        machine_side.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fs_read_range_and_zip_relay_replies_and_errors() {
+        use offdesk_protocol::FsOpErrorCode;
+        let state = state_with_terminals(Vec::new()).await;
+        let range_uri = "/api/machines/machine-a/fs/read_range?path=%2Fw%2Fa.zip&offset=4&length=8";
+        let (status, body) = fs_request(&state, Method::GET, range_uri, None).await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(body["error"], "machine_outdated");
+
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_OPS_CAPABILITY.to_string()],
+            )
+            .await;
+        let machine_side = {
+            let manager = state.manager.clone();
+            tokio::spawn(async move {
+                let Some(HubToMachine::FsReadRange {
+                    request_id,
+                    path,
+                    offset,
+                    length,
+                }) = commands.recv().await
+                else {
+                    panic!("expected FsReadRange");
+                };
+                assert_eq!((path.as_str(), offset, length), ("/w/a.zip", 4, 8));
+                let reply = MachineToHub::FsReadRangeResult {
+                    request_id,
+                    size: 12,
+                    data_base64: "AAAAAAAAAAA=".into(),
+                    eof: true,
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+
+                let Some(HubToMachine::FsReadRange { request_id, .. }) = commands.recv().await
+                else {
+                    panic!("expected FsReadRange");
+                };
+                let reply = MachineToHub::FsOpError {
+                    request_id,
+                    code: FsOpErrorCode::Invalid,
+                    message: "not a regular file".into(),
+                    path: Some("/w".into()),
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+
+                let Some(HubToMachine::FsZip { request_id, paths }) = commands.recv().await else {
+                    panic!("expected FsZip");
+                };
+                assert_eq!(paths, ["/w/a", "/w/b"]);
+                let reply = MachineToHub::FsZipResult {
+                    request_id,
+                    path: "/tmp/offdesk-zips-1/x.zip".into(),
+                    size: 99,
+                    name: "w".into(),
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+            })
+        };
+
+        let (status, body) = fs_request(&state, Method::GET, range_uri, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({ "size": 12, "data_base64": "AAAAAAAAAAA=", "eof": true })
+        );
+
+        let (status, body) = fs_request(
+            &state,
+            Method::GET,
+            "/api/machines/machine-a/fs/read_range?path=%2Fw",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid");
+        assert_eq!(body["path"], "/w");
+
+        // Over the cap is refused here, without asking the machine.
+        let (status, body) = fs_request(
+            &state,
+            Method::GET,
+            "/api/machines/machine-a/fs/read_range?path=%2Fw%2Fa&length=4194305",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"], "invalid");
+
+        let (status, body) = fs_request(
+            &state,
+            Method::POST,
+            "/api/machines/machine-a/fs/zip",
+            Some(serde_json::json!({ "paths": ["/w/a", "/w/b"] })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body,
+            serde_json::json!({ "path": "/tmp/offdesk-zips-1/x.zip", "size": 99, "name": "w" })
+        );
         machine_side.await.unwrap();
     }
 

@@ -187,6 +187,71 @@ pub enum FsWriteErrorCode {
     Io,
 }
 
+/// Capability a machine advertises when it can answer `HubToMachine::FsOp`.
+pub const FS_OPS_CAPABILITY: &str = "fs-ops-v1";
+
+/// Largest zip (`HubToMachine::FsZip`) a machine will produce, and the most the
+/// app downloads in one go (it holds the whole file in memory as base64).
+pub const FS_ZIP_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Why an `FsOp` failed.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FsOpErrorCode {
+    NotFound,
+    Exists,
+    PermissionDenied,
+    Invalid,
+    TooLarge,
+    NoSpace,
+    Io,
+}
+
+/// What to do when a copy/move target already exists.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OnConflict {
+    /// Fail with `exists`.
+    #[default]
+    Error,
+    /// Pick a free Finder-style name (`name copy.ext`).
+    KeepBoth,
+    /// Trash the existing target first.
+    Replace,
+}
+
+/// One file operation on a machine. Paths are absolute or `~`-prefixed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum FsOp {
+    Mkdir {
+        path: String,
+    },
+    CreateFile {
+        path: String,
+    },
+    Rename {
+        path: String,
+        /// A bare name, not a path.
+        new_name: String,
+    },
+    Trash {
+        paths: Vec<String>,
+    },
+    Copy {
+        sources: Vec<String>,
+        dest_dir: String,
+        #[serde(default)]
+        on_conflict: OnConflict,
+    },
+    Move {
+        sources: Vec<String>,
+        dest_dir: String,
+        #[serde(default)]
+        on_conflict: OnConflict,
+    },
+}
+
 /// Capability a machine advertises when it understands the chunked
 /// `HubToMachine::AttachUpload*` messages.
 pub const UPLOAD_CHUNKED_CAPABILITY: &str = "upload-chunked-v1";
@@ -1676,6 +1741,57 @@ pub enum HubToMachine {
         /// Hex SHA-256 of the content the edit started from.
         base_sha256: String,
     },
+    /// Run one file operation. Needs `FS_OPS_CAPABILITY`. Answered by
+    /// `FsOpResult` or `FsOpError`.
+    #[serde(rename = "fs_op")]
+    FsOp { request_id: String, op: FsOp },
+    /// Start an upload into a directory. Needs `FS_OPS_CAPABILITY`. Answered
+    /// by `FsUploadAck { received: 0 }` or `FsOpError`.
+    #[serde(rename = "fs_upload_begin")]
+    FsUploadBegin {
+        request_id: String,
+        upload_id: String,
+        dest_dir: String,
+        /// A bare file name.
+        filename: String,
+        size: u64,
+        #[serde(default)]
+        on_conflict: OnConflict,
+    },
+    /// Next chunk (base64, at most `UPLOAD_CHUNK_MAX_BYTES` decoded), in order.
+    /// Answered by `FsUploadAck` or `FsOpError`.
+    #[serde(rename = "fs_upload_chunk")]
+    FsUploadChunk {
+        request_id: String,
+        upload_id: String,
+        index: u32,
+        data: String,
+    },
+    /// Finish an upload. Answered by `FsUploadDone` or `FsOpError`.
+    #[serde(rename = "fs_upload_end")]
+    FsUploadEnd {
+        request_id: String,
+        upload_id: String,
+    },
+    /// Drop an upload and its part file. No reply.
+    #[serde(rename = "fs_upload_abort")]
+    FsUploadAbort { upload_id: String },
+    /// Read a byte range of a regular file. Needs `FS_OPS_CAPABILITY`.
+    /// Answered by `FsReadRangeResult` or `FsOpError`.
+    #[serde(rename = "fs_read_range")]
+    FsReadRange {
+        request_id: String,
+        path: String,
+        offset: u64,
+        length: u64,
+    },
+    /// Zip files/folders into a node-owned temp dir. Needs `FS_OPS_CAPABILITY`.
+    /// Answered by `FsZipResult` or `FsOpError`.
+    #[serde(rename = "fs_zip")]
+    FsZip {
+        request_id: String,
+        paths: Vec<String>,
+    },
     /// Start a chunked upload into an attach. Needs `UPLOAD_CHUNKED_CAPABILITY`.
     /// Answered by `AttachUploadAck { received: 0 }`.
     #[serde(rename = "attach_upload_begin")]
@@ -1939,6 +2055,49 @@ pub enum MachineToHub {
         /// The content's hash now, for `Conflict`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha256: Option<String>,
+    },
+    #[serde(rename = "fs_op_result")]
+    FsOpResult {
+        request_id: String,
+        /// Resulting absolute paths, in input order.
+        paths: Vec<String>,
+    },
+    /// Upload begun (`received` 0) or a chunk stored (bytes on disk so far).
+    #[serde(rename = "fs_upload_ack")]
+    FsUploadAck { request_id: String, received: u64 },
+    /// Upload finished; `path` is where the file ended up.
+    #[serde(rename = "fs_upload_done")]
+    FsUploadDone {
+        request_id: String,
+        path: String,
+        size: u64,
+    },
+    #[serde(rename = "fs_read_range_result")]
+    FsReadRangeResult {
+        request_id: String,
+        /// Whole file size.
+        size: u64,
+        data_base64: String,
+        /// The range reached the end of the file.
+        eof: bool,
+    },
+    #[serde(rename = "fs_zip_result")]
+    FsZipResult {
+        request_id: String,
+        /// Absolute path of the zip on the node.
+        path: String,
+        size: u64,
+        /// Suggested download name, without `.zip`.
+        name: String,
+    },
+    #[serde(rename = "fs_op_error")]
+    FsOpError {
+        request_id: String,
+        code: FsOpErrorCode,
+        message: String,
+        /// The item that failed, when one specific item did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
     },
     #[serde(rename = "fs_read_error")]
     FsReadError {
@@ -3047,6 +3206,132 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn fs_op_messages_round_trip() {
+        use super::{FsOp, FsOpErrorCode, MachineToHub, OnConflict};
+        let request = HubToMachine::FsOp {
+            request_id: "r".into(),
+            op: FsOp::Copy {
+                sources: vec!["~/a".into()],
+                dest_dir: "/tmp".into(),
+                on_conflict: OnConflict::KeepBoth,
+            },
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains(r#""type":"fs_op""#));
+        assert!(json.contains(r#""op":"copy""#));
+        assert!(json.contains(r#""on_conflict":"keep_both""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::FsOp {
+                op: FsOp::Copy {
+                    on_conflict: OnConflict::KeepBoth,
+                    ..
+                },
+                ..
+            }
+        ));
+
+        // on_conflict defaults to error; every op parses by its tag.
+        let op: FsOp =
+            serde_json::from_str(r#"{"op":"move","sources":["/a"],"dest_dir":"/b"}"#).unwrap();
+        assert!(matches!(
+            op,
+            FsOp::Move {
+                on_conflict: OnConflict::Error,
+                ..
+            }
+        ));
+        for json in [
+            r#"{"op":"mkdir","path":"/a"}"#,
+            r#"{"op":"create_file","path":"/a"}"#,
+            r#"{"op":"rename","path":"/a","new_name":"b"}"#,
+            r#"{"op":"trash","paths":["/a"]}"#,
+        ] {
+            let op: FsOp = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&op).unwrap(), json);
+        }
+
+        let ok = MachineToHub::FsOpResult {
+            request_id: "r".into(),
+            paths: vec!["/b/a".into()],
+        };
+        let json = serde_json::to_string(&ok).unwrap();
+        assert!(json.contains(r#""type":"fs_op_result""#));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::FsOpResult { paths, .. } if paths == ["/b/a"]
+        ));
+
+        let failed = MachineToHub::FsOpError {
+            request_id: "r".into(),
+            code: FsOpErrorCode::PermissionDenied,
+            message: "no".into(),
+            path: Some("/a".into()),
+        };
+        let json = serde_json::to_string(&failed).unwrap();
+        assert!(json.contains(r#""code":"permission_denied""#));
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(&json).unwrap(),
+            MachineToHub::FsOpError {
+                code: FsOpErrorCode::PermissionDenied,
+                path: Some(_),
+                ..
+            }
+        ));
+        // path is optional on the wire.
+        let json = r#"{"type":"fs_op_error","request_id":"r","code":"io","message":"x"}"#;
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(json).unwrap(),
+            MachineToHub::FsOpError { path: None, .. }
+        ));
+    }
+
+    #[test]
+    fn fs_transfer_messages_round_trip() {
+        use super::{MachineToHub, OnConflict};
+        let begin = HubToMachine::FsUploadBegin {
+            request_id: "r".into(),
+            upload_id: "u".into(),
+            dest_dir: "~/d".into(),
+            filename: "a.txt".into(),
+            size: 5,
+            on_conflict: OnConflict::Replace,
+        };
+        let json = serde_json::to_string(&begin).unwrap();
+        assert!(json.contains(r#""type":"fs_upload_begin""#));
+        assert!(json.contains(r#""on_conflict":"replace""#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::FsUploadBegin { size: 5, on_conflict: OnConflict::Replace, .. }
+        ));
+        // on_conflict defaults to error.
+        let json = r#"{"type":"fs_upload_begin","request_id":"r","upload_id":"u","dest_dir":"/d","filename":"a","size":1}"#;
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(json).unwrap(),
+            HubToMachine::FsUploadBegin { on_conflict: OnConflict::Error, .. }
+        ));
+        for json in [
+            r#"{"type":"fs_upload_chunk","request_id":"r","upload_id":"u","index":2,"data":"YQ=="}"#,
+            r#"{"type":"fs_upload_end","request_id":"r","upload_id":"u"}"#,
+            r#"{"type":"fs_upload_abort","upload_id":"u"}"#,
+            r#"{"type":"fs_read_range","request_id":"r","path":"/a","offset":4,"length":8}"#,
+            r#"{"type":"fs_zip","request_id":"r","paths":["/a","/b"]}"#,
+        ] {
+            let msg: HubToMachine = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&msg).unwrap(), json);
+        }
+        for json in [
+            r#"{"type":"fs_upload_ack","request_id":"r","received":3}"#,
+            r#"{"type":"fs_upload_done","request_id":"r","path":"/d/a","size":3}"#,
+            r#"{"type":"fs_read_range_result","request_id":"r","size":9,"data_base64":"YQ==","eof":true}"#,
+            r#"{"type":"fs_zip_result","request_id":"r","path":"/t/x.zip","size":9,"name":"x"}"#,
+        ] {
+            let msg: MachineToHub = serde_json::from_str(json).unwrap();
+            assert_eq!(serde_json::to_string(&msg).unwrap(), json);
+        }
     }
 
     #[test]

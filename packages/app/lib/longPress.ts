@@ -96,6 +96,7 @@ export function createLongPressTracker(options: {
 export function useLongPress(
   onLongPress: (point: LongPressPoint) => void,
   enabled: boolean,
+  options?: { delayMs?: number; slopPx?: number },
 ): {
   onPointerDown: (event: ReactPointerEvent<HTMLElement>) => void;
   onPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -105,6 +106,8 @@ export function useLongPress(
   const onLongPressRef = useRef(onLongPress);
   onLongPressRef.current = onLongPress;
   const trackerRef = useRef<LongPressTracker | null>(null);
+  const delayMs = options?.delayMs;
+  const slopPx = options?.slopPx;
 
   useEffect(() => {
     if (!enabled) {
@@ -114,13 +117,15 @@ export function useLongPress(
     }
     const tracker = createLongPressTracker({
       onLongPress: (point) => onLongPressRef.current(point),
+      delayMs,
+      slopPx,
     });
     trackerRef.current = tracker;
     return () => {
       tracker.dispose();
       if (trackerRef.current === tracker) trackerRef.current = null;
     };
-  }, [enabled]);
+  }, [enabled, delayMs, slopPx]);
 
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLElement>) => {

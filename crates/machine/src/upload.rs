@@ -234,7 +234,7 @@ fn io_error(e: &std::io::Error) -> (UploadErrorCode, String) {
 /// Bytes available to unprivileged writers on `path`'s volume; `None` when it
 /// cannot be determined (the write itself then reports ENOSPC).
 #[cfg(unix)]
-fn free_space(path: &std::path::Path) -> Option<u64> {
+pub(crate) fn free_space(path: &std::path::Path) -> Option<u64> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -250,7 +250,7 @@ fn free_space(path: &std::path::Path) -> Option<u64> {
 }
 
 #[cfg(not(unix))]
-fn free_space(_path: &std::path::Path) -> Option<u64> {
+pub(crate) fn free_space(_path: &std::path::Path) -> Option<u64> {
     None
 }
 

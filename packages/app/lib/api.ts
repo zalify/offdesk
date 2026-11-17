@@ -309,8 +309,11 @@ function remoteFileError(err: unknown): unknown {
   } catch {
     // Non-JSON body (proxy error page): fall through with a generic code.
   }
+  // A hub that predates a route answers a bare 404: no JSON, so no `error`.
+  // Real hub 404s always carry a code (`not_found`, `machine_not_found`, ...).
   const code =
-    body.error ?? (err.status === 504 ? "timeout" : `http_${err.status}`);
+    body.error ??
+    (err.status === 504 ? "timeout" : err.status === 404 ? "hub_outdated" : `http_${err.status}`);
   return new RemoteFileError(
     err.status,
     code,
@@ -356,6 +359,107 @@ export async function writeFile(
     throw remoteFileError(err);
   }
 }
+
+// File operations (`fs/op`), transfers and zip. Errors are RemoteFileError
+// with `code` (`exists`, `invalid`, `machine_outdated`, ...), `status`, `path`.
+export type FsConflictPolicy = "error" | "keep_both" | "replace";
+
+export type FsOp =
+  | { op: "mkdir"; path: string }
+  | { op: "create_file"; path: string }
+  | { op: "rename"; path: string; new_name: string }
+  | { op: "trash"; paths: string[] }
+  | { op: "copy"; sources: string[]; dest_dir: string; on_conflict?: FsConflictPolicy }
+  | { op: "move"; sources: string[]; dest_dir: string; on_conflict?: FsConflictPolicy };
+
+/** Runs one file operation; resolves to the resulting absolute paths. */
+export async function fsOp(
+  machineId: string,
+  op: FsOp,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  try {
+    const res = await request<{ paths: string[] }>(
+      "POST",
+      `/api/machines/${machineId}/fs/op`,
+      op,
+      signal,
+    );
+    return res.paths;
+  } catch (err) {
+    throw remoteFileError(err);
+  }
+}
+
+async function fsPost<T>(
+  machineId: string,
+  route: string,
+  body: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    return await request<T>("POST", `/api/machines/${machineId}/fs/${route}`, body, signal);
+  } catch (err) {
+    throw remoteFileError(err);
+  }
+}
+
+export const uploadBegin = (
+  machineId: string,
+  body: { dest_dir: string; filename: string; size: number; on_conflict: FsConflictPolicy },
+  signal?: AbortSignal,
+) => fsPost<{ upload_id: string }>(machineId, "upload/begin", body, signal);
+
+export const uploadChunk = (
+  machineId: string,
+  uploadId: string,
+  index: number,
+  dataBase64: string,
+  signal?: AbortSignal,
+) =>
+  fsPost<{ received: number }>(
+    machineId,
+    "upload/chunk",
+    { upload_id: uploadId, index, data: dataBase64 },
+    signal,
+  );
+
+export const uploadEnd = (machineId: string, uploadId: string, signal?: AbortSignal) =>
+  fsPost<{ path: string; size: number }>(machineId, "upload/end", { upload_id: uploadId }, signal);
+
+export const uploadAbort = (machineId: string, uploadId: string) =>
+  fsPost<void>(machineId, "upload/abort", { upload_id: uploadId });
+
+export interface RemoteRange {
+  size: number;
+  data_base64: string;
+  eof: boolean;
+}
+
+/** Reads up to 4 MiB of a regular file starting at `offset`. */
+export async function readRange(
+  machineId: string,
+  path: string,
+  offset: number,
+  length: number,
+  signal?: AbortSignal,
+): Promise<RemoteRange> {
+  const query = `path=${encodeURIComponent(path)}&offset=${offset}&length=${length}`;
+  try {
+    return await request<RemoteRange>(
+      "GET",
+      `/api/machines/${machineId}/fs/read_range?${query}`,
+      undefined,
+      signal,
+    );
+  } catch (err) {
+    throw remoteFileError(err);
+  }
+}
+
+/** Zips files/folders on the machine; `path` is the zip to pull with `readRange`. */
+export const zipPaths = (machineId: string, paths: string[], signal?: AbortSignal) =>
+  fsPost<{ path: string; size: number; name: string }>(machineId, "zip", { paths }, signal);
 
 // Bookmarks
 export const listBookmarks = (machineId: string) =>

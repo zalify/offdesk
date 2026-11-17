@@ -36,6 +36,7 @@ sha2.workspace = true
 hex.workspace = true
 toml = "0.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+trash = "5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

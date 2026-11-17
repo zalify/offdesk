@@ -1272,6 +1272,15 @@ function TerminalCanvasInner() {
   const filesMachine = filesState
     ? machines.find((machine) => machine.id === filesState.machineId)
     : undefined;
+  // Distinct working directories of the files machine's terminals, for the
+  // file browser sidebar.
+  const filesTerminalCwds = useMemo(() => {
+    if (!filesMachine) return [];
+    const cwds = terminals
+      .filter((t) => t.machine_id === filesMachine.id && t.cwd)
+      .map((t) => t.cwd);
+    return [...new Set(cwds)];
+  }, [terminals, filesMachine]);
   const filesButtonProps =
     activeMachine && machineOnline[activeMachine.id]
       ? { open: filesState !== null }
@@ -1982,6 +1991,18 @@ function TerminalCanvasInner() {
                     homeDir={filesMachine.home_dir}
                     startPath={filesState.startPath}
                     canEdit={!viewOnlyLocked}
+                    terminalCwds={filesTerminalCwds}
+                    onOpenTerminal={
+                      isMachineController(filesMachine.id)
+                        ? (cwd) => {
+                            void handleCreateTerminal(filesMachine.id, cwd).catch((err) => {
+                              showWorkspaceToast(
+                                `Could not open a terminal: ${err instanceof Error ? err.message : String(err)}`,
+                              );
+                            });
+                          }
+                        : undefined
+                    }
                     onClose={handleCloseFiles}
                   />
                 ) : null
@@ -2304,6 +2325,18 @@ function TerminalCanvasInner() {
             homeDir={filesMachine.home_dir}
             startPath={filesState.startPath}
             canEdit={!viewOnlyLocked}
+            terminalCwds={filesTerminalCwds}
+            onOpenTerminal={
+              isMachineController(filesMachine.id)
+                ? (cwd) => {
+                    void handleCreateTerminal(filesMachine.id, cwd).catch((err) => {
+                      showWorkspaceToast(
+                        `Could not open a terminal: ${err instanceof Error ? err.message : String(err)}`,
+                      );
+                    });
+                  }
+                : undefined
+            }
             onClose={handleCloseFiles}
           />
         )}
