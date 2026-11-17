@@ -3,6 +3,8 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   configure,
   getMe,
+  fsOp,
+  RemoteFileError,
   ApiError,
   deleteWorkspaceGroup,
   deleteMachine,
@@ -17,6 +19,23 @@ describe("api request", () => {
     await expect(getMe(controller.signal)).rejects.toBeInstanceOf(ApiError);
     await expect(getMe()).rejects.toMatchObject({ status: 401 });
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/auth/me", expect.objectContaining({ signal: controller.signal }));
+  });
+
+  test("file routes: a bare 404 means an old hub, a coded 404 stays not_found", async () => {
+    const spy = vi.spyOn(globalThis, "fetch");
+    spy.mockResolvedValueOnce(new Response("", { status: 404 }));
+    await expect(fsOp("m", { op: "mkdir", path: "/a" })).rejects.toMatchObject({
+      status: 404,
+      code: "hub_outdated",
+    });
+    spy.mockResolvedValueOnce(new Response("404 page not found", { status: 404 }));
+    await expect(fsOp("m", { op: "mkdir", path: "/a" })).rejects.toMatchObject({ code: "hub_outdated" });
+    spy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: "not_found", message: "gone" }), { status: 404 }),
+    );
+    const err = await fsOp("m", { op: "mkdir", path: "/a" }).catch((e) => e);
+    expect(err).toBeInstanceOf(RemoteFileError);
+    expect(err.code).toBe("not_found");
   });
 
   afterEach(() => {

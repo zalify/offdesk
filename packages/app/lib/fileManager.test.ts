@@ -11,6 +11,7 @@ import {
   describeFsOpError,
   dirname,
   downloadRemote,
+  MAX_DOWNLOAD_BYTES,
   downloadZip,
   emptySelection,
   entryKind,
@@ -290,6 +291,19 @@ describe("describeFsOpError", () => {
     expect(describeFsOpError(err("not_found", "/a/b"))).toBe("b no longer exists");
     expect(describeFsOpError(err("timeout"))).toBe("The machine is offline or not responding");
   });
+  it("tells an old hub (bare 404) from a missing item", () => {
+    expect(describeFsOpError(new RemoteFileError(404, "hub_outdated", "404: "))).toBe(
+      "Update the hub to manage files",
+    );
+    expect(describeFsOpError(new RemoteFileError(404, "not_found", "m", undefined, "/a/b"))).toBe(
+      "b no longer exists",
+    );
+  });
+  it("keeps the node's too_large message", () => {
+    expect(describeFsOpError(err("too_large", undefined, "The zip would be over 256 MB"))).toBe(
+      "The zip would be over 256 MB",
+    );
+  });
   it("falls back for plain errors", () => {
     expect(describeFsOpError(new Error("Failed to fetch"))).toBe("The machine is offline or not responding");
     expect(describeFsOpError(new Error("boom"))).toBe("boom");
@@ -436,6 +450,30 @@ describe("downloadRemote / downloadZip", () => {
       downloadRemote({ machineId: "m", path: "/f", size: 10, api, signal: ctrl.signal }),
     ).rejects.toMatchObject({ name: "AbortError" });
     expect(api.readRange).toHaveBeenCalledTimes(1);
+  });
+  it("refuses files over the cap before reading", async () => {
+    const api = { readRange: vi.fn() };
+    await expect(
+      downloadRemote({ machineId: "m", path: "/f", size: MAX_DOWNLOAD_BYTES + 1, api }),
+    ).rejects.toMatchObject({
+      code: "too_large",
+      message: "Files over 256 MB can't be downloaded here yet",
+    });
+    expect(api.readRange).not.toHaveBeenCalled();
+  });
+  it("refuses when the file grows past the cap while reading", async () => {
+    const grown = vi.fn(async () => ({ size: MAX_DOWNLOAD_BYTES + 1, data_base64: b64([1]), eof: false }));
+    await expect(
+      downloadRemote({ machineId: "m", path: "/f", size: 1, api: { readRange: grown } }),
+    ).rejects.toMatchObject({ code: "too_large" });
+  });
+  it("zip: refuses an oversized zip without pulling it", async () => {
+    const zipPaths = vi.fn(async () => ({ path: "/tmp/z.zip", size: MAX_DOWNLOAD_BYTES + 1, name: "s" }));
+    const api = { readRange: vi.fn(), zipPaths };
+    await expect(downloadZip({ machineId: "m", paths: ["/a"], api })).rejects.toMatchObject({
+      code: "too_large",
+    });
+    expect(api.readRange).not.toHaveBeenCalled();
   });
   it("zip: asks the node to zip, then pulls the result", async () => {
     const zipPaths = vi.fn(async () => ({ path: "/tmp/z.zip", size: 5, name: "stuff" }));

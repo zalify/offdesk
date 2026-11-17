@@ -309,8 +309,11 @@ function remoteFileError(err: unknown): unknown {
   } catch {
     // Non-JSON body (proxy error page): fall through with a generic code.
   }
+  // A hub that predates a route answers a bare 404: no JSON, so no `error`.
+  // Real hub 404s always carry a code (`not_found`, `machine_not_found`, ...).
   const code =
-    body.error ?? (err.status === 504 ? "timeout" : `http_${err.status}`);
+    body.error ??
+    (err.status === 504 ? "timeout" : err.status === 404 ? "hub_outdated" : `http_${err.status}`);
   return new RemoteFileError(
     err.status,
     code,

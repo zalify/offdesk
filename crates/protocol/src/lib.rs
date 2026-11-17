@@ -190,6 +190,10 @@ pub enum FsWriteErrorCode {
 /// Capability a machine advertises when it can answer `HubToMachine::FsOp`.
 pub const FS_OPS_CAPABILITY: &str = "fs-ops-v1";
 
+/// Largest zip (`HubToMachine::FsZip`) a machine will produce, and the most the
+/// app downloads in one go (it holds the whole file in memory as base64).
+pub const FS_ZIP_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Why an `FsOp` failed.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

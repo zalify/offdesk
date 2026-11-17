@@ -9,6 +9,17 @@ import { UPLOAD_CHUNK_BYTES } from "./terminalUpload";
 
 export { UPLOAD_CHUNK_BYTES };
 export const DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
+/**
+ * Largest download. The whole file becomes one base64 string (V8 caps strings
+ * near 536M chars), so bigger files would crash. Mirrors `FS_ZIP_MAX_BYTES`.
+ */
+export const MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+
+const DOWNLOAD_TOO_LARGE = "Files over 256 MB can't be downloaded here yet";
+
+function downloadTooLarge(path: string, size: number): RemoteFileError {
+  return new RemoteFileError(413, "too_large", DOWNLOAD_TOO_LARGE, size, path);
+}
 
 // ---------------------------------------------------------------- names
 
@@ -343,7 +354,9 @@ export function describeFsOpError(err: unknown, name?: string): string {
       case "not_found":
         return item ? `${item} no longer exists` : "That item no longer exists";
       case "too_large":
-        return "That file is too large";
+        return err.message || "That file is too large";
+      case "hub_outdated":
+        return "Update the hub to manage files";
       case "machine_not_found":
         return "Machine not found";
       case "machine_disconnected":
@@ -469,6 +482,7 @@ export async function downloadRemote(opts: DownloadOptions): Promise<Blob> {
   const { machineId, path, onProgress, signal, api } = opts;
   const chunkBytes = opts.chunkBytes ?? DOWNLOAD_CHUNK_BYTES;
   const parts: Uint8Array<ArrayBuffer>[] = [];
+  if (opts.size > MAX_DOWNLOAD_BYTES) throw downloadTooLarge(path, opts.size);
   let total = opts.size;
   let offset = 0;
   for (;;) {
@@ -478,6 +492,10 @@ export async function downloadRemote(opts: DownloadOptions): Promise<Blob> {
     if (bytes.length > 0) parts.push(bytes);
     offset += bytes.length;
     total = res.size;
+    // The file may have grown since it was listed.
+    if (total > MAX_DOWNLOAD_BYTES || offset > MAX_DOWNLOAD_BYTES) {
+      throw downloadTooLarge(path, Math.max(total, offset));
+    }
     onProgress?.(offset, total);
     if (res.eof) break;
     // A non-final empty chunk would loop forever.
@@ -496,6 +514,7 @@ export async function downloadZip(opts: {
 }): Promise<{ blob: Blob; filename: string }> {
   const { machineId, paths, onProgress, signal, api } = opts;
   const zip = await api.zipPaths(machineId, paths, signal);
+  if (zip.size > MAX_DOWNLOAD_BYTES) throw downloadTooLarge(zip.path, zip.size);
   const blob = await downloadRemote({
     machineId,
     path: zip.path,

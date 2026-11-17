@@ -1,6 +1,6 @@
 # Finder-like file manager
 
-Status: in progress (branch `feat/finder-files`).
+Status: implemented (branch `feat/finder-files`). This doc describes what shipped.
 
 Decisions (owner, 2026-11-17):
 - Do both phases: file operations **and** a Finder-style interface.
@@ -75,14 +75,14 @@ Upload into a directory (no terminal needed), chunked like the attach upload
 (docs/plans/2026-11-04-chunked-uploads.md), but over HTTP:
 
 - `POST /api/machines/{id}/fs/upload/begin` `{dest_dir, filename, size, on_conflict}` → `{"upload_id"}`
-  (hub generates the id; node checks free space and the conflict policy,
-  creates `dest_dir/.<filename>.offdesk-part-<id>`)
+  (hub generates the id; node validates the name, checks free space and, for
+  `error`, that the name is free; creates `dest_dir/.<filename>.offdesk-part-<id>`)
 - `POST /api/machines/{id}/fs/upload/chunk` `{upload_id, index, data}` (`data` = base64 of ≤ `UPLOAD_CHUNK_MAX_BYTES`, in order) → `{"received"}`
-- `POST /api/machines/{id}/fs/upload/end` `{upload_id}` → `{"path","size"}` (node renames the part file into place, applying `on_conflict` again)
+- `POST /api/machines/{id}/fs/upload/end` `{upload_id}` → `{"path","size"}` (node renames the part file into place, applying `on_conflict` here: `keep_both` picks the free name now, `replace` trashes the existing file now, `error` re-checks)
 - `POST /api/machines/{id}/fs/upload/abort` `{upload_id}` → 204 (part file removed)
 - The node drops uploads idle for > 10 minutes (part file removed).
 
-Download of any size, and of folders:
+Download of big files (up to the cap below), and of folders:
 
 - `GET /api/machines/{id}/fs/read_range?path=&offset=&length=` →
   `{"size","data_base64","eof"}`; `length` ≤ 4 MiB. Regular files only.
@@ -91,6 +91,17 @@ Download of any size, and of folders:
   parent) into a private temp dir and returns that zip's path; the app then
   pulls it with `read_range` and offers it as `<name>.zip`. The node deletes
   zips it made that are older than 1 hour whenever it makes a new one, and on start.
+- Limits. The app holds a download in memory as one base64 string (V8 caps
+  strings near 536M chars), so downloads are capped at 256 MiB
+  (`MAX_DOWNLOAD_BYTES` in the app, `FS_ZIP_MAX_BYTES` in the protocol): a
+  larger file, or a zip the node reports as larger, is refused with
+  `too_large` ("Files over 256 MB can't be downloaded here yet"). The node
+  refuses to zip more than 1 GiB of input (`too_large`, "Folder is too large
+  to zip (over 1 GB)"), needs free space of input size + 16 MiB in the zips
+  dir (`no_space`), and aborts and deletes the part file if the zip passes
+  256 MiB (`too_large`, "The zip would be over 256 MB").
+- A hub that predates these routes answers a bare 404 (no JSON `error`); the
+  app reports "Update the hub to manage files".
 
 The existing ≤ 20 MiB `fs/read` stays for preview.
 
@@ -105,23 +116,23 @@ Desktop overlay grows to `min(96vw, 1400px) × min(90vh, 900px)` and becomes:
 │  terminal  │ │   README.md            │ 4 KB   │ just now     │ md    │   (preview pane     │
 │   cwd(s)   │ │   ...                  │        │              │       │    when a file is   │
 │  pinned…   │ └────────────────────────┴────────┴──────────────┴───────┘    open, as today)  │
-│ Machines   │ status bar: 3 items selected · 12 MB                                           │
+│            │ status bar: 3 items selected · 12 MB                                           │
 └────────────┴─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - Sidebar: Home, the open terminals' cwds on this machine, user-pinned folders
-  (localStorage per machine; drag a folder in or "Pin to sidebar"), Trash is
+  (localStorage per machine; "Pin to Sidebar" or the toolbar pin), Trash is
   **not** listed (no browsing of trash in this round).
 - Back / forward history; ↑ parent; breadcrumb doubles as an editable path
   field (click empty area or ⌘⇧G / ⌘L).
 - List view with sortable columns (Name, Size, Modified, Kind; folders first
   always), and an icon view (grid) with lazy image thumbnails (images ≤ 5 MB
-  via `fs/read`, only for visible tiles). View + sort remembered per machine.
+  via `fs/read`, only for visible tiles, downscaled to 192px before caching). View + sort remembered per machine.
+- Click selects, double-click / Enter opens (the phone keeps tap-to-open).
 - Selection: click, ⌘/Ctrl-click toggle, Shift-click range, ⌘A, arrows,
   Shift+arrows. Status bar shows count and total size.
 - Context menu (right-click on item / empty area) and toolbar actions:
-  Open, Quick Look (Space), Rename (F2, or Enter on a single selected row while
-  the list has focus is **not** rename — Enter keeps opening, as today),
+  Open, Quick Look (Space), Rename (F2; Enter keeps opening, as today),
   Duplicate, Copy (⌘C), Cut (⌘X), Paste (⌘V), Move to Trash (⌘⌫ / Delete),
   New Folder (⌘⇧N), New File, Download (files; folders and multi-select download as zip),
   Copy Path, Open in Terminal (new terminal with that cwd), Pin to Sidebar.

@@ -5,19 +5,41 @@
 //! and never followed, so a link cannot pull files from outside the tree.
 //! Blocking: callers run these on a blocking task.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 
-use offdesk_protocol::FsOpErrorCode as Code;
+use offdesk_protocol::{FsOpErrorCode as Code, FS_ZIP_MAX_BYTES};
 use zip::write::SimpleFileOptions;
 
 use crate::fs_ops::{absolute, path_string, FsOpFail, Result};
+use crate::upload::free_space;
 
 /// Zips older than this are deleted.
 const MAX_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// Most input bytes (regular files, uncompressed) one zip may cover.
+const MAX_INPUT_BYTES: u64 = 1024 * 1024 * 1024;
+/// Free space to keep beyond the input size while zipping.
+const FREE_SPACE_MARGIN: u64 = 16 * 1024 * 1024;
+
+/// Size limits for one zip; injected in tests.
+#[derive(Clone, Copy)]
+struct Limits {
+    max_input: u64,
+    max_zip: u64,
+    margin: u64,
+}
+
+const LIMITS: Limits = Limits {
+    max_input: MAX_INPUT_BYTES,
+    max_zip: FS_ZIP_MAX_BYTES,
+    margin: FREE_SPACE_MARGIN,
+};
 
 pub struct ZipInfo {
     pub path: String,
@@ -108,10 +130,10 @@ pub fn cleanup_on_start() {
 
 /// Zip `paths` relative to their common parent.
 pub fn make_zip(paths: &[String]) -> Result<ZipInfo> {
-    make_zip_in(&zips_dir()?, paths, MAX_AGE)
+    make_zip_in(&zips_dir()?, paths, MAX_AGE, LIMITS)
 }
 
-fn make_zip_in(dir: &Path, paths: &[String], max_age: Duration) -> Result<ZipInfo> {
+fn make_zip_in(dir: &Path, paths: &[String], max_age: Duration, limits: Limits) -> Result<ZipInfo> {
     if paths.is_empty() {
         return Err(FsOpFail::new(Code::Invalid, "Nothing to zip", None));
     }
@@ -132,10 +154,11 @@ fn make_zip_in(dir: &Path, paths: &[String], max_age: Duration) -> Result<ZipInf
     .unwrap_or_else(|| "archive".into());
 
     clean_old(dir, max_age);
+    check_input(dir, &items, limits)?;
     let id = uuid::Uuid::new_v4();
     let part = dir.join(format!("{id}.zip.part"));
     let target = dir.join(format!("{id}.zip"));
-    let result = write_zip(&part, &base, &items)
+    let result = write_zip(&part, &base, &items, limits.max_zip)
         .and_then(|()| fs::rename(&part, &target).map_err(|e| FsOpFail::from_io(&e, &target)));
     if let Err(e) = result {
         let _ = fs::remove_file(&part);
@@ -171,18 +194,130 @@ fn zip_error(e: zip::result::ZipError, path: &Path) -> FsOpFail {
     }
 }
 
-fn write_zip(part: &Path, base: &Path, items: &[PathBuf]) -> Result<()> {
+/// Writer that fails once the stream position passes `max` (zip headers seek
+/// back and rewrite, so the position, not the byte count, is what grows).
+struct CapWriter<W> {
+    inner: W,
+    pos: u64,
+    max: u64,
+    exceeded: Rc<Cell<bool>>,
+}
+
+impl<W: io::Write> io::Write for CapWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.pos.saturating_add(buf.len() as u64) > self.max {
+            self.exceeded.set(true);
+            return Err(io::Error::other("zip size limit reached"));
+        }
+        let n = self.inner.write(buf)?;
+        self.pos += n as u64;
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl<W: io::Seek> io::Seek for CapWriter<W> {
+    fn seek(&mut self, to: io::SeekFrom) -> io::Result<u64> {
+        self.pos = self.inner.seek(to)?;
+        Ok(self.pos)
+    }
+}
+
+fn zip_too_large(max: u64) -> FsOpFail {
+    FsOpFail::new(
+        Code::TooLarge,
+        format!("The zip would be over {} MB", max / (1024 * 1024)),
+        None,
+    )
+}
+
+fn write_zip(part: &Path, base: &Path, items: &[PathBuf], max_zip: u64) -> Result<()> {
+    let exceeded = Rc::new(Cell::new(false));
+    let result = write_zip_capped(part, base, items, max_zip, &exceeded);
+    match result {
+        // Any error after the cap tripped is the cap, whatever layer reported it.
+        Err(_) if exceeded.get() => Err(zip_too_large(max_zip)),
+        other => other,
+    }
+}
+
+fn write_zip_capped(
+    part: &Path,
+    base: &Path,
+    items: &[PathBuf],
+    max_zip: u64,
+    exceeded: &Rc<Cell<bool>>,
+) -> Result<()> {
     let file = fs::File::create(part).map_err(|e| FsOpFail::from_io(&e, part))?;
-    let mut zip = zip::ZipWriter::new(io::BufWriter::new(file));
+    let capped = CapWriter {
+        inner: io::BufWriter::new(file),
+        pos: 0,
+        max: max_zip,
+        exceeded: Rc::clone(exceeded),
+    };
+    let mut zip = zip::ZipWriter::new(capped);
     let mut seen = HashSet::new();
     for item in items {
         add_entry(&mut zip, base, item, &mut seen)?;
     }
     let writer = zip.finish().map_err(|e| zip_error(e, part))?;
     let file = writer
+        .inner
         .into_inner()
         .map_err(|e| FsOpFail::from_io(e.error(), part))?;
     file.sync_all().map_err(|e| FsOpFail::from_io(&e, part))
+}
+
+/// Sum of regular-file sizes under `path`, walking like `add_entry` (symlinks
+/// are not followed, nested selections counted once). Stops past `limit`.
+fn input_size(path: &Path, seen: &mut HashSet<PathBuf>, total: &mut u64, limit: u64) -> Result<()> {
+    if *total > limit || !seen.insert(path.to_path_buf()) {
+        return Ok(());
+    }
+    let meta = fs::symlink_metadata(path).map_err(|e| FsOpFail::from_io(&e, path))?;
+    let kind = meta.file_type();
+    if kind.is_dir() {
+        for child in fs::read_dir(path).map_err(|e| FsOpFail::from_io(&e, path))? {
+            let child = child.map_err(|e| FsOpFail::from_io(&e, path))?;
+            input_size(&child.path(), seen, total, limit)?;
+        }
+    } else if kind.is_file() {
+        *total = total.saturating_add(meta.len());
+    }
+    Ok(())
+}
+
+/// Refuse oversized inputs, and inputs the zips dir has no room to hold.
+fn check_input(dir: &Path, items: &[PathBuf], limits: Limits) -> Result<()> {
+    let mut seen = HashSet::new();
+    let mut total = 0;
+    for item in items {
+        input_size(item, &mut seen, &mut total, limits.max_input)?;
+    }
+    if total > limits.max_input {
+        return Err(FsOpFail::new(
+            Code::TooLarge,
+            format!(
+                "Folder is too large to zip (over {} GB)",
+                limits.max_input / (1024 * 1024 * 1024)
+            ),
+            None,
+        ));
+    }
+    // The zip is at most the input size plus a little; the cap bounds it too.
+    if let Some(free) = free_space(dir) {
+        if free < total.saturating_add(limits.margin) {
+            return Err(FsOpFail::new(
+                Code::NoSpace,
+                format!("Not enough free space on the machine ({free} bytes available)"),
+                None,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn entry_options(meta: &fs::Metadata) -> SimpleFileOptions {
@@ -284,7 +419,7 @@ mod tests {
         fs::create_dir_all(dir.join("src")).unwrap();
         fs::write(dir.join("README.md"), b"hello").unwrap();
         fs::write(dir.join("src/main.rs"), b"fn main() {}").unwrap();
-        let info = make_zip_in(&out, &[s(&dir)], MAX_AGE).unwrap();
+        let info = make_zip_in(&out, &[s(&dir)], MAX_AGE, LIMITS).unwrap();
         assert_eq!(info.name, "proj");
         assert_eq!(info.size, fs::metadata(&info.path).unwrap().len());
         assert!(info.path.starts_with(&s(&out)));
@@ -313,7 +448,7 @@ mod tests {
             s(&root.join("a/f.txt")),
             s(&root.join("a/dir/x.txt")),
         ];
-        let info = make_zip_in(&out, &items, MAX_AGE).unwrap();
+        let info = make_zip_in(&out, &items, MAX_AGE, LIMITS).unwrap();
         assert_eq!(info.name, "a");
         let got = entries(&info.path);
         let names: Vec<_> = got.iter().map(|(n, _)| n.as_str()).collect();
@@ -323,7 +458,7 @@ mod tests {
         fs::create_dir_all(root.join("b")).unwrap();
         fs::write(root.join("b/g.txt"), b"g").unwrap();
         let items = [s(&root.join("a/f.txt")), s(&root.join("b/g.txt"))];
-        let info = make_zip_in(&out, &items, MAX_AGE).unwrap();
+        let info = make_zip_in(&out, &items, MAX_AGE, LIMITS).unwrap();
         assert_eq!(info.name, root.file_name().unwrap().to_string_lossy());
         let names: Vec<_> = entries(&info.path).into_iter().map(|(n, _)| n).collect();
         assert_eq!(names, ["a/f.txt", "b/g.txt"]);
@@ -339,7 +474,7 @@ mod tests {
         let dir = root.join("d");
         fs::create_dir_all(&dir).unwrap();
         std::os::unix::fs::symlink(&outside, dir.join("escape")).unwrap();
-        let info = make_zip_in(&out, &[s(&dir)], MAX_AGE).unwrap();
+        let info = make_zip_in(&out, &[s(&dir)], MAX_AGE, LIMITS).unwrap();
         let got = entries(&info.path);
         assert!(!got.iter().any(|(n, _)| n.contains("secret")));
         let link = got.iter().find(|(n, _)| n == "d/escape").unwrap();
@@ -349,7 +484,12 @@ mod tests {
     #[test]
     fn rejects_empty_missing_and_relative_paths() {
         let out = scratch();
-        let code = |paths: &[String]| make_zip_in(&out, paths, MAX_AGE).err().unwrap().code;
+        let code = |paths: &[String]| {
+            make_zip_in(&out, paths, MAX_AGE, LIMITS)
+                .err()
+                .unwrap()
+                .code
+        };
         assert_eq!(code(&[]), Code::Invalid);
         assert_eq!(code(&["rel".into()]), Code::Invalid);
         assert_eq!(code(&[s(&out.join("nope"))]), Code::NotFound);
@@ -362,10 +502,16 @@ mod tests {
         let root = scratch();
         let out = scratch();
         fs::write(root.join("f"), b"f").unwrap();
-        let first = make_zip_in(&out, &[s(&root.join("f"))], MAX_AGE).unwrap();
+        let first = make_zip_in(&out, &[s(&root.join("f"))], MAX_AGE, LIMITS).unwrap();
         fs::write(out.join("notes.txt"), b"not ours").unwrap();
         std::thread::sleep(Duration::from_millis(10));
-        let second = make_zip_in(&out, &[s(&root.join("f"))], Duration::from_millis(1)).unwrap();
+        let second = make_zip_in(
+            &out,
+            &[s(&root.join("f"))],
+            Duration::from_millis(1),
+            LIMITS,
+        )
+        .unwrap();
         assert!(!Path::new(&first.path).exists());
         assert!(Path::new(&second.path).exists());
         // Only zips are touched.
@@ -377,7 +523,7 @@ mod tests {
         let root = scratch();
         let out = scratch();
         fs::write(root.join("f.txt"), vec![b'z'; 5000]).unwrap();
-        let info = make_zip_in(&out, &[s(&root.join("f.txt"))], MAX_AGE).unwrap();
+        let info = make_zip_in(&out, &[s(&root.join("f.txt"))], MAX_AGE, LIMITS).unwrap();
         let mut bytes = Vec::new();
         loop {
             let (size, data, eof) =
@@ -389,5 +535,78 @@ mod tests {
             }
         }
         assert_eq!(bytes, fs::read(&info.path).unwrap());
+    }
+
+    fn tiny(max_input: u64, max_zip: u64, margin: u64) -> Limits {
+        Limits {
+            max_input,
+            max_zip,
+            margin,
+        }
+    }
+
+    #[test]
+    fn refuses_inputs_over_the_input_limit() {
+        let root = scratch();
+        let out = scratch();
+        fs::create_dir_all(root.join("d/sub")).unwrap();
+        fs::write(root.join("d/a"), vec![1u8; 600]).unwrap();
+        fs::write(root.join("d/sub/b"), vec![2u8; 600]).unwrap();
+        let limits = tiny(1000, LIMITS.max_zip, 0);
+        let err = make_zip_in(&out, &[s(&root.join("d"))], MAX_AGE, limits)
+            .err()
+            .unwrap();
+        assert_eq!(err.code, Code::TooLarge);
+        assert!(err.message.contains("too large to zip"));
+        assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
+        // Exactly at the limit passes; a nested selection is counted once.
+        let limits = tiny(1200, LIMITS.max_zip, 0);
+        let items = [s(&root.join("d")), s(&root.join("d/a"))];
+        assert!(make_zip_in(&out, &items, MAX_AGE, limits).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn input_size_ignores_symlink_targets() {
+        let root = scratch();
+        let out = scratch();
+        let outside = scratch();
+        fs::write(outside.join("big"), vec![0u8; 5000]).unwrap();
+        fs::create_dir_all(root.join("d")).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("d/link")).unwrap();
+        let limits = tiny(100, LIMITS.max_zip, 0);
+        assert!(make_zip_in(&out, &[s(&root.join("d"))], MAX_AGE, limits).is_ok());
+    }
+
+    #[test]
+    fn refuses_when_there_is_no_room() {
+        let root = scratch();
+        let out = scratch();
+        fs::write(root.join("f"), b"data").unwrap();
+        // A margin no disk has.
+        let limits = tiny(LIMITS.max_input, LIMITS.max_zip, u64::MAX / 2);
+        let err = make_zip_in(&out, &[s(&root.join("f"))], MAX_AGE, limits)
+            .err()
+            .unwrap();
+        assert_eq!(err.code, Code::NoSpace);
+    }
+
+    #[test]
+    fn stops_and_cleans_up_when_the_zip_grows_past_the_cap() {
+        let root = scratch();
+        let out = scratch();
+        // Incompressible-ish data so the zip is about as big as the input.
+        let data: Vec<u8> = (0..20_000u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        fs::write(root.join("big"), &data).unwrap();
+        let limits = tiny(LIMITS.max_input, 2000, 0);
+        let err = make_zip_in(&out, &[s(&root.join("big"))], MAX_AGE, limits)
+            .err()
+            .unwrap();
+        assert_eq!(err.code, Code::TooLarge);
+        assert!(err.message.contains("The zip would be over"));
+        // The part file is gone.
+        assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
     }
 }

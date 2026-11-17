@@ -21,11 +21,51 @@ async function withSlot<T>(job: () => Promise<T>): Promise<T> {
   }
 }
 
+// Tiles are small: cache a downscaled copy, never the full-size image.
+const THUMB_MAX_SIDE = 192;
+const SVG_MAX_BYTES = 512 * 1024;
+
 function decode(base64: string, mime: string): Blob {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return new Blob([bytes], { type: mime });
+}
+
+function toBlob(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+}
+
+/** Small WebP (PNG if unsupported) of `source`, at most THUMB_MAX_SIDE px per side. */
+async function downscale(source: Blob): Promise<Blob> {
+  const bitmap = await createImageBitmap(source);
+  try {
+    const scale = Math.min(1, THUMB_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const webp = await toBlob(canvas, "image/webp", 0.8);
+    // Browsers without WebP encoding silently hand back a PNG.
+    const out = webp?.type === "image/webp" ? webp : await toBlob(canvas, "image/png");
+    if (!out) throw new Error("thumbnail encode failed");
+    canvas.width = canvas.height = 0; // release the backing store
+    return out;
+  } finally {
+    bitmap.close();
+  }
+}
+
+/** The blob to cache for a read image; SVGs stay vector but are size-capped. */
+async function thumbnailBlob(base64: string, mime: string): Promise<Blob> {
+  const full = decode(base64, mime);
+  if (mime === "image/svg+xml") {
+    if (full.size > SVG_MAX_BYTES) throw new Error("svg too large for a thumbnail");
+    return full;
+  }
+  return downscale(full);
 }
 
 /**
@@ -72,7 +112,9 @@ export function FileThumbnail({
       if (!live) return;
       const file = await readFile(machineId, entry.path);
       if (!live) return;
-      const next = URL.createObjectURL(decode(file.data_base64, file.mime));
+      const small = await thumbnailBlob(file.data_base64, file.mime);
+      if (!live) return;
+      const next = URL.createObjectURL(small);
       cache.set(key, next);
       setUrl(next);
     }).catch(() => {
