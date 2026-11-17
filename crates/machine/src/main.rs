@@ -5,6 +5,10 @@ mod agent_start;
 mod agent_browser;
 mod attach;
 mod config;
+mod fs_ops;
+mod fs_transfer;
+mod fs_upload;
+mod fs_zip;
 mod hub_conn;
 mod keep_awake;
 mod osc_title;
@@ -376,6 +380,8 @@ async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<Str
         );
         std::process::exit(1);
     }
+
+    fs_zip::cleanup_on_start();
 
     // Try to load config
     let loaded_config = config::load_config().ok();

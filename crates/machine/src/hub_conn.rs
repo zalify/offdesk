@@ -184,6 +184,7 @@ impl HubConnection {
                 offdesk_protocol::preview::CAPABILITY.to_string(),
                 offdesk_protocol::FS_READ_CAPABILITY.to_string(),
                 offdesk_protocol::FS_WRITE_CAPABILITY.to_string(),
+                offdesk_protocol::FS_OPS_CAPABILITY.to_string(),
                 offdesk_protocol::UPLOAD_CHUNKED_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_KEYS_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_CHOOSE_CAPABILITY.to_string(),
@@ -942,6 +943,42 @@ async fn handle_hub_message(
                     },
                 };
                 let _ = send_tx.send(OutboundHubMessage::Json(message)).await;
+            });
+        }
+        HubToMachine::FsOp { request_id, op } => {
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                // Copy/move can be slow: keep them off the async workers.
+                let result = tokio::task::spawn_blocking(move || crate::fs_ops::run(op)).await;
+                let message = match result {
+                    Ok(Ok(paths)) => MachineToHub::FsOpResult { request_id, paths },
+                    Ok(Err(e)) => MachineToHub::FsOpError {
+                        request_id,
+                        code: e.code,
+                        message: e.message,
+                        path: e.path,
+                    },
+                    Err(e) => MachineToHub::FsOpError {
+                        request_id,
+                        code: offdesk_protocol::FsOpErrorCode::Io,
+                        message: format!("File operation failed: {e}"),
+                        path: None,
+                    },
+                };
+                let _ = send_tx.send(OutboundHubMessage::Json(message)).await;
+            });
+        }
+        msg @ (HubToMachine::FsUploadBegin { .. }
+        | HubToMachine::FsUploadChunk { .. }
+        | HubToMachine::FsUploadEnd { .. }
+        | HubToMachine::FsUploadAbort { .. }
+        | HubToMachine::FsReadRange { .. }
+        | HubToMachine::FsZip { .. }) => {
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                if let Some(reply) = crate::fs_transfer::handle(msg).await {
+                    let _ = send_tx.send(OutboundHubMessage::Json(reply)).await;
+                }
             });
         }
         HubToMachine::FsListDir {
@@ -1899,7 +1936,7 @@ async fn write_file_for_hub(
     })
 }
 
-fn expand_tilde(path: &str) -> String {
+pub(crate) fn expand_tilde(path: &str) -> String {
     if path.starts_with("~/") || path == "~" {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
         path.replacen('~', &home, 1)

@@ -52,6 +52,8 @@ pub enum PendingResult {
     },
     FsRead(Result<FsReadData, FsReadFailure>),
     FsWrite(Result<FsWriteData, FsWriteFailure>),
+    FsOp(Result<Vec<String>, FsOpFailure>),
+    FsTransfer(FsTransferReply),
     Upload(Result<UploadReply, UploadFailure>),
     /// Node's reply to an agent browser command: its `data`, or its error text.
     AgentBrowser(Result<serde_json::Value, String>),
@@ -123,6 +125,36 @@ pub enum FsWriteFailure {
     Disconnected,
     Timeout,
 }
+
+/// Why a remote file operation failed.
+#[derive(Debug)]
+pub enum FsOpFailure {
+    /// The machine answered with a typed error.
+    Machine {
+        code: offdesk_protocol::FsOpErrorCode,
+        message: String,
+        path: Option<String>,
+    },
+    /// The machine predates `fs-ops-v1`.
+    Outdated,
+    NoMachine,
+    Disconnected,
+    Timeout,
+}
+
+/// A machine's successful answer to an upload, read_range or zip request.
+#[derive(Debug)]
+pub enum FsTransferReply {
+    /// Upload begun (0) or chunk stored: bytes on disk so far.
+    Ack { received: u64 },
+    Done { path: String, size: u64 },
+    Range { size: u64, data_base64: String, eof: bool },
+    Zip { path: String, size: u64, name: String },
+}
+
+/// Copy, move and trash can touch a lot of data.
+const FS_OP_SLOW_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+const FS_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Why reading a remote file failed.
 #[derive(Debug)]
@@ -2049,6 +2081,124 @@ impl MachineManager {
         }
     }
 
+    /// Run one file operation on a machine; returns the resulting paths.
+    pub async fn fs_op(
+        &self,
+        machine_id: &str,
+        op: offdesk_protocol::FsOp,
+    ) -> Result<Vec<String>, FsOpFailure> {
+        use offdesk_protocol::FsOp;
+        if !self
+            .machine_supports(machine_id, offdesk_protocol::FS_OPS_CAPABILITY)
+            .await
+        {
+            let known = self.machines.lock().await.contains_key(machine_id);
+            return Err(if known {
+                FsOpFailure::Outdated
+            } else {
+                FsOpFailure::NoMachine
+            });
+        }
+        let timeout = match op {
+            FsOp::Copy { .. } | FsOp::Move { .. } | FsOp::Trash { .. } => FS_OP_SLOW_TIMEOUT,
+            _ => FS_OP_TIMEOUT,
+        };
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err(FsOpFailure::NoMachine);
+            };
+            conn.cmd_tx.clone()
+        };
+        if cmd_tx
+            .send(HubToMachine::FsOp {
+                request_id: request_id.clone(),
+                op,
+            })
+            .await
+            .is_err()
+        {
+            self.remove_pending(&request_id).await;
+            return Err(FsOpFailure::Disconnected);
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(PendingResult::FsOp(result)))) => result,
+            Ok(Ok(_)) => Err(FsOpFailure::Disconnected),
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                Err(FsOpFailure::Disconnected)
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(FsOpFailure::Timeout)
+            }
+        }
+    }
+
+    /// Send an upload / read_range / zip request and wait for its reply.
+    /// Needs `fs-ops-v1`.
+    pub async fn fs_transfer(
+        &self,
+        machine_id: &str,
+        request_id: String,
+        msg: HubToMachine,
+        timeout: std::time::Duration,
+    ) -> Result<FsTransferReply, FsOpFailure> {
+        if !self
+            .machine_supports(machine_id, offdesk_protocol::FS_OPS_CAPABILITY)
+            .await
+        {
+            let known = self.machines.lock().await.contains_key(machine_id);
+            return Err(if known {
+                FsOpFailure::Outdated
+            } else {
+                FsOpFailure::NoMachine
+            });
+        }
+        let rx = self.register_pending(&request_id).await;
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            let Some(conn) = machines.get(machine_id) else {
+                drop(machines);
+                self.remove_pending(&request_id).await;
+                return Err(FsOpFailure::NoMachine);
+            };
+            conn.cmd_tx.clone()
+        };
+        if cmd_tx.send(msg).await.is_err() {
+            self.remove_pending(&request_id).await;
+            return Err(FsOpFailure::Disconnected);
+        }
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Ok(PendingResult::FsTransfer(reply)))) => Ok(reply),
+            Ok(Ok(Ok(PendingResult::FsOp(Err(failure))))) => Err(failure),
+            Ok(Ok(_)) => Err(FsOpFailure::Disconnected),
+            Ok(Err(_)) => {
+                self.remove_pending(&request_id).await;
+                Err(FsOpFailure::Disconnected)
+            }
+            Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(FsOpFailure::Timeout)
+            }
+        }
+    }
+
+    /// Tell the machine to drop an upload. Fire and forget.
+    pub async fn fs_upload_abort(&self, machine_id: &str, upload_id: String) {
+        let cmd_tx = {
+            let machines = self.machines.lock().await;
+            machines.get(machine_id).map(|conn| conn.cmd_tx.clone())
+        };
+        if let Some(cmd_tx) = cmd_tx {
+            let _ = cmd_tx.send(HubToMachine::FsUploadAbort { upload_id }).await;
+        }
+    }
+
     /// Fail unless the machine is connected and understands chunked uploads.
     pub async fn supports_chunked_upload(&self, machine_id: &str) -> Result<(), UploadFailure> {
         if self
@@ -2498,6 +2648,62 @@ impl MachineManager {
                         sha256,
                     }))));
                 }
+            }
+            MachineToHub::FsOpResult { request_id, paths } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::FsOp(Ok(paths))));
+                }
+            }
+            MachineToHub::FsOpError {
+                request_id,
+                code,
+                message,
+                path,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::FsOp(Err(FsOpFailure::Machine {
+                        code,
+                        message,
+                        path,
+                    }))));
+                }
+            }
+            MachineToHub::FsUploadAck {
+                request_id,
+                received,
+            } => {
+                self.resolve_fs_transfer(&request_id, FsTransferReply::Ack { received })
+                    .await;
+            }
+            MachineToHub::FsUploadDone {
+                request_id,
+                path,
+                size,
+            } => {
+                self.resolve_fs_transfer(&request_id, FsTransferReply::Done { path, size })
+                    .await;
+            }
+            MachineToHub::FsReadRangeResult {
+                request_id,
+                size,
+                data_base64,
+                eof,
+            } => {
+                let reply = FsTransferReply::Range {
+                    size,
+                    data_base64,
+                    eof,
+                };
+                self.resolve_fs_transfer(&request_id, reply).await;
+            }
+            MachineToHub::FsZipResult {
+                request_id,
+                path,
+                size,
+                name,
+            } => {
+                self.resolve_fs_transfer(&request_id, FsTransferReply::Zip { path, size, name })
+                    .await;
             }
             MachineToHub::AttachUploadAck {
                 request_id,
@@ -3430,6 +3636,12 @@ impl MachineManager {
                 manager.flush_event_seq();
             }
         });
+    }
+
+    async fn resolve_fs_transfer(&self, request_id: &str, reply: FsTransferReply) {
+        if let Some(tx) = self.pending.lock().await.remove(request_id) {
+            let _ = tx.send(Ok(PendingResult::FsTransfer(reply)));
+        }
     }
 
     async fn register_pending(
