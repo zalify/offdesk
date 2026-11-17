@@ -157,6 +157,12 @@ function PathInput({
 
 export function FileBrowserToolbar(props: ToolbarProps) {
   const { touch, crumbs, up, loading, onGo, onRefresh } = props;
+  // Keep the deepest crumb in view when the path outgrows the bar.
+  const crumbsRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const nav = crumbsRef.current;
+    if (nav) nav.scrollLeft = nav.scrollWidth;
+  }, [props.currentPath, props.editingPath]);
 
   const button = (testId: string, label: string, onClick: () => void, content: React.ReactNode, disabled = false, active = false) => (
     <button
@@ -184,6 +190,7 @@ export function FileBrowserToolbar(props: ToolbarProps) {
     />
   ) : (
     <nav
+      ref={crumbsRef}
       aria-label="Path"
       data-testid="file-browser-breadcrumb"
       title={touch ? undefined : "Click to type a path (⌘⇧G)"}
@@ -209,7 +216,8 @@ export function FileBrowserToolbar(props: ToolbarProps) {
         const last = index === crumbs.length - 1;
         return (
           <span key={crumb.path} style={{ display: "inline-flex", alignItems: "center" }}>
-            {index > 0 && (
+            {/* No separator after the "/" root crumb: "/ tmp", not "/ / tmp". */}
+            {index > 0 && crumbs[index - 1].path !== "/" && (
               <span aria-hidden style={{ color: colors.fg3 }}>/</span>
             )}
             <button
