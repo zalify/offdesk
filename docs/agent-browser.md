@@ -715,6 +715,27 @@ Chromium runs with its sandbox, except when the node runs as root or
 `OFFDESK_CHROMIUM_NO_SANDBOX` is set, where it is started with `--no-sandbox`
 (containers commonly need this). Set the variable in the node's environment.
 
+## Logins and the profile
+
+The agent browser's profile is its own: it does not share cookies or logins
+with the browsers a person uses, on this machine or elsewhere. Log in once per
+site by taking over (or with `offdesk browser login`), and tick "remember this
+device" where a site offers it. Every agent on the machine can use those
+logins, so prefer accounts made for the agent, or ones with few permissions,
+and keep banking and main accounts out of it; where a site offers an API
+token, that is usually the better path.
+
+Sites trust a device that stays the same. Pick the browser and the
+[browser mode](#browser-mode) once, before logging in to many sites, and then
+leave them alone: switching between headed and headless, between Chrome for
+Testing and Google Chrome, or wiping the profile can make a site treat the
+browser as a new device and ask to verify again. Cookies survive a switch
+between modes and between Chrome for Testing and Google Chrome of the same
+version, but site storage (`localStorage`) was seen to be lost once on the
+first switch from Chrome for Testing to Google Chrome, so back up
+`<config dir>/agent-browser/profile` (with the browser closed) before
+switching.
+
 ## Limits
 
 Time limits at the hub: `open` 5 minutes, `wait` its timeout plus 15 seconds,
