@@ -51,12 +51,29 @@ def dismiss_update(root):
     return True
 
 
+def dismiss_foreign_anr(root):
+    # The emulator's own apps (the launcher, system UI) sometimes stop
+    # responding during first boot, and their dialog covers an app that has
+    # rendered fine. Wait on those; an "Offdesk isn't responding" still fails.
+    titles = [m.group(1) for n in root.iter("node")
+              if (m := re.fullmatch(r"(.+) (?:isn't|is not) responding", n.get("text", "")))]
+    if not titles or any("offdesk" in t.casefold() for t in titles):
+        return False
+    wait = next((n for n in root.iter("node") if n.get("text", "").casefold() == "wait"), None)
+    if wait is None:
+        return False
+    print(f"Dismissing a system dialog: {titles[0]} isn't responding")
+    left, top, right, bottom = map(int, re.findall(r"\d+", wait.attrib["bounds"]))
+    adb("shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2))
+    return True
+
+
 def wait_for_screen(text):
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
         try:
             root = hierarchy()
-            if dismiss_update(root):
+            if dismiss_update(root) or dismiss_foreign_anr(root):
                 continue
             # Chrome is lowercased by CSS, and the WebView reports the rendered text.
             if any(text.casefold() in (n.get("text", "") + n.get("content-desc", "")).casefold() for n in root.iter("node")):
@@ -91,8 +108,8 @@ def check_webview_input():
             adb("shell", "input", "text", character)
             time.sleep(0.1)
         root = hierarchy()
-        if dismiss_update(root):
-            continue  # Retry only an action interrupted by the known updater.
+        if dismiss_update(root) or dismiss_foreign_anr(root):
+            continue  # Retry only an action interrupted by a known prompt.
         assert any(n.get("text") == "http://example.invalid" for n in root.iter("node")), "WebView input is unresponsive"
         return
     raise AssertionError("Update prompts repeatedly interrupted WebView input")
