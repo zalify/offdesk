@@ -10,6 +10,7 @@
 //! (`DOM.getBoxModel` already reports main-frame coordinates for frames of
 //! the same process, verified against real Chromium.)
 
+use super::human;
 use super::keys;
 use super::snapshot::{self, FrameData};
 use super::Tab;
@@ -180,6 +181,23 @@ fn content_center(model: &Value) -> Option<(f64, f64)> {
         (quad[0] + quad[2] + quad[4] + quad[6]) / 4.0,
         (quad[1] + quad[3] + quad[5] + quad[7]) / 4.0,
     ))
+}
+
+/// Width and height of the bounding box of the content quad.
+fn content_size(model: &Value) -> Option<(f64, f64)> {
+    let quad: Vec<f64> = model["model"]["content"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    if quad.len() < 8 {
+        return None;
+    }
+    let span = |offset: usize| {
+        let v = || quad.iter().skip(offset).step_by(2).copied();
+        v().fold(f64::MIN, f64::max) - v().fold(f64::MAX, f64::min)
+    };
+    Some((span(0), span(1)))
 }
 
 fn short(text: &str) -> String {
@@ -504,6 +522,14 @@ impl Tab {
         let model = self.client.call(s, "DOM.getBoxModel", node).await?;
         let (mut x, mut y) =
             content_center(&model).ok_or("element has no visible box; it may be hidden")?;
+        let mut jitter = None;
+        if human::enabled() {
+            let mut rng = human::Rng::from_entropy();
+            let (w, h) = content_size(&model).unwrap_or((0.0, 0.0));
+            let (jx, jy) = human::click_point(&mut rng, (x - w / 2.0, y - h / 2.0, w, h));
+            (x, y) = (jx, jy);
+            jitter = Some(rng);
+        }
         for (session, backend) in &chain {
             let owner = self
                 .client
@@ -518,17 +544,88 @@ impl Tab {
             x += ox;
             y += oy;
         }
-        self.call(
-            "Input.dispatchMouseEvent",
-            json!({"type": "mouseMoved", "x": x, "y": y}),
-        )
-        .await?;
-        for kind in ["mousePressed", "mouseReleased"] {
+        match jitter {
+            Some(mut rng) => self.human_click(&mut rng, (x, y)).await,
+            None => {
+                self.call(
+                    "Input.dispatchMouseEvent",
+                    json!({"type": "mouseMoved", "x": x, "y": y}),
+                )
+                .await?;
+                for kind in ["mousePressed", "mouseReleased"] {
+                    self.call(
+                        "Input.dispatchMouseEvent",
+                        json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}),
+                    )
+                    .await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Move the mouse from where it was to `to` along a curved path, pause,
+    /// press, hold, release.
+    async fn human_click(&self, rng: &mut human::Rng, to: (f64, f64)) -> Result<(), String> {
+        use std::time::Duration;
+        let from = {
+            let last = self.mouse.lock().unwrap();
+            last.unwrap_or_else(|| human::start_point(rng))
+        };
+        let path = human::mouse_path(rng, from, to);
+        let timing = human::click_timing(rng, path.len());
+        for (&(px, py), &ms) in path.iter().zip(&timing.step_ms) {
+            // Remember where the mouse is even if a later step fails.
+            *self.mouse.lock().unwrap() = Some((px, py));
             self.call(
                 "Input.dispatchMouseEvent",
-                json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}),
+                json!({"type": "mouseMoved", "x": px, "y": py, "button": "none", "buttons": 0}),
             )
             .await?;
+            tokio::time::sleep(Duration::from_millis(ms)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(timing.settle_ms)).await;
+        let (x, y) = to;
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({"type": "mousePressed", "x": x, "y": y, "button": "left", "buttons": 1, "clickCount": 1}),
+        )
+        .await?;
+        tokio::time::sleep(Duration::from_millis(timing.hold_ms)).await;
+        self.call(
+            "Input.dispatchMouseEvent",
+            json!({"type": "mouseReleased", "x": x, "y": y, "button": "left", "buttons": 0, "clickCount": 1}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Type `text` key by key at a human pace (see [`human::plan_typing`]).
+    /// Errors never contain `text`.
+    async fn type_human(&self, text: &str) -> Result<(), String> {
+        use std::time::Duration;
+        let mut rng = human::Rng::from_entropy();
+        for step in human::plan_typing(&mut rng, text) {
+            let gap = match step {
+                human::TypeStep::Key {
+                    ch,
+                    hold_ms,
+                    gap_ms,
+                } => {
+                    let (def, shift) = keys::ascii_key(ch).ok_or("untypable character")?;
+                    let modifiers = if shift { 8 } else { 0 };
+                    self.dispatch_key_with(&def, modifiers, Duration::from_millis(hold_ms))
+                        .await?;
+                    gap_ms
+                }
+                human::TypeStep::Insert { text, gap_ms } => {
+                    self.call("Input.insertText", json!({"text": text})).await?;
+                    gap_ms
+                }
+            };
+            if gap > 0 {
+                tokio::time::sleep(Duration::from_millis(gap)).await;
+            }
         }
         Ok(())
     }
@@ -845,6 +942,8 @@ impl Tab {
         }
         if text.is_empty() {
             self.dispatch_key(&keys::parse_key("Backspace")?).await
+        } else if human::enabled() {
+            self.type_human(text).await
         } else {
             self.call("Input.insertText", json!({"text": text}))
                 .await

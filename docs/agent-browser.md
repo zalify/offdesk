@@ -571,6 +571,26 @@ Set `OFFDESK_BROWSER_GPU=0` in the node's environment to never try it; any
 other value, or none, is auto. macOS and other platforms are unchanged. A
 headed Chromium on Xvfb is a special case, see [Browser mode](#browser-mode).
 
+**Typing and clicking.** Bot detection also watches behaviour, so the agent's
+input is not instant. `fill` (and the field filling of `login`) selects the
+field, then types printable ASCII one key at a time: trusted `keyDown`/`keyUp`
+with `key`, `code`, `text` and Shift for capitals and shifted symbols (US
+layout), 35-120 ms between keys, a 150-350 ms pause now and then, and a 20-60 ms
+key hold. Anything with no key of its own (CJK, emoji, accents, `\n`, `\t`) is
+inserted as text with `Input.insertText`, so a newline never presses Enter. A
+long text is sped up to fit a 6 s budget; past about 1500 characters the first
+40 are typed and the rest inserted in four chunks, so a 2000-character fill
+takes about 3-4 s. Text is never logged. Every agent click (`click`, `click
+--text`, the click that opens a file chooser for `upload`) aims at a random
+point within 25% of the centre of the element's box, moves the mouse there from
+where the last click left it (a random spot the first time) in 10-25 `mouseMoved`
+events along a gently curved path, pauses 40-120 ms, presses, holds 50-130 ms
+and releases; a click takes about half a second. A person's input from the web
+UI is forwarded as it comes and is not touched. Set
+`OFFDESK_BROWSER_HUMAN_INPUT=0` in the node's environment to get the old
+instant behaviour back (one `insertText`, a direct click at the exact centre),
+which is handy when debugging; any other value, or none, is on.
+
 ## Click by text
 
 Many tabs and toggles are clickable `div`s with no accessibility role, so they
@@ -649,8 +669,9 @@ add the suffix to `MULTI_PART_SUFFIXES`.
 **What `login` does.** In every frame it looks for a visible password field
 and the username field before it (same form, `autocomplete=username|email`
 first); it prefers a frame on an allowed domain. Each field is focused,
-cleared and filled with `Input.insertText`, which fires the same trusted
-`beforeinput`/`input` events as typing (React-style controlled inputs keep the
+cleared and typed into like `fill` does (see
+[Looking like a normal browser](#looking-like-a-normal-browser)): trusted key
+and `beforeinput`/`input` events (React-style controlled inputs keep the
 value), then a `change` event. If the page shows only a username field
 (two-step logins), only the username is filled and the reply says so: wait
 for the next step and call `login` again. `--submit` presses Enter in the last

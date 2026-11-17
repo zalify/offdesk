@@ -9,6 +9,7 @@ mod cdp;
 mod chromium;
 mod download;
 mod frames;
+mod human;
 mod input;
 mod keys;
 mod snapshot;
@@ -173,6 +174,9 @@ struct Tab {
     cast_gate: tokio::sync::Mutex<u64>,
     /// A person's input, applied in order by this tab's dispatcher task.
     input: input::InputTx,
+    /// Where the agent's last click left the mouse, so the next one travels
+    /// from there; `None` until the first click.
+    mouse: Mutex<Option<(f64, f64)>>,
 }
 
 #[derive(Default)]
@@ -1214,6 +1218,7 @@ impl Tab {
             screen: Mutex::new(Screen::default()),
             cast_gate: tokio::sync::Mutex::new(0),
             input,
+            mouse: Mutex::new(None),
         };
         // A popup may already have history, a load running or a dialog up.
         tab.refresh_nav().await;
@@ -1725,6 +1730,17 @@ impl Tab {
     }
 
     async fn dispatch_key(&self, key: &keys::KeyDef) -> Result<(), String> {
+        self.dispatch_key_with(key, 0, Duration::ZERO).await
+    }
+
+    /// Key down, wait `hold`, key up; `modifiers` is CDP's bitmask (8 =
+    /// Shift).
+    async fn dispatch_key_with(
+        &self,
+        key: &keys::KeyDef,
+        modifiers: u32,
+        hold: Duration,
+    ) -> Result<(), String> {
         let mut down = json!({
             "type": if key.text.is_some() { "keyDown" } else { "rawKeyDown" },
             "key": key.key,
@@ -1732,23 +1748,26 @@ impl Tab {
             "windowsVirtualKeyCode": key.windows_vk,
             "nativeVirtualKeyCode": key.windows_vk,
         });
+        let mut up = json!({
+            "type": "keyUp",
+            "key": key.key,
+            "code": key.code,
+            "windowsVirtualKeyCode": key.windows_vk,
+            "nativeVirtualKeyCode": key.windows_vk,
+        });
+        if modifiers != 0 {
+            down["modifiers"] = json!(modifiers);
+            up["modifiers"] = json!(modifiers);
+        }
         if let Some(t) = &key.text {
             down["text"] = json!(t);
             down["unmodifiedText"] = json!(t);
         }
         self.call("Input.dispatchKeyEvent", down).await?;
-        self.call(
-            "Input.dispatchKeyEvent",
-            json!({
-                "type": "keyUp",
-                "key": key.key,
-                "code": key.code,
-                "windowsVirtualKeyCode": key.windows_vk,
-                "nativeVirtualKeyCode": key.windows_vk,
-            }),
-        )
-        .await
-        .map(|_| ())
+        if !hold.is_zero() {
+            tokio::time::sleep(hold).await;
+        }
+        self.call("Input.dispatchKeyEvent", up).await.map(|_| ())
     }
 
     async fn press(&self, key: &str) -> Result<(), String> {
@@ -3068,6 +3087,170 @@ mod tests {
             Ev::Text {
                 text: "x".repeat(10_001),
             },
+        );
+
+        mgr.shutdown().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The agent's typing and clicks look like a person's: key events at a
+    /// human pace, a mouse that travels, all of it trusted; and the text
+    /// still arrives exactly.
+    #[tokio::test]
+    #[ignore]
+    async fn agent_input_is_human_like_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let page = "data:text/html,<body style='margin:0'>\
+            <form onsubmit=\"window.submitted=true;return false\">\
+            <input aria-label=inp id=i style='position:absolute;left:100px;top:100px;width:400px'>\
+            <textarea aria-label=area id=t style='position:absolute;left:100px;top:200px;width:400px;height:100px'></textarea>\
+            </form>\
+            <button id=b style='position:absolute;left:700px;top:600px;width:120px;height:40px' \
+              onclick=\"window.clicks=(window.clicks||0)+1;window.movesAtClick=window.moves;window.clickTrusted=event.isTrusted\">Go</button>\
+            <script>\
+              window.moves=0;window.keydowns=0;window.untrusted=0;\
+              document.addEventListener('mousemove',e=>{window.moves++;if(!e.isTrusted)window.untrusted++});\
+              document.addEventListener('keydown',e=>{window.keydowns++;if(!e.isTrusted)window.untrusted++});\
+            </script>";
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some(page.to_string()),
+                opener_terminal_id: None,
+            })
+            .await
+            .unwrap();
+        let id = info["id"].as_str().unwrap().to_string();
+        let tab = mgr.tabs.get(&id).unwrap();
+        let snap = mgr
+            .execute(AgentBrowserCommand::Snapshot {
+                browser_id: id.clone(),
+            })
+            .await
+            .unwrap();
+        let snap = snap["snapshot"].as_str().unwrap().to_string();
+        let ref_of = |what: &str| -> String {
+            let line = snap
+                .lines()
+                .find(|l| l.contains(what))
+                .unwrap_or_else(|| panic!("no {what} in {snap}"));
+            let start = line.find("[ref=").unwrap() + 5;
+            line[start..line[start..].find(']').unwrap() + start].to_string()
+        };
+        let (input, area, button) = (ref_of("\"inp\""), ref_of("\"area\""), ref_of("button"));
+        let fill = |r: &str, text: String| {
+            mgr.execute(AgentBrowserCommand::Fill {
+                browser_id: id.clone(),
+                r#ref: r.to_string(),
+                text,
+            })
+        };
+
+        let text = "Hello, World! \u{4e16}\u{754c} 123";
+        let started = Instant::now();
+        fill(&input, text.to_string()).await.unwrap();
+        let short = started.elapsed();
+        eprintln!("short fill ({} chars): {short:?}", text.chars().count());
+        assert_eq!(
+            tab.evaluate("document.getElementById('i').value")
+                .await
+                .unwrap(),
+            text
+        );
+        let ascii = text.chars().filter(char::is_ascii).count() as i64;
+        let keydowns = tab
+            .evaluate("window.keydowns")
+            .await
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        assert!(
+            keydowns >= ascii,
+            "{keydowns} keydowns for {ascii} ASCII chars"
+        );
+        assert!(short < Duration::from_secs(6), "{short:?}");
+        if super::human::enabled() {
+            assert!(short > Duration::from_millis(400), "{short:?}");
+        }
+
+        // A newline is text, not an Enter that submits the form.
+        fill(&area, "a\nb".to_string()).await.unwrap();
+        assert_eq!(
+            tab.evaluate("document.getElementById('t').value")
+                .await
+                .unwrap(),
+            "a\nb"
+        );
+        assert_eq!(
+            tab.evaluate("window.submitted === true").await.unwrap(),
+            false
+        );
+
+        // The mouse travels to the button before it clicks.
+        let started = Instant::now();
+        mgr.execute(AgentBrowserCommand::Click {
+            browser_id: id.clone(),
+            r#ref: Some(button.clone()),
+            text: None,
+        })
+        .await
+        .unwrap();
+        eprintln!("click: {:?}", started.elapsed());
+        assert_eq!(tab.evaluate("window.clicks").await.unwrap(), 1);
+        assert_eq!(tab.evaluate("window.clickTrusted").await.unwrap(), true);
+        let moves = tab
+            .evaluate("window.movesAtClick")
+            .await
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        if super::human::enabled() {
+            assert!(moves >= 5, "{moves} mouse moves before the click");
+        }
+        assert_eq!(tab.evaluate("window.untrusted").await.unwrap(), 0);
+        // The next click starts where this one ended: still lots of moves.
+        let before = tab
+            .evaluate("window.moves")
+            .await
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        mgr.execute(AgentBrowserCommand::Click {
+            browser_id: id.clone(),
+            r#ref: Some(input.clone()),
+            text: None,
+        })
+        .await
+        .unwrap();
+        let after = tab
+            .evaluate("window.moves")
+            .await
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        if super::human::enabled() {
+            assert!(after - before >= 5, "{} moves", after - before);
+        }
+
+        // A long text arrives whole, and in bounded time.
+        let long: String = (0..2000u32)
+            .map(|i| char::from(b'a' + (i % 26) as u8))
+            .collect();
+        let started = Instant::now();
+        fill(&input, long.clone()).await.unwrap();
+        let took = started.elapsed();
+        eprintln!("2000-char fill: {took:?}");
+        assert!(took < Duration::from_secs(8), "{took:?}");
+        assert_eq!(
+            tab.evaluate("document.getElementById('i').value")
+                .await
+                .unwrap(),
+            long.as_str()
         );
 
         mgr.shutdown().await;

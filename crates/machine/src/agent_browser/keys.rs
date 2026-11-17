@@ -41,27 +41,63 @@ pub fn parse_key(spec: &str) -> Result<KeyDef, String> {
                      ArrowUp/Down/Left/Right, Home, End, PageUp, PageDown or a single character"
                 ));
             };
-            let (code, vk) = if c.is_ascii_alphabetic() {
-                (
-                    format!("Key{}", c.to_ascii_uppercase()),
-                    c.to_ascii_uppercase() as u32,
-                )
-            } else if c.is_ascii_digit() {
-                (format!("Digit{c}"), c as u32)
-            } else if c == ' ' {
-                ("Space".to_string(), 32)
-            } else {
-                (String::new(), c as u32)
-            };
-            KeyDef {
-                key: c.to_string(),
-                code,
-                windows_vk: vk,
-                text: Some(c.to_string()),
+            match ascii_key(c) {
+                Some((def, _)) => def,
+                None => KeyDef {
+                    key: c.to_string(),
+                    code: String::new(),
+                    windows_vk: c as u32,
+                    text: Some(c.to_string()),
+                },
             }
         }
     };
     Ok(def)
+}
+
+/// Symbol keys of a US layout: (plain, shifted, `code`, virtual key).
+const SYMBOLS: &[(char, char, &str, u32)] = &[
+    ('-', '_', "Minus", 189),
+    ('=', '+', "Equal", 187),
+    ('[', '{', "BracketLeft", 219),
+    (']', '}', "BracketRight", 221),
+    ('\\', '|', "Backslash", 220),
+    (';', ':', "Semicolon", 186),
+    ('\'', '"', "Quote", 222),
+    (',', '<', "Comma", 188),
+    ('.', '>', "Period", 190),
+    ('/', '?', "Slash", 191),
+    ('`', '~', "Backquote", 192),
+];
+
+/// What shift turns the digit keys 0-9 into, in order.
+const SHIFTED_DIGITS: &str = ")!@#$%^&*(";
+
+/// The key that types the printable ASCII character `c` on a US keyboard,
+/// and whether Shift is held for it. `None` for anything else.
+pub fn ascii_key(c: char) -> Option<(KeyDef, bool)> {
+    let def = |code: String, vk: u32| KeyDef {
+        key: c.to_string(),
+        code,
+        windows_vk: vk,
+        text: Some(c.to_string()),
+    };
+    if c.is_ascii_alphabetic() {
+        let up = c.to_ascii_uppercase();
+        return Some((def(format!("Key{up}"), up as u32), c.is_ascii_uppercase()));
+    }
+    if c.is_ascii_digit() {
+        return Some((def(format!("Digit{c}"), c as u32), false));
+    }
+    if c == ' ' {
+        return Some((def("Space".to_string(), 32), false));
+    }
+    if let Some(d) = SHIFTED_DIGITS.find(c) {
+        return Some((def(format!("Digit{d}"), 0x30 + d as u32), true));
+    }
+    SYMBOLS.iter().find_map(|&(plain, shifted, code, vk)| {
+        (c == plain || c == shifted).then(|| (def(code.to_string(), vk), c == shifted))
+    })
 }
 
 #[cfg(test)]
@@ -96,5 +132,32 @@ mod tests {
     fn unknown_key_errors() {
         assert!(parse_key("Hyper").unwrap_err().contains("unknown key"));
         assert!(parse_key("").is_err());
+    }
+
+    #[test]
+    fn ascii_keys_have_codes_and_shift() {
+        let key = |c| ascii_key(c).unwrap();
+        let (d, shift) = key('A');
+        assert_eq!((d.code.as_str(), d.windows_vk, shift), ("KeyA", 65, true));
+        assert!(!key('a').1);
+        let (d, shift) = key('!');
+        assert_eq!((d.code.as_str(), d.windows_vk, shift), ("Digit1", 49, true));
+        assert_eq!(d.text.as_deref(), Some("!"));
+        let (d, shift) = key('?');
+        assert_eq!((d.code.as_str(), d.windows_vk, shift), ("Slash", 191, true));
+        let (d, shift) = key('5');
+        assert_eq!(
+            (d.code.as_str(), d.windows_vk, shift),
+            ("Digit5", 53, false)
+        );
+        let (d, shift) = key(' ');
+        assert_eq!((d.code.as_str(), d.windows_vk, shift), ("Space", 32, false));
+        assert_eq!(key(')').0.code, "Digit0");
+        assert_eq!(key('\\').0.code, "Backslash");
+        assert_eq!(key('"').0.code, "Quote");
+        assert_eq!(key('`').0.code, "Backquote");
+        assert!(ascii_key('世').is_none() && ascii_key('\n').is_none() && ascii_key('é').is_none());
+        // Every printable ASCII character has a key.
+        assert!((0x20u8..0x7f).all(|b| ascii_key(b as char).is_some()));
     }
 }
