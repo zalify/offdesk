@@ -35,6 +35,11 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Fixed CSS viewport of every agent browser, so geometry is known.
 const VIEWPORT_WIDTH: u32 = offdesk_protocol::AGENT_BROWSER_VIEWPORT_WIDTH;
 const VIEWPORT_HEIGHT: u32 = offdesk_protocol::AGENT_BROWSER_VIEWPORT_HEIGHT;
+/// The monitor the pages believe they are on. `screen.width` must not be
+/// smaller than `innerWidth` (headless reports 800x600 next to a 1280x800
+/// viewport, which no real browser does).
+const SCREEN_WIDTH: u32 = 1920;
+const SCREEN_HEIGHT: u32 = 1080;
 /// A frame the hub never acknowledged stops blocking the stream after this.
 const TITLE_POLL: Duration = Duration::from_secs(2);
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -471,13 +476,13 @@ impl AgentBrowserManager {
     async fn start_chromium(
         &self,
         binary: &Path,
-        user_agent: Option<&str>,
+        opts: &chromium::LaunchOptions,
     ) -> Result<Running, String> {
         let launched = chromium::launch(
             binary,
             &self.dir.join("profile"),
             &self.dir.join("chromium.pid"),
-            user_agent,
+            opts,
         )
         .await?;
         match CdpClient::connect(&launched.ws_url).await {
@@ -519,7 +524,22 @@ impl AgentBrowserManager {
             .ok()
             .map(|ua| ua.trim().to_string())
             .filter(|ua| !ua.is_empty());
-        let mut running = self.start_chromium(&binary, saved.as_deref()).await?;
+        // The GPU is tried when the machine has one, and given up on (per
+        // Chrome build) when it leaves WebGL without a context: a software
+        // renderer is a better fingerprint than none. The marker lets the
+        // next start skip the failed attempt when `--version` already tells
+        // which build this is.
+        let gpu_marker = self.dir.join("gpu-broken");
+        let marked_broken = std::fs::read_to_string(&gpu_marker)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty());
+        let cli_version = chromium::cli_version(&binary).await;
+        let gpu_known_broken =
+            |version: Option<&str>| version.is_some() && version == marked_broken.as_deref();
+        let mut gpu = chromium::gpu_wanted_here() && !gpu_known_broken(cli_version.as_deref());
+        let mut opts = chromium::LaunchOptions::new(saved, gpu);
+        let mut running = self.start_chromium(&binary, &opts).await?;
         if let Ok(version) = running
             .client
             .call(None, "Browser.getVersion", json!({}))
@@ -527,14 +547,56 @@ impl AgentBrowserManager {
         {
             let reported = version["userAgent"].as_str().unwrap_or("");
             let product = version["product"].as_str().unwrap_or("");
+            let mut relaunch = false;
+            if gpu {
+                let product_version = chromium::version_of(product);
+                let broken = gpu_known_broken(product_version.as_deref())
+                    || match probe_webgl(&running.client).await {
+                        Ok(Some(renderer)) => {
+                            tracing::info!(renderer, "agent-browser: WebGL on the GPU");
+                            false
+                        }
+                        Ok(None) => true,
+                        Err(e) => {
+                            // Not a verdict on the GPU; keep it and move on.
+                            tracing::warn!("agent-browser: WebGL probe failed: {e}");
+                            false
+                        }
+                    };
+                if broken {
+                    tracing::warn!(
+                        "agent-browser: GPU flags left WebGL without a context; \
+                        relaunching without them (set OFFDESK_BROWSER_GPU=0 to skip the attempt)"
+                    );
+                    if let Some(v) = product_version.or(cli_version) {
+                        let _ = std::fs::write(&gpu_marker, v);
+                    }
+                    gpu = false;
+                    relaunch = true;
+                }
+            }
             if let Some(wanted) =
                 chromium::windowed_user_agent(reported, product).filter(|wanted| wanted != reported)
             {
                 let _ = std::fs::write(&ua_file, &wanted);
+                opts.user_agent = Some(wanted);
+                relaunch = true;
+            }
+            if relaunch {
+                opts.gpu = gpu;
                 self.stop_chromium(running).await;
-                running = self.start_chromium(&binary, Some(&wanted)).await?;
+                running = self.start_chromium(&binary, &opts).await?;
             }
         }
+        tracing::info!(
+            gpu = opts.gpu,
+            "agent-browser: Chromium running ({})",
+            if opts.gpu {
+                "GPU"
+            } else {
+                "software rendering"
+            }
+        );
         let client = running.client.clone();
         // Report url/title changes of tabs we own, and notice the pages they
         // open.
@@ -652,6 +714,52 @@ impl AgentBrowserManager {
         tab.check_no_dialog()?;
         Ok(tab)
     }
+}
+
+/// Reads `UNMASKED_RENDERER_WEBGL` from a throwaway tab: `Some(renderer)`
+/// when WebGL works, `None` when the page cannot get a context. Errors are
+/// for failures of the probe itself. No `Runtime.enable` (a known
+/// automation tell); `Runtime.evaluate` does not need it.
+async fn probe_webgl(client: &CdpClient) -> Result<Option<String>, String> {
+    const EXPR: &str = "(()=>{try{const g=document.createElement('canvas').getContext('webgl');\
+        if(!g)return null;const e=g.getExtension('WEBGL_debug_renderer_info');\
+        return String(e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER))}\
+        catch(e){return null}})()";
+    let created = client
+        .call(None, "Target.createTarget", json!({"url": "about:blank"}))
+        .await?;
+    let target_id = created["targetId"]
+        .as_str()
+        .ok_or("createTarget returned no targetId")?
+        .to_string();
+    let result = async {
+        let attached = client
+            .call(
+                None,
+                "Target.attachToTarget",
+                json!({"targetId": target_id, "flatten": true}),
+            )
+            .await?;
+        let session_id = attached["sessionId"]
+            .as_str()
+            .ok_or("attachToTarget returned no sessionId")?;
+        client
+            .call(
+                Some(session_id),
+                "Runtime.evaluate",
+                json!({"expression": EXPR, "returnByValue": true}),
+            )
+            .await
+    }
+    .await;
+    let _ = client
+        .call(None, "Target.closeTarget", json!({"targetId": target_id}))
+        .await;
+    let result = result?;
+    if result.get("exceptionDetails").is_some() {
+        return Ok(None);
+    }
+    Ok(result["result"]["value"].as_str().map(str::to_string))
 }
 
 /// Best effort: make the window's content area exactly the viewport size.
@@ -983,6 +1091,8 @@ impl Tab {
                     "height": VIEWPORT_HEIGHT,
                     "deviceScaleFactor": 1,
                     "mobile": false,
+                    "screenWidth": SCREEN_WIDTH,
+                    "screenHeight": SCREEN_HEIGHT,
                 }),
             )
             .await?;

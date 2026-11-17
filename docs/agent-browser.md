@@ -495,6 +495,29 @@ and relaunches once; later launches use it directly, and relaunch only when
 Chromium has been updated since. Some sites still ask a person to tick their
 box, as they do for a normal browser on a new device: use `handoff`.
 
+## Looking like a normal browser
+
+Driving Chromium over DevTools sets `navigator.webdriver` to `true`, which bot
+detection reads as automation. The node always starts it with
+`--disable-blink-features=AutomationControlled`, so the property is `false`, as
+in a person's browser. No script is injected and no prototype is patched:
+only launch flags and DevTools emulation are used.
+
+Every tab also reports a 1920x1080 screen (`screen.width/height`,
+`availWidth/availHeight`) around its 1280x800 viewport; headless Chromium would
+otherwise say 800x600, smaller than the page itself.
+
+**GPU.** Headless Chromium renders WebGL in software (SwiftShader), which shows
+in `UNMASKED_RENDERER_WEBGL`. On Linux, when a DRM render node exists
+(`/dev/dri/renderD*`), the node adds `--enable-gpu --use-gl=angle
+--use-angle=gl-egl` so WebGL reports the real GPU. Some drivers then give no
+WebGL context at all, which is worse than software, so after launching the node
+asks a throwaway tab for a WebGL context. If there is none it relaunches without
+the GPU flags and remembers the Chrome version in
+`<config dir>/agent-browser/gpu-broken`; a Chrome update tries the GPU again.
+Set `OFFDESK_BROWSER_GPU=0` in the node's environment to never try it; any
+other value, or none, is auto. macOS and other platforms are unchanged.
+
 ## Click by text
 
 Many tabs and toggles are clickable `div`s with no accessibility role, so they
@@ -604,6 +627,15 @@ The node looks for a browser in this order:
 4. Otherwise, the first `open` downloads Chrome for Testing into
    `<config dir>/agent-browser/chrome/` (about 150 MB, so the first `open`
    can take minutes) and reuses it afterwards.
+
+Prefer a branded Google Chrome (`google-chrome-stable`) over the
+auto-downloaded Chrome for Testing: Chrome for Testing reports only the
+`Chromium` brand in `navigator.userAgentData` and `Sec-CH-UA`, which sites can
+tell from a real Chrome. Discovery already picks `google-chrome` from `PATH`
+before anything else, so installing it is enough. Caution: if the installed
+Chrome is an older major version than the Chrome for Testing that last used the
+profile, Chrome treats the profile as a downgrade and logins may be lost. Back
+up `<config dir>/agent-browser/profile` first.
 
 Chromium runs with its sandbox, except when the node runs as root or
 `OFFDESK_CHROMIUM_NO_SANDBOX` is set, where it is started with `--no-sandbox`
