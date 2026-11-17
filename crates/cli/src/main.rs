@@ -346,7 +346,7 @@ enum Commands {
         #[command(subcommand)]
         action: LayoutAction,
     },
-    /// Drive a node's headless Chromium (the agent browser)
+    /// Drive a node's Chromium (the agent browser)
     #[command(after_help = "\
 Exit codes:
   0  success (wait: matched; handoff --wait / wait-control: a person is done)

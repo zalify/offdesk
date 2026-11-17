@@ -12,6 +12,7 @@ mod frames;
 mod input;
 mod keys;
 mod snapshot;
+mod xvfb;
 
 use base64::Engine;
 use bytes::Bytes;
@@ -177,6 +178,13 @@ struct Tab {
 #[derive(Default)]
 struct State {
     chromium: Option<Running>,
+    /// The private display a headed Chromium draws on. Lives and dies with
+    /// the Chromium: both are stopped together, and either one dying resets
+    /// both.
+    xvfb: Option<xvfb::Xvfb>,
+    /// Chromium shows windows (on `xvfb`, or natively), so every agent
+    /// browser gets a window of its own.
+    headed: bool,
 }
 
 pub struct AgentBrowserManager {
@@ -195,6 +203,10 @@ impl AgentBrowserManager {
 
     pub fn with_dir(dir: PathBuf) -> Self {
         chromium::kill_stale(&dir.join("chromium.pid"), &dir.join("profile"));
+        // Same for the private Xvfb: the node runs with `KillMode=process`,
+        // so children outlive it. Only an Xvfb started with our auth file
+        // counts.
+        chromium::kill_stale(&xvfb::pidfile(&dir), &xvfb::auth_path(&dir));
         Self {
             dir,
             state: AsyncMutex::new(State::default()),
@@ -455,6 +467,10 @@ impl AgentBrowserManager {
         if let Some(running) = state.chromium.take() {
             self.stop_chromium(running).await;
         }
+        if let Some(xvfb) = state.xvfb.take() {
+            xvfb.stop().await;
+        }
+        state.headed = false;
     }
 
     async fn stop_chromium(&self, mut running: Running) {
@@ -504,15 +520,68 @@ impl AgentBrowserManager {
         let dead = match state.chromium.as_mut() {
             Some(r) => r.client.is_closed() || matches!(r.child.try_wait(), Ok(Some(_))),
             None => false,
-        };
+        } || state.xvfb.as_mut().is_some_and(|x| x.exited());
         if dead {
-            tracing::warn!("agent-browser Chromium died; resetting");
+            tracing::warn!("agent-browser Chromium (or its Xvfb) died; resetting");
             self.teardown(state).await;
         }
         if let Some(r) = &state.chromium {
             return Ok(r.client.clone());
         }
+        // A failed start must not leave an Xvfb behind.
+        match self.launch_browser(state).await {
+            Ok(client) => Ok(client),
+            Err(e) => {
+                self.teardown(state).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Where Chromium draws, starting the private Xvfb when that is the
+    /// answer. `auto` gives up on a broken Xvfb and goes headless; an
+    /// explicit `headed` reports it.
+    async fn choose_display(
+        &self,
+        state: &mut State,
+    ) -> Result<(bool, Option<chromium::X11Display>), String> {
+        let mode = xvfb::BrowserMode::from_env()?;
+        let xvfb_binary = xvfb::find_xvfb();
+        let plan = xvfb::plan(mode, cfg!(target_os = "linux"), xvfb_binary.is_some())?;
+        match (plan, xvfb_binary) {
+            (xvfb::Plan::Headless, _) => Ok((false, None)),
+            (xvfb::Plan::NativeWindow, _) => Ok((true, None)),
+            (xvfb::Plan::PrivateXvfb, Some(binary)) => {
+                match xvfb::Xvfb::start(&binary, &self.dir).await {
+                    Ok(x) => {
+                        let x11 = chromium::X11Display {
+                            display: x.display.clone(),
+                            xauthority: x.xauthority.clone(),
+                        };
+                        tracing::info!(display = %x.display, "agent-browser: private Xvfb started");
+                        state.xvfb = Some(x);
+                        Ok((true, Some(x11)))
+                    }
+                    Err(e) if mode == xvfb::BrowserMode::Auto => {
+                        tracing::warn!(
+                            "agent-browser: private Xvfb failed ({e}); using headless Chromium"
+                        );
+                        Ok((false, None))
+                    }
+                    Err(e) => Err(format!(
+                        "OFFDESK_BROWSER_MODE=headed: could not start Xvfb: {e}"
+                    )),
+                }
+            }
+            (xvfb::Plan::PrivateXvfb, None) => Err(format!("Xvfb not found; {}", xvfb::XVFB_HINT)),
+        }
+    }
+
+    /// Start Xvfb (when headed), Chromium and the supervisor.
+    async fn launch_browser(&self, state: &mut State) -> Result<Arc<CdpClient>, String> {
         let binary = self.find_or_download_chromium().await?;
+        let (headed, x11) = self.choose_display(state).await?;
+        state.headed = headed;
         // Headless Chromium calls itself HeadlessChrome in its user agent,
         // which sites behind Cloudflare and the like treat as a bot. Launch
         // with the user agent the same browser has with a window (remembered
@@ -529,7 +598,13 @@ impl AgentBrowserManager {
         // renderer is a better fingerprint than none. The marker lets the
         // next start skip the failed attempt when `--version` already tells
         // which build this is.
-        let gpu_marker = self.dir.join("gpu-broken");
+        // Headless and headed need different flags, and what works for one
+        // says nothing about the other.
+        let gpu_marker = self.dir.join(if headed {
+            "gpu-broken-headed"
+        } else {
+            "gpu-broken"
+        });
         let marked_broken = std::fs::read_to_string(&gpu_marker)
             .ok()
             .map(|v| v.trim().to_string())
@@ -539,6 +614,8 @@ impl AgentBrowserManager {
             |version: Option<&str>| version.is_some() && version == marked_broken.as_deref();
         let mut gpu = chromium::gpu_wanted_here() && !gpu_known_broken(cli_version.as_deref());
         let mut opts = chromium::LaunchOptions::new(saved, gpu);
+        opts.headed = headed;
+        opts.x11 = x11;
         let mut running = self.start_chromium(&binary, &opts).await?;
         if let Ok(version) = running
             .client
@@ -551,9 +628,9 @@ impl AgentBrowserManager {
             if gpu {
                 let product_version = chromium::version_of(product);
                 let broken = gpu_known_broken(product_version.as_deref())
-                    || match probe_webgl(&running.client).await {
+                    || match probe_webgl(&running.client, headed).await {
                         Ok(Some(renderer)) => {
-                            tracing::info!(renderer, "agent-browser: WebGL on the GPU");
+                            tracing::info!(renderer, "agent-browser: WebGL renderer");
                             false
                         }
                         Ok(None) => true,
@@ -590,7 +667,8 @@ impl AgentBrowserManager {
         }
         tracing::info!(
             gpu = opts.gpu,
-            "agent-browser: Chromium running ({})",
+            "agent-browser: Chromium running ({}, {})",
+            if opts.headed { "headed" } else { "headless" },
             if opts.gpu {
                 "GPU"
             } else {
@@ -641,7 +719,8 @@ impl AgentBrowserManager {
         let tab = {
             let mut state = self.state.lock().await;
             let client = self.ensure_running(&mut state).await?;
-            match Tab::create(client, opener_terminal_id, self.events.clone()).await {
+            let headed = state.headed;
+            match Tab::create(client, headed, opener_terminal_id, self.events.clone()).await {
                 Ok(tab) => {
                     let tab = Arc::new(tab);
                     self.tabs.insert(tab.clone());
@@ -720,13 +799,17 @@ impl AgentBrowserManager {
 /// when WebGL works, `None` when the page cannot get a context. Errors are
 /// for failures of the probe itself. No `Runtime.enable` (a known
 /// automation tell); `Runtime.evaluate` does not need it.
-async fn probe_webgl(client: &CdpClient) -> Result<Option<String>, String> {
+async fn probe_webgl(client: &CdpClient, new_window: bool) -> Result<Option<String>, String> {
     const EXPR: &str = "(()=>{try{const g=document.createElement('canvas').getContext('webgl');\
         if(!g)return null;const e=g.getExtension('WEBGL_debug_renderer_info');\
         return String(e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):g.getParameter(g.RENDERER))}\
         catch(e){return null}})()";
     let created = client
-        .call(None, "Target.createTarget", json!({"url": "about:blank"}))
+        .call(
+            None,
+            "Target.createTarget",
+            create_target_params(new_window),
+        )
         .await?;
     let target_id = created["targetId"]
         .as_str()
@@ -1032,14 +1115,30 @@ async fn adopt_popup(
     }
 }
 
+/// `Target.createTarget` parameters. A window shows one tab at a time and the
+/// window is what `fit_window_to_viewport` sizes, so with windows every agent
+/// browser gets its own: its viewport is exact and it stays visible (to its
+/// own screencast) whatever the other browsers do. The `about:blank` page
+/// Chromium starts with stays open and unlisted, since a headed Chromium
+/// quits when its last window closes (and the node stops Chromium itself when
+/// the last agent browser is closed).
+fn create_target_params(new_window: bool) -> Value {
+    json!({"url": "about:blank", "newWindow": new_window})
+}
+
 impl Tab {
     async fn create(
         client: Arc<CdpClient>,
+        new_window: bool,
         opener_terminal_id: Option<String>,
         events: Events,
     ) -> Result<Tab, String> {
         let created = client
-            .call(None, "Target.createTarget", json!({"url": "about:blank"}))
+            .call(
+                None,
+                "Target.createTarget",
+                create_target_params(new_window),
+            )
             .await?;
         let target_id = created["targetId"]
             .as_str()
@@ -1078,7 +1177,7 @@ impl Tab {
                 json!({"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}),
             )
             .await;
-        // headless=new sizes the window, and the browser UI eats part of it, so
+        // The window size is Chromium's own, and the browser UI eats part of it, so
         // the screencast would crop the emulated viewport. Grow the window by
         // the UI's size first, then pin the viewport.
         fit_window_to_viewport(&client, &target_id, &session_id).await;
@@ -2299,6 +2398,142 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// Windows and viewport in whatever mode the node picks
+    /// (`OFFDESK_BROWSER_MODE`): exact 1280x800 viewport inside a real-looking
+    /// window, an older agent browser that keeps rendering behind a newer
+    /// one, and closing every browser leaving a node that can open again.
+    /// `OFFDESK_TEST_SHOT_DIR` keeps the screenshots for a look.
+    #[tokio::test]
+    #[ignore]
+    async fn windows_stay_exact_and_alive_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let animated = |color: &str| {
+            format!(
+                "data:text/html,<body style='margin:0;background:{color}'><h1>{color}</h1>\
+                <script>window.n=0;(function f(){{window.n++;requestAnimationFrame(f)}})()</script>"
+            )
+        };
+        let open = |url: String| {
+            let mgr = &mgr;
+            async move {
+                let info = mgr
+                    .execute(AgentBrowserCommand::Open {
+                        url: Some(url),
+                        opener_terminal_id: None,
+                    })
+                    .await
+                    .unwrap();
+                info["id"].as_str().unwrap().to_string()
+            }
+        };
+        let first = open(animated("red")).await;
+        let pid = mgr.chromium_pid().await.unwrap();
+        let second = open(animated("blue")).await;
+        assert_eq!(mgr.chromium_pid().await, Some(pid));
+        let headed = mgr.state.lock().await.headed;
+        eprintln!("headed={headed}");
+
+        for id in [&first, &second] {
+            let tab = mgr.tabs.get(id).unwrap();
+            let sizes = tab
+                .evaluate(
+                    "[innerWidth, innerHeight, outerWidth, outerHeight, screen.width, \
+                    navigator.webdriver].join(' ')",
+                )
+                .await
+                .unwrap();
+            eprintln!("{id}: inner/outer/screen/webdriver = {sizes}");
+            let n: Vec<&str> = sizes.as_str().unwrap().split(' ').collect();
+            assert_eq!((n[0], n[1]), ("1280", "800"), "{sizes}");
+            let (ow, oh): (u32, u32) = (n[2].parse().unwrap(), n[3].parse().unwrap());
+            assert!(ow >= 1280 && oh >= 800, "outer {ow}x{oh} (headless is 0x0)");
+            assert_eq!(n[5], "false");
+        }
+
+        // The first browser is behind the second; it must still render.
+        let tab = mgr.tabs.get(&first).unwrap();
+        let before = tab.evaluate("window.n").await.unwrap().as_f64().unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let after = tab.evaluate("window.n").await.unwrap().as_f64().unwrap();
+        // (Headless Chromium paints only when someone watches.)
+        if headed {
+            assert!(
+                after > before + 5.0,
+                "frames {before} -> {after}: throttled"
+            );
+        }
+        let renderer = tab
+            .evaluate(
+                "(()=>{const g=document.createElement('canvas').getContext('webgl');\
+                if(!g)return 'none';const e=g.getExtension('WEBGL_debug_renderer_info');\
+                return e?g.getParameter(e.UNMASKED_RENDERER_WEBGL):'no debug info'})()",
+            )
+            .await
+            .unwrap();
+        eprintln!("WebGL renderer: {renderer}");
+        assert_ne!(renderer, "none", "pages get no WebGL context");
+        let shot = |id: String| {
+            let mgr = &mgr;
+            async move {
+                let r = mgr
+                    .execute(AgentBrowserCommand::Screenshot {
+                        browser_id: id,
+                        full_page: false,
+                    })
+                    .await
+                    .unwrap();
+                base64::engine::general_purpose::STANDARD
+                    .decode(r["png_base64"].as_str().unwrap())
+                    .unwrap()
+            }
+        };
+        let png = shot(first.clone()).await;
+        let png2 = shot(second.clone()).await;
+        assert!(png.len() > 1000 && png2.len() > 1000);
+        if let Some(out) = std::env::var_os("OFFDESK_TEST_SHOT_DIR") {
+            let out = PathBuf::from(out);
+            std::fs::create_dir_all(&out).unwrap();
+            std::fs::write(out.join("first.png"), &png).unwrap();
+            std::fs::write(out.join("second.png"), &png2).unwrap();
+        }
+
+        // Only agent browsers are listed, never Chromium's start page.
+        assert_eq!(mgr.list().await.unwrap().len(), 2);
+
+        // Close the older one, then everything, then open again.
+        mgr.execute(AgentBrowserCommand::Close {
+            browser_id: first.clone(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(mgr.chromium_pid().await, Some(pid));
+        mgr.execute(AgentBrowserCommand::Close {
+            browser_id: second.clone(),
+        })
+        .await
+        .unwrap();
+        assert!(mgr.list().await.unwrap().is_empty());
+        let third = open(animated("green")).await;
+        let tab = mgr.tabs.get(&third).unwrap();
+        assert_eq!(
+            tab.evaluate("innerWidth + 'x' + innerHeight")
+                .await
+                .unwrap(),
+            "1280x800"
+        );
+        mgr.shutdown().await;
+        // Nothing is left behind: no Xvfb, no cookie file.
+        assert!(!xvfb::pidfile(&dir).exists());
+        assert!(!xvfb::auth_path(&dir).exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// `upload` finds the file input itself, or answers the chooser a button
     /// opens.
     #[tokio::test]
@@ -2490,7 +2725,11 @@ mod tests {
         let ua = tab.evaluate("navigator.userAgent").await.unwrap();
         let ua = ua.as_str().unwrap();
         assert!(!ua.contains("Headless") && ua.contains("Chrome/"), "{ua}");
-        assert_eq!(std::fs::read_to_string(dir.join("user-agent")).unwrap(), ua);
+        // Only a headless launch has a user agent to learn; a window says
+        // `Chrome/` itself.
+        if !mgr.state.lock().await.headed {
+            assert_eq!(std::fs::read_to_string(dir.join("user-agent")).unwrap(), ua);
+        }
 
         mgr.execute(AgentBrowserCommand::Goto {
             browser_id: id.clone(),

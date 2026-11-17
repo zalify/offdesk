@@ -146,6 +146,18 @@ pub struct LaunchOptions {
     /// software renderer.
     pub gpu: bool,
     pub no_sandbox: bool,
+    /// A normal window instead of `--headless=new`.
+    pub headed: bool,
+    /// The private X display a headed Chromium draws on (Linux).
+    pub x11: Option<X11Display>,
+}
+
+/// The private Xvfb display a headed Chromium is pointed at.
+#[derive(Debug, Clone)]
+pub struct X11Display {
+    /// `:N`.
+    pub display: String,
+    pub xauthority: PathBuf,
 }
 
 impl LaunchOptions {
@@ -155,6 +167,8 @@ impl LaunchOptions {
             user_agent,
             gpu,
             no_sandbox: running_as_root(),
+            headed: false,
+            x11: None,
         }
     }
 }
@@ -165,12 +179,35 @@ impl LaunchOptions {
 /// `--enable-gpu --ignore-gpu-blocklist` produced no WebGL context at all
 /// (worse than the SwiftShader default), which is why the node probes WebGL
 /// after launching with them and falls back.
+///
+/// Under Xvfb (no DRI3, so no hardware EGL) the same flags are measured to
+/// leave WebGL without a context too, unless `--ignore-gpu-blocklist` is
+/// added, which then renders on Mesa's llvmpipe rather than the GPU: still a
+/// plausible Linux renderer string, and better than none (see
+/// `docs/agent-browser.md`).
 const GPU_FLAGS: &[&str] = &["--enable-gpu", "--use-gl=angle", "--use-angle=gl-egl"];
+
+/// Flags for a window. Several agent browsers' windows overlap on one
+/// virtual screen, and an occluded or background window must keep rendering
+/// and streaming; a node restart kills Chromium uncleanly, and the next start
+/// must not ask "Restore pages?".
+const HEADED_FLAGS: &[&str] = &[
+    "--window-position=0,0",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
+    "--hide-crash-restore-bubble",
+];
+
+/// WebGL on a headed Chromium without a usable GPU. Headless Chromium falls
+/// back to SwiftShader by itself; a windowed one gives pages no WebGL context
+/// at all, which no real browser does.
+const HEADED_SOFTWARE_GL_FLAGS: &[&str] =
+    &["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
 
 /// The full argument list for a launch.
 pub fn build_args(profile: &Path, opts: &LaunchOptions) -> Vec<OsString> {
     let mut args: Vec<OsString> = vec![
-        "--headless=new".into(),
         "--remote-debugging-port=0".into(),
         "--remote-debugging-address=127.0.0.1".into(),
         format!("--user-data-dir={}", profile.display()).into(),
@@ -182,8 +219,23 @@ pub fn build_args(profile: &Path, opts: &LaunchOptions) -> Vec<OsString> {
         // bot detection reads as automation; a person's browser says false.
         "--disable-blink-features=AutomationControlled".into(),
     ];
+    if !opts.headed {
+        args.insert(0, "--headless=new".into());
+    } else {
+        args.extend(HEADED_FLAGS.iter().map(OsString::from));
+        if opts.x11.is_some() {
+            // Never let Chromium pick Wayland from the environment: the
+            // window goes to the private X display or nowhere.
+            args.push("--ozone-platform=x11".into());
+        }
+    }
     if opts.gpu {
         args.extend(GPU_FLAGS.iter().map(OsString::from));
+        if opts.headed {
+            args.push("--ignore-gpu-blocklist".into());
+        }
+    } else if opts.headed {
+        args.extend(HEADED_SOFTWARE_GL_FLAGS.iter().map(OsString::from));
     }
     if let Some(user_agent) = &opts.user_agent {
         args.push(format!("--user-agent={user_agent}").into());
@@ -270,6 +322,11 @@ pub async fn launch(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if let Some(x11) = &opts.x11 {
+        cmd.env("DISPLAY", &x11.display)
+            .env("XAUTHORITY", &x11.xauthority)
+            .env_remove("WAYLAND_DISPLAY");
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to launch {}: {e}", binary.display()))?;
@@ -425,6 +482,7 @@ mod tests {
                 user_agent: Some("UA/1 (x y)".into()),
                 gpu: true,
                 no_sandbox: true,
+                ..Default::default()
             },
         );
         assert!(full.contains(&"--disable-blink-features=AutomationControlled".into()));
@@ -434,6 +492,57 @@ mod tests {
         assert!(full.contains(&"--user-agent=UA/1 (x y)".into()));
         assert!(full.contains(&"--no-sandbox".into()));
         assert_eq!(full.last().unwrap(), "about:blank");
+        assert!(full.contains(&"--headless=new".into()));
+        assert!(!full.iter().any(|a| a == "--ozone-platform=x11"));
+    }
+
+    #[test]
+    fn headed_args_drop_headless_and_target_the_private_display() {
+        let headed = build_args(
+            Path::new("/p"),
+            &LaunchOptions {
+                headed: true,
+                x11: Some(X11Display {
+                    display: ":7".into(),
+                    xauthority: "/a".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        assert!(!headed
+            .iter()
+            .any(|a| a.to_string_lossy().contains("headless")));
+        // Without the GPU a window still gets software WebGL.
+        assert!(headed.contains(&"--use-angle=swiftshader".into()));
+        assert!(headed.contains(&"--enable-unsafe-swiftshader".into()));
+        let headed_gpu = build_args(
+            Path::new("/p"),
+            &LaunchOptions {
+                headed: true,
+                gpu: true,
+                ..Default::default()
+            },
+        );
+        assert!(headed_gpu.contains(&"--ignore-gpu-blocklist".into()));
+        assert!(!headed_gpu.contains(&"--use-angle=swiftshader".into()));
+        for flag in HEADED_FLAGS.iter().chain(&[
+            "--ozone-platform=x11",
+            "--disable-blink-features=AutomationControlled",
+            "--window-size=1280,800",
+        ]) {
+            assert!(headed.contains(&OsString::from(*flag)), "{flag}");
+        }
+        assert_eq!(headed.last().unwrap(), "about:blank");
+        // A native window (macOS) names no X display.
+        let native = build_args(
+            Path::new("/p"),
+            &LaunchOptions {
+                headed: true,
+                ..Default::default()
+            },
+        );
+        assert!(!native.iter().any(|a| a == "--ozone-platform=x11"));
+        assert!(native.contains(&"--window-position=0,0".into()));
     }
 
     #[test]

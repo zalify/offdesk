@@ -11,7 +11,8 @@ rename mapping is at the bottom.
 
 ## Agent browser (implementation added 2026-10-06)
 
-- A node can own one headless Chromium with a persistent per-machine profile at
+- A node can own one Chromium (headed on a private Xvfb where Xvfb is installed,
+  else headless; `OFFDESK_BROWSER_MODE`, see `docs/agent-browser.md`) with a persistent per-machine profile at
   `<config dir>/agent-browser/profile` and one tab per agent browser; `offdesk
   browser` drives it through the Hub
   (`crates/machine/src/agent_browser/`, `crates/hub/src/routes/agent_browser.rs`,

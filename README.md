@@ -97,7 +97,7 @@ Linux can also host a Hub with tmux installed separately.
   machine as a page in the desktop or Android app
 - [Customize terminal keys](docs/terminal-keys.md): key placement, Shift combinations
   and backward deletion without reopening the system keyboard
-- [Agent browser](docs/agent-browser.md): a headless Chromium on a machine that
+- [Agent browser](docs/agent-browser.md): a Chromium on a machine that
   agents drive with `offdesk browser`, and hand to you when they need a person
 - [Build from source](docs/building.md) · [Security model](SECURITY.md)
 - [Release notes and version history](https://github.com/zalify/offdesk/releases)
@@ -426,7 +426,7 @@ offdesk layout equalize --group <name|cwd:path> [--machine <id>] [--json]
                                                 # rebalance a group's pane splits evenly; web clients update live
 offdesk layout rotate --group <name|cwd:path> [--machine <id>] [--json]
                                                 # flip every split between side-by-side and stacked
-offdesk browser open [URL] [--machine M] [--json]   # open a node's headless Chromium tab; prints its id
+offdesk browser open [URL] [--machine M] [--json]   # open a node's Chromium tab; prints its id
 offdesk browser ls [--machine M] [--json]           # list agent browsers
 offdesk browser goto|snapshot|click|fill|upload|press|dialog|wait|screenshot|close <browser> ...
                                                 # drive it; see docs/agent-browser.md

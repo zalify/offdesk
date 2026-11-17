@@ -1,4 +1,4 @@
-//! `offdesk browser`: drive the headless Chromium owned by a node. Every
+//! `offdesk browser`: drive the Chromium owned by a node. Every
 //! command goes through the hub to the node that owns the browser; an agent
 //! browser is addressed by its id or a unique id prefix.
 use std::path::{Path, PathBuf};
