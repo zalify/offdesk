@@ -252,6 +252,30 @@ fn transfer(
         ));
     }
     let dest_canon = fs::canonicalize(&dest_dir).map_err(|e| FsOpFail::from_io(&e, &dest_dir))?;
+    // Report a conflict before touching anything, so a retry with another
+    // policy doesn't repeat the items that went through first.
+    if on_conflict == OnConflict::Error {
+        for raw in sources {
+            let src = absolute(raw)?;
+            let same_dir = src
+                .parent()
+                .and_then(|p| fs::canonicalize(p).ok())
+                .is_some_and(|p| p == dest_canon);
+            if same_dir {
+                continue;
+            }
+            if let Some(name) = src.file_name() {
+                let target = dest_dir.join(name);
+                if exists(&target) {
+                    return Err(FsOpFail::new(
+                        Code::Exists,
+                        format!("{} already exists", target.display()),
+                        Some(&target),
+                    ));
+                }
+            }
+        }
+    }
     sources
         .iter()
         .map(|raw| transfer_one(raw, &dest_dir, &dest_canon, on_conflict, is_move))
@@ -444,6 +468,24 @@ mod tests {
             Code::NotFound
         );
         assert_eq!(read_range("rel", 0, 1).unwrap_err().code, Code::Invalid);
+    }
+
+    #[test]
+    fn copy_conflict_is_reported_before_anything_is_copied() {
+        let dir = scratch();
+        let (src, dest) = (dir.join("src"), dir.join("dest"));
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(src.join("a.txt"), b"a").unwrap();
+        fs::write(src.join("b.txt"), b"b").unwrap();
+        fs::write(dest.join("b.txt"), b"old").unwrap();
+        let op = copy_op(
+            &[&src.join("a.txt"), &src.join("b.txt")],
+            &dest,
+            OnConflict::Error,
+        );
+        assert_eq!(code(run(op)), Code::Exists);
+        assert!(!dest.join("a.txt").exists());
     }
 
     #[test]

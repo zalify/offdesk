@@ -14,6 +14,8 @@ export function FileBrowserOverlay({
   homeDir,
   startPath,
   canEdit = false,
+  terminalCwds,
+  onOpenTerminal,
   onClose: close,
 }: {
   machineId: string;
@@ -21,6 +23,10 @@ export function FileBrowserOverlay({
   homeDir?: string;
   startPath: string;
   canEdit?: boolean;
+  /** Working directories of this machine's open terminals (sidebar entries). */
+  terminalCwds?: string[];
+  /** Start a terminal in a folder and leave the overlay; omitted when not allowed. */
+  onOpenTerminal?: (cwd: string) => void;
   onClose: () => void;
 }) {
   // An open editor with unsaved changes keeps the overlay open.
@@ -73,8 +79,8 @@ export function FileBrowserOverlay({
         data-testid="file-browser-overlay"
         tabIndex={-1}
         style={{
-          width: "min(92vw, 1120px)",
-          height: "min(84vh, 640px)",
+          width: "min(96vw, 1400px)",
+          height: "min(90vh, 900px)",
           display: "flex",
           flexDirection: "column",
           background: colors.bg1,
@@ -116,7 +122,16 @@ export function FileBrowserOverlay({
           startPath={startPath}
           touch={false}
           canEdit={canEdit}
+          terminalCwds={terminalCwds}
           onDirtyChange={setDirty}
+          onOpenTerminal={
+            onOpenTerminal
+              ? (cwd) => {
+                  onOpenTerminal(cwd);
+                  close();
+                }
+              : undefined
+          }
         />
       </div>
     </div>

@@ -48,7 +48,7 @@ test.describe("file browser on desktop", () => {
     await expect(browser(page)).toHaveAttribute("data-path", "/tmp");
 
     // Into a directory through the list.
-    await row(page, "e2e-fb").click();
+    await row(page, "e2e-fb").dblclick();
     await expect(browser(page)).toHaveAttribute("data-path", "/tmp/e2e-fb");
     await expect(row(page, "sub")).toBeVisible();
     // Directories sort before files.
@@ -75,7 +75,7 @@ test.describe("file browser on desktop", () => {
     await page.getByTestId("file-browser-filter").fill("");
 
     // Clicking a file previews it; download comes from the preview.
-    await row(page, "report.txt").click();
+    await row(page, "report.txt").dblclick();
     await expect(page.getByTestId("file-browser-preview")).toHaveAttribute("data-kind", "text");
     await expect(page.getByTestId("file-browser-preview-text")).toContainText("file browser body");
     const download = page.waitForEvent("download", { timeout: 15_000 });
@@ -90,7 +90,7 @@ test.describe("file browser on desktop", () => {
     await expect(browser(page)).toHaveAttribute("data-path", "/tmp/e2e-fb");
 
     // Markdown renders inside an iframe with an empty sandbox.
-    await row(page, "note.md").click();
+    await row(page, "note.md").dblclick();
     const rich = page.getByTestId("file-browser-preview-rich");
     await expect(rich).toHaveAttribute("sandbox", "");
     await expect(page.getByTestId("file-browser-preview")).toHaveAttribute("data-kind", "markdown");
@@ -103,7 +103,7 @@ test.describe("file browser on desktop", () => {
     await expect(page.getByTestId("file-browser-overlay")).toBeVisible();
 
     // Down into sub, then back out through the breadcrumb.
-    await row(page, "sub").click();
+    await row(page, "sub").dblclick();
     await expect(browser(page)).toHaveAttribute("data-path", "/tmp/e2e-fb/sub");
     await expect(row(page, "deep.txt")).toBeVisible();
     await page
@@ -159,7 +159,7 @@ test.describe("file browser on desktop", () => {
     await expandTerminalById(page, id);
     await expect.poll(() => readTerminalBuffer(page, id)).toContain("FB_READY");
     await page.getByTestId("tab-bar-files").click();
-    await row(page, "e2e-fb-gone").click();
+    await row(page, "e2e-fb-gone").dblclick();
     await expect(browser(page)).toHaveAttribute("data-path", "/tmp/e2e-fb-gone");
     await expect(page.getByTestId("file-browser-empty")).toBeVisible();
     await expect(async () => {
@@ -192,8 +192,8 @@ test.describe("file browser on desktop", () => {
     };
 
     await page.getByTestId("tab-bar-files").click();
-    await row(page, "e2e-fb").click();
-    await row(page, "app.env").click();
+    await row(page, "e2e-fb").dblclick();
+    await row(page, "app.env").dblclick();
     await expect(page.getByTestId("file-browser-preview-text")).toContainText("A=1");
 
     // Edit and save: the machine has the new text.

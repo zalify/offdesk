@@ -1,0 +1,10 @@
+/* Sidebar unpin button: only while the place is hovered or focused. */
+.odk-fb-unpin{opacity:0;pointer-events:none}
+.odk-fb-place:hover .odk-fb-unpin,.odk-fb-place:focus-within .odk-fb-unpin{opacity:1;pointer-events:auto}
+/* Rows and tiles: hover tint when not selected. */
+.odk-fb-row[data-selected=false]:hover,.odk-fb-tile[data-selected=false]:hover{background:rgb(var(--color-bg-2))}
+.odk-fb-sort:hover{color:rgb(var(--color-fg-0))}
+/* Drop targets while dragging: folder rows/tiles, sidebar places, the listing. */
+.odk-fb-row[data-drop=true],.odk-fb-tile[data-drop=true]{outline:2px solid rgb(var(--color-primary));outline-offset:-2px;background:rgb(var(--color-bg-3))}
+.odk-fb-place[data-drop=true]>button{outline:2px solid rgb(var(--color-primary));outline-offset:-2px}
+.odk-fb-list[data-drop=true]{box-shadow:inset 0 0 0 2px rgb(var(--color-primary))}

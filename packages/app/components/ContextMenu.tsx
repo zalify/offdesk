@@ -7,6 +7,8 @@ export interface ContextMenuItem {
   label: string;
   shortcut?: string;
   disabled?: boolean;
+  /** `data-testid` of the item's button. */
+  testId?: string;
   onClick: () => void;
   // Optional submenu ("Move pane to tab ▸"), shown on hover.
   children?: ContextMenuItem[];
@@ -23,13 +25,15 @@ interface ContextMenuProps {
   y: number;
   items: ContextMenuEntry[];
   onClose: () => void;
+  /** `data-testid` of the menu; defaults to "context-menu". */
+  testId?: string;
 }
 
 function isSeparator(entry: ContextMenuEntry): entry is ContextMenuSeparator {
   return "type" in entry && entry.type === "separator";
 }
 
-export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
+export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [openSubmenu, setOpenSubmenu] = useState<number | null>(null);
 
@@ -103,6 +107,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     const button = (
       <button
         role="menuitem"
+        data-testid={entry.testId}
         onClick={() => {
           if (entry.disabled || hasChildren) return;
           entry.onClick();
@@ -205,7 +210,7 @@ export function ContextMenu({ x, y, items, onClose }: ContextMenuProps) {
     <div
       role="menu"
       ref={menuRef}
-      data-testid="context-menu"
+      data-testid={testId}
       style={{
         position: "fixed",
         left: x,
