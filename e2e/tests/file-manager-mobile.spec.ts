@@ -132,4 +132,70 @@ test.describe("file manager on the phone", () => {
     await expect(row(page, "in.txt")).toBeVisible();
     await expect(page.getByTestId("file-browser-select-bar")).toHaveCount(0);
   });
+
+  test("download a 21 MiB file in chunks from the action bar", async ({ page }) => {
+    const dir = "/tmp/e2e-fmm-6";
+    await openPhoneBrowserIn(page, dir, "head -c 22020096 /dev/zero > big.bin");
+    await page.evaluate(() => {
+      const w = window as unknown as { __sawTransfer?: boolean };
+      w.__sawTransfer = false;
+      new MutationObserver(() => {
+        if (document.querySelector('[data-testid="file-browser-transfer"]')) w.__sawTransfer = true;
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+    await longPress(page, "big.bin");
+    const downloading = page.waitForEvent("download", { timeout: 60_000 });
+    await page.getByTestId("file-mobile-action-download").tap();
+    const download = await downloading;
+    let length = 0;
+    for await (const chunk of await download.createReadStream()) length += (chunk as Buffer).length;
+    expect(length).toBe(22020096);
+    expect(
+      await page.evaluate(() => (window as unknown as { __sawTransfer?: boolean }).__sawTransfer),
+    ).toBe(true);
+  });
+
+  test("real touch input: hold selects, a short tap navigates, a moving touch does not select", async ({ page }) => {
+    const dir = "/tmp/e2e-fmm-7";
+    await openPhoneBrowserIn(page, dir, "mkdir inner; printf x > inner/in.txt; printf 1 > a.txt; printf 2 > b.txt");
+    const cdp = await page.context().newCDPSession(page);
+    const center = async (name: string) => {
+      const box = await row(page, name).boundingBox();
+      expect(box).not.toBeNull();
+      return { x: Math.round(box!.x + box!.width / 2), y: Math.round(box!.y + box!.height / 2) };
+    };
+    const touch = (type: "touchStart" | "touchMove" | "touchEnd", point?: { x: number; y: number }) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints: type === "touchEnd" ? [] : [{ ...point!, id: 1 }],
+      });
+
+    // Moving 40px during the hold is a scroll/drag, not a long-press.
+    const a = await center("a.txt");
+    await touch("touchStart", a);
+    await touch("touchMove", { x: a.x, y: a.y + 40 });
+    await page.waitForTimeout(650);
+    await touch("touchEnd");
+    await expect(page.getByTestId("file-browser-select-bar")).toHaveCount(0);
+    await expect(row(page, "a.txt")).toHaveAttribute("data-selected", "false");
+
+    // A quick tap on a folder enters it, no selection mode.
+    const inner = await center("inner");
+    await touch("touchStart", inner);
+    await page.waitForTimeout(50);
+    await touch("touchEnd");
+    await expect(browser(page)).toHaveAttribute("data-path", `${dir}/inner`);
+    await expect(page.getByTestId("file-browser-select-bar")).toHaveCount(0);
+    await page.getByTestId("file-browser-up").tap();
+    await expect(browser(page)).toHaveAttribute("data-path", dir);
+
+    // Holding still enters selection mode with the row selected.
+    const b = await center("b.txt");
+    await touch("touchStart", b);
+    await page.waitForTimeout(650);
+    await touch("touchEnd");
+    await expect(page.getByTestId("file-browser-select-bar")).toBeVisible();
+    await expect(row(page, "b.txt")).toHaveAttribute("data-selected", "true");
+    await expect(page.getByTestId("file-browser-preview")).toHaveCount(0);
+  });
 });

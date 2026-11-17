@@ -325,4 +325,115 @@ test.describe("file manager on desktop", () => {
       await ctx.close();
     }
   });
+
+  test("download a 21 MiB file in chunks", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-11";
+    await openBrowserIn(page, dir, "head -c 22020096 /dev/zero > big.bin");
+    // The strip can be short-lived on a fast link: record that it ever mounted.
+    await page.evaluate(() => {
+      const w = window as unknown as { __sawTransfer?: boolean };
+      w.__sawTransfer = false;
+      const check = () => {
+        if (document.querySelector('[data-testid="file-browser-transfer"]')) w.__sawTransfer = true;
+      };
+      new MutationObserver(check).observe(document.body, { childList: true, subtree: true });
+    });
+    // aria-disabled (over 20 MB) makes Playwright treat the row as not enabled.
+    await row(page, "big.bin").click({ button: "right", force: true });
+    const downloading = page.waitForEvent("download", { timeout: 60_000 });
+    await menuItem(page, "download").click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("big.bin");
+    let length = 0;
+    for await (const chunk of await download.createReadStream()) length += (chunk as Buffer).length;
+    expect(length).toBe(22020096);
+    expect(
+      await page.evaluate(() => (window as unknown as { __sawTransfer?: boolean }).__sawTransfer),
+    ).toBe(true);
+    await expect(page.getByTestId("file-browser-transfer")).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test("drag a row onto a folder moves it; Alt-drag copies", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-12";
+    await openBrowserIn(page, dir, "mkdir dest other; printf 1 > move.txt; printf 2 > copy.txt");
+    await row(page, "move.txt").dragTo(row(page, "dest"));
+    await expect(row(page, "move.txt")).toHaveCount(0);
+    await expect.poll(() => namesIn(page, `${dir}/dest`)).toEqual(["move.txt"]);
+
+    await page.keyboard.down("Alt");
+    try {
+      await row(page, "copy.txt").dragTo(row(page, "other"), { force: true });
+    } finally {
+      await page.keyboard.up("Alt");
+    }
+    await expect.poll(() => namesIn(page, `${dir}/other`)).toEqual(["copy.txt"]);
+    // A copy leaves the source behind.
+    expect(await namesIn(page, dir)).toEqual(["copy.txt", "dest", "other"]);
+  });
+
+  test("dropping files from the OS uploads them", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-13";
+    await openBrowserIn(page, dir, "printf x > existing.txt");
+    await page.getByTestId("file-browser-list").evaluate((list) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(["dropped body"], "dropped.txt", { type: "text/plain" }));
+      list.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, bubbles: true, cancelable: true }));
+      list.dispatchEvent(new DragEvent("drop", { dataTransfer: dt, bubbles: true, cancelable: true }));
+    });
+    await expect(row(page, "dropped.txt")).toBeVisible({ timeout: 15_000 });
+    await expect
+      .poll(async () => (await listDir(page, dir)).find((e) => e.name === "dropped.txt")?.size)
+      .toBe("dropped body".length);
+  });
+
+  test("paste onto an existing name and Replace sends the old one to the trash", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-14";
+    const name = "replace-me-e2e-fm-14.txt";
+    const id = await openBrowserIn(
+      page,
+      dir,
+      `mkdir dest; printf 'new' > ${name}; printf 'old old old old' > dest/${name}; ` +
+        `printf 'TRASHDIR=%s\\n' "\${XDG_DATA_HOME:-$HOME/.local/share}/Trash/files"`,
+    );
+    const trashDir = /TRASHDIR=(\/\S+)/.exec(
+      (await readTerminalBuffer(page, id)).split("\n").filter((l) => !l.includes("printf")).join("\n"),
+    )?.[1];
+    expect(trashDir).toBeTruthy();
+
+    await row(page, name).click();
+    await page.keyboard.press("Control+c");
+    await row(page, "dest").dblclick();
+    await expect(browser(page)).toHaveAttribute("data-path", `${dir}/dest`);
+    await page.keyboard.press("Control+v");
+    await expect(page.getByTestId("file-conflict-dialog")).toBeVisible();
+    await page.getByTestId("file-conflict-replace").click();
+    await expect(page.getByTestId("file-conflict-dialog")).toHaveCount(0);
+    await expect
+      .poll(async () => (await listDir(page, `${dir}/dest`)).find((e) => e.name === name)?.size)
+      .toBe(3);
+    await expect
+      .poll(async () => (await listDir(page, trashDir!)).filter((e) => e.name.startsWith("replace-me-e2e-fm-14")).map((e) => e.size))
+      .toContain("old old old old".length);
+  });
+
+  test("upload conflicts: apply to all keeps both once", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-15";
+    await openBrowserIn(page, dir, "printf 1 > a.txt; printf 2 > b.txt");
+    await page.getByTestId("file-browser-upload-input").setInputFiles([
+      { name: "a.txt", mimeType: "text/plain", buffer: Buffer.from("new a") },
+      { name: "b.txt", mimeType: "text/plain", buffer: Buffer.from("new b") },
+    ]);
+    const dialog = page.getByTestId("file-conflict-dialog");
+    await expect(dialog).toBeVisible();
+    await page.getByTestId("file-conflict-apply-all").check();
+    await page.getByTestId("file-conflict-keep-both").click();
+    // A second prompt would stall the second file: both copies appearing means one dialog.
+    await expect
+      .poll(() => namesIn(page, dir))
+      .toEqual(["a copy.txt", "a.txt", "b copy.txt", "b.txt"]);
+    await expect(dialog).toHaveCount(0);
+    const sizes = Object.fromEntries((await listDir(page, dir)).map((e) => [e.name, e.size]));
+    expect(sizes["a.txt"]).toBe(1);
+    expect(sizes["a copy.txt"]).toBe("new a".length);
+  });
 });
