@@ -45,8 +45,12 @@ class TestFlightRelease
   end
 
   def run
-    builds = call('get', '/v1/builds', nil, 'filter[app]' => APP, 'filter[version]' => @number)['data']
-    raise 'Expected one uploaded build' unless builds.length == 1
+    # Build numbers are not unique across marketing versions: release builds
+    # number from release.yml's run and manual RCs from mobile-ios.yml's, so
+    # both can reach e.g. 25.1. Narrow by the marketing version too.
+    builds = call('get', '/v1/builds', nil, 'filter[app]' => APP, 'filter[version]' => @number,
+                  'filter[preReleaseVersion.version]' => @version)['data']
+    raise "Expected one uploaded build #{@number} of #{@version}, found #{builds.length}" unless builds.length == 1
     build = builds.first
     id = build.fetch('id')
     raise 'Build is not processed and valid' unless build['attributes']['processingState'] == 'VALID'
