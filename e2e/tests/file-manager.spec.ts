@@ -437,3 +437,124 @@ test.describe("file manager on desktop", () => {
     expect(sizes["a copy.txt"]).toBe("new a".length);
   });
 });
+
+// A folder taller than the viewport: actions must refresh it in place, keeping
+// the scroll position and landing the selection on the affected row.
+const MANY = 'for i in $(seq -w 1 200); do printf x > "f$i.txt"; done';
+
+const listBox = (page: Page) => page.getByTestId("file-browser-list");
+const scrollTopOf = (page: Page) => listBox(page).evaluate((el) => el.scrollTop);
+
+/** Records whether the "reading…" placeholder ever mounts from now on. */
+async function watchLoading(page: Page) {
+  await page.evaluate(() => {
+    const w = window as unknown as { __sawLoading?: boolean };
+    w.__sawLoading = false;
+    const sel = '[data-testid="file-browser-loading"]';
+    new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of Array.from(r.addedNodes)) {
+          if (n instanceof Element && (n.matches(sel) || n.querySelector(sel))) w.__sawLoading = true;
+        }
+      }
+    }).observe(document.body, { childList: true, subtree: true });
+  });
+}
+const sawLoading = (page: Page) =>
+  page.evaluate(() => (window as unknown as { __sawLoading?: boolean }).__sawLoading === true);
+
+/** Scrolls to the bottom and selects a late row; returns the scroll offset. */
+async function scrollDownAndSelect(page: Page, name: string): Promise<number> {
+  await expect(row(page, "f200.txt")).toBeAttached();
+  await listBox(page).evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await row(page, name).click();
+  await expect(row(page, name)).toHaveAttribute("data-selected", "true");
+  const top = await scrollTopOf(page);
+  expect(top, "list is taller than the viewport").toBeGreaterThan(300);
+  return top;
+}
+
+async function expectRowVisibleInList(page: Page, name: string) {
+  await expect(row(page, name)).toBeVisible();
+  await expect
+    .poll(async () => {
+      const r = await row(page, name).boundingBox();
+      const l = await listBox(page).boundingBox();
+      return !!r && !!l && r.y >= l.y - 1 && r.y + r.height <= l.y + l.height + 1;
+    })
+    .toBe(true);
+}
+
+for (const { label, dir } of [
+  { label: "home-relative", dir: "~/e2e-fm-smooth-home" },
+  { label: "absolute", dir: "/tmp/e2e-fm-smooth-abs" },
+]) {
+  test.describe(`file manager keeps its place after actions (${label} path)`, () => {
+    test("rename keeps scroll and selects the renamed row", async ({ page }) => {
+      await openBrowserIn(page, dir, MANY);
+      const before = await scrollDownAndSelect(page, "f190.txt");
+      await watchLoading(page);
+      await page.keyboard.press("F2");
+      const input = page.getByTestId("file-browser-rename-input");
+      await input.fill("g190.txt");
+      await input.press("Enter");
+      await expectRowVisibleInList(page, "g190.txt");
+      await expect(row(page, "g190.txt")).toHaveAttribute("data-selected", "true");
+      expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+      expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+    });
+
+    test("trash keeps scroll and selects the neighbour", async ({ page }) => {
+      await openBrowserIn(page, dir, MANY);
+      const before = await scrollDownAndSelect(page, "f190.txt");
+      await watchLoading(page);
+      await page.keyboard.press("Delete");
+      await expect(row(page, "f190.txt")).toHaveCount(0);
+      await expect(row(page, "f191.txt")).toHaveAttribute("data-selected", "true");
+      expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+      expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+    });
+
+    test("duplicate selects the copy without jumping", async ({ page }) => {
+      await openBrowserIn(page, dir, MANY);
+      const before = await scrollDownAndSelect(page, "f190.txt");
+      await watchLoading(page);
+      await row(page, "f190.txt").click({ button: "right" });
+      await menuItem(page, "duplicate").click();
+      await expectRowVisibleInList(page, "f190 copy.txt");
+      await expect(row(page, "f190 copy.txt")).toHaveAttribute("data-selected", "true");
+      expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+      expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+    });
+
+    test("new folder selects the committed folder without a loading flash", async ({ page }) => {
+      await openBrowserIn(page, dir, MANY);
+      await scrollDownAndSelect(page, "f190.txt");
+      await watchLoading(page);
+      await page.getByTestId("file-browser-new-folder").click();
+      const input = page.getByTestId("file-browser-rename-input");
+      await expect(input).toBeVisible();
+      await input.fill("Zeta");
+      await input.press("Enter");
+      await expectRowVisibleInList(page, "Zeta");
+      await expect(row(page, "Zeta")).toHaveAttribute("data-kind", "dir");
+      await expect(row(page, "Zeta")).toHaveAttribute("data-selected", "true");
+      expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+    });
+
+    test("an upload finishing keeps scroll and selects the new file", async ({ page }) => {
+      await openBrowserIn(page, dir, MANY);
+      const before = await scrollDownAndSelect(page, "f190.txt");
+      await watchLoading(page);
+      await page.getByTestId("file-browser-upload-input").setInputFiles([
+        { name: "zz-upload.txt", mimeType: "text/plain", buffer: Buffer.from("up") },
+      ]);
+      await expect(row(page, "zz-upload.txt")).toBeVisible({ timeout: 15_000 });
+      await expect(row(page, "zz-upload.txt")).toHaveAttribute("data-selected", "true");
+      expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+      expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+    });
+  });
+}

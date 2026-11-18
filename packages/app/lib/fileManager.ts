@@ -57,6 +57,50 @@ export function dirname(path: string): string {
   return p.slice(0, idx);
 }
 
+/**
+ * Comparable form of a folder: "~" expanded with `home` when known, trailing
+ * slashes dropped. The listing may show "~/x" while the node reports absolute
+ * paths.
+ */
+export function normalizeFolder(path: string, home?: string): string {
+  let p = trimSlashes(path);
+  if (home && (p === "~" || p.startsWith("~/"))) {
+    const base = trimSlashes(home);
+    p = p === "~" ? base : base === "/" ? p.slice(1) : base + p.slice(1);
+  }
+  return p;
+}
+
+/** Whether `path` is a direct child of the folder `dir` (either may use "~"). */
+export function isInFolder(path: string, dir: string, home?: string): boolean {
+  const parent = normalizeFolder(dirname(path), home);
+  const folder = normalizeFolder(dir, home);
+  if (parent === folder) return true;
+  // Home unknown: match "~/sub" by the tail of an absolute parent.
+  if (!home && folder.startsWith("~/") && parent.startsWith("/")) {
+    return parent.endsWith(folder.slice(1));
+  }
+  return false;
+}
+
+/**
+ * After rows disappear, the row to select: the one now at the removed rows'
+ * index, else the last one. Null when nothing is listed or nothing was removed.
+ */
+export function selectionAfterRemoval(
+  prevOrder: string[],
+  order: string[],
+  selected: ReadonlySet<string>,
+): string | null {
+  if (order.length === 0) return null;
+  let index = -1;
+  prevOrder.forEach((p, i) => {
+    if (selected.has(p) && (index < 0 || i < index)) index = i;
+  });
+  if (index < 0) return null;
+  return order[Math.min(index, order.length - 1)];
+}
+
 // ---------------------------------------------------------------- sort
 
 export type SortKey = "name" | "size" | "modified" | "kind";

@@ -19,6 +19,9 @@ import {
   historyCurrent,
   historyForward,
   historyPush,
+  isInFolder,
+  normalizeFolder,
+  selectionAfterRemoval,
   joinPath,
   moveFocus,
   pasteDecision,
@@ -494,5 +497,48 @@ describe("blobToBase64", () => {
       expected += String.fromCharCode(...bytes.slice(i, i + 0x8000));
     }
     expect(await blobToBase64(blob)).toBe(btoa(expected));
+  });
+});
+
+describe("folder identity", () => {
+  it("expands ~ against the home dir and drops trailing slashes", () => {
+    expect(normalizeFolder("~", "/home/u")).toBe("/home/u");
+    expect(normalizeFolder("~/sub/", "/home/u/")).toBe("/home/u/sub");
+    expect(normalizeFolder("/", "/")).toBe("/");
+    expect(normalizeFolder("~/a", "/")).toBe("/a");
+    expect(normalizeFolder("/x/y/")).toBe("/x/y");
+    expect(normalizeFolder("~/sub")).toBe("~/sub");
+  });
+
+  it("matches absolute results against a home-relative listing", () => {
+    expect(isInFolder("/home/u/sub/untitled folder", "~/sub", "/home/u")).toBe(true);
+    expect(isInFolder("/home/u/new.txt", "~", "/home/u")).toBe(true);
+    expect(isInFolder("/home/u/sub/x", "~/sub/", "/home/u")).toBe(true);
+    expect(isInFolder("/home/u/sub/deep/x", "~/sub", "/home/u")).toBe(false);
+    expect(isInFolder("/home/u/other/x", "~/sub", "/home/u")).toBe(false);
+    expect(isInFolder("/tmp/a/x", "/tmp/a", "/home/u")).toBe(true);
+    expect(isInFolder("/tmp/a/x", "/tmp/a/", undefined)).toBe(true);
+  });
+
+  it("falls back to the path tail when home is unknown", () => {
+    expect(isInFolder("/home/u/sub/x", "~/sub")).toBe(true);
+    expect(isInFolder("/home/u/sub2/x", "~/sub")).toBe(false);
+  });
+});
+
+describe("selectionAfterRemoval", () => {
+  const prev = ["a", "b", "c", "d"];
+  it("picks the row now at the removed index", () => {
+    expect(selectionAfterRemoval(prev, ["a", "c", "d"], new Set(["b"]))).toBe("c");
+  });
+  it("picks the last row when the tail was removed", () => {
+    expect(selectionAfterRemoval(prev, ["a", "b", "c"], new Set(["d"]))).toBe("c");
+  });
+  it("uses the first removed row of a multi-selection", () => {
+    expect(selectionAfterRemoval(prev, ["a", "d"], new Set(["b", "c"]))).toBe("d");
+  });
+  it("is null for an empty listing or unknown selection", () => {
+    expect(selectionAfterRemoval(prev, [], new Set(["a"]))).toBeNull();
+    expect(selectionAfterRemoval(prev, ["a"], new Set(["zzz"]))).toBeNull();
   });
 });

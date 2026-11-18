@@ -27,9 +27,9 @@ import {
   blobToBase64,
   clipboardAfterPaste,
   describeFsOpError,
-  dirname,
   downloadRemote,
   downloadZip,
+  isInFolder,
   isAbortError,
   joinPath,
   pasteDecision,
@@ -63,6 +63,8 @@ export interface FileActionsOptions {
   machineId: string;
   /** Folder being listed. */
   dir: string;
+  /** Machine home, to match "~" against the absolute paths the node returns. */
+  homeDir?: string;
   /** Mutating actions are refused when false (view-only lock). */
   canEdit: boolean;
   /** Path of the file open in the editor with unsaved changes, if any. */
@@ -162,9 +164,9 @@ export function useFileActions(options: FileActionsOptions) {
 
   /** Select what an action produced when it landed in the folder being shown. */
   const settle = useCallback((paths: string[]) => {
-    const { dir, reload, selectPaths } = opts.current;
+    const { dir, homeDir, reload, selectPaths } = opts.current;
     reload();
-    const here = paths.filter((p) => dirname(p) === dir);
+    const here = paths.filter((p) => isInFolder(p, dir, homeDir));
     if (here.length > 0) selectPaths(here);
   }, []);
 
