@@ -406,9 +406,16 @@ async function fsPost<T>(
 
 export const uploadBegin = (
   machineId: string,
-  body: { dest_dir: string; filename: string; size: number; on_conflict: FsConflictPolicy },
+  body: {
+    dest_dir: string;
+    filename: string;
+    size: number;
+    on_conflict: FsConflictPolicy;
+    /** Offer positional chunks of exactly this size; the reply says if the node accepts them in any order. */
+    chunk_bytes?: number;
+  },
   signal?: AbortSignal,
-) => fsPost<{ upload_id: string }>(machineId, "upload/begin", body, signal);
+) => fsPost<{ upload_id: string; parallel?: boolean }>(machineId, "upload/begin", body, signal);
 
 export const uploadChunk = (
   machineId: string,

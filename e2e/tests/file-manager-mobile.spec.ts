@@ -133,6 +133,28 @@ test.describe("file manager on the phone", () => {
     await expect(page.getByTestId("file-browser-select-bar")).toHaveCount(0);
   });
 
+  test("an upload shows a compact one-line strip and the file lands", async ({ page }) => {
+    const dir = "/tmp/e2e-fmm-30";
+    await openPhoneBrowserIn(page, dir, "printf x > existing.txt");
+    await page.route("**/fs/upload/chunk", async (route) => {
+      await new Promise((r) => setTimeout(r, 300));
+      const response = await route.fetch();
+      await route.fulfill({ response });
+    });
+    await page.getByTestId("file-browser-upload-input").setInputFiles([
+      { name: "phone-big.bin", mimeType: "application/octet-stream", buffer: Buffer.alloc(9 * 1024 * 1024, 7) },
+      { name: "phone-small.txt", mimeType: "text/plain", buffer: Buffer.from("hi") },
+    ]);
+    const strip = page.getByTestId("file-browser-transfer");
+    await expect(strip).toBeVisible();
+    await expect(page.getByTestId("file-browser-transfer-files")).toContainText(/\d\/2/);
+    // One line plus the bar: the 44px cancel target sets the height.
+    expect((await strip.boundingBox())!.height).toBeLessThanOrEqual(56);
+    await expect(row(page, "phone-small.txt")).toBeVisible({ timeout: 30_000 });
+    await expect(row(page, "phone-big.bin")).toBeVisible({ timeout: 60_000 });
+    await expect(strip).toHaveCount(0, { timeout: 30_000 });
+  });
+
   test("download a 21 MiB file in chunks from the action bar", async ({ page }) => {
     const dir = "/tmp/e2e-fmm-6";
     await openPhoneBrowserIn(page, dir, "head -c 22020096 /dev/zero > big.bin");

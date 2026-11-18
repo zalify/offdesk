@@ -364,7 +364,7 @@ describe("uploadToDirectory", () => {
     expect(progress.at(-1)).toEqual([5, 5]);
     expect(api.uploadBegin).toHaveBeenCalledWith(
       "m",
-      { dest_dir: "/d", filename: "f.bin", size: 5, on_conflict: "keep_both" },
+      { dest_dir: "/d", filename: "f.bin", size: 5, on_conflict: "keep_both", chunk_bytes: 2 },
       undefined,
     );
   });
@@ -411,6 +411,133 @@ describe("uploadToDirectory", () => {
   });
 });
 
+describe("uploadToDirectory pipelined", () => {
+  /** Chunks that stay in flight until released, to observe the concurrency. */
+  function gatedApi(opts: { parallel: boolean; fail?: (index: number, attempt: number) => unknown }) {
+    const { api, calls } = fakeUploadApi();
+    api.uploadBegin = vi.fn(async () => ({ upload_id: "u1", parallel: opts.parallel }));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const started: number[] = [];
+    const attempts = new Map<number, number>();
+    const waiting: Array<() => void> = [];
+    api.uploadChunk = vi.fn(async (_m, _id, index, _data, signal) => {
+      started.push(index);
+      const attempt = attempts.get(index) ?? 0;
+      attempts.set(index, attempt + 1);
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        await new Promise<void>((resolve, reject) => {
+          waiting.push(resolve);
+          signal?.addEventListener("abort", () => {
+            const e = new Error("Aborted");
+            e.name = "AbortError";
+            reject(e);
+          });
+        });
+        const err = opts.fail?.(index, attempt);
+        if (err) throw err;
+        calls.push(`chunk${index}`);
+        return {};
+      } finally {
+        inFlight--;
+      }
+    });
+    const release = async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      waiting.splice(0).forEach((r) => r());
+    };
+    return { api, calls, started, release, max: () => maxInFlight };
+  }
+
+  it("keeps at most `pipeline` chunks in flight, in index order of start", async () => {
+    const g = gatedApi({ parallel: true });
+    const progress: number[] = [];
+    const run = uploadToDirectory({
+      machineId: "m", destDir: "/d", file: fileOf([1, 2, 3, 4, 5, 6, 7, 8]), onConflict: "error",
+      api: g.api, chunkBytes: 1, pipeline: 3, onProgress: (n) => progress.push(n),
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(g.started).toEqual([0, 1, 2]);
+    for (let i = 0; i < 20 && !g.calls.includes("end"); i++) await g.release();
+    await run;
+    expect(g.max()).toBe(3);
+    expect(g.started).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(progress.at(-1)).toBe(8);
+    expect(progress).toEqual([...progress].sort((a, b) => a - b));
+    expect(g.calls.at(-1)).toBe("end");
+  });
+
+  it("sends strictly serially when the node is not parallel", async () => {
+    const g = gatedApi({ parallel: false });
+    const run = uploadToDirectory({
+      machineId: "m", destDir: "/d", file: fileOf([1, 2, 3, 4]), onConflict: "error",
+      api: g.api, chunkBytes: 1, pipeline: 3,
+    });
+    for (let i = 0; i < 20 && !g.calls.includes("end"); i++) await g.release();
+    await run;
+    expect(g.max()).toBe(1);
+    expect(g.started).toEqual([0, 1, 2, 3]);
+  });
+
+  it("retries a chunk on a 5xx and then succeeds", async () => {
+    const g = gatedApi({
+      parallel: true,
+      fail: (index, attempt) =>
+        index === 1 && attempt < 2 ? new RemoteFileError(502, "machine_disconnected", "x") : null,
+    });
+    const run = uploadToDirectory({
+      machineId: "m", destDir: "/d", file: fileOf([1, 2, 3]), onConflict: "error",
+      api: g.api, chunkBytes: 1, pipeline: 3,
+    });
+    for (let i = 0; i < 30 && !g.calls.includes("end"); i++) await g.release();
+    await expect(run).resolves.toBeTruthy();
+    expect(g.started.filter((i) => i === 1)).toHaveLength(3);
+  });
+
+  it("fails after the retries are used up and aborts the upload", async () => {
+    const g = gatedApi({ parallel: true, fail: (index) => (index === 1 ? new TypeError("network") : null) });
+    const run = uploadToDirectory({
+      machineId: "m", destDir: "/d", file: fileOf([1, 2, 3]), onConflict: "error",
+      api: g.api, chunkBytes: 1, pipeline: 3,
+    });
+    const settled = run.catch((e) => e);
+    for (let i = 0; i < 30; i++) await g.release();
+    expect(await settled).toBeInstanceOf(TypeError);
+    expect(g.started.filter((i) => i === 1)).toHaveLength(3);
+    expect(g.api.uploadAbort).toHaveBeenCalledTimes(1);
+    expect(g.api.uploadEnd).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a 4xx or a full disk", async () => {
+    const g = gatedApi({ parallel: true, fail: (index) => (index === 0 ? new RemoteFileError(507, "no_space", "full") : null) });
+    const run = uploadToDirectory({
+      machineId: "m", destDir: "/d", file: fileOf([1, 2]), onConflict: "error",
+      api: g.api, chunkBytes: 1, pipeline: 3,
+    });
+    const settled = run.catch((e) => e);
+    for (let i = 0; i < 10; i++) await g.release();
+    expect(await settled).toMatchObject({ code: "no_space" });
+    expect(g.started.filter((i) => i === 0)).toHaveLength(1);
+  });
+
+  it("abort stops every in-flight chunk", async () => {
+    const g = gatedApi({ parallel: true });
+    const ctrl = new AbortController();
+    const run = uploadToDirectory({
+      machineId: "m", destDir: "/d", file: fileOf([1, 2, 3, 4, 5, 6]), onConflict: "error",
+      api: g.api, chunkBytes: 1, pipeline: 3, signal: ctrl.signal,
+    });
+    const settled = run.catch((e) => e);
+    await new Promise((r) => setTimeout(r, 10));
+    ctrl.abort();
+    expect(await settled).toMatchObject({ name: "AbortError" });
+    expect(g.started).toEqual([0, 1, 2]);
+    expect(g.api.uploadAbort).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("downloadRemote / downloadZip", () => {
   const data = [1, 2, 3, 4, 5];
   const readRange = vi.fn(async (_m: string, _p: string, offset: number, length: number) => {
@@ -428,6 +555,37 @@ describe("downloadRemote / downloadZip", () => {
     expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array(data));
     expect(readRange.mock.calls.map((c) => c[2])).toEqual([0, 2, 4]);
     expect(progress).toEqual([2, 4, 5]);
+  });
+  it("fetches several ranges at once and assembles them in order", async () => {
+    const bytes = Array.from({ length: 10 }, (_, i) => i + 1);
+    let inFlight = 0;
+    let max = 0;
+    const waiting: Array<() => void> = [];
+    const api = {
+      readRange: vi.fn(async (_m: string, _p: string, offset: number, length: number) => {
+        inFlight++;
+        max = Math.max(max, inFlight);
+        // Later ranges answer first.
+        if (offset > 0) await new Promise<void>((r) => waiting.push(r));
+        inFlight--;
+        return {
+          size: bytes.length,
+          data_base64: b64(bytes.slice(offset, offset + length)),
+          eof: offset + length >= bytes.length,
+        };
+      }),
+    };
+    const run = downloadRemote({ machineId: "m", path: "/f", size: 10, api, chunkBytes: 2, pipeline: 3 });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(max).toBe(3);
+    waiting.reverse();
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 2));
+      waiting.splice(0).forEach((r) => r());
+    }
+    const blob = await run;
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array(bytes));
+    expect(max).toBe(3);
   });
   it("reads an empty file with one call", async () => {
     const empty = vi.fn(async () => ({ size: 0, data_base64: "", eof: true }));

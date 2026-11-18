@@ -885,8 +885,15 @@ export function FileBrowser({
                 <FileListView {...viewProps} touch={touch} sort={effective.sort} onSort={setSort} />
               )}
             </div>
+            {actions.downloadTransfer && (
+              <FileTransferStrip
+                transfer={actions.downloadTransfer}
+                onCancel={() => actions.cancelTransfer("download")}
+                touch={touch}
+              />
+            )}
             {actions.transfer && (
-              <FileTransferStrip transfer={actions.transfer} onCancel={actions.cancelTransfer} touch={touch} />
+              <FileTransferStrip transfer={actions.transfer} onCancel={() => actions.cancelTransfer("upload")} touch={touch} />
             )}
             {touch && selecting && barActions.length > 0 && (
               <FileActionBar actions={barActions} onAction={runBarAction} />

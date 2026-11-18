@@ -38,6 +38,8 @@ import {
 } from "@/lib/fileManager";
 import { fetchRemoteFile, saveFetchedFile } from "@/lib/fetchRemoteFile";
 import { showNotice } from "@/lib/workspaceToast";
+import { SpeedMeter, UploadQueue } from "@/lib/uploadQueue";
+import type { QueueSnapshot } from "@/lib/uploadQueue";
 
 export interface TransferState {
   kind: "upload" | "download";
@@ -45,9 +47,13 @@ export interface TransferState {
   done: number;
   /** 0 while unknown (zip being prepared). */
   total: number;
-  /** 1-based position when several files are queued. */
-  index: number;
+  /** Files finished when several are queued. */
+  filesDone: number;
   count: number;
+  /** Smoothed bytes per second (0 while unknown). */
+  speedBps: number;
+  /** Seconds left, null while unknown. */
+  etaSec: number | null;
 }
 
 export type ConflictChoice = "keep_both" | "replace" | "stop";
@@ -114,14 +120,19 @@ export function useFileActions(options: FileActionsOptions) {
   const clipboard = useSyncExternalStore(subscribeFileClipboard, getFileClipboard);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [transfer, setTransfer] = useState<TransferState | null>(null);
+  const [downloadState, setDownloadState] = useState<TransferState | null>(null);
   const [conflict, setConflict] = useState<ConflictPrompt | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const conflictRef = useRef<ConflictPrompt | null>(null);
+  const queueRef = useRef<UploadQueue<File> | null>(null);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Closing the overlay stops a running transfer and any pending question.
+  // Closing the overlay stops running transfers and any pending question.
   useEffect(
     () => () => {
       abortRef.current?.abort();
+      queueRef.current?.cancel();
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
       conflictRef.current?.resolve({ choice: "stop", all: false });
     },
     [],
@@ -376,79 +387,89 @@ export function useFileActions(options: FileActionsOptions) {
 
   // --- transfers -------------------------------------------------------------
 
-  const beginTransfer = useCallback((): AbortController | null => {
-    if (abortRef.current) {
-      showNotice("Another transfer is still running");
-      return null;
-    }
-    const controller = new AbortController();
-    abortRef.current = controller;
-    return controller;
+  const uploadTransfer = (snap: QueueSnapshot): TransferState => ({
+    kind: "upload",
+    name:
+      snap.active.length > 1
+        ? `${snap.active[0]} +${snap.active.length - 1}`
+        : (snap.active[0] ?? ""),
+    done: snap.bytesDone,
+    total: snap.bytesTotal,
+    filesDone: snap.filesDone,
+    count: snap.filesTotal,
+    speedBps: snap.speedBps,
+    etaSec: snap.etaSec,
+  });
+
+  /** Reloads the listing shortly after a file lands; bursts share one reload. */
+  const scheduleReload = useCallback(() => {
+    if (reloadTimer.current) return;
+    reloadTimer.current = setTimeout(() => {
+      reloadTimer.current = null;
+      opts.current.reload();
+    }, 300);
   }, []);
 
-  const endTransfer = useCallback(() => {
-    abortRef.current = null;
-    setTransfer(null);
-  }, []);
+  const getQueue = useCallback((): UploadQueue<File> => {
+    if (queueRef.current) return queueRef.current;
+    const queue = new UploadQueue<File>({
+      run: (item, ctx) =>
+        uploadToDirectory({
+          machineId: opts.current.machineId,
+          destDir: item.destDir,
+          file: item.file,
+          onConflict: ctx.policy,
+          signal: ctx.signal,
+          api: { uploadBegin, uploadChunk, uploadEnd, uploadAbort },
+          onProgress: ctx.onProgress,
+        }),
+      askConflict,
+      onFileDone: (path) => {
+        const { dir, homeDir } = opts.current;
+        if (isInFolder(path, dir, homeDir)) scheduleReload();
+      },
+      onChange: (snap) => {
+        if (snap.filesTotal > 0) setTransfer(uploadTransfer(snap));
+      },
+      onDrain: (result) => {
+        setTransfer(null);
+        if (reloadTimer.current) {
+          clearTimeout(reloadTimer.current);
+          reloadTimer.current = null;
+        }
+        const { uploaded, error, cancelled } = result;
+        if (uploaded.length > 0) {
+          showNotice(`Uploaded ${uploaded.length} ${uploaded.length === 1 ? "file" : "files"}`);
+        }
+        if (cancelled) showNotice("Upload cancelled");
+        else if (error) fail(error);
+        // Select what landed only now, so a busy queue never steals the selection.
+        settle(uploaded);
+      },
+    });
+    queueRef.current = queue;
+    return queue;
+  }, [askConflict, fail, scheduleReload, settle]);
 
-  const cancelTransfer = useCallback(() => abortRef.current?.abort(), []);
+  // Speed and time left decay while no progress arrives.
+  useEffect(() => {
+    if (!transfer || transfer.kind !== "upload") return;
+    const timer = setInterval(() => queueRef.current?.tick(), 1000);
+    return () => clearInterval(timer);
+  }, [transfer !== null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const upload = useCallback(
     async (files: File[], destDir: string) => {
       if (files.length === 0 || !canMutate()) return;
-      const controller = beginTransfer();
-      if (!controller) return;
-      const { machineId } = opts.current;
-      const uploaded: string[] = [];
-      let applyToAll: FsConflictPolicy | null = null;
-      let stopped = false;
-      try {
-        for (let i = 0; i < files.length && !stopped; i++) {
-          const file = files[i];
-          const base = { kind: "upload", name: file.name, total: file.size, index: i + 1, count: files.length } as const;
-          setTransfer({ ...base, done: 0 });
-          let policy: FsConflictPolicy = applyToAll ?? "error";
-          for (;;) {
-            try {
-              const result = await uploadToDirectory({
-                machineId,
-                destDir,
-                file,
-                onConflict: policy,
-                signal: controller.signal,
-                api: { uploadBegin, uploadChunk, uploadEnd, uploadAbort },
-                onProgress: (sent) => setTransfer({ ...base, done: sent }),
-              });
-              uploaded.push(result.path);
-              break;
-            } catch (err) {
-              if (isExists(err) && policy === "error") {
-                const answer = await askConflict(file.name, files.length - i > 1);
-                if (answer.choice === "stop") {
-                  stopped = true;
-                  break;
-                }
-                policy = answer.choice;
-                if (answer.all) applyToAll = answer.choice;
-                continue;
-              }
-              throw err;
-            }
-          }
-        }
-        if (uploaded.length > 0) {
-          showNotice(`Uploaded ${uploaded.length} ${uploaded.length === 1 ? "file" : "files"}`);
-        }
-      } catch (err) {
-        if (isAbortError(err)) showNotice("Upload cancelled");
-        else fail(err);
-      } finally {
-        endTransfer();
-        settle(uploaded);
-      }
+      getQueue().add(files.map((file) => ({ file, destDir })));
     },
-    [askConflict, beginTransfer, canMutate, endTransfer, fail, settle],
+    [canMutate, getQueue],
   );
+
+  const cancelTransfer = useCallback((kind: "upload" | "download" = "upload") => {
+    if (kind === "upload") queueRef.current?.cancel();
+    else abortRef.current?.abort();
+  }, []);
 
   const download = useCallback(
     async (entries: DirEntry[]) => {
@@ -460,13 +481,32 @@ export function useFileActions(options: FileActionsOptions) {
         await fetchRemoteFile({ machineId, path: single.path });
         return;
       }
-      const controller = beginTransfer();
-      if (!controller) return;
+      // Uploads may run alongside; a second download is refused.
+      if (abortRef.current) {
+        showNotice("Another download is still running");
+        return;
+      }
+      const controller = new AbortController();
+      abortRef.current = controller;
       const signal = controller.signal;
       const label = single?.name ?? `${entries.length} items`;
-      const base = { kind: "download", name: label, index: 1, count: 1 } as const;
+      const meter = new SpeedMeter();
+      const base = { kind: "download", name: label, filesDone: 0, count: 1 } as const;
+      const report = (done: number, total: number) => {
+        const now = Date.now();
+        meter.record(done, now);
+        const speedBps = meter.speed(now);
+        const left = total - done;
+        setDownloadState({
+          ...base,
+          done,
+          total,
+          speedBps,
+          etaSec: speedBps > 0 && left > 0 ? left / speedBps : null,
+        });
+      };
       try {
-        setTransfer({ ...base, done: 0, total: single?.size ?? 0 });
+        report(0, single?.size ?? 0);
         let blob: Blob;
         let filename: string;
         if (single && !single.is_dir) {
@@ -476,7 +516,7 @@ export function useFileActions(options: FileActionsOptions) {
             size: single.size ?? 0,
             signal,
             api: { readRange },
-            onProgress: (done, total) => setTransfer({ ...base, done, total }),
+            onProgress: report,
           });
           filename = single.name;
         } else {
@@ -485,7 +525,7 @@ export function useFileActions(options: FileActionsOptions) {
             paths: entries.map((e) => e.path),
             signal,
             api: { readRange, zipPaths },
-            onProgress: (done, total) => setTransfer({ ...base, done, total }),
+            onProgress: report,
           }));
         }
         await saveFetchedFile({
@@ -497,16 +537,18 @@ export function useFileActions(options: FileActionsOptions) {
         if (isAbortError(err)) showNotice("Download cancelled");
         else fail(err, single?.name);
       } finally {
-        endTransfer();
+        abortRef.current = null;
+        setDownloadState(null);
       }
     },
-    [beginTransfer, endTransfer, fail],
+    [fail],
   );
 
   return {
     clipboard,
     renaming,
     transfer,
+    downloadTransfer: downloadState,
     conflict,
     newFolder: useCallback(() => createItem("folder"), [createItem]),
     newFile: useCallback(() => createItem("file"), [createItem]),
