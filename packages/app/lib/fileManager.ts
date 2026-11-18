@@ -5,10 +5,16 @@ import { RemoteFileError } from "./api";
 import type { FsConflictPolicy, RemoteRange } from "./api";
 import { classifyListError } from "./fileBrowser";
 import { arrayBufferToBase64 } from "./terminalImagePaste";
-import { UPLOAD_CHUNK_BYTES } from "./terminalUpload";
 
-export { UPLOAD_CHUNK_BYTES };
+/** File-manager upload chunk (the node accepts up to 2 MiB per chunk). */
+export const UPLOAD_CHUNK_BYTES = 2 * 1024 * 1024;
+/** Chunks in flight per file when the node accepts them in any order. */
+export const UPLOAD_PIPELINE = 3;
+/** Retries of one chunk after a network / 5xx failure (parallel mode only). */
+export const UPLOAD_CHUNK_RETRIES = 2;
 export const DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024;
+/** Ranges fetched concurrently by a download. */
+export const DOWNLOAD_PIPELINE = 3;
 /**
  * Largest download. The whole file becomes one base64 string (V8 caps strings
  * near 536M chars), so bigger files would crash. Mirrors `FS_ZIP_MAX_BYTES`.
@@ -417,9 +423,15 @@ export function describeFsOpError(err: unknown, name?: string): string {
 export interface UploadApi {
   uploadBegin: (
     machineId: string,
-    body: { dest_dir: string; filename: string; size: number; on_conflict: FsConflictPolicy },
+    body: {
+      dest_dir: string;
+      filename: string;
+      size: number;
+      on_conflict: FsConflictPolicy;
+      chunk_bytes?: number;
+    },
     signal?: AbortSignal,
-  ) => Promise<{ upload_id: string }>;
+  ) => Promise<{ upload_id: string; parallel?: boolean }>;
   uploadChunk: (
     machineId: string,
     uploadId: string,
@@ -464,30 +476,103 @@ export interface UploadOptions {
   destDir: string;
   file: Blob & { name?: string };
   onConflict: FsConflictPolicy;
+  /** Acknowledged bytes so far. */
   onProgress?: (sent: number, total: number) => void;
   signal?: AbortSignal;
   api: UploadApi;
   chunkBytes?: number;
+  /** Chunks in flight when the node accepts them out of order. */
+  pipeline?: number;
+  retries?: number;
 }
 
-/** Uploads one file into `destDir`; removes the part file on error or abort. */
+/** Network failures and 5xx are worth another try; 507 (disk full) and 4xx are not. */
+export function isRetryableChunkError(err: unknown): boolean {
+  if (isAbortError(err)) return false;
+  if (err instanceof RemoteFileError) return err.status >= 500 && err.status !== 507;
+  return true;
+}
+
+/**
+ * Uploads one file into `destDir`; removes the part file on error or abort.
+ * With a node that takes chunks in any order it keeps `pipeline` chunks in
+ * flight; otherwise chunks go strictly one at a time, in order.
+ */
 export async function uploadToDirectory(opts: UploadOptions): Promise<{ path: string; size: number }> {
   const { machineId, destDir, file, onConflict, onProgress, signal, api } = opts;
   const chunkBytes = opts.chunkBytes ?? UPLOAD_CHUNK_BYTES;
+  const pipeline = Math.max(1, opts.pipeline ?? UPLOAD_PIPELINE);
+  const retries = opts.retries ?? UPLOAD_CHUNK_RETRIES;
   const total = file.size;
   if (signal?.aborted) throw abortError();
-  const { upload_id: id } = await api.uploadBegin(
+  const begin = await api.uploadBegin(
     machineId,
-    { dest_dir: destDir, filename: file.name || "upload", size: total, on_conflict: onConflict },
+    {
+      dest_dir: destDir,
+      filename: file.name || "upload",
+      size: total,
+      on_conflict: onConflict,
+      chunk_bytes: chunkBytes,
+    },
     signal,
   );
+  const id = begin.upload_id;
   try {
-    let index = 0;
-    for (let offset = 0; offset < total; offset += chunkBytes, index++) {
+    const chunkCount = Math.ceil(total / chunkBytes);
+    const readChunk = async (index: number) =>
+      arrayBufferToBase64(
+        await file.slice(index * chunkBytes, Math.min((index + 1) * chunkBytes, total)).arrayBuffer(),
+      );
+    const chunkLen = (index: number) => Math.min((index + 1) * chunkBytes, total) - index * chunkBytes;
+    let acked = 0;
+
+    if (begin.parallel !== true) {
+      for (let index = 0; index < chunkCount; index++) {
+        if (signal?.aborted) throw abortError();
+        await api.uploadChunk(machineId, id, index, await readChunk(index), signal);
+        acked += chunkLen(index);
+        onProgress?.(acked, total);
+      }
+    } else {
+      // Workers pull the next index, read+encode it while the others' requests
+      // are in flight, then send it. The first failure stops everyone.
+      const inner = new AbortController();
+      const onOuterAbort = () => inner.abort();
+      signal?.addEventListener("abort", onOuterAbort);
+      let next = 0;
+      let failure: { err: unknown } | null = null;
+      const worker = async () => {
+        while (!failure && !inner.signal.aborted) {
+          const index = next++;
+          if (index >= chunkCount) return;
+          try {
+            const data = await readChunk(index);
+            for (let attempt = 0; ; attempt++) {
+              try {
+                await api.uploadChunk(machineId, id, index, data, inner.signal);
+                break;
+              } catch (err) {
+                if (attempt >= retries || inner.signal.aborted || !isRetryableChunkError(err)) throw err;
+              }
+            }
+            acked += chunkLen(index);
+            onProgress?.(acked, total);
+          } catch (err) {
+            if (!failure && !(isAbortError(err) && inner.signal.aborted && !signal?.aborted)) {
+              failure = { err };
+            }
+            inner.abort();
+            return;
+          }
+        }
+      };
+      try {
+        await Promise.all(Array.from({ length: Math.min(pipeline, chunkCount) }, worker));
+      } finally {
+        signal?.removeEventListener("abort", onOuterAbort);
+      }
       if (signal?.aborted) throw abortError();
-      const buffer = await file.slice(offset, Math.min(offset + chunkBytes, total)).arrayBuffer();
-      await api.uploadChunk(machineId, id, index, arrayBufferToBase64(buffer), signal);
-      onProgress?.(Math.min(offset + chunkBytes, total), total);
+      if (failure) throw (failure as { err: unknown }).err;
     }
     if (signal?.aborted) throw abortError();
     const result = await api.uploadEnd(machineId, id, signal);
@@ -519,33 +604,84 @@ export interface DownloadOptions {
   signal?: AbortSignal;
   api: Pick<DownloadApi, "readRange">;
   chunkBytes?: number;
+  /** Ranges in flight at once. */
+  pipeline?: number;
 }
 
-/** Pulls a remote file in 4 MiB ranges into a Blob. */
+/**
+ * Pulls a remote file in 4 MiB ranges into a Blob, a few ranges at a time
+ * (`read_range` is stateless). Ranges are assembled in order.
+ */
 export async function downloadRemote(opts: DownloadOptions): Promise<Blob> {
   const { machineId, path, onProgress, signal, api } = opts;
   const chunkBytes = opts.chunkBytes ?? DOWNLOAD_CHUNK_BYTES;
-  const parts: Uint8Array<ArrayBuffer>[] = [];
+  const pipeline = Math.max(1, opts.pipeline ?? DOWNLOAD_PIPELINE);
   if (opts.size > MAX_DOWNLOAD_BYTES) throw downloadTooLarge(path, opts.size);
-  let total = opts.size;
-  let offset = 0;
-  for (;;) {
-    if (signal?.aborted) throw abortError();
-    const res = await api.readRange(machineId, path, offset, chunkBytes, signal);
-    const bytes = decodeBase64(res.data_base64);
-    if (bytes.length > 0) parts.push(bytes);
-    offset += bytes.length;
-    total = res.size;
+  if (signal?.aborted) throw abortError();
+
+  // Range 0 tells the real size; the rest are fetched in parallel from it.
+  const parts: Uint8Array<ArrayBuffer>[] = [];
+  let received = 0;
+  const check = (total: number, end: number) => {
     // The file may have grown since it was listed.
-    if (total > MAX_DOWNLOAD_BYTES || offset > MAX_DOWNLOAD_BYTES) {
-      throw downloadTooLarge(path, Math.max(total, offset));
+    if (total > MAX_DOWNLOAD_BYTES || end > MAX_DOWNLOAD_BYTES) {
+      throw downloadTooLarge(path, Math.max(total, end));
     }
-    onProgress?.(offset, total);
-    if (res.eof) break;
-    // A non-final empty chunk would loop forever.
-    if (bytes.length === 0) throw new Error("The machine returned no data before the end of the file");
+  };
+  const first = await api.readRange(machineId, path, 0, chunkBytes, signal);
+  if (signal?.aborted) throw abortError();
+  const firstBytes = decodeBase64(first.data_base64);
+  let total = first.size;
+  check(total, firstBytes.length);
+  received += firstBytes.length;
+  if (firstBytes.length > 0) parts[0] = firstBytes;
+  onProgress?.(received, total);
+  if (first.eof) return new Blob(parts, { type: "application/octet-stream" });
+  // A non-final empty chunk would loop forever.
+  if (firstBytes.length === 0) throw new Error("The machine returned no data before the end of the file");
+
+  const chunkCount = Math.ceil(total / chunkBytes);
+  const inner = new AbortController();
+  const onOuterAbort = () => inner.abort();
+  signal?.addEventListener("abort", onOuterAbort);
+  let nextIndex = 1;
+  let failure: { err: unknown } | null = null;
+  const worker = async () => {
+    while (!failure && !inner.signal.aborted) {
+      const index = nextIndex++;
+      if (index >= chunkCount) return;
+      try {
+        const res = await api.readRange(machineId, path, index * chunkBytes, chunkBytes, inner.signal);
+        const bytes = decodeBase64(res.data_base64);
+        const expected = Math.min(chunkBytes, Math.max(0, res.size - index * chunkBytes));
+        if (bytes.length < expected && !res.eof) {
+          throw new Error("The machine returned no data before the end of the file");
+        }
+        check(res.size, index * chunkBytes + bytes.length);
+        parts[index] = bytes;
+        received += bytes.length;
+        total = Math.max(total, res.size);
+        onProgress?.(received, total);
+      } catch (err) {
+        if (!failure && !(isAbortError(err) && inner.signal.aborted && !signal?.aborted)) {
+          failure = { err };
+        }
+        inner.abort();
+        return;
+      }
+    }
+  };
+  try {
+    await Promise.all(Array.from({ length: Math.min(pipeline, chunkCount - 1) }, worker));
+  } finally {
+    signal?.removeEventListener("abort", onOuterAbort);
   }
-  return new Blob(parts, { type: "application/octet-stream" });
+  if (signal?.aborted) throw abortError();
+  if (failure) throw (failure as { err: unknown }).err;
+  return new Blob(
+    parts.filter((p) => p && p.length > 0),
+    { type: "application/octet-stream" },
+  );
 }
 
 /** Zips `paths` on the machine, then pulls the zip. `filename` ends in ".zip". */

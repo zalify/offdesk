@@ -2,10 +2,22 @@ import { useEffect, useRef, useState } from "react";
 import { colors, colorAlpha } from "@/lib/colors";
 import { formatBytes } from "@/lib/resourceStats";
 import { rem } from "@/lib/rem";
+import { formatEta } from "@/lib/uploadQueue";
 import "./Primitives.css";
 import type { ConflictChoice, ConflictPrompt, TransferState } from "./useFileActions";
 
-/** Slim progress strip above the status bar: current file, percent, cancel. */
+/** Keeps the start and the extension: "a-very-long-na…me.tar.gz". */
+function midTruncate(name: string, max: number): string {
+  if (name.length <= max) return name;
+  const tail = Math.floor((max - 1) / 3);
+  return `${name.slice(0, max - 1 - tail)}…${name.slice(name.length - tail)}`;
+}
+
+/**
+ * Slim progress strip above the status bar: current file, "3 of 10 files",
+ * overall bytes, speed, time left and a cancel that stops the whole queue.
+ * The phone gets one line plus the bar.
+ */
 export function FileTransferStrip({
   transfer,
   onCancel,
@@ -19,23 +31,33 @@ export function FileTransferStrip({
   const known = transfer.total > 0;
   const pct = known ? Math.min(100, Math.round((transfer.done / transfer.total) * 100)) : null;
   const verb = transfer.kind === "upload" ? "Uploading" : "Downloading";
-  const queue = transfer.count > 1 ? ` (${transfer.index} of ${transfer.count})` : "";
-  const detail =
+  const files =
+    transfer.count > 1
+      ? touch
+        ? `${transfer.filesDone}/${transfer.count}`
+        : `${transfer.filesDone} of ${transfer.count} files`
+      : "";
+  const label = touch ? midTruncate(transfer.name, 28) : `${verb} ${transfer.name}`;
+  const bytes =
     pct !== null
       ? `${pct}% · ${formatBytes(transfer.done)} of ${formatBytes(transfer.total)}`
       : transfer.kind === "download"
         ? "preparing…"
         : "";
+  const speed = transfer.speedBps > 0 ? `${formatBytes(transfer.speedBps)}/s` : "";
+  const eta = transfer.etaSec !== null && transfer.speedBps > 0 ? `${formatEta(transfer.etaSec)} left` : "";
+  const muted = { flexShrink: 0, color: colors.fg3, whiteSpace: "nowrap" } as const;
   return (
     <div
       data-testid="file-browser-transfer"
+      data-kind={transfer.kind}
       role="status"
       style={{
         flexShrink: 0,
         position: "relative",
         display: "flex",
         alignItems: "center",
-        gap: 12,
+        gap: touch ? 8 : 12,
         padding: touch ? "0 4px 0 12px" : "6px 20px",
         borderTop: `1px solid ${colors.lineSoft}`,
         background: colors.bg1,
@@ -46,6 +68,8 @@ export function FileTransferStrip({
     >
       <span
         aria-hidden
+        data-testid="file-browser-transfer-bar"
+        data-pct={pct ?? ""}
         style={{
           position: "absolute",
           left: 0,
@@ -61,12 +85,33 @@ export function FileTransferStrip({
         data-testid="file-browser-transfer-name"
         style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: colors.fg1 }}
       >
-        {verb} {transfer.name}
-        {queue}
+        {label}
       </span>
-      <span data-testid="file-browser-transfer-progress" style={{ flexShrink: 0, color: colors.fg3 }}>
-        {detail}
-      </span>
+      {files && (
+        <span data-testid="file-browser-transfer-files" style={muted}>
+          {files}
+        </span>
+      )}
+      {!touch && (
+        <span data-testid="file-browser-transfer-progress" style={muted}>
+          {bytes}
+        </span>
+      )}
+      {touch && pct !== null && (
+        <span data-testid="file-browser-transfer-progress" style={muted}>
+          {pct}%
+        </span>
+      )}
+      {speed && (
+        <span data-testid="file-browser-transfer-speed" style={muted}>
+          {speed}
+        </span>
+      )}
+      {eta && !touch && (
+        <span data-testid="file-browser-transfer-eta" style={muted}>
+          {eta}
+        </span>
+      )}
       <button
         type="button"
         data-testid="file-browser-transfer-cancel"

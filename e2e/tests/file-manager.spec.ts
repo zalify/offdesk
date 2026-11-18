@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { test, expect, type Page } from "@playwright/test";
 import {
   createTerminalViaApi,
@@ -16,6 +17,47 @@ interface Entry {
   path: string;
   is_dir: boolean;
   size?: number;
+}
+
+/**
+ * Delays every request matching `url` by `delayMs` (the real request runs
+ * after the delay) and records how many were in flight at once.
+ */
+async function trackConcurrency(page: Page, url: string, delayMs: number, minBodyBytes = 0) {
+  const stats = { inFlight: 0, max: 0, total: 0 };
+  await page.route(url, async (route) => {
+    if ((route.request().postDataBuffer()?.length ?? 0) < minBodyBytes) {
+      await route.continue();
+      return;
+    }
+    stats.inFlight++;
+    stats.total++;
+    stats.max = Math.max(stats.max, stats.inFlight);
+    try {
+      await new Promise((r) => setTimeout(r, delayMs));
+      const response = await route.fetch();
+      await route.fulfill({ response });
+    } catch {
+      // the page cancelled the request
+    } finally {
+      stats.inFlight--;
+    }
+  });
+  return stats;
+}
+
+/** SHA-256 of a file on the node, read through read_range. */
+async function remoteSha256(page: Page, path: string, size: number): Promise<string> {
+  const hash = createHash("sha256");
+  for (let offset = 0; offset < size; offset += 4 * 1024 * 1024) {
+    const resp = await page.request.get(
+      `/api/machines/${MACHINE}/fs/read_range?path=${encodeURIComponent(path)}&offset=${offset}&length=${4 * 1024 * 1024}`,
+      { headers: await getAuthHeaders(page) },
+    );
+    const body = (await resp.json()) as { data_base64: string };
+    hash.update(Buffer.from(body.data_base64, "base64"));
+  }
+  return hash.digest("hex");
 }
 
 const row = (page: Page, name: string) =>
@@ -329,6 +371,7 @@ test.describe("file manager on desktop", () => {
   test("download a 21 MiB file in chunks", async ({ page }) => {
     const dir = "/tmp/e2e-fm-11";
     await openBrowserIn(page, dir, "head -c 22020096 /dev/zero > big.bin");
+    const ranges = await trackConcurrency(page, "**/fs/read_range?*", 150);
     // The strip can be short-lived on a fast link: record that it ever mounted.
     await page.evaluate(() => {
       const w = window as unknown as { __sawTransfer?: boolean };
@@ -350,6 +393,8 @@ test.describe("file manager on desktop", () => {
     expect(
       await page.evaluate(() => (window as unknown as { __sawTransfer?: boolean }).__sawTransfer),
     ).toBe(true);
+    // 6 ranges of 4 MiB: several are fetched at once.
+    expect(ranges.max).toBeGreaterThanOrEqual(2);
     await expect(page.getByTestId("file-browser-transfer")).toHaveCount(0, { timeout: 15_000 });
   });
 
@@ -414,6 +459,82 @@ test.describe("file manager on desktop", () => {
     await expect
       .poll(async () => (await listDir(page, trashDir!)).filter((e) => e.name.startsWith("replace-me-e2e-fm-14")).map((e) => e.size))
       .toContain("old old old old".length);
+  });
+
+  test("a big upload sends chunks in parallel and arrives intact", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-30";
+    await openBrowserIn(page, dir, "printf x > existing.txt");
+    const chunks = await trackConcurrency(page, "**/fs/upload/chunk", 300);
+    const big = randomBytes(9 * 1024 * 1024 + 123);
+    const started = Date.now();
+    await page.getByTestId("file-browser-upload-input").setInputFiles([
+      { name: "parallel.bin", mimeType: "application/octet-stream", buffer: big },
+    ]);
+    await expect(row(page, "parallel.bin")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("file-browser-transfer")).toHaveCount(0, { timeout: 30_000 });
+    console.log(`parallel upload of 9 MiB took ${Date.now() - started} ms (${chunks.total} chunks, max ${chunks.max} in flight)`);
+    expect(chunks.max).toBeGreaterThanOrEqual(2);
+    expect(chunks.max).toBeLessThanOrEqual(3);
+    const size = (await listDir(page, dir)).find((e) => e.name === "parallel.bin")?.size;
+    expect(size).toBe(big.length);
+    expect(await remoteSha256(page, `${dir}/parallel.bin`, big.length)).toBe(
+      createHash("sha256").update(big).digest("hex"),
+    );
+  });
+
+  test("files added mid-upload queue, appear as they finish, and the strip shows progress", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-31";
+    await openBrowserIn(page, dir, "printf x > existing.txt");
+    await trackConcurrency(page, "**/fs/upload/chunk", 1000, 100_000);
+    const input = page.getByTestId("file-browser-upload-input");
+    await input.setInputFiles([
+      { name: "big-queued.bin", mimeType: "application/octet-stream", buffer: randomBytes(24 * 1024 * 1024) },
+    ]);
+    const strip = page.getByTestId("file-browser-transfer");
+    await expect(strip).toBeVisible();
+    // More files while the big one runs: queued, not refused.
+    await input.setInputFiles([
+      { name: "q1.txt", mimeType: "text/plain", buffer: Buffer.from("one") },
+      { name: "q2.txt", mimeType: "text/plain", buffer: Buffer.from("two") },
+      { name: "q3.txt", mimeType: "text/plain", buffer: Buffer.from("three") },
+    ]);
+    await expect(page.getByText("Another transfer is still running")).toHaveCount(0);
+    await expect(page.getByTestId("file-browser-transfer-files")).toContainText(/\d+ of 4 files/);
+    await expect(page.getByTestId("file-browser-transfer-speed")).toContainText("/s", { timeout: 15_000 });
+    // The small files land (and are listed) while the big one is still going.
+    await expect(row(page, "q3.txt")).toBeVisible({ timeout: 15_000 });
+    await expect(row(page, "q1.txt")).toBeVisible();
+    await expect(strip).toBeVisible();
+    await expect(row(page, "big-queued.bin")).toHaveCount(0);
+    // Mid-queue the user's own selection is left alone.
+    await expect(row(page, "q3.txt")).not.toHaveAttribute("data-selected", "true");
+    await expect(row(page, "big-queued.bin")).toBeVisible({ timeout: 60_000 });
+    await expect(strip).toHaveCount(0, { timeout: 30_000 });
+    // On drain what landed is selected.
+    await expect(row(page, "big-queued.bin")).toHaveAttribute("data-selected", "true");
+    await expect
+      .poll(async () => (await namesIn(page, dir)).filter((n) => /^(q\d\.txt|big-queued\.bin)$/.test(n)))
+      .toEqual(["big-queued.bin", "q1.txt", "q2.txt", "q3.txt"]);
+  });
+
+  test("cancel stops the whole queue and leaves no part files", async ({ page }) => {
+    const dir = "/tmp/e2e-fm-32";
+    await openBrowserIn(page, dir, "printf x > existing.txt");
+    await trackConcurrency(page, "**/fs/upload/chunk", 1500, 100_000);
+    const input = page.getByTestId("file-browser-upload-input");
+    await input.setInputFiles([
+      { name: "cancel-a.bin", mimeType: "application/octet-stream", buffer: randomBytes(24 * 1024 * 1024) },
+      { name: "cancel-b.bin", mimeType: "application/octet-stream", buffer: randomBytes(24 * 1024 * 1024) },
+      { name: "cancel-c.txt", mimeType: "text/plain", buffer: Buffer.from("never") },
+    ]);
+    await expect(page.getByTestId("file-browser-transfer-files")).toContainText("of 3 files");
+    // Wait until the node has begun writing part files.
+    await expect
+      .poll(async () => (await namesIn(page, dir)).some((n) => n.includes(".offdesk-part-")), { timeout: 15_000 })
+      .toBe(true);
+    await page.getByTestId("file-browser-transfer-cancel").click();
+    await expect(page.getByTestId("file-browser-transfer")).toHaveCount(0, { timeout: 15_000 });
+    await expect.poll(() => namesIn(page, dir), { timeout: 15_000 }).toEqual(["existing.txt"]);
   });
 
   test("upload conflicts: apply to all keeps both once", async ({ page }) => {
