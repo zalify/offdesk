@@ -77,10 +77,10 @@ jobs:
           printf '[env]\nOFFDESK_UI_PUBLIC_KEY = "%s"\nOFFDESK_UI_CHANNEL = "%s"\n' \
             "$OFFDESK_UI_PUBLIC_KEY" "$OFFDESK_UI_CHANNEL" >> ~/.cargo/config.toml
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.23.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -313,7 +313,7 @@ jobs:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY: ${{ secrets.APP_STORE_CONNECT_API_KEY }}
         run: ruby scripts/testflight-internal.rb "$RUNNER_TEMP/rc/build-number.txt"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ios-rc-testflight
