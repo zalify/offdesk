@@ -30,7 +30,15 @@ class TestFlightReleaseTest < Minitest::Test
       end
       data = case path
       when '/v1/builds'
-        query['filter[version]'] == '0.6.4' ? [{id: 'old', attributes: {version: '0.6.4', usesNonExemptEncryption: @baseline_exemption}}] : [{id: 'new', attributes: {processingState: 'VALID', expired: false, usesNonExemptEncryption: @current_exemption}}]
+        if query['filter[version]'] == '0.6.4'
+          [{id: 'old', attributes: {version: '0.6.4', usesNonExemptEncryption: @baseline_exemption}}]
+        else
+          # An earlier RC of another marketing version took the same build number.
+          builds = {'0.6.6' => {id: 'new', attributes: {processingState: 'VALID', expired: false, usesNonExemptEncryption: @current_exemption}},
+                    '0.5.0' => {id: 'rc', attributes: {processingState: 'VALID', expired: false}}}
+          wanted = query['filter[preReleaseVersion.version]']
+          wanted ? builds.values_at(wanted).compact : builds.values
+        end
       when '/v1/builds/new/preReleaseVersion'
         {attributes: {version: @version, platform: 'IOS'}}
       when '/v1/betaGroups'
