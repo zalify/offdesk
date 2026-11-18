@@ -772,6 +772,7 @@ enum ContentArg {
     Metadata,
     Requests,
     Notes,
+    Conversation,
 }
 
 impl From<ContentArg> for offdesk_protocol::ContentLevel {
@@ -780,6 +781,7 @@ impl From<ContentArg> for offdesk_protocol::ContentLevel {
             ContentArg::Metadata => offdesk_protocol::ContentLevel::Metadata,
             ContentArg::Requests => offdesk_protocol::ContentLevel::Requests,
             ContentArg::Notes => offdesk_protocol::ContentLevel::Notes,
+            ContentArg::Conversation => offdesk_protocol::ContentLevel::Conversation,
         }
     }
 }

@@ -16,12 +16,14 @@ export const RUN_SCOPES: { scope: TokenScope; label: string }[] = [
   { scope: "runs:answer", label: "Answer questions" },
   { scope: "runs:approve", label: "Approve commands" },
   { scope: "runs:start", label: "Start agents" },
+  { scope: "runs:message", label: "Send messages" },
 ];
 
 export const CONTENT_LEVELS: { level: ContentLevel; label: string }[] = [
   { level: "metadata", label: "Status only" },
   { level: "requests", label: "Status and what they ask" },
   { level: "notes", label: "Also their notes" },
+  { level: "conversation", label: "Also the conversation" },
 ];
 
 export const defaultTokenAccessForm = (): TokenAccessForm => ({

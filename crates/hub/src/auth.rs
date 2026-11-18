@@ -279,17 +279,22 @@ fn scoped_route(
     const SEE_RUNS: &[TokenScope] = &[RunsRead, RunsAnswer, RunsApprove];
     const ANSWER: &[TokenScope] = &[RunsAnswer, RunsApprove];
     const START: &[TokenScope] = &[RunsStart];
-    const CONTROL: &[TokenScope] = &[RunsAnswer, RunsApprove, RunsStart];
+    const MESSAGE: &[TokenScope] = &[RunsMessage];
+    const CHAT: &[TokenScope] = &[RunsRead, RunsAnswer, RunsApprove, RunsMessage];
+    const CONTROL: &[TokenScope] = &[RunsAnswer, RunsApprove, RunsStart, RunsMessage];
     const ANY: &[TokenScope] = &[RunsRead, RunsAnswer, RunsApprove, RunsStart, RunsMessage];
     match (method.as_str(), path) {
         (
             "GET",
             "/api/agent-runs" | "/api/agent-runs/{run_id}" | "/api/agent-runs/{run_id}/events",
         ) => Some(SEE_RUNS),
+        // The conversation also needs the conversation content level (routes/agent_runs.rs)
+        ("GET", "/api/agent-runs/{run_id}/messages") => Some(CHAT),
         ("POST", "/api/agent-runs/{run_id}/answer") => Some(ANSWER),
+        ("POST", "/api/agent-runs/{run_id}/message") => Some(MESSAGE),
         ("POST", "/api/agent-runs") => Some(START),
         ("GET", "/api/machines/{machine_id}/agents") => Some(START),
-        // Answering and starting take the machine's control lease, as the CLI does
+        // Answering, messaging and starting take the machine's control lease, as the CLI does
         ("POST", "/api/mode/control" | "/api/mode/release") => Some(CONTROL),
         // Listed only as far as the token's machines go
         ("GET", "/api/machines") => Some(ANY),

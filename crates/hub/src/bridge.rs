@@ -389,7 +389,22 @@ enum ServerMessage {
         #[serde(default)]
         permission_mode: Option<AgentPermissionMode>,
     },
-    Message { command_id: String, run_id: String },
+    Message {
+        command_id: String,
+        run_id: String,
+        #[serde(default)]
+        text: String,
+    },
+    /// A run's conversation (content level `conversation`). A read: its result isn't
+    /// kept for repeats.
+    Messages {
+        command_id: String,
+        run_id: String,
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
     Cancel { command_id: String, run_id: String },
     Pong,
     #[serde(other)]
@@ -416,6 +431,17 @@ async fn handle(state: &AppState, bridge: &Integration, text: &str) -> Option<Va
             return None;
         }
         ServerMessage::Pong | ServerMessage::Other => return None,
+        ServerMessage::Messages { command_id, run_id, after, limit } => {
+            let caller = bridge_caller(bridge);
+            let query = crate::routes::agent_runs::ConversationQuery { after: after.clone(), limit: *limit };
+            let mut result = match crate::routes::agent_runs::conversation_as(state, &caller, run_id, query).await {
+                Ok(conversation) => json!({ "ok": true, "messages": conversation.messages, "found": conversation.found }),
+                Err(refused) => refusal(refused),
+            };
+            result["type"] = "result".into();
+            result["command_id"] = command_id.clone().into();
+            return Some(result);
+        }
         ServerMessage::Answer { command_id, .. }
         | ServerMessage::Start { command_id, .. }
         | ServerMessage::Message { command_id, .. }
@@ -443,14 +469,19 @@ fn refusal((status, reason): (axum::http::StatusCode, String)) -> Value {
     json!({ "ok": false, "status": status.as_u16(), "error": reason })
 }
 
-/// Carries out a command as the bridge: its access decides, and it's audited.
-async fn command(state: &AppState, bridge: &Integration, message: ServerMessage) -> Value {
-    let caller = AuthUser {
+/// The bridge as a caller: its integration's access, audited as `bridge:<name>`.
+fn bridge_caller(bridge: &Integration) -> AuthUser {
+    AuthUser {
         user_id: bridge.user_id.clone(),
         api_token_name: Some(format!("bridge:{}", bridge.name)),
         api_token_id: Some(bridge.id.clone()),
         access: Some(bridge.access.clone()),
-    };
+    }
+}
+
+/// Carries out a command as the bridge: its access decides, and it's audited.
+async fn command(state: &AppState, bridge: &Integration, message: ServerMessage) -> Value {
+    let caller = bridge_caller(bridge);
     // The bridge types as its own device, which takes the machine's control lease as
     // the CLI does: only when it may do the thing at all
     let device = format!("bridge-{}", bridge.id.get(..8).unwrap_or(&bridge.id));
@@ -497,12 +528,30 @@ async fn command(state: &AppState, bridge: &Integration, message: ServerMessage)
                 Err(refused) => refusal(refused),
             }
         }
-        ServerMessage::Message { run_id, .. } | ServerMessage::Cancel { run_id, .. } => {
+        ServerMessage::Message { run_id, text, .. } => {
+            if !caller.allows(TokenScope::RunsMessage) {
+                let reason = "This bridge can't send messages; it needs runs:message";
+                caller.audit(&state.db, "message", &run_id, reason);
+                return json!({ "ok": false, "status": 403, "error": reason });
+            }
+            let machine = state.db.get().ok().and_then(|conn| {
+                db::agent_runs::find_for_user(&conn, &run_id, &bridge.user_id).ok().flatten()
+            });
+            if let Some(run) = machine.filter(|run| caller.may_reach_machine(&state.db, &run.machine_id)) {
+                state.manager.request_control(&bridge.user_id, &run.machine_id, &device);
+            }
+            let message = offdesk_protocol::AgentRunMessage { text, device_id: Some(device) };
+            match crate::routes::agent_runs::message_as(state, &caller, &run_id, message).await {
+                Ok(run) => json!({ "ok": true, "run": run }),
+                Err(refused) => refusal(refused),
+            }
+        }
+        ServerMessage::Cancel { run_id, .. } => {
             let reason = "This hub can't do that yet";
             caller.audit(&state.db, "denied", &run_id, reason);
             json!({ "ok": false, "status": 501, "error": reason })
         }
-        ServerMessage::Ack { .. } | ServerMessage::Pong | ServerMessage::Other => Value::Null,
+        ServerMessage::Ack { .. } | ServerMessage::Pong | ServerMessage::Other | ServerMessage::Messages { .. } => Value::Null,
     }
 }
 

@@ -639,6 +639,52 @@ pub struct AgentStart {
 /// A node that checks `AgentStart::allowed_dirs` against real paths.
 pub const AGENT_START_DIRS_CAPABILITY: &str = "agent-start-dirs-v1";
 
+/// A node that reads an agent run's conversation from the agent's own session file
+/// (`HubToMachine::AgentTranscript`).
+pub const AGENT_TRANSCRIPT_CAPABILITY: &str = "agent-transcript-v1";
+
+/// Who said a conversation message.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMessageRole {
+    /// The person (what was typed or sent to the agent).
+    User,
+    /// The agent's reply.
+    Agent,
+    /// A tool the agent ran, in one line ("Bash: git status"); never its output.
+    Tool,
+}
+
+/// One message of an agent run's conversation, read from the agent's session file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentMessage {
+    /// Stable and increasing within a session: "<byte offset>:<block>" of the file.
+    pub id: String,
+    pub role: AgentMessageRole,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_ms: Option<i64>,
+}
+
+/// A run's conversation as the hub serves it (`GET /api/agent-runs/{id}/messages`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentConversation {
+    /// Oldest first: the last ones, or those after `after`.
+    pub messages: Vec<AgentMessage>,
+    /// Whether the node found the agent's session file at all.
+    pub found: bool,
+}
+
+/// A message for a running agent (`POST /api/agent-runs/{id}/message`): typed into its
+/// terminal and sent with Enter, as if the person typed it there.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentRunMessage {
+    pub text: String,
+    /// The sending device, which must hold the machine's control lease.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
 /// What an API token may do (docs/plans/2026-10-14-agent-runs-external-access.md, B1).
 /// `Full` is everything a person can do: terminals, input, machines. The `runs:*`
 /// scopes reach only agent runs.
@@ -656,7 +702,7 @@ pub enum TokenScope {
     /// Start agents in the allowed folders, with a prompt.
     #[serde(rename = "runs:start")]
     RunsStart,
-    /// Send a running agent a message (no endpoint yet).
+    /// Send a running agent a message: typed into its terminal with Enter.
     #[serde(rename = "runs:message")]
     RunsMessage,
     #[serde(rename = "full")]
@@ -687,6 +733,9 @@ pub enum ContentLevel {
     Requests,
     /// Also the agent's own notes and handover, the step it's on, and its session's title.
     Notes,
+    /// Also the conversation: what the person and the agent said, and the tools it ran
+    /// in one line each (from the agent's session file). Never terminal output.
+    Conversation,
 }
 
 /// A scoped token's scopes and limits. A token without one (`None` in storage) is full.
@@ -1901,6 +1950,18 @@ pub enum HubToMachine {
     RefreshAttach { attach_id: String },
     #[serde(rename = "attach_input")]
     AttachInput { attach_id: String, data: String },
+    /// Read the conversation of the agent in a terminal from its session file (nodes
+    /// with AGENT_TRANSCRIPT_CAPABILITY). Answered by `AgentTranscriptResult` or
+    /// `AgentTranscriptError`.
+    #[serde(rename = "agent_transcript")]
+    AgentTranscript {
+        request_id: String,
+        terminal_id: String,
+        /// Only messages after this id; None: the last `limit`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+        limit: u32,
+    },
     /// Type an answer into an agent run's terminal (nodes with AGENT_KEYS_CAPABILITY).
     #[serde(rename = "send_agent_keys")]
     SendAgentKeys {
@@ -2011,6 +2072,14 @@ pub enum MachineToHub {
     },
     #[serde(rename = "fs_list_error")]
     FsListError { request_id: String, error: String },
+    #[serde(rename = "agent_transcript_result")]
+    AgentTranscriptResult {
+        request_id: String,
+        messages: Vec<AgentMessage>,
+        found: bool,
+    },
+    #[serde(rename = "agent_transcript_error")]
+    AgentTranscriptError { request_id: String, error: String },
     #[serde(rename = "fs_read_result")]
     FsReadResult {
         request_id: String,

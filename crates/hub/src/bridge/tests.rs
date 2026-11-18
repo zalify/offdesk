@@ -152,6 +152,39 @@ async fn a_bridge_pairs_resumes_refuses_and_hangs_up_when_revoked() {
     // Something it can't read gets an answer too
     ws.send(Message::Text(json!({ "type": "start", "command_id": "cmd-2" }).to_string().into())).await.unwrap();
     assert_eq!(next(&mut ws).await["status"], 400);
+    // A message needs runs:message, the conversation its content level
+    let message = json!({ "type": "message", "command_id": "cmd-3", "run_id": waiting["id"], "text": "Go on" });
+    ws.send(Message::Text(message.to_string().into()))
+        .await
+        .unwrap();
+    let result = next(&mut ws).await;
+    assert_eq!(
+        (result["command_id"].as_str(), result["status"].as_u64()),
+        (Some("cmd-3"), Some(403))
+    );
+    assert_eq!(
+        result["error"],
+        "This bridge can't send messages; it needs runs:message"
+    );
+    let messages = json!({ "type": "messages", "command_id": "cmd-4", "run_id": waiting["id"] });
+    ws.send(Message::Text(messages.to_string().into()))
+        .await
+        .unwrap();
+    let result = next(&mut ws).await;
+    assert_eq!(
+        (
+            result["type"].as_str(),
+            result["command_id"].as_str(),
+            result["status"].as_u64()
+        ),
+        (Some("result"), Some("cmd-4"), Some(403))
+    );
+    assert!(
+        integrations::command_result(&pool.get().unwrap(), "bridge-1", "cmd-4")
+            .unwrap()
+            .is_none(),
+        "a read isn't kept for repeats"
+    );
 
     // The server goes away; what happens meanwhile waits for it
     drop(ws);

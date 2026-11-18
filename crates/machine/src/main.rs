@@ -2,6 +2,7 @@ mod acp;
 mod agent_detect;
 mod agent_socket;
 mod agent_start;
+mod agent_transcript;
 mod agent_browser;
 mod attach;
 mod config;

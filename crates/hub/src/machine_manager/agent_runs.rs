@@ -10,7 +10,7 @@ use offdesk_protocol::{
     AgentAnswer, AgentKey, AgentReportKind, AgentRequestKind, AgentRunInfo, AgentRunRequest,
     AgentRunStatus, AgentSignal, AgentStart, BrowserEvent, HubToMachine, InstalledAgent, RunAgent,
     StartAgentRun, TerminalAttention, TerminalInfo, TerminalOpener, AGENT_CHOOSE_CAPABILITY,
-    AGENT_KEYS_CAPABILITY, AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY, FOLDER_TRUST_PROMPT,
+    AGENT_KEYS_CAPABILITY, AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY, AGENT_TRANSCRIPT_CAPABILITY, FOLDER_TRUST_PROMPT,
     FOLDER_TRUST_SOURCE, FOLDER_TRUST_YES,
 };
 
@@ -435,6 +435,158 @@ impl MachineManager {
             )?;
             agent_runs::set_status(&db, &run.id, AgentRunStatus::Idle)?;
         }
+        let row = agent_runs::find(&db, &run.id)?.ok_or(AnswerError::NotFound)?;
+        let info = agent_runs::to_info(&db, &row)?;
+        self.send_event(
+            Some(user_id.to_string()),
+            BrowserEvent::AgentRunUpdated { run: info.clone() },
+        );
+        Ok(info)
+    }
+
+    /// The conversation of a run's agent, read by its node from the agent's own session
+    /// file: the last `limit` messages, or those after `after`. A run that ended has
+    /// none any more (its agent's session is no longer in the terminal).
+    pub async fn agent_run_conversation(
+        &self,
+        user_id: &str,
+        run_id: &str,
+        after: Option<String>,
+        limit: u32,
+    ) -> Result<offdesk_protocol::AgentConversation, AnswerError> {
+        let run = {
+            let db = self.db.get().map_err(|_| AnswerError::Internal)?;
+            agent_runs::find_for_user(&db, run_id, user_id)?.ok_or(AnswerError::NotFound)?
+        };
+        let (Some(terminal_id), None) = (run.terminal_id.clone(), run.ended_at) else {
+            return Ok(offdesk_protocol::AgentConversation::default());
+        };
+        if !self.user_can_access_machine(user_id, &run.machine_id).await {
+            return Err(AnswerError::Unavailable("The machine is offline"));
+        }
+        if !self
+            .machine_supports(&run.machine_id, AGENT_TRANSCRIPT_CAPABILITY)
+            .await
+        {
+            return Err(AnswerError::Unavailable(
+                "Update Offdesk on that machine to see the conversation here",
+            ));
+        }
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let rx = self.register_pending(&request_id).await;
+        let message = HubToMachine::AgentTranscript {
+            request_id: request_id.clone(),
+            terminal_id,
+            after,
+            limit: limit.clamp(1, 200),
+        };
+        if self
+            .send_to_machine(&run.machine_id, message)
+            .await
+            .is_err()
+        {
+            self.remove_pending(&request_id).await;
+            return Err(AnswerError::Unavailable("The machine is offline"));
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(Ok(super::PendingResult::AgentTranscript(conversation)))) => Ok(conversation),
+            Ok(Ok(Err(error))) => {
+                tracing::warn!("agent run {run_id} conversation: {error}");
+                Err(AnswerError::Unavailable(
+                    "The machine couldn't read the conversation",
+                ))
+            }
+            Ok(Ok(Ok(_))) => Err(AnswerError::Internal),
+            Ok(Err(_)) | Err(_) => {
+                self.remove_pending(&request_id).await;
+                Err(AnswerError::Unavailable(
+                    "The machine didn't answer in time",
+                ))
+            }
+        }
+    }
+
+    /// A person sends a run's agent a message: the node types it into its terminal and
+    /// presses Enter, as if they typed it there. Not while it waits on a request (that
+    /// takes an answer) or before the agent has started. Line breaks become spaces.
+    pub async fn message_agent_run(
+        &self,
+        user_id: &str,
+        run_id: &str,
+        message: offdesk_protocol::AgentRunMessage,
+    ) -> Result<AgentRunInfo, AnswerError> {
+        let text = message
+            .text
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let key = AgentKey::Text(text.clone());
+        if !key.is_allowed() {
+            return Err(AnswerError::BadRequest(
+                "Write a message of at most 2000 characters",
+            ));
+        }
+        let run = {
+            let db = self.db.get().map_err(|_| AnswerError::Internal)?;
+            let run =
+                agent_runs::find_for_user(&db, run_id, user_id)?.ok_or(AnswerError::NotFound)?;
+            if run.ended_at.is_some() {
+                return Err(AnswerError::Conflict("This agent run has ended"));
+            }
+            if run.status == AgentRunStatus::Starting {
+                return Err(AnswerError::Conflict("The agent hasn't started yet"));
+            }
+            if agent_runs::open_request(&db, &run.id)?
+                .is_some_and(|request| request.answer_sent_at_ms.is_none())
+            {
+                return Err(AnswerError::Conflict(
+                    "It's waiting on a request; answer that first",
+                ));
+            }
+            run
+        };
+        let terminal_id = run
+            .terminal_id
+            .clone()
+            .ok_or(AnswerError::Conflict("This run has no terminal to type in"))?;
+        if !self.user_can_access_machine(user_id, &run.machine_id).await {
+            return Err(AnswerError::Unavailable("The machine is offline"));
+        }
+        if !self
+            .machine_supports(&run.machine_id, AGENT_KEYS_CAPABILITY)
+            .await
+        {
+            return Err(AnswerError::Unavailable(
+                "Update Offdesk on that machine to send messages from here",
+            ));
+        }
+        let device = message
+            .device_id
+            .as_deref()
+            .filter(|device| !device.is_empty());
+        if device.is_none() || self.get_controller(user_id, &run.machine_id).as_deref() != device {
+            return Err(AnswerError::Conflict("Take control of the machine first"));
+        }
+        if self
+            .send_to_machine(
+                &run.machine_id,
+                HubToMachine::SendAgentKeys {
+                    terminal_id,
+                    keys: vec![key, AgentKey::Enter],
+                },
+            )
+            .await
+            .is_err()
+        {
+            return Err(AnswerError::Unavailable("The machine is offline"));
+        }
+        let db = self.db.get().map_err(|_| AnswerError::Internal)?;
+        agent_runs::insert_event(
+            &db,
+            &run.id,
+            "message",
+            &serde_json::json!({ "text": text, "device_id": device }),
+        )?;
         let row = agent_runs::find(&db, &run.id)?.ok_or(AnswerError::NotFound)?;
         let info = agent_runs::to_info(&db, &row)?;
         self.send_event(

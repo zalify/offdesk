@@ -3,8 +3,8 @@
 A bridge connects an Offdesk hub to a server you choose (your own service, or a hosted
 one such as Offdesk at offdesk.so). The hub dials out and keeps one WebSocket open; nothing has
 to reach the hub. Over it the server sees the hub's coding agent runs and, within what
-the person allowed **on the hub**, answers them and starts agents. Terminal output never
-goes over a bridge.
+the person allowed **on the hub**, answers them, reads their conversations, sends them
+messages and starts agents. Terminal output never goes over a bridge.
 
 `examples/bridge-server` is a small working server. The hub side is
 `crates/hub/src/bridge.rs`.
@@ -25,9 +25,15 @@ goes over a bridge.
    accepts the key alone.
 
 The scopes are the hub's to decide: `runs:read` (default), `runs:answer`,
-`runs:approve`, `runs:start`, with the machines, folders, agents, content level and
-hourly limits of a scoped token (see `SECURITY.md`). Never full access. The server can't
-widen them; it learns them in `hello`.
+`runs:approve`, `runs:start`, `runs:message`, with the machines, folders, agents, content
+level and hourly limits of a scoped token (see `SECURITY.md`). Never full access. The
+server can't widen them; it learns them in `hello`.
+
+The content level is `metadata` (default), `requests` (what a request asks), `notes`
+(the agent's own notes and handover) or `conversation`: also what the person and the
+agent said, and each tool call in one line, read by the node from the agent's own session
+file (Claude Code's `~/.claude/projects/…/<session>.jsonl`, Codex's open rollout) when the
+server asks. Not tool output, not thinking, not the screen. The hub doesn't keep it.
 
 ## The connection
 
@@ -81,6 +87,8 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   "option_id": "2" }                            // or "text": "…", or "approve": true|false
 { "type": "start", "command_id": "…", "machine_id": "…", "agent": "claude", "cwd": "~/work/shop",
   "prompt": "…", "label": "…", "external_ref": "…", "permission_mode": "ask" }
+{ "type": "message", "command_id": "…", "run_id": "…", "text": "…" }
+{ "type": "messages", "command_id": "…", "run_id": "…", "after": "…", "limit": 100 }
 { "type": "pong" }
 ```
 
@@ -94,8 +102,19 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   `result.status` is that API's HTTP status.
 - `command_id` is yours: a command id the hub has carried out gets the same `result`
   again, not a second go.
-- `message` and `cancel` are reserved; this hub answers them with `ok: false`, status 501.
-  Unknown types are ignored.
+- **message** needs `runs:message`: the text is typed into the run's terminal and sent
+  with Enter, as if the person typed it there (line breaks become spaces, at most 2000
+  characters). Refused (409) while the run waits on a request (answer it) or before its
+  agent has started. It counts toward the hourly limit of answers.
+- **messages** needs the `conversation` content level. Its result is
+  `{ "ok": true, "messages": [{ "id", "role": "user" | "agent" | "tool", "text", "at_ms" }],
+  "found": true }`, oldest first: the last `limit` (at most 200), or those after the
+  message id `after`. Ids only grow within a session, so polling with the last id gets
+  what's new. `found` is false when the run has ended or its agent has no session file.
+  A read: its result isn't kept, and a repeat reads again.
+- A node without the `agent-transcript-v1` capability (older ones) can't read conversations: `messages` gets status 503 for its runs.
+- `cancel` is reserved; this hub answers it with `ok: false`, status 501. Unknown types
+  are ignored.
 
 ## Revoking
 

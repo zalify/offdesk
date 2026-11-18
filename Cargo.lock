@@ -1521,6 +1521,7 @@ version = "0.26.0"
 dependencies = [
  "base64",
  "bytes",
+ "chrono",
  "clap",
  "dirs",
  "futures",

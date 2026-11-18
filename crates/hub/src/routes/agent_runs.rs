@@ -83,6 +83,9 @@ fn shown_event(mut event: Value, level: Option<ContentLevel>) -> Value {
             body.remove("text");
             body.remove("link");
         }
+        if level < ContentLevel::Conversation && kind == "message" {
+            body.remove("text");
+        }
     }
     event
 }
@@ -296,6 +299,150 @@ async fn answer_run(
         .map_err(IntoResponse::into_response)
 }
 
+fn answer_refusal(error: crate::machine_manager::AnswerError) -> Refusal {
+    use crate::machine_manager::AnswerError;
+    match error {
+        AnswerError::NotFound => refused(StatusCode::NOT_FOUND, "Agent run not found"),
+        AnswerError::Conflict(reason) => refused(StatusCode::CONFLICT, reason),
+        AnswerError::BadRequest(reason) => refused(StatusCode::BAD_REQUEST, reason),
+        AnswerError::Unavailable(reason) => refused(StatusCode::SERVICE_UNAVAILABLE, reason),
+        AnswerError::Internal => failed("agent run failed"),
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct ConversationQuery {
+    pub after: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// A run's conversation as `auth_user` reads it: a scoped caller (a token, a bridge)
+/// only at the `conversation` content level. Read from the agent's session file each
+/// time; the hub doesn't keep it.
+pub(crate) async fn conversation_as(
+    state: &AppState,
+    auth_user: &AuthUser,
+    run_id: &str,
+    query: ConversationQuery,
+) -> Result<offdesk_protocol::AgentConversation, Refusal> {
+    {
+        let db = state.db.get().map_err(failed)?;
+        if visible_run(&db, auth_user, run_id)
+            .map_err(failed)?
+            .is_none()
+        {
+            return Err(refused(StatusCode::NOT_FOUND, "Agent run not found"));
+        }
+    }
+    if auth_user
+        .access
+        .as_ref()
+        .is_some_and(|access| access.content < ContentLevel::Conversation)
+    {
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "This token can't see conversations; its content level isn't conversation",
+        ));
+    }
+    state
+        .manager
+        .agent_run_conversation(
+            &auth_user.user_id,
+            run_id,
+            query.after,
+            query.limit.unwrap_or(100),
+        )
+        .await
+        .map_err(answer_refusal)
+}
+
+async fn run_conversation(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(run_id): Path<String>,
+    Query(query): Query<ConversationQuery>,
+) -> Result<Json<offdesk_protocol::AgentConversation>, Response> {
+    conversation_as(&state, &auth_user, &run_id, query)
+        .await
+        .map(Json)
+        .map_err(IntoResponse::into_response)
+}
+
+/// Sends a run's agent a message as `auth_user`: runs:message, within the hourly limit
+/// of answers, audited. The node types it into the terminal with Enter.
+pub(crate) async fn message_as(
+    state: &AppState,
+    auth_user: &AuthUser,
+    run_id: &str,
+    message: offdesk_protocol::AgentRunMessage,
+) -> Result<AgentRunInfo, Refusal> {
+    {
+        let db = state.db.get().map_err(failed)?;
+        if visible_run(&db, auth_user, run_id)
+            .map_err(failed)?
+            .is_none()
+        {
+            return Err(refused(StatusCode::NOT_FOUND, "Agent run not found"));
+        }
+    }
+    if !auth_user.allows(TokenScope::RunsMessage) {
+        return Err(refuse(
+            auth_user,
+            state,
+            "message",
+            run_id,
+            "This token can't send messages; it needs runs:message",
+        ));
+    }
+    let limit = auth_user
+        .access
+        .as_ref()
+        .and_then(|access| access.max_answers_per_hour);
+    if over_limit(state, auth_user, &["answer", "approve", "message"], limit) {
+        auth_user.audit(&state.db, "message", run_id, "hourly limit reached");
+        return Err(refused(
+            StatusCode::TOO_MANY_REQUESTS,
+            "This token reached its hourly limit of answers",
+        ));
+    }
+    let level = auth_user.access.as_ref().map(|access| access.content);
+    let result = state
+        .manager
+        .message_agent_run(&auth_user.user_id, run_id, message)
+        .await;
+    auth_user.audit(
+        &state.db,
+        "message",
+        run_id,
+        match &result {
+            Ok(_) => "ok",
+            Err(
+                crate::machine_manager::AnswerError::Conflict(reason)
+                | crate::machine_manager::AnswerError::BadRequest(reason)
+                | crate::machine_manager::AnswerError::Unavailable(reason),
+            ) => reason,
+            Err(crate::machine_manager::AnswerError::NotFound) => "not found",
+            Err(crate::machine_manager::AnswerError::Internal) => "failed",
+        },
+    );
+    result
+        .map(|run| shown_run(run, level))
+        .map_err(answer_refusal)
+}
+
+/// Send the run's agent a message: 202 means it was typed in, not that the agent took it.
+async fn message_run(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(run_id): Path<String>,
+    Json(message): Json<offdesk_protocol::AgentRunMessage>,
+) -> Result<(StatusCode, Json<AgentRunInfo>), Response> {
+    message_as(&state, &auth_user, &run_id, message)
+        .await
+        .map(|run| (StatusCode::ACCEPTED, Json(run)))
+        .map_err(IntoResponse::into_response)
+}
+
 /// Starts an agent as `auth_user`: a scoped caller only on its machines, with its
 /// agents, in its folders and within its hourly limit; the caller's device must hold
 /// the machine's control lease. Audited for tokens and bridges.
@@ -457,6 +604,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/agent-runs/{run_id}", get(get_run))
         .route("/api/agent-runs/{run_id}/events", get(run_events))
         .route("/api/agent-runs/{run_id}/answer", post(answer_run))
+        .route("/api/agent-runs/{run_id}/messages", get(run_conversation))
+        .route("/api/agent-runs/{run_id}/message", post(message_run))
 }
 
 #[cfg(test)]
@@ -788,6 +937,202 @@ mod tests {
         let (status, _) = call(&state, "odk_read", "GET", "/api/agent-runs", None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(crate::auth::verify_bearer_token("odk_read", &state.db, &state.jwt_secret).is_err());
+    }
+
+    #[tokio::test]
+    async fn conversations_are_read_and_messages_typed_within_the_token() {
+        use offdesk_protocol::{
+            AgentKey, AgentMessage, AgentMessageRole, AgentRequestKind, ContentLevel, MachineToHub,
+            TokenAccess, TokenScope,
+        };
+        let state = test_state();
+        let (idle, waiting) = {
+            let db = state.db.get().unwrap();
+            let idle = agent_runs::insert(
+                &db,
+                "machine-a",
+                "t1",
+                RunAgent::Claude,
+                "/w",
+                AgentRunStatus::Idle,
+            )
+            .unwrap();
+            let waiting = agent_runs::insert(
+                &db,
+                "machine-a",
+                "t2",
+                RunAgent::Claude,
+                "/w",
+                AgentRunStatus::Working,
+            )
+            .unwrap();
+            agent_runs::insert_request(
+                &db,
+                &waiting.id,
+                AgentRequestKind::Question,
+                Some("Which plan?"),
+                &[],
+                "hooks",
+            )
+            .unwrap();
+            (idle, waiting)
+        };
+        let machine = offdesk_protocol::MachineInfo {
+            id: "machine-a".into(),
+            name: "machine-a".into(),
+            os: "linux".into(),
+            home_dir: "/tmp".into(),
+            production: false,
+        };
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine,
+                Some("user-a".into()),
+                vec![
+                    offdesk_protocol::AGENT_KEYS_CAPABILITY.into(),
+                    offdesk_protocol::AGENT_TRANSCRIPT_CAPABILITY.into(),
+                ],
+            )
+            .await;
+        token(
+            &state,
+            "odk_notes",
+            Some(TokenAccess {
+                scopes: vec![TokenScope::RunsRead],
+                content: ContentLevel::Notes,
+                ..Default::default()
+            }),
+        );
+        token(
+            &state,
+            "odk_chat",
+            Some(TokenAccess {
+                scopes: vec![TokenScope::RunsRead, TokenScope::RunsMessage],
+                content: ContentLevel::Conversation,
+                ..Default::default()
+            }),
+        );
+        let messages = format!("/api/agent-runs/{}/messages?limit=20", idle.id);
+        let message = format!("/api/agent-runs/{}/message", idle.id);
+
+        // Below the conversation level there's no conversation, and no messages without runs:message
+        let (status, _) = call(&state, "odk_notes", "GET", &messages, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, _) = call(
+            &state,
+            "odk_notes",
+            "POST",
+            &message,
+            Some(serde_json::json!({ "text": "hi", "device_id": "d" })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        // The node reads it from the agent's session file
+        let reader = {
+            let state = state.clone();
+            let messages = messages.clone();
+            tokio::spawn(async move { call(&state, "odk_chat", "GET", &messages, None).await })
+        };
+        let Some(HubToMachine::AgentTranscript {
+            request_id,
+            terminal_id,
+            limit,
+            after,
+        }) = commands.recv().await
+        else {
+            panic!("the node is asked for the conversation");
+        };
+        assert_eq!((terminal_id.as_str(), limit, after), ("t1", 20, None));
+        let said = AgentMessage {
+            id: "0:0".into(),
+            role: AgentMessageRole::Agent,
+            text: "Done.".into(),
+            at_ms: None,
+        };
+        state
+            .manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentTranscriptResult {
+                    request_id,
+                    messages: vec![said],
+                    found: true,
+                },
+            )
+            .await;
+        let (status, body) = reader.await.unwrap();
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let conversation: offdesk_protocol::AgentConversation =
+            serde_json::from_str(&body).unwrap();
+        assert!(conversation.found);
+        assert_eq!(conversation.messages[0].text, "Done.");
+
+        // A message needs the machine's control, is one line, and waits for no request
+        let send = |text: &str| Some(serde_json::json!({ "text": text, "device_id": "d" }));
+        let (status, _) = call(&state, "odk_chat", "POST", &message, send("hi")).await;
+        assert_eq!(status, StatusCode::CONFLICT, "take control first");
+        state.manager.request_control("user-a", "machine-a", "d");
+        let (status, body) = call(
+            &state,
+            "odk_chat",
+            "POST",
+            &format!("/api/agent-runs/{}/message", waiting.id),
+            send("hi"),
+        )
+        .await;
+        assert_eq!(
+            (status, body.as_str()),
+            (
+                StatusCode::CONFLICT,
+                "It's waiting on a request; answer that first"
+            )
+        );
+        let (status, _) = call(&state, "odk_chat", "POST", &message, send("   ")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        let (status, body) = call(
+            &state,
+            "odk_chat",
+            "POST",
+            &message,
+            send("Fix the test\n  then push"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+        let Some(HubToMachine::SendAgentKeys { terminal_id, keys }) = commands.recv().await else {
+            panic!("the message is typed in");
+        };
+        assert_eq!(terminal_id, "t1");
+        assert_eq!(
+            keys,
+            vec![
+                AgentKey::Text("Fix the test then push".into()),
+                AgentKey::Enter
+            ]
+        );
+        // Its history has the message, its text only at the conversation level
+        let (_, body) = call(
+            &state,
+            "odk_notes",
+            "GET",
+            &format!("/api/agent-runs/{}/events", idle.id),
+            None,
+        )
+        .await;
+        assert!(
+            body.contains("\"message\"") && !body.contains("Fix the test"),
+            "{body}"
+        );
+        let (_, body) = call(
+            &state,
+            "odk_chat",
+            "GET",
+            &format!("/api/agent-runs/{}/events", idle.id),
+            None,
+        )
+        .await;
+        assert!(body.contains("Fix the test then push"), "{body}");
     }
 
     #[tokio::test]

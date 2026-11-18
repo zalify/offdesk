@@ -278,7 +278,7 @@ export interface StartedAgentRun {
 export type TokenScope = 'runs:read' | 'runs:answer' | 'runs:approve' | 'runs:start' | 'runs:message' | 'full'
 
 /** How much of a run a scoped token sees; terminal output never. */
-export type ContentLevel = 'metadata' | 'requests' | 'notes'
+export type ContentLevel = 'metadata' | 'requests' | 'notes' | 'conversation'
 
 /** A scoped token's scopes and limits (none on a token: full access). */
 export interface TokenAccess {

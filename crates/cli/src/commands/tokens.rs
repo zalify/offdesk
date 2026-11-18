@@ -54,6 +54,7 @@ pub fn describe(access: Option<&TokenAccess>) -> String {
             ContentLevel::Metadata => "status only",
             ContentLevel::Requests => "+ what runs ask",
             ContentLevel::Notes => "+ notes",
+            ContentLevel::Conversation => "+ conversation",
         }
         .to_string(),
     );
@@ -137,7 +138,7 @@ pub fn access_from(options: &CreateOptions, machine_ids: Vec<String>) -> Result<
             .map(|s| {
                 serde_json::from_value::<TokenScope>(Value::String(s.clone())).map_err(|_| {
                     CliError::Usage(format!(
-                        "no scope {s}; the scopes are runs:read, runs:answer, runs:approve, runs:start (or --full)"
+                        "no scope {s}; the scopes are runs:read, runs:answer, runs:approve, runs:start, runs:message (or --full)"
                     ))
                 })
             })
