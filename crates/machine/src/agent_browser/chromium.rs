@@ -135,39 +135,198 @@ fn running_as_root() -> bool {
         || std::env::var_os("OFFDESK_CHROMIUM_NO_SANDBOX").is_some()
 }
 
+/// What the launch command line depends on, kept apart from the spawning so
+/// the flags can be unit-tested.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchOptions {
+    /// Replaces the user agent Chromium would report (everywhere: pages,
+    /// iframes, workers).
+    pub user_agent: Option<String>,
+    /// Use the machine's GPU for WebGL and compositing instead of the
+    /// software renderer.
+    pub gpu: bool,
+    pub no_sandbox: bool,
+    /// A normal window instead of `--headless=new`.
+    pub headed: bool,
+    /// The private X display a headed Chromium draws on (Linux).
+    pub x11: Option<X11Display>,
+}
+
+/// The private Xvfb display a headed Chromium is pointed at.
+#[derive(Debug, Clone)]
+pub struct X11Display {
+    /// `:N`.
+    pub display: String,
+    pub xauthority: PathBuf,
+}
+
+impl LaunchOptions {
+    /// `no_sandbox` follows the node's environment (root, containers).
+    pub fn new(user_agent: Option<String>, gpu: bool) -> Self {
+        Self {
+            user_agent,
+            gpu,
+            no_sandbox: running_as_root(),
+            headed: false,
+            x11: None,
+        }
+    }
+}
+
+/// Flags that make Chromium use the GPU through ANGLE's desktop-GL-on-EGL
+/// backend. Measured on Linux with an AMD GPU: this gives a real
+/// `UNMASKED_RENDERER_WEBGL`, while the Vulkan backend and the bare
+/// `--enable-gpu --ignore-gpu-blocklist` produced no WebGL context at all
+/// (worse than the SwiftShader default), which is why the node probes WebGL
+/// after launching with them and falls back.
+///
+/// Under Xvfb (no DRI3, so no hardware EGL) the same flags are measured to
+/// leave WebGL without a context too, unless `--ignore-gpu-blocklist` is
+/// added, which then renders on Mesa's llvmpipe rather than the GPU: still a
+/// plausible Linux renderer string, and better than none (see
+/// `docs/agent-browser.md`).
+const GPU_FLAGS: &[&str] = &["--enable-gpu", "--use-gl=angle", "--use-angle=gl-egl"];
+
+/// Flags for a window. Several agent browsers' windows overlap on one
+/// virtual screen, and an occluded or background window must keep rendering
+/// and streaming; a node restart kills Chromium uncleanly, and the next start
+/// must not ask "Restore pages?".
+const HEADED_FLAGS: &[&str] = &[
+    "--window-position=0,0",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
+    "--hide-crash-restore-bubble",
+];
+
+/// WebGL on a headed Chromium without a usable GPU. Headless Chromium falls
+/// back to SwiftShader by itself; a windowed one gives pages no WebGL context
+/// at all, which no real browser does.
+const HEADED_SOFTWARE_GL_FLAGS: &[&str] =
+    &["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
+
+/// The full argument list for a launch.
+pub fn build_args(profile: &Path, opts: &LaunchOptions) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec![
+        "--remote-debugging-port=0".into(),
+        "--remote-debugging-address=127.0.0.1".into(),
+        format!("--user-data-dir={}", profile.display()).into(),
+        "--no-first-run".into(),
+        "--no-default-browser-check".into(),
+        "--disable-background-networking".into(),
+        "--window-size=1280,800".into(),
+        // --remote-debugging-port makes `navigator.webdriver` true, which
+        // bot detection reads as automation; a person's browser says false.
+        "--disable-blink-features=AutomationControlled".into(),
+    ];
+    if !opts.headed {
+        args.insert(0, "--headless=new".into());
+    } else {
+        args.extend(HEADED_FLAGS.iter().map(OsString::from));
+        if opts.x11.is_some() {
+            // Never let Chromium pick Wayland from the environment: the
+            // window goes to the private X display or nowhere.
+            args.push("--ozone-platform=x11".into());
+        }
+    }
+    if opts.gpu {
+        args.extend(GPU_FLAGS.iter().map(OsString::from));
+        if opts.headed {
+            args.push("--ignore-gpu-blocklist".into());
+        }
+    } else if opts.headed {
+        args.extend(HEADED_SOFTWARE_GL_FLAGS.iter().map(OsString::from));
+    }
+    if let Some(user_agent) = &opts.user_agent {
+        args.push(format!("--user-agent={user_agent}").into());
+    }
+    if opts.no_sandbox {
+        args.push("--no-sandbox".into());
+    }
+    args.push("about:blank".into());
+    args
+}
+
+/// True when `dir` (normally `/dev/dri`) holds a DRM render node, which is
+/// what Chromium needs for GPU rasterisation without a display server.
+pub fn has_render_node(dir: &Path) -> bool {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with("renderD"))
+        })
+        .unwrap_or(false)
+}
+
+/// Whether to try the GPU: only on Linux with a render node, unless the
+/// node's `OFFDESK_BROWSER_GPU` is `0`. Anything else (including unset) is
+/// auto. Other platforms keep Chromium's own defaults.
+pub fn gpu_wanted(env: Option<&OsString>, dri_dir: &Path) -> bool {
+    cfg!(target_os = "linux") && env.map(|v| v != "0").unwrap_or(true) && has_render_node(dri_dir)
+}
+
+/// `gpu_wanted` for this machine.
+pub fn gpu_wanted_here() -> bool {
+    gpu_wanted(
+        std::env::var_os("OFFDESK_BROWSER_GPU").as_ref(),
+        Path::new("/dev/dri"),
+    )
+}
+
+/// The `149.0.7827.2` in `Google Chrome 149.0.7827.2 ` (what `--version`
+/// prints) or in `Chrome/149.0.7827.2` (what `Browser.getVersion` calls the
+/// product).
+pub fn version_of(text: &str) -> Option<String> {
+    text.split(|c: char| c.is_whitespace() || c == '/')
+        .find(|word| {
+            word.contains('.')
+                && word
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .map(str::to_string)
+}
+
+/// The version `binary --version` reports, without starting a browser.
+pub async fn cli_version(binary: &Path) -> Option<String> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(5),
+        Command::new(binary)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    version_of(&String::from_utf8_lossy(&out.stdout))
+}
+
 /// Start Chromium on `profile` and return once its DevTools endpoint is up.
-/// `user_agent` replaces the one it would report (everywhere: pages,
-/// iframes, workers).
 pub async fn launch(
     binary: &Path,
     profile: &Path,
     pidfile: &Path,
-    user_agent: Option<&str>,
+    opts: &LaunchOptions,
 ) -> Result<Launched, String> {
     std::fs::create_dir_all(profile).map_err(|e| format!("create profile dir: {e}"))?;
     let port_file = profile.join("DevToolsActivePort");
     let _ = std::fs::remove_file(&port_file);
 
     let mut cmd = Command::new(binary);
-    cmd.arg("--headless=new")
-        .arg("--remote-debugging-port=0")
-        .arg("--remote-debugging-address=127.0.0.1")
-        .arg(format!("--user-data-dir={}", profile.display()))
-        .arg("--no-first-run")
-        .arg("--no-default-browser-check")
-        .arg("--disable-background-networking")
-        .arg("--window-size=1280,800");
-    if let Some(user_agent) = user_agent {
-        cmd.arg(format!("--user-agent={user_agent}"));
-    }
-    if running_as_root() {
-        cmd.arg("--no-sandbox");
-    }
-    cmd.arg("about:blank")
+    cmd.args(build_args(profile, opts))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+    if let Some(x11) = &opts.x11 {
+        cmd.env("DISPLAY", &x11.display)
+            .env("XAUTHORITY", &x11.xauthority)
+            .env_remove("WAYLAND_DISPLAY");
+    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to launch {}: {e}", binary.display()))?;
@@ -303,6 +462,121 @@ mod tests {
             windowed_user_agent("Mozilla/5.0 Firefox/130.0", "Firefox/130"),
             None
         );
+    }
+
+    #[test]
+    fn args_always_hide_automation_and_add_the_rest_on_request() {
+        let profile = Path::new("/p");
+        let plain = build_args(profile, &LaunchOptions::default());
+        assert!(plain.contains(&"--disable-blink-features=AutomationControlled".into()));
+        assert!(plain.contains(&"--user-data-dir=/p".into()));
+        assert_eq!(plain.last().unwrap(), "about:blank");
+        assert!(!plain.iter().any(|a| a.to_string_lossy().contains("gpu")
+            || a.to_string_lossy().contains("angle")
+            || a.to_string_lossy().starts_with("--user-agent")
+            || a == "--no-sandbox"));
+
+        let full = build_args(
+            profile,
+            &LaunchOptions {
+                user_agent: Some("UA/1 (x y)".into()),
+                gpu: true,
+                no_sandbox: true,
+                ..Default::default()
+            },
+        );
+        assert!(full.contains(&"--disable-blink-features=AutomationControlled".into()));
+        for flag in GPU_FLAGS {
+            assert!(full.contains(&OsString::from(*flag)), "{flag}");
+        }
+        assert!(full.contains(&"--user-agent=UA/1 (x y)".into()));
+        assert!(full.contains(&"--no-sandbox".into()));
+        assert_eq!(full.last().unwrap(), "about:blank");
+        assert!(full.contains(&"--headless=new".into()));
+        assert!(!full.iter().any(|a| a == "--ozone-platform=x11"));
+    }
+
+    #[test]
+    fn headed_args_drop_headless_and_target_the_private_display() {
+        let headed = build_args(
+            Path::new("/p"),
+            &LaunchOptions {
+                headed: true,
+                x11: Some(X11Display {
+                    display: ":7".into(),
+                    xauthority: "/a".into(),
+                }),
+                ..Default::default()
+            },
+        );
+        assert!(!headed
+            .iter()
+            .any(|a| a.to_string_lossy().contains("headless")));
+        // Without the GPU a window still gets software WebGL.
+        assert!(headed.contains(&"--use-angle=swiftshader".into()));
+        assert!(headed.contains(&"--enable-unsafe-swiftshader".into()));
+        let headed_gpu = build_args(
+            Path::new("/p"),
+            &LaunchOptions {
+                headed: true,
+                gpu: true,
+                ..Default::default()
+            },
+        );
+        assert!(headed_gpu.contains(&"--ignore-gpu-blocklist".into()));
+        assert!(!headed_gpu.contains(&"--use-angle=swiftshader".into()));
+        for flag in HEADED_FLAGS.iter().chain(&[
+            "--ozone-platform=x11",
+            "--disable-blink-features=AutomationControlled",
+            "--window-size=1280,800",
+        ]) {
+            assert!(headed.contains(&OsString::from(*flag)), "{flag}");
+        }
+        assert_eq!(headed.last().unwrap(), "about:blank");
+        // A native window (macOS) names no X display.
+        let native = build_args(
+            Path::new("/p"),
+            &LaunchOptions {
+                headed: true,
+                ..Default::default()
+            },
+        );
+        assert!(!native.iter().any(|a| a == "--ozone-platform=x11"));
+        assert!(native.contains(&"--window-position=0,0".into()));
+    }
+
+    #[test]
+    fn render_node_detection_and_the_gpu_switch() {
+        let none = tmp("dri-none");
+        std::fs::write(none.join("card0"), "").unwrap();
+        assert!(!has_render_node(&none));
+        assert!(!has_render_node(&none.join("missing")));
+        let some = tmp("dri-some");
+        std::fs::write(some.join("renderD128"), "").unwrap();
+        assert!(has_render_node(&some));
+
+        let on = cfg!(target_os = "linux");
+        assert_eq!(gpu_wanted(None, &some), on);
+        assert_eq!(gpu_wanted(Some(&"auto".into()), &some), on);
+        assert!(!gpu_wanted(Some(&"0".into()), &some));
+        assert!(!gpu_wanted(None, &none));
+    }
+
+    #[test]
+    fn versions_are_read_from_cli_output_and_products() {
+        assert_eq!(
+            version_of("Google Chrome 149.0.7827.2 \n").as_deref(),
+            Some("149.0.7827.2")
+        );
+        assert_eq!(
+            version_of("Chromium 120.0.6099.109 snap").as_deref(),
+            Some("120.0.6099.109")
+        );
+        assert_eq!(
+            version_of("HeadlessChrome/149.0.7827.2").as_deref(),
+            Some("149.0.7827.2")
+        );
+        assert_eq!(version_of("Chrome"), None);
     }
 
     #[test]

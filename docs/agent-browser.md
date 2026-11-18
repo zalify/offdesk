@@ -1,6 +1,8 @@
 # Agent browser
 
-A headless Chromium that a node owns and an AI agent drives from the
+A Chromium that a node owns (a normal window on a private virtual display
+where Xvfb is installed, otherwise headless; see [Browser mode](#browser-mode))
+and an AI agent drives from the
 `offdesk browser` CLI: open a page, read it as text, fill and click, wait,
 take a screenshot. It runs on the machine the node runs on, so it sees that
 machine's network (localhost dev servers, LAN hosts) and keeps its logins.
@@ -56,7 +58,7 @@ backdrop. The terminals underneath stay mounted and keep their connections.
   reloads and ⌘L selects the address; elsewhere Alt+← / Alt+→, Ctrl+R and
   Ctrl+L. F5 reloads everywhere. These go to the toolbar, not the page; every
   other key still goes to the page (Option+arrows and Ctrl+L on a Mac included).
-- **Dialogs.** Headless Chromium paints no `alert`, `confirm`, `prompt` or "Leave
+- **Dialogs.** Chromium here paints no `alert`, `confirm`, `prompt` or "Leave
   site?" dialog, so the web UI shows them over the page, with the page's message
   and OK / Cancel (Leave / Stay). The device in control answers, with the
   buttons or Enter and Esc; a prompt comes prefilled and takes the keyboard.
@@ -482,8 +484,58 @@ it is driven like any other. It has the same 1280x800 viewport. When its page
 closes itself, the browser is destroyed. Chromium blocks popups that no click
 or key opened, as usual.
 
+## Browser mode
+
+Headless Chromium has no real window, which pages can tell, and bot detection such as Cloudflare Turnstile can loop on it, while
+the same browser with a window passes. `OFFDESK_BROWSER_MODE`, in the node's
+environment, picks how Chromium runs:
+
+| Value | Linux | macOS |
+| --- | --- | --- |
+| `auto` (default, or unset) | headed on a private Xvfb when `Xvfb` is on `PATH`, else headless | headless |
+| `headed` | headed on a private Xvfb; an error if Xvfb is missing or does not start | a normal window on your screen |
+| `headless` | headless | headless |
+
+Any other value is an error when a browser is opened. A node never opens
+windows on a person's own screen unless `headed` is set on a Mac.
+
+**Private Xvfb.** The node starts its own `Xvfb` (a 1920x1080 virtual screen,
+`-nolisten tcp`, on a free display number it learns through `-displayfd`) the
+first time a browser opens, and stops it when the last agent browser closes or
+the node shuts down. It never uses the node's `DISPLAY` or `WAYLAND_DISPLAY`
+(a window would appear on your desktop). Access is limited by a random
+`MIT-MAGIC-COOKIE-1` that the node writes to `<config dir>/agent-browser/xvfb.auth`
+(mode 0600; no `xauth` binary needed) and that only the node and its Chromium
+hold. A node that died leaves its Xvfb running (children survive it under
+`KillMode=process`); the next node kills it by the pid in `xvfb.pid`, after
+checking the process was started with that auth file. If Xvfb or Chromium dies,
+both restart on the next `open`.
+
+Install Xvfb with `dnf install xorg-x11-server-Xvfb` (Fedora) or `apt install
+xvfb` (Debian, Ubuntu). If it is installed but does not start within 10 seconds,
+`auto` logs a warning and uses headless; `headed` reports the error.
+
+**Windows.** Every agent browser gets a window of its own (`Target.createTarget`
+with `newWindow`), so its content is exactly 1280x800 and windows that overlap
+on the virtual screen keep rendering and streaming (Chromium is started with
+`--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`
+and `--disable-background-timer-throttling`). The `about:blank` page Chromium
+starts with is never closed and never listed, so a headed Chromium does not quit
+under the node when its last agent browser closes. `--hide-crash-restore-bubble`
+keeps a "Restore pages?" bubble away after an unclean stop.
+
+**WebGL.** A headed Chromium on Xvfb has no hardware GL (no DRI3). Measured on
+Linux with an AMD GPU, the [GPU flags](#looking-like-a-normal-browser) alone
+leave pages without a WebGL context there; with `--ignore-gpu-blocklist` it
+renders on Mesa's llvmpipe, and without a GPU the node adds
+`--use-angle=swiftshader --enable-unsafe-swiftshader`, which headless Chromium
+does by itself. Pages see a software renderer in `UNMASKED_RENDERER_WEBGL`,
+whereas headless mode can show the real GPU. Use `OFFDESK_BROWSER_MODE=headless`
+for sites that look at the GPU and not at the window.
+
 ## User agent
 
+(Only in headless mode: a Chromium with a window says `Chrome/` itself.)
 Headless Chromium calls itself `HeadlessChrome` in its user agent, and sites
 behind Cloudflare and the like treat that as a bot ("Verify you are human"
 before every page). The node therefore starts Chromium with the user agent the
@@ -494,6 +546,50 @@ user agent from Chromium, remembers it in `<config dir>/agent-browser/user-agent
 and relaunches once; later launches use it directly, and relaunch only when
 Chromium has been updated since. Some sites still ask a person to tick their
 box, as they do for a normal browser on a new device: use `handoff`.
+
+## Looking like a normal browser
+
+Driving Chromium over DevTools sets `navigator.webdriver` to `true`, which bot
+detection reads as automation. The node always starts it with
+`--disable-blink-features=AutomationControlled`, so the property is `false`, as
+in a person's browser. No script is injected and no prototype is patched:
+only launch flags and DevTools emulation are used.
+
+Every tab also reports a 1920x1080 screen (`screen.width/height`,
+`availWidth/availHeight`) around its 1280x800 viewport; headless Chromium would
+otherwise say 800x600, smaller than the page itself.
+
+**GPU.** Headless Chromium renders WebGL in software (SwiftShader), which shows
+in `UNMASKED_RENDERER_WEBGL`. On Linux, when a DRM render node exists
+(`/dev/dri/renderD*`), the node adds `--enable-gpu --use-gl=angle
+--use-angle=gl-egl` so WebGL reports the real GPU. Some drivers then give no
+WebGL context at all, which is worse than software, so after launching the node
+asks a throwaway tab for a WebGL context. If there is none it relaunches without
+the GPU flags and remembers the Chrome version in
+`<config dir>/agent-browser/gpu-broken`; a Chrome update tries the GPU again.
+Set `OFFDESK_BROWSER_GPU=0` in the node's environment to never try it; any
+other value, or none, is auto. macOS and other platforms are unchanged. A
+headed Chromium on Xvfb is a special case, see [Browser mode](#browser-mode).
+
+**Typing and clicking.** Bot detection also watches behaviour, so the agent's
+input is not instant. `fill` (and the field filling of `login`) selects the
+field, then types printable ASCII one key at a time: trusted `keyDown`/`keyUp`
+with `key`, `code`, `text` and Shift for capitals and shifted symbols (US
+layout), 35-120 ms between keys, a 150-350 ms pause now and then, and a 20-60 ms
+key hold. Anything with no key of its own (CJK, emoji, accents, `\n`, `\t`) is
+inserted as text with `Input.insertText`, so a newline never presses Enter. A
+long text is sped up to fit a 6 s budget; past about 1500 characters the first
+40 are typed and the rest inserted in four chunks, so a 2000-character fill
+takes about 3-4 s. Text is never logged. Every agent click (`click`, `click
+--text`, the click that opens a file chooser for `upload`) aims at a random
+point within 25% of the centre of the element's box, moves the mouse there from
+where the last click left it (a random spot the first time) in 10-25 `mouseMoved`
+events along a gently curved path, pauses 40-120 ms, presses, holds 50-130 ms
+and releases; a click takes about half a second. A person's input from the web
+UI is forwarded as it comes and is not touched. Set
+`OFFDESK_BROWSER_HUMAN_INPUT=0` in the node's environment to get the old
+instant behaviour back (one `insertText`, a direct click at the exact centre),
+which is handy when debugging; any other value, or none, is on.
 
 ## Click by text
 
@@ -506,7 +602,7 @@ for example `clicked div "账密登录"`). Give exactly one of a ref and `--text
 
 ## Uploading files
 
-A headless browser has no file dialog, so `<input type=file>` cannot be driven
+The browser has no file dialog the agent can use, so `<input type=file>` cannot be driven
 by clicking. `upload <browser> [<ref>] --file PATH [--file PATH ...]` (MCP:
 `browser_upload` with `paths`) sends the local files to the node and sets them
 on the page's file input. Which input it uses depends on the ref:
@@ -573,8 +669,9 @@ add the suffix to `MULTI_PART_SUFFIXES`.
 **What `login` does.** In every frame it looks for a visible password field
 and the username field before it (same form, `autocomplete=username|email`
 first); it prefers a frame on an allowed domain. Each field is focused,
-cleared and filled with `Input.insertText`, which fires the same trusted
-`beforeinput`/`input` events as typing (React-style controlled inputs keep the
+cleared and typed into like `fill` does (see
+[Looking like a normal browser](#looking-like-a-normal-browser)): trusted key
+and `beforeinput`/`input` events (React-style controlled inputs keep the
 value), then a `change` event. If the page shows only a username field
 (two-step logins), only the username is filled and the reply says so: wait
 for the next step and call `login` again. `--submit` presses Enter in the last
@@ -605,9 +702,39 @@ The node looks for a browser in this order:
    `<config dir>/agent-browser/chrome/` (about 150 MB, so the first `open`
    can take minutes) and reuses it afterwards.
 
+Prefer a branded Google Chrome (`google-chrome-stable`) over the
+auto-downloaded Chrome for Testing: Chrome for Testing reports only the
+`Chromium` brand in `navigator.userAgentData` and `Sec-CH-UA`, which sites can
+tell from a real Chrome. Discovery already picks `google-chrome` from `PATH`
+before anything else, so installing it is enough. Caution: if the installed
+Chrome is an older major version than the Chrome for Testing that last used the
+profile, Chrome treats the profile as a downgrade and logins may be lost. Back
+up `<config dir>/agent-browser/profile` first.
+
 Chromium runs with its sandbox, except when the node runs as root or
 `OFFDESK_CHROMIUM_NO_SANDBOX` is set, where it is started with `--no-sandbox`
 (containers commonly need this). Set the variable in the node's environment.
+
+## Logins and the profile
+
+The agent browser's profile is its own: it does not share cookies or logins
+with the browsers a person uses, on this machine or elsewhere. Log in once per
+site by taking over (or with `offdesk browser login`), and tick "remember this
+device" where a site offers it. Every agent on the machine can use those
+logins, so prefer accounts made for the agent, or ones with few permissions,
+and keep banking and main accounts out of it; where a site offers an API
+token, that is usually the better path.
+
+Sites trust a device that stays the same. Pick the browser and the
+[browser mode](#browser-mode) once, before logging in to many sites, and then
+leave them alone: switching between headed and headless, between Chrome for
+Testing and Google Chrome, or wiping the profile can make a site treat the
+browser as a new device and ask to verify again. Cookies survive a switch
+between modes and between Chrome for Testing and Google Chrome of the same
+version, but site storage (`localStorage`) was seen to be lost once on the
+first switch from Chrome for Testing to Google Chrome, so back up
+`<config dir>/agent-browser/profile` (with the browser closed) before
+switching.
 
 ## Limits
 
