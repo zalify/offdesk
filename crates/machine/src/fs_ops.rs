@@ -780,7 +780,7 @@ mod tests {
         // An upload with `replace` trashes what appeared meanwhile.
         use base64::Engine;
         let ups = crate::fs_upload::FsUploads::default();
-        ups.begin("u", &s(&dest), "up.txt", 3, OnConflict::Replace)
+        ups.begin("u", &s(&dest), "up.txt", 3, OnConflict::Replace, None)
             .unwrap();
         ups.chunk(
             "u",

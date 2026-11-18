@@ -77,7 +77,13 @@ Upload into a directory (no terminal needed), chunked like the attach upload
 - `POST /api/machines/{id}/fs/upload/begin` `{dest_dir, filename, size, on_conflict}` → `{"upload_id"}`
   (hub generates the id; node validates the name, checks free space and, for
   `error`, that the name is free; creates `dest_dir/.<filename>.offdesk-part-<id>`)
-- `POST /api/machines/{id}/fs/upload/chunk` `{upload_id, index, data}` (`data` = base64 of ≤ `UPLOAD_CHUNK_MAX_BYTES`, in order) → `{"received"}`
+- Parallel negotiation: begin may also carry `chunk_bytes` (≤ `UPLOAD_CHUNK_MAX_BYTES`)
+  and then answers `{"upload_id","parallel"}`. `parallel: true` means the node
+  takes positional chunks (index `i` at offset `i * chunk_bytes`, every chunk
+  exactly `chunk_bytes` except the last, any order, several in flight, duplicates
+  idempotent; `end` fails unless all chunks arrived). Old nodes ignore the field
+  and old hubs never send it, so `parallel` is false and chunks stay serial.
+- `POST /api/machines/{id}/fs/upload/chunk` `{upload_id, index, data}` (`data` = base64 of ≤ `UPLOAD_CHUNK_MAX_BYTES`, in order unless `parallel`) → `{"received"}`
 - `POST /api/machines/{id}/fs/upload/end` `{upload_id}` → `{"path","size"}` (node renames the part file into place, applying `on_conflict` here: `keep_both` picks the free name now, `replace` trashes the existing file now, `error` re-checks)
 - `POST /api/machines/{id}/fs/upload/abort` `{upload_id}` → 204 (part file removed)
 - The node drops uploads idle for > 10 minutes (part file removed).

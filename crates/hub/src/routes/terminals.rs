@@ -1412,6 +1412,9 @@ struct UploadBeginBody {
     size: u64,
     #[serde(default)]
     on_conflict: offdesk_protocol::OnConflict,
+    /// Offer positional (parallel-safe) chunks of exactly this size.
+    #[serde(default)]
+    chunk_bytes: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -1443,10 +1446,12 @@ async fn fs_upload_begin(
         filename: body.filename,
         size: body.size,
         on_conflict: body.on_conflict,
+        chunk_bytes: body.chunk_bytes,
     };
     match fs_transfer(&state, &auth_user, &machine_id, msg, FS_STEP_TIMEOUT).await {
-        Ok(FsTransferReply::Ack { .. }) => {
-            Json(serde_json::json!({ "upload_id": upload_id })).into_response()
+        Ok(FsTransferReply::Ack { parallel, .. }) => {
+            Json(serde_json::json!({ "upload_id": upload_id, "parallel": parallel }))
+                .into_response()
         }
         Ok(_) => unexpected_reply(),
         Err(response) => response,
@@ -1467,7 +1472,7 @@ async fn fs_upload_chunk(
         data: body.data,
     };
     match fs_transfer(&state, &auth_user, &machine_id, msg, FS_STEP_TIMEOUT).await {
-        Ok(FsTransferReply::Ack { received }) => {
+        Ok(FsTransferReply::Ack { received, .. }) => {
             Json(serde_json::json!({ "received": received })).into_response()
         }
         Ok(_) => unexpected_reply(),
@@ -2153,10 +2158,12 @@ mod tests {
                     filename,
                     size,
                     on_conflict,
+                    chunk_bytes,
                 }) = commands.recv().await
                 else {
                     panic!("expected FsUploadBegin");
                 };
+                assert_eq!(chunk_bytes, None);
                 assert_eq!(
                     (dest_dir.as_str(), filename.as_str(), size),
                     ("/w", "a.bin", 3_000_000)
@@ -2165,6 +2172,7 @@ mod tests {
                 let reply = MachineToHub::FsUploadAck {
                     request_id,
                     received: 0,
+                    parallel: false,
                 };
                 manager.handle_machine_message("machine-a", reply).await;
 
@@ -2183,6 +2191,7 @@ mod tests {
                 let reply = MachineToHub::FsUploadAck {
                     request_id,
                     received: 1_000_000,
+                    parallel: false,
                 };
                 manager.handle_machine_message("machine-a", reply).await;
 
@@ -2210,6 +2219,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let upload_id = body["upload_id"].as_str().unwrap().to_string();
         assert!(!upload_id.is_empty());
+        assert_eq!(body["parallel"], false);
 
         let chunk = serde_json::json!({
             "upload_id": upload_id, "index": 0, "data": "A".repeat(2_800_000)
@@ -2244,6 +2254,77 @@ mod tests {
         )
         .await;
         assert_eq!(status, StatusCode::NO_CONTENT);
+        machine_side.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fs_upload_begin_forwards_chunk_bytes_and_returns_parallel() {
+        let state = state_with_terminals(Vec::new()).await;
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine("machine-a"),
+                Some("user-a".to_string()),
+                vec![offdesk_protocol::FS_OPS_CAPABILITY.to_string()],
+            )
+            .await;
+        let manager = state.manager.clone();
+        let machine_side = tokio::spawn(async move {
+            // First begin: the node accepts the offer.
+            let Some(HubToMachine::FsUploadBegin {
+                request_id,
+                chunk_bytes,
+                ..
+            }) = commands.recv().await
+            else {
+                panic!("expected FsUploadBegin");
+            };
+            assert_eq!(chunk_bytes, Some(1_048_576));
+            let reply = MachineToHub::FsUploadAck {
+                request_id,
+                received: 0,
+                parallel: true,
+            };
+            manager.handle_machine_message("machine-a", reply).await;
+            // Second begin: nothing offered, serial ack.
+            let Some(HubToMachine::FsUploadBegin {
+                request_id,
+                chunk_bytes,
+                ..
+            }) = commands.recv().await
+            else {
+                panic!("expected FsUploadBegin");
+            };
+            assert_eq!(chunk_bytes, None);
+            let reply = MachineToHub::FsUploadAck {
+                request_id,
+                received: 0,
+                parallel: false,
+            };
+            manager.handle_machine_message("machine-a", reply).await;
+        });
+        let uri = "/api/machines/machine-a/fs/upload/begin";
+        let (status, body) = fs_request(
+            &state,
+            Method::POST,
+            uri,
+            Some(serde_json::json!({
+                "dest_dir": "/w", "filename": "a", "size": 5, "chunk_bytes": 1_048_576
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["parallel"], true);
+        assert!(body["upload_id"].as_str().is_some_and(|s| !s.is_empty()));
+        let (status, body) = fs_request(
+            &state,
+            Method::POST,
+            uri,
+            Some(serde_json::json!({ "dest_dir": "/w", "filename": "a", "size": 5 })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["parallel"], false);
         machine_side.await.unwrap();
     }
 
