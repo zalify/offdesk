@@ -46,11 +46,11 @@ jobs:
 
       # site/ is its own pnpm root (site/pnpm-workspace.yaml) so the app
       # workspace never has to install Astro.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           package_json_file: site/package.json
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -65,14 +65,14 @@ jobs:
         run: pnpm build
 
       - name: Deploy to Cloudflare Workers
-        uses: cloudflare/wrangler-action@v3
+        uses: cloudflare/wrangler-action@v4
         with:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           workingDirectory: site
-          # wrangler-action v3 installs 3.90.0 by default, which parses
-          # [assets] without complaint and then ignores it — it uploads a
-          # Worker with no static files and reports success. Static assets
-          # need 4.x.
+          # Static assets need Wrangler 4.x: 3.x parses [assets] without
+          # complaint and then ignores it, uploading a Worker with no static
+          # files and reporting success. Pinned so the action's default can't
+          # drift back.
           wranglerVersion: "4"
           command: deploy

@@ -49,7 +49,7 @@ jobs:
       OFFDESK_UI_CHANNEL: ${{ inputs.tag && 'stable' || 'rc' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
 
@@ -62,12 +62,12 @@ jobs:
           fi
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 10.23.0
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -180,7 +180,7 @@ jobs:
 
       - name: Keep the installers of a manual build
         if: ${{ !inputs.tag }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.platform }}
           if-no-files-found: warn
