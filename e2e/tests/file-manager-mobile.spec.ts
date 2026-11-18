@@ -199,3 +199,95 @@ test.describe("file manager on the phone", () => {
     await expect(page.getByTestId("file-browser-preview")).toHaveCount(0);
   });
 });
+
+// A folder taller than the screen: actions refresh it in place, no jump.
+test.describe("file manager on the phone keeps its place after actions", () => {
+  const MANY = 'for i in $(seq -w 1 200); do printf x > "f$i.txt"; done';
+  const listBox = (page: Page) => page.getByTestId("file-browser-list");
+  const scrollTopOf = (page: Page) => listBox(page).evaluate((el) => el.scrollTop);
+
+  async function watchLoading(page: Page) {
+    await page.evaluate(() => {
+      const w = window as unknown as { __sawLoading?: boolean };
+      w.__sawLoading = false;
+      const sel = '[data-testid="file-browser-loading"]';
+      new MutationObserver((records) => {
+        for (const r of records) {
+          for (const n of Array.from(r.addedNodes)) {
+            if (n instanceof Element && (n.matches(sel) || n.querySelector(sel))) w.__sawLoading = true;
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+  }
+  const sawLoading = (page: Page) =>
+    page.evaluate(() => (window as unknown as { __sawLoading?: boolean }).__sawLoading === true);
+
+  async function scrollDown(page: Page): Promise<number> {
+    await expect(row(page, "f200.txt")).toBeAttached();
+    await listBox(page).evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    const top = await scrollTopOf(page);
+    expect(top, "list is taller than the screen").toBeGreaterThan(300);
+    return top;
+  }
+
+  test("new file keeps the scroll position", async ({ page }) => {
+    await openPhoneBrowserIn(page, "/tmp/e2e-fmm-smooth-1", MANY);
+    const before = await scrollDown(page);
+    await watchLoading(page);
+    await page.getByTestId("file-browser-add").tap();
+    await page.getByTestId("file-add-new-file").tap();
+    const input = page.getByTestId("file-browser-rename-input");
+    await expect(input).toBeVisible();
+    await input.fill("zz-new.txt");
+    await input.press("Enter");
+    await expect(row(page, "zz-new.txt")).toBeVisible();
+    expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+    expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+  });
+
+  test("new folder does not flash the loading placeholder", async ({ page }) => {
+    await openPhoneBrowserIn(page, "/tmp/e2e-fmm-smooth-2", MANY);
+    await scrollDown(page);
+    await watchLoading(page);
+    await page.getByTestId("file-browser-add").tap();
+    await page.getByTestId("file-add-new-folder").tap();
+    const input = page.getByTestId("file-browser-rename-input");
+    await expect(input).toBeVisible();
+    await input.fill("Zeta");
+    await input.press("Enter");
+    await expect(row(page, "Zeta")).toHaveAttribute("data-kind", "dir");
+    expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+  });
+
+  test("rename keeps the scroll position", async ({ page }) => {
+    await openPhoneBrowserIn(page, "/tmp/e2e-fmm-smooth-3", MANY);
+    await scrollDown(page);
+    await longPress(page, "f197.txt");
+    const before = await scrollTopOf(page);
+    await watchLoading(page);
+    await page.getByTestId("file-mobile-action-rename").tap();
+    const input = page.getByTestId("file-browser-rename-input");
+    await expect(input).toBeVisible();
+    await input.fill("g197.txt");
+    await input.press("Enter");
+    await expect(row(page, "g197.txt")).toBeVisible();
+    expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+    expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+  });
+
+  test("trash keeps the scroll position", async ({ page }) => {
+    await openPhoneBrowserIn(page, "/tmp/e2e-fmm-smooth-4", MANY);
+    await scrollDown(page);
+    await longPress(page, "f197.txt");
+    const before = await scrollTopOf(page);
+    await watchLoading(page);
+    await page.getByTestId("file-mobile-action-trash").tap();
+    await expect(row(page, "f197.txt")).toHaveCount(0);
+    await expect(page.getByTestId("file-browser-select-bar")).toHaveCount(0);
+    expect(await scrollTopOf(page)).toBeGreaterThan(before - 200);
+    expect(await sawLoading(page), "list unmounted for the loading placeholder").toBe(false);
+  });
+});

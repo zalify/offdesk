@@ -4,6 +4,7 @@ import type { DirEntry } from "@offdesk/shared";
 import { listDirectory } from "@/lib/api";
 import { FilePreview } from "./FilePreview.web";
 import {
+  classifyListError,
   describeListError,
   filterEntries,
   isTooLarge,
@@ -26,6 +27,7 @@ import {
   pinnedFolders,
   pruneSelection,
   selectAll,
+  selectionAfterRemoval,
   selectOne,
   selectRange,
   setViewPrefs,
@@ -38,6 +40,7 @@ import type { Selection, SortKey, ViewPrefs } from "@/lib/fileManager";
 import { gridMoveDelta } from "@/lib/fileGrid";
 import type { ArrowKey } from "@/lib/fileGrid";
 import { colors } from "@/lib/colors";
+import { showNotice } from "@/lib/workspaceToast";
 import { FileBrowserSidebar } from "./FileBrowserSidebar.web";
 import { FileBrowserToolbar, FileFilterControls } from "./FileBrowserToolbar.web";
 import { selectionOf, setFileClipboard } from "@/lib/fileActions";
@@ -71,9 +74,12 @@ import { Centered, SPIN } from "./FileBrowserShared.web";
 import type { ClickModifiers, RowInteraction } from "./FileRowEvents";
 
 type Listing =
-  | { status: "loading" }
+  // `slow` flips on after SLOW_LOAD_MS so quick loads show no placeholder.
+  | { status: "loading"; slow: boolean }
   | { status: "ready"; entries: DirEntry[] }
   | { status: "error"; message: string };
+
+const SLOW_LOAD_MS = 150;
 
 const isMod = (event: ReactKeyboardEvent) => event.metaKey || event.ctrlKey;
 const ARROWS = new Set<string>(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
@@ -122,7 +128,7 @@ export function FileBrowser({
   const [history, setHistory] = useState(() => createHistory(startPath));
   const [showHidden, setShowHidden] = useState(false);
   const [filter, setFilter] = useState("");
-  const [listing, setListing] = useState<Listing>({ status: "loading" });
+  const [listing, setListing] = useState<Listing>({ status: "loading", slow: false });
   const [selection, setSelection] = useState<Selection>(emptySelection);
   const [prefs, setPrefs] = useState<ViewPrefs>(() => viewPrefs(machineId));
   const [pinned, setPinned] = useState<string[]>(() => pinnedFolders(machineId));
@@ -172,23 +178,47 @@ export function FileBrowser({
     setHistory((h) => historyPush(h, startPath));
   }, [startPath, resetView]);
 
-  // Load the listing. A newer navigation or toggle supersedes an older
-  // request: its result is dropped when the effect has been cleaned up.
+  // Load the listing. Navigation (machine, folder, hidden files) shows a
+  // placeholder only if the load is slow; a reload of the same folder swaps the
+  // entries in place, so the list keeps its scroll position. A newer request
+  // supersedes an older one: its result is dropped when the effect is cleaned up.
+  const shownKey = useRef<string | null>(null);
+  // Set on navigation; the selection effect starts on the first row once.
+  const navigated = useRef(true);
   useEffect(() => {
     let live = true;
-    setListing({ status: "loading" });
+    const key = `${machineId}\n${path}\n${showHidden}`;
+    const inPlace = shownKey.current === key;
+    let slowTimer: ReturnType<typeof setTimeout> | undefined;
+    if (!inPlace) {
+      shownKey.current = null;
+      navigated.current = true;
+      setListing({ status: "loading", slow: false });
+      slowTimer = setTimeout(() => {
+        if (live) setListing((l) => (l.status === "loading" ? { status: "loading", slow: true } : l));
+      }, SLOW_LOAD_MS);
+    }
     listDirectory(machineId, path, { showHidden })
       .then((entries) => {
         if (!live) return;
+        clearTimeout(slowTimer);
+        shownKey.current = key;
         setListing({ status: "ready", entries });
         rememberDirectory(machineId, path);
       })
       .catch((err) => {
         if (!live) return;
-        setListing({ status: "error", message: describeListError(err, path) });
+        clearTimeout(slowTimer);
+        const message = describeListError(err, path);
+        // A transient failure keeps the list already shown; if the folder itself
+        // is gone or closed, that list is stale and the error replaces it.
+        const gone = ["not_found", "permission_denied"].includes(classifyListError(err));
+        if (inPlace && !gone) showNotice(message, { tone: "error", timeoutMs: 6000 });
+        else setListing({ status: "error", message });
       });
     return () => {
       live = false;
+      clearTimeout(slowTimer);
     };
   }, [machineId, path, showHidden, reloadTick]);
 
@@ -201,13 +231,19 @@ export function FileBrowser({
   );
   const order = useMemo(() => visible.map((e) => e.path), [visible]);
 
-  // Keep the selection to listed items; a new folder or filter starts on the
-  // first row (Enter then opens it).
+  // Keep the selection to listed items. A new folder or filter starts on the
+  // first row (Enter then opens it); when rows vanish in place (trash, move
+  // out) the row now at their index is selected instead.
   const lastFilter = useRef(filter);
+  const prevOrder = useRef<string[]>([]);
   useEffect(() => {
     const filterChanged = lastFilter.current !== filter;
     lastFilter.current = filter;
     if (listing.status !== "ready") return;
+    const previous = prevOrder.current;
+    prevOrder.current = order;
+    const fromTop = navigated.current || filterChanged;
+    navigated.current = false;
     if (touch) {
       setSelection((current) => (current.selected.size === 0 ? current : pruneSelection(current, order)));
       return;
@@ -215,8 +251,10 @@ export function FileBrowser({
     setSelection((current) => {
       const pruned = pruneSelection(current, order);
       if (order.length === 0) return pruned;
-      if (filterChanged || pruned.selected.size === 0) return selectOne(pruned, order[0]);
-      return pruned;
+      if (fromTop) return selectOne(pruned, order[0]);
+      if (pruned.selected.size > 0) return pruned;
+      const next = selectionAfterRemoval(previous, order, current.selected);
+      return next === null ? pruned : selectOne(pruned, next);
     });
   }, [order, filter, listing.status, touch]);
 
@@ -345,6 +383,7 @@ export function FileBrowser({
   const actions = useFileActions({
     machineId,
     dir: path,
+    homeDir,
     canEdit,
     dirtyPath: dirty ? previewPath : null,
     listedNames,
@@ -810,7 +849,7 @@ export function FileBrowser({
               }}
               style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain" }}
             >
-              {listing.status === "loading" && (
+              {listing.status === "loading" && listing.slow && (
                 <Centered testId="file-browser-loading">
                   <span aria-hidden style={{ display: "inline-block", ...SPIN }}>↻</span> reading…
                 </Centered>
