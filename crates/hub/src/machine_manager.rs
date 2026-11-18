@@ -145,8 +145,9 @@ pub enum FsOpFailure {
 /// A machine's successful answer to an upload, read_range or zip request.
 #[derive(Debug)]
 pub enum FsTransferReply {
-    /// Upload begun (0) or chunk stored: bytes on disk so far.
-    Ack { received: u64 },
+    /// Upload begun (0) or chunk stored: bytes on disk so far. `parallel`
+    /// is true on a begin the node accepted as positional.
+    Ack { received: u64, parallel: bool },
     Done { path: String, size: u64 },
     Range { size: u64, data_base64: String, eof: bool },
     Zip { path: String, size: u64, name: String },
@@ -2671,9 +2672,10 @@ impl MachineManager {
             MachineToHub::FsUploadAck {
                 request_id,
                 received,
+                parallel,
             } => {
-                self.resolve_fs_transfer(&request_id, FsTransferReply::Ack { received })
-                    .await;
+                let reply = FsTransferReply::Ack { received, parallel };
+                self.resolve_fs_transfer(&request_id, reply).await;
             }
             MachineToHub::FsUploadDone {
                 request_id,

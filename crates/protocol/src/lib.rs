@@ -1757,8 +1757,16 @@ pub enum HubToMachine {
         size: u64,
         #[serde(default)]
         on_conflict: OnConflict,
+        /// Offer positional chunks: every chunk but the last is exactly this
+        /// many bytes and chunk `i` lives at offset `i * chunk_bytes`, so
+        /// chunks may arrive in any order and concurrently. A node that
+        /// accepts says so with `FsUploadAck { parallel: true }`; older nodes
+        /// ignore the field and keep the in-order contract.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chunk_bytes: Option<u32>,
     },
-    /// Next chunk (base64, at most `UPLOAD_CHUNK_MAX_BYTES` decoded), in order.
+    /// Next chunk (base64, at most `UPLOAD_CHUNK_MAX_BYTES` decoded). In
+    /// order, unless the begin was acked with `parallel: true`.
     /// Answered by `FsUploadAck` or `FsOpError`.
     #[serde(rename = "fs_upload_chunk")]
     FsUploadChunk {
@@ -2063,8 +2071,15 @@ pub enum MachineToHub {
         paths: Vec<String>,
     },
     /// Upload begun (`received` 0) or a chunk stored (bytes on disk so far).
+    /// `parallel` is set only on the begin ack, when the node accepted the
+    /// offered `chunk_bytes` (positional, out-of-order chunks).
     #[serde(rename = "fs_upload_ack")]
-    FsUploadAck { request_id: String, received: u64 },
+    FsUploadAck {
+        request_id: String,
+        received: u64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        parallel: bool,
+    },
     /// Upload finished; `path` is where the file ended up.
     #[serde(rename = "fs_upload_done")]
     FsUploadDone {
@@ -3290,6 +3305,53 @@ mod tests {
     }
 
     #[test]
+    fn fs_upload_parallel_negotiation_is_backward_compatible() {
+        use super::{MachineToHub, OnConflict};
+        let begin = HubToMachine::FsUploadBegin {
+            request_id: "r".into(),
+            upload_id: "u".into(),
+            dest_dir: "/d".into(),
+            filename: "a".into(),
+            size: 9,
+            on_conflict: OnConflict::Error,
+            chunk_bytes: Some(4096),
+        };
+        let json = serde_json::to_string(&begin).unwrap();
+        assert!(json.contains(r#""chunk_bytes":4096"#));
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(&json).unwrap(),
+            HubToMachine::FsUploadBegin { chunk_bytes: Some(4096), .. }
+        ));
+        // An old hub never sends it.
+        let old = r#"{"type":"fs_upload_begin","request_id":"r","upload_id":"u","dest_dir":"/d","filename":"a","size":1}"#;
+        assert!(matches!(
+            serde_json::from_str::<HubToMachine>(old).unwrap(),
+            HubToMachine::FsUploadBegin { chunk_bytes: None, .. }
+        ));
+        // An old node's ack has no `parallel`; a serial ack does not emit it.
+        let old_ack = r#"{"type":"fs_upload_ack","request_id":"r","received":0}"#;
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(old_ack).unwrap(),
+            MachineToHub::FsUploadAck { parallel: false, .. }
+        ));
+        let serial = MachineToHub::FsUploadAck {
+            request_id: "r".into(),
+            received: 0,
+            parallel: false,
+        };
+        assert_eq!(serde_json::to_string(&serial).unwrap(), old_ack);
+        let ack = r#"{"type":"fs_upload_ack","request_id":"r","received":0,"parallel":true}"#;
+        assert!(matches!(
+            serde_json::from_str::<MachineToHub>(ack).unwrap(),
+            MachineToHub::FsUploadAck { parallel: true, .. }
+        ));
+        // Unknown fields are ignored (no deny_unknown_fields): an old node
+        // deserializes a begin carrying `chunk_bytes` as a serial begin.
+        let with_unknown = r#"{"type":"fs_upload_begin","request_id":"r","upload_id":"u","dest_dir":"/d","filename":"a","size":1,"future_field":1}"#;
+        assert!(serde_json::from_str::<HubToMachine>(with_unknown).is_ok());
+    }
+
+    #[test]
     fn fs_transfer_messages_round_trip() {
         use super::{MachineToHub, OnConflict};
         let begin = HubToMachine::FsUploadBegin {
@@ -3299,9 +3361,12 @@ mod tests {
             filename: "a.txt".into(),
             size: 5,
             on_conflict: OnConflict::Replace,
+            chunk_bytes: None,
         };
         let json = serde_json::to_string(&begin).unwrap();
         assert!(json.contains(r#""type":"fs_upload_begin""#));
+        // Absent when not offered, so older nodes see the old shape.
+        assert!(!json.contains("chunk_bytes"));
         assert!(json.contains(r#""on_conflict":"replace""#));
         assert!(matches!(
             serde_json::from_str::<HubToMachine>(&json).unwrap(),

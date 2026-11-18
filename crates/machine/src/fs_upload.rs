@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -25,29 +25,53 @@ const FREE_SPACE_MARGIN: u64 = 16 * 1024 * 1024;
 
 /// Longest file name most filesystems accept.
 const NAME_MAX: usize = 255;
+/// Most chunks a positional upload may have; bounds the per-chunk
+/// bookkeeping (2 TB at the 2 MiB chunks the app sends).
+const MAX_POSITIONAL_CHUNKS: u64 = 1 << 20;
+
+/// How the chunks of an upload are laid out.
+enum Mode {
+    /// Appended in order; one writer at a time (the upload lock is held
+    /// across the write).
+    Serial { next_index: u32 },
+    /// Chunk `i` lives at `i * chunk_bytes`; any order, any concurrency.
+    Positional {
+        chunk_bytes: u32,
+        /// Which chunks are on disk.
+        got: Vec<bool>,
+    },
+}
 
 struct Upload {
     dest_dir: PathBuf,
     filename: String,
     part: PathBuf,
-    file: std::fs::File,
+    /// Shared so positional chunks can write without holding the upload lock.
+    file: Arc<std::fs::File>,
     received: u64,
-    next_index: u32,
+    mode: Mode,
     size: u64,
     on_conflict: OnConflict,
     last_activity: Instant,
 }
 
 impl Upload {
-    fn discard(self) {
-        drop(self.file);
+    fn discard(&self) {
         let _ = std::fs::remove_file(&self.part);
     }
 }
 
+/// Lock order: the table lock is never taken while holding an upload lock
+/// (the reaper uses `try_lock` on uploads for the same reason).
+type Shared = Arc<Mutex<Upload>>;
+
+fn lock_upload(upload: &Shared) -> std::sync::MutexGuard<'_, Upload> {
+    upload.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[derive(Default)]
 pub struct FsUploads {
-    uploads: Mutex<HashMap<String, Upload>>,
+    uploads: Mutex<HashMap<String, Shared>>,
 }
 
 /// The node-wide upload table.
@@ -71,10 +95,13 @@ pub fn ensure_reaper() {
 }
 
 impl FsUploads {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Upload>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<String, Shared>> {
         self.uploads.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Start an upload. `chunk_bytes` offers positional chunks; returns true
+    /// when accepted (`0 < n <= UPLOAD_CHUNK_MAX_BYTES`), false for a serial
+    /// upload (no offer, or an unusable size, which is not an error).
     pub fn begin(
         &self,
         upload_id: &str,
@@ -82,7 +109,8 @@ impl FsUploads {
         filename: &str,
         size: u64,
         on_conflict: OnConflict,
-    ) -> Result<()> {
+        chunk_bytes: Option<u32>,
+    ) -> Result<bool> {
         let dest_dir = absolute(dest_dir)?;
         let meta = std::fs::metadata(&dest_dir).map_err(|e| FsOpFail::from_io(&e, &dest_dir))?;
         if !meta.is_dir() {
@@ -117,47 +145,85 @@ impl FsUploads {
             .create_new(true)
             .open(&part)
             .map_err(|e| FsOpFail::from_io(&e, &part))?;
+        // A floor on the chunk size bounds the per-chunk bookkeeping
+        // (`got` has one entry per chunk).
+        let positional = chunk_bytes
+            .filter(|&n| {
+                n > 0
+                    && n as usize <= UPLOAD_CHUNK_MAX_BYTES
+                    && size.div_ceil(n as u64) <= MAX_POSITIONAL_CHUNKS
+            })
+            .map(|n| Mode::Positional {
+                chunk_bytes: n,
+                got: vec![false; size.div_ceil(n as u64) as usize],
+            });
+        let parallel = positional.is_some();
         let previous = self.lock().insert(
             upload_id.to_string(),
-            Upload {
+            Arc::new(Mutex::new(Upload {
                 dest_dir,
                 filename: filename.to_string(),
                 part,
-                file,
+                file: Arc::new(file),
                 received: 0,
-                next_index: 0,
+                mode: positional.unwrap_or(Mode::Serial { next_index: 0 }),
                 size,
                 on_conflict,
                 last_activity: Instant::now(),
-            },
+            })),
         );
         if let Some(previous) = previous {
-            previous.discard();
+            lock_upload(&previous).discard();
         }
-        Ok(())
+        Ok(parallel)
     }
 
-    /// Append one chunk; returns the bytes on disk so far. Any failure other
-    /// than an unknown upload discards the upload.
+    /// Store one chunk; returns the bytes on disk so far.
+    ///
+    /// Serial uploads: any failure other than an unknown upload discards the
+    /// upload. Positional uploads: a bad index, length or base64 is a plain
+    /// `invalid`/`too_large` error and the upload survives (the client can
+    /// retry that chunk, and other chunks are in flight); only an I/O error
+    /// discards it. A duplicate chunk is acked without being counted twice.
     pub fn chunk(&self, upload_id: &str, index: u32, data: &str) -> Result<u64> {
-        let mut uploads = self.lock();
-        let Some(upload) = uploads.get_mut(upload_id) else {
+        let Some(shared) = self.lock().get(upload_id).cloned() else {
             return Err(no_such_upload());
         };
-        let result = write_chunk(upload, index, data);
-        if result.is_err() {
-            if let Some(upload) = uploads.remove(upload_id) {
-                upload.discard();
+        let serial = matches!(lock_upload(&shared).mode, Mode::Serial { .. });
+        if serial {
+            let result = write_chunk(&mut lock_upload(&shared), index, data);
+            if result.is_err() {
+                self.discard_if_current(upload_id, &shared);
             }
+            return result;
+        }
+        let (result, discard) = write_positional(&shared, index, data);
+        if discard {
+            self.discard_if_current(upload_id, &shared);
         }
         result
     }
 
+    /// Remove and discard `shared` unless the id was reused by a newer upload.
+    fn discard_if_current(&self, upload_id: &str, shared: &Shared) {
+        let removed = {
+            let mut uploads = self.lock();
+            match uploads.get(upload_id) {
+                Some(current) if Arc::ptr_eq(current, shared) => uploads.remove(upload_id),
+                _ => None,
+            }
+        };
+        if let Some(removed) = removed {
+            lock_upload(&removed).discard();
+        }
+    }
+
     /// Move the part file into place; returns the final path and size.
     pub fn finish(&self, upload_id: &str) -> Result<(String, u64)> {
-        let Some(upload) = self.lock().remove(upload_id) else {
+        let Some(shared) = self.lock().remove(upload_id) else {
             return Err(no_such_upload());
         };
+        let upload = lock_upload(&shared);
         if upload.received != upload.size {
             let message = format!(
                 "Expected {} bytes, received {}",
@@ -179,20 +245,27 @@ impl FsUploads {
     pub fn abort(&self, upload_id: &str) {
         let removed = self.lock().remove(upload_id);
         if let Some(upload) = removed {
-            upload.discard();
+            lock_upload(&upload).discard();
         }
     }
 
     pub fn reap_idle(&self, max_idle: Duration) {
         let mut uploads = self.lock();
+        // An upload whose lock is held is being written to: not idle.
         let stale: Vec<_> = uploads
             .iter()
-            .filter(|(_, u)| u.last_activity.elapsed() > max_idle)
+            .filter(|(_, u)| match u.try_lock() {
+                Ok(u) => u.last_activity.elapsed() > max_idle,
+                Err(std::sync::TryLockError::Poisoned(e)) => {
+                    e.into_inner().last_activity.elapsed() > max_idle
+                }
+                Err(std::sync::TryLockError::WouldBlock) => false,
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for id in stale {
             if let Some(upload) = uploads.remove(&id) {
-                upload.discard();
+                lock_upload(&upload).discard();
             }
         }
     }
@@ -212,10 +285,13 @@ fn no_such_upload() -> FsOpFail {
 
 fn write_chunk(upload: &mut Upload, index: u32, data: &str) -> Result<u64> {
     let fail = |code, message: String| FsOpFail::new(code, message, Some(&upload.part));
-    if index != upload.next_index {
+    let Mode::Serial { next_index } = upload.mode else {
+        unreachable!("write_chunk is for serial uploads");
+    };
+    if index != next_index {
         return Err(fail(
             Code::Invalid,
-            format!("Expected chunk {}, got {index}", upload.next_index),
+            format!("Expected chunk {next_index}, got {index}"),
         ));
     }
     // Reject before decoding: base64 is 4 bytes per 3.
@@ -231,14 +307,99 @@ fn write_chunk(upload: &mut Upload, index: u32, data: &str) -> Result<u64> {
     if upload.received + bytes.len() as u64 > upload.size {
         return Err(fail(Code::TooLarge, "More data than announced".into()));
     }
-    upload
-        .file
+    (&*upload.file)
         .write_all(&bytes)
         .map_err(|e| FsOpFail::from_io(&e, &upload.part))?;
     upload.received += bytes.len() as u64;
-    upload.next_index += 1;
+    upload.mode = Mode::Serial {
+        next_index: next_index + 1,
+    };
     upload.last_activity = Instant::now();
     Ok(upload.received)
+}
+
+/// Store one positional chunk. Returns the result and whether the upload
+/// must be discarded (I/O errors only). Decoding and writing happen outside
+/// the upload lock so chunks of one upload proceed in parallel.
+fn write_positional(shared: &Shared, index: u32, data: &str) -> (Result<u64>, bool) {
+    // Snapshot what validation needs; the layout never changes after begin.
+    let (part, file, size, chunk_bytes, total, dup) = {
+        let upload = lock_upload(shared);
+        let Mode::Positional { chunk_bytes, got } = &upload.mode else {
+            unreachable!("write_positional is for positional uploads");
+        };
+        (
+            upload.part.clone(),
+            upload.file.clone(),
+            upload.size,
+            *chunk_bytes as u64,
+            got.len() as u64,
+            got.get(index as usize).copied().unwrap_or(false),
+        )
+    };
+    let fail = |code, message: String| (Err(FsOpFail::new(code, message, Some(&part))), false);
+    if index as u64 >= total {
+        return fail(
+            Code::Invalid,
+            format!("Chunk {index} out of range (0..{total})"),
+        );
+    }
+    let expected = if index as u64 == total - 1 {
+        size - index as u64 * chunk_bytes
+    } else {
+        chunk_bytes
+    };
+    if dup {
+        return (Ok(lock_upload(shared).received), false);
+    }
+    if data.len() > UPLOAD_CHUNK_MAX_BYTES / 3 * 4 + 4 {
+        return fail(Code::TooLarge, "Chunk is too large".into());
+    }
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(data) {
+        Ok(bytes) => bytes,
+        Err(e) => return fail(Code::Invalid, format!("Base64 decode failed: {e}")),
+    };
+    if bytes.len() as u64 != expected {
+        return fail(
+            Code::Invalid,
+            format!(
+                "Chunk {index} must be {expected} bytes, got {}",
+                bytes.len()
+            ),
+        );
+    }
+    if let Err(e) = write_all_at(&file, &bytes, index as u64 * chunk_bytes) {
+        return (Err(FsOpFail::from_io(&e, &part)), true);
+    }
+    let mut upload = lock_upload(shared);
+    if let Mode::Positional { got, .. } = &mut upload.mode {
+        // A concurrent duplicate may have landed first: count once.
+        if !got[index as usize] {
+            got[index as usize] = true;
+            upload.received += expected;
+        }
+    }
+    upload.last_activity = Instant::now();
+    (Ok(upload.received), false)
+}
+
+#[cfg(unix)]
+fn write_all_at(file: &std::fs::File, buf: &[u8], offset: u64) -> std::io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, buf, offset)
+}
+
+#[cfg(windows)]
+fn write_all_at(file: &std::fs::File, mut buf: &[u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt;
+    while !buf.is_empty() {
+        let n = file.seek_write(buf, offset)?;
+        if n == 0 {
+            return Err(std::io::ErrorKind::WriteZero.into());
+        }
+        buf = &buf[n..];
+        offset += n as u64;
+    }
+    Ok(())
 }
 
 /// fsync the part file and rename it to its final name, applying the
@@ -291,7 +452,7 @@ mod tests {
     fn chunks_produce_the_file() {
         let ups = FsUploads::default();
         let dir = scratch();
-        ups.begin("u", &d(&dir), "a.txt", 9, OnConflict::Error)
+        ups.begin("u", &d(&dir), "a.txt", 9, OnConflict::Error, None)
             .unwrap();
         // The part file is hidden and named after the upload.
         assert_eq!(names(&dir), vec![".a.txt.offdesk-part-u"]);
@@ -310,7 +471,7 @@ mod tests {
     fn out_of_order_chunk_discards_the_upload() {
         let ups = FsUploads::default();
         let dir = scratch();
-        ups.begin("u", &d(&dir), "a.txt", 6, OnConflict::Error)
+        ups.begin("u", &d(&dir), "a.txt", 6, OnConflict::Error, None)
             .unwrap();
         ups.chunk("u", 0, &b64(b"abc")).unwrap();
         assert_eq!(
@@ -328,7 +489,7 @@ mod tests {
     fn overflow_and_short_uploads_fail() {
         let ups = FsUploads::default();
         let dir = scratch();
-        ups.begin("u", &d(&dir), "a.txt", 4, OnConflict::Error)
+        ups.begin("u", &d(&dir), "a.txt", 4, OnConflict::Error, None)
             .unwrap();
         assert_eq!(
             ups.chunk("u", 0, &b64(b"abcde")).unwrap_err().code,
@@ -336,15 +497,22 @@ mod tests {
         );
         assert!(names(&dir).is_empty());
 
-        ups.begin("v", &d(&dir), "a.txt", 4, OnConflict::Error)
+        ups.begin("v", &d(&dir), "a.txt", 4, OnConflict::Error, None)
             .unwrap();
         ups.chunk("v", 0, &b64(b"ab")).unwrap();
         assert_eq!(ups.finish("v").unwrap_err().code, Code::Invalid);
         assert!(names(&dir).is_empty());
 
         let big = vec![0u8; UPLOAD_CHUNK_MAX_BYTES + 1];
-        ups.begin("w", &d(&dir), "a.txt", big.len() as u64, OnConflict::Error)
-            .unwrap();
+        ups.begin(
+            "w",
+            &d(&dir),
+            "a.txt",
+            big.len() as u64,
+            OnConflict::Error,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             ups.chunk("w", 0, &b64(&big)).unwrap_err().code,
             Code::TooLarge
@@ -357,17 +525,17 @@ mod tests {
         let dir = scratch();
         for bad in ["", ".", "..", "a/b", "a\0b", &"x".repeat(250)] {
             let err = ups
-                .begin("u", &d(&dir), bad, 1, OnConflict::Error)
+                .begin("u", &d(&dir), bad, 1, OnConflict::Error, None)
                 .unwrap_err();
             assert_eq!(err.code, Code::Invalid, "{bad:?}");
         }
-        let err = ups.begin("u", &d(&dir.join("nope")), "a", 1, OnConflict::Error);
+        let err = ups.begin("u", &d(&dir.join("nope")), "a", 1, OnConflict::Error, None);
         assert_eq!(err.unwrap_err().code, Code::NotFound);
         std::fs::write(dir.join("f"), b"x").unwrap();
-        let err = ups.begin("u", &d(&dir.join("f")), "a", 1, OnConflict::Error);
+        let err = ups.begin("u", &d(&dir.join("f")), "a", 1, OnConflict::Error, None);
         assert_eq!(err.unwrap_err().code, Code::Invalid);
         std::fs::write(dir.join("a.txt"), b"old").unwrap();
-        let err = ups.begin("u", &d(&dir), "a.txt", 1, OnConflict::Error);
+        let err = ups.begin("u", &d(&dir), "a.txt", 1, OnConflict::Error, None);
         assert_eq!(err.unwrap_err().code, Code::Exists);
         assert_eq!(names(&dir), vec!["a.txt", "f"]);
     }
@@ -377,7 +545,7 @@ mod tests {
         let ups = FsUploads::default();
         let dir = scratch();
         std::fs::write(dir.join("a.txt"), b"old").unwrap();
-        ups.begin("u", &d(&dir), "a.txt", 3, OnConflict::KeepBoth)
+        ups.begin("u", &d(&dir), "a.txt", 3, OnConflict::KeepBoth, None)
             .unwrap();
         ups.chunk("u", 0, &b64(b"new")).unwrap();
         // A copy appears meanwhile: the name is chosen at the end.
@@ -392,7 +560,7 @@ mod tests {
     fn error_policy_rechecks_at_the_end() {
         let ups = FsUploads::default();
         let dir = scratch();
-        ups.begin("u", &d(&dir), "a.txt", 1, OnConflict::Error)
+        ups.begin("u", &d(&dir), "a.txt", 1, OnConflict::Error, None)
             .unwrap();
         ups.chunk("u", 0, &b64(b"n")).unwrap();
         std::fs::write(dir.join("a.txt"), b"appeared").unwrap();
@@ -407,7 +575,7 @@ mod tests {
     fn abort_removes_the_part_file() {
         let ups = FsUploads::default();
         let dir = scratch();
-        ups.begin("u", &d(&dir), "a.txt", 3, OnConflict::Error)
+        ups.begin("u", &d(&dir), "a.txt", 3, OnConflict::Error, None)
             .unwrap();
         ups.chunk("u", 0, &b64(b"ab")).unwrap();
         ups.abort("u");
@@ -420,7 +588,7 @@ mod tests {
     fn idle_uploads_are_reaped() {
         let ups = FsUploads::default();
         let dir = scratch();
-        ups.begin("u", &d(&dir), "a.txt", 3, OnConflict::Error)
+        ups.begin("u", &d(&dir), "a.txt", 3, OnConflict::Error, None)
             .unwrap();
         ups.reap_idle(Duration::from_secs(3600));
         assert_eq!(names(&dir).len(), 1);
@@ -428,5 +596,114 @@ mod tests {
         ups.reap_idle(Duration::from_millis(1));
         assert!(names(&dir).is_empty());
         assert!(ups.lock().is_empty());
+    }
+
+    fn begin_positional(ups: &FsUploads, dir: &Path, size: u64, n: u32) {
+        let parallel = ups
+            .begin("p", &d(dir), "a.bin", size, OnConflict::Error, Some(n))
+            .unwrap();
+        assert!(parallel);
+    }
+
+    #[test]
+    fn invalid_chunk_size_falls_back_to_serial() {
+        let ups = FsUploads::default();
+        let dir = scratch();
+        for n in [Some(0), Some(UPLOAD_CHUNK_MAX_BYTES as u32 + 1), None] {
+            let parallel = ups
+                .begin("u", &d(&dir), "a.txt", 3, OnConflict::Error, n)
+                .unwrap();
+            assert!(!parallel, "{n:?}");
+            ups.abort("u");
+        }
+        // Too many chunks for the bookkeeping: serial instead.
+        let size = MAX_POSITIONAL_CHUNKS + 1;
+        let parallel = ups
+            .begin("u", &d(&dir), "a.txt", size, OnConflict::Error, Some(1))
+            .unwrap();
+        assert!(!parallel);
+        ups.abort("u");
+    }
+
+    #[test]
+    fn positional_chunks_arrive_out_of_order() {
+        let ups = FsUploads::default();
+        let dir = scratch();
+        begin_positional(&ups, &dir, 10, 4);
+        assert_eq!(ups.chunk("p", 2, &b64(b"ij")).unwrap(), 2);
+        assert_eq!(ups.chunk("p", 0, &b64(b"abcd")).unwrap(), 6);
+        // A duplicate is acked and not counted twice.
+        assert_eq!(ups.chunk("p", 0, &b64(b"abcd")).unwrap(), 6);
+        assert_eq!(ups.chunk("p", 1, &b64(b"efgh")).unwrap(), 10);
+        let (path, size) = ups.finish("p").unwrap();
+        assert_eq!(size, 10);
+        assert_eq!(std::fs::read(path).unwrap(), b"abcdefghij");
+        assert_eq!(names(&dir), vec!["a.bin"]);
+    }
+
+    #[test]
+    fn positional_rejects_bad_index_and_length_without_discarding() {
+        let ups = FsUploads::default();
+        let dir = scratch();
+        begin_positional(&ups, &dir, 10, 4);
+        for (index, data) in [
+            (3, &b"abcd"[..]), // out of range
+            (0, b"abc"),       // short non-last chunk
+            (0, b"abcde"),     // long chunk
+            (2, b"ijk"),       // last chunk longer than the remainder
+            (2, b"i"),         // last chunk shorter than the remainder
+        ] {
+            let err = ups.chunk("p", index, &b64(data)).unwrap_err();
+            assert_eq!(err.code, Code::Invalid, "{index} {data:?}");
+        }
+        assert_eq!(ups.chunk("p", 0, "!!!").unwrap_err().code, Code::Invalid);
+        // Still alive and usable.
+        ups.chunk("p", 0, &b64(b"abcd")).unwrap();
+        assert_eq!(names(&dir), vec![".a.bin.offdesk-part-p"]);
+    }
+
+    #[test]
+    fn positional_finish_needs_every_chunk() {
+        let ups = FsUploads::default();
+        let dir = scratch();
+        begin_positional(&ups, &dir, 8, 4);
+        ups.chunk("p", 1, &b64(b"efgh")).unwrap();
+        assert_eq!(ups.finish("p").unwrap_err().code, Code::Invalid);
+        assert!(names(&dir).is_empty());
+    }
+
+    #[test]
+    fn positional_chunks_written_concurrently() {
+        let ups = Arc::new(FsUploads::default());
+        let dir = scratch();
+        let n = 1024usize;
+        let chunks = 64usize;
+        let size = n * chunks - 100;
+        let content: Vec<u8> = (0..size).map(|i| (i * 7 % 251) as u8).collect();
+        begin_positional(&ups, &dir, size as u64, n as u32);
+        let content = Arc::new(content);
+        let handles: Vec<_> = (0..8)
+            .map(|t| {
+                let (ups, content) = (ups.clone(), content.clone());
+                std::thread::spawn(move || {
+                    // Each thread takes every 8th chunk, from the end.
+                    for index in (0..chunks).rev().filter(|i| i % 8 == t) {
+                        let end = ((index + 1) * n).min(content.len());
+                        let data = b64(&content[index * n..end]);
+                        ups.chunk("p", index as u32, &data).unwrap();
+                        // Some threads also resend a chunk.
+                        if t % 2 == 0 {
+                            ups.chunk("p", index as u32, &data).unwrap();
+                        }
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let (path, got) = ups.finish("p").unwrap();
+        assert_eq!(got as usize, size);
+        assert_eq!(std::fs::read(path).unwrap(), *content);
     }
 }

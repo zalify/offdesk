@@ -25,20 +25,23 @@ pub async fn handle(msg: HubToMachine) -> Option<MachineToHub> {
             filename,
             size,
             on_conflict,
+            chunk_bytes,
         } => {
             fs_upload::ensure_reaper();
             Some(
                 blocking(request_id, move |request_id| {
-                    fs_upload::global().begin(
+                    let parallel = fs_upload::global().begin(
                         &upload_id,
                         &dest_dir,
                         &filename,
                         size,
                         on_conflict,
+                        chunk_bytes,
                     )?;
                     Ok(MachineToHub::FsUploadAck {
                         request_id,
                         received: 0,
+                        parallel,
                     })
                 })
                 .await,
@@ -55,6 +58,7 @@ pub async fn handle(msg: HubToMachine) -> Option<MachineToHub> {
                 Ok(MachineToHub::FsUploadAck {
                     request_id,
                     received,
+                    parallel: false,
                 })
             })
             .await,
