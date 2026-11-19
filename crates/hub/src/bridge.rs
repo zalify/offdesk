@@ -25,6 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::auth::AuthUser;
 use crate::db::{self, integrations::{self, Integration}};
+use crate::routes::agent_runs::files;
 use crate::AppState;
 
 /// The protocol version this hub speaks (`hello.protocol`).
@@ -429,6 +430,21 @@ enum ServerMessage {
         limit: Option<u32>,
     },
     Cancel { command_id: String, run_id: String },
+    /// Starts saving a file for a run's agent on its machine (runs:message).
+    UploadBegin {
+        command_id: String,
+        run_id: String,
+        name: String,
+        size: u64,
+    },
+    /// The next chunk of an upload. `data` is never logged or kept.
+    UploadChunk {
+        command_id: String,
+        upload_id: String,
+        index: u32,
+        data: String,
+    },
+    UploadEnd { command_id: String, upload_id: String },
     Pong,
     #[serde(other)]
     Other,
@@ -488,7 +504,10 @@ async fn handle(state: &AppState, bridge: &Integration, text: &str) -> Option<Va
         ServerMessage::Answer { command_id, .. }
         | ServerMessage::Start { command_id, .. }
         | ServerMessage::Message { command_id, .. }
-        | ServerMessage::Cancel { command_id, .. } => command_id.clone(),
+        | ServerMessage::Cancel { command_id, .. }
+        | ServerMessage::UploadBegin { command_id, .. }
+        | ServerMessage::UploadChunk { command_id, .. }
+        | ServerMessage::UploadEnd { command_id, .. } => command_id.clone(),
     };
     // A command seen before gets the same result, not a second go
     if let Some(previous) = state
@@ -558,6 +577,8 @@ fn bridge_caller(bridge: &Integration) -> AuthUser {
     }
 }
 
+const UPLOAD_SCOPE: &str = "This bridge can't attach files; it needs runs:message";
+
 /// Carries out a command as the bridge: its access decides, and it's audited.
 async fn command(state: &AppState, bridge: &Integration, message: ServerMessage) -> Value {
     let caller = bridge_caller(bridge);
@@ -623,6 +644,35 @@ async fn command(state: &AppState, bridge: &Integration, message: ServerMessage)
             let message = offdesk_protocol::AgentRunMessage { text, device_id: Some(device) };
             match crate::routes::agent_runs::message_as(state, &caller, &run_id, message).await {
                 Ok(run) => json!({ "ok": true, "run": run }),
+                Err(refused) => refusal(refused),
+            }
+        }
+        ServerMessage::UploadBegin { run_id, name, size, .. } => {
+            if !caller.allows(TokenScope::RunsMessage) {
+                let reason = UPLOAD_SCOPE;
+                caller.audit(&state.db, "upload", &run_id, reason);
+                return json!({ "ok": false, "status": 403, "error": reason });
+            }
+            match files::upload_begin_as(state, &caller, &run_id, &name, size).await {
+                Ok(begun) => json!({ "ok": true, "upload_id": begun.upload_id, "chunk_bytes": begun.chunk_bytes }),
+                Err(refused) => refusal(refused),
+            }
+        }
+        ServerMessage::UploadChunk { upload_id, index, data, .. } => {
+            if !caller.allows(TokenScope::RunsMessage) {
+                return json!({ "ok": false, "status": 403, "error": UPLOAD_SCOPE });
+            }
+            match files::upload_chunk_as(state, &caller, None, &upload_id, index, data).await {
+                Ok(received) => json!({ "ok": true, "received": received }),
+                Err(refused) => refusal(refused),
+            }
+        }
+        ServerMessage::UploadEnd { upload_id, .. } => {
+            if !caller.allows(TokenScope::RunsMessage) {
+                return json!({ "ok": false, "status": 403, "error": UPLOAD_SCOPE });
+            }
+            match files::upload_end_as(state, &caller, None, &upload_id).await {
+                Ok((path, size)) => json!({ "ok": true, "path": path, "size": size }),
                 Err(refused) => refusal(refused),
             }
         }

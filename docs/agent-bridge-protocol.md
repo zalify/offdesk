@@ -4,7 +4,7 @@ A bridge connects an Offdesk hub to a server you choose (your own service, or a 
 one such as Offdesk at offdesk.so). The hub dials out and keeps one WebSocket open; nothing has
 to reach the hub. Over it the server sees the hub's coding agent runs and, within what
 the person allowed **on the hub**, answers them, reads their conversations, sends them
-messages and starts agents. Terminal output never goes over a bridge.
+messages and files, and starts agents. Terminal output never goes over a bridge.
 
 `examples/bridge-server` is a small working server. The hub side is
 `crates/hub/src/bridge.rs`.
@@ -93,6 +93,9 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
 { "type": "sessions", "command_id": "…", "days": 7, "limit": 50 }
 { "type": "session_messages", "command_id": "…", "machine_id": "…", "agent": "claude",
   "session_id": "…", "after": "…", "limit": 100 }
+{ "type": "upload_begin", "command_id": "…", "run_id": "…", "name": "IMG_1.png", "size": 12345 }
+{ "type": "upload_chunk", "command_id": "…", "upload_id": "…", "index": 0, "data": "<base64>" }
+{ "type": "upload_end", "command_id": "…", "upload_id": "…" }
 { "type": "pong" }
 ```
 
@@ -132,6 +135,28 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   other first.
 - A node without the `local-sessions-v1` capability gets status 503 for `session_messages`
   and `start` with `resume`, and is left out of `sessions`.
+- **upload_begin**, **upload_chunk** and **upload_end** save a file (an image, a video,
+  anything up to 100 MB) on the machine a run is on, so its agent can read it. They need
+  `runs:message`, and the run must be open on a machine the bridge may reach. The file
+  lands in `~/.offdesk/attachments/<run_id>/` under its name (the last part of `name`,
+  at most 120 bytes; "file" when nothing is left). A name already there gets a free one
+  (`IMG_1 copy.png`). Then send a **message** that names the path.
+  - `upload_begin` answers `{ "ok": true, "upload_id": "…", "chunk_bytes": 1048576 }`.
+    Status 404 for an unknown run, 409 for an ended one, 413 above 100 MB, 503 when the
+    machine is offline or its Offdesk is too old to take files. Each upload counts once
+    toward the hourly limit of answers.
+  - `upload_chunk` sends the file's next `chunk_bytes` (the last one may be shorter) as
+    base64, one at a time and in order from 0. It answers `{ "ok": true, "received":
+    12345 }`, the bytes saved so far. A chunk out of order gets 400; a chunk that fails
+    ends the upload, so start again.
+  - `upload_end` answers `{ "ok": true, "path": "/Users/me/.offdesk/attachments/<run_id>/IMG_1.png",
+    "size": 12345 }`. The audit records the path and size, never the content.
+  - Only the bridge that began an upload can go on with it. One nobody touches for 10
+    minutes is dropped, and the machine deletes what it got.
+  - Results are kept for repeats like any command's; a chunk's data never is. The same
+    goes over HTTP for an API token with `runs:message`: `POST
+    /api/agent-runs/<run_id>/files/begin` (`{name, size}`), `…/files/chunk` (`{upload_id,
+    index, data}`) and `…/files/end` (`{upload_id}`), with the same answers less `ok` (a refusal is its status and a line of text).
 - `cancel` is reserved; this hub answers it with `ok: false`, status 501. Unknown types
   are ignored.
 
