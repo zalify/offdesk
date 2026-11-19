@@ -170,7 +170,7 @@ Hub → 服务端
 - **内容级别**：`metadata` 去掉请求的原文和选项、回答的文字；`requests` 保留它们；`notes` 再保留进展说明、交接摘要和当前步骤。运行和事件历史都按这个裁剪。
 - **审计和频率**：API token 的回答、批准、启动（含失败原因）和被拒的请求写进 `api_token_audit`（每个用户保留最近 1 万条），`GET /api/auth/api-tokens/audit` 查看；每小时上限按审计里成功的次数算，超出返回 429。审计只记 API token，不记 App 会话。
 - **设置页**：新建 token 时选“只限 agent 运行”（默认，勾选看/回答/批准/启动、内容级别、启动目录、是否含生产机器）或“完全访问”（红字说明等于远程执行）；列表里每个 token 一行写明它能做什么，full 用红色。
-- **没做**：`runs:message` 只定义了范围，还没有对应接口；按机器选择的 UI（API 支持 `machines`）；审计的界面（B4）；`offdesk-hub integrations log`（B2 的集成）。
+- **没做**：按机器选择的 UI（API 支持 `machines`）；审计的界面（B4）；`offdesk-hub integrations log`（B2 的集成）。`runs:message` 已在 OFF-143 实现（`POST /api/agent-runs/{id}/message`，bridge 的 `message`），对话读取见 `conversation` 内容级别（`GET /api/agent-runs/{id}/messages`，bridge 的 `messages`）。
 - **验证**：路由测试走完整路由表：`runs:read` 访问终端、文件、token、回答、启动都是 403，WebSocket 校验拒绝；生产机器上的运行看不到；`metadata` 看不到问题原文、`requests` 看得到；`runs:answer` 不能批准；`..`、同前缀目录、相对路径、不允许的 agent 都被拒；频率上限 429；读不懂的 `access` 什么都不允许；审计里有每一条。node 测试覆盖符号链接和 `..`。隔离环境里用 CLI 实测：只读 token 能 `offdesk runs`，`ls`/`open`/`start` 都 403；启动 token 在允许目录里能启动，目录外被 Hub 拒，目录内指向外面的符号链接被 node 拒。
 
 ### B2 Webhook
@@ -204,9 +204,9 @@ Hub → 服务端
 - **规范**：`docs/agent-bridge-protocol.md`（协议版本 1）。参考服务端在 `examples/bridge-server`（Node + `ws`），带一个本机 HTTP 控制口（`/state`、`/answer`、`/start`、`/pairing-code`），方便脚本和 agent 驱动。
 - **配对**：和设计一致，但不需要单独的注册接口：Hub 第一次连接时同时带上自己生成的 bridge 密钥（`Authorization: Bearer obk_…`）和配对码（`X-Offdesk-Pairing-Code`），服务端校验配对码后保存密钥（存哈希即可），之后只认密钥。连接成功后 Hub 就清掉配对码。命令行是 `offdesk bridges add <名字> <wss 地址> --code … --scope …`（不是设计里的 `offdesk-hub integrations add bridge`），权限范围在 Hub 上选，默认 `runs:read`，不允许 `full`。地址只接受 `wss://`，`ws://` 只限本机（给本机的服务端和测试用）。
 - **事件和断点续传**：复用 B2 的发件箱。bridge 和 webhook 收到同样的运行事件（bridge 不按事件类型过滤），另外还有机器上线、下线事件。消息里的 `seq` 就是发件箱行的 id，对这个 bridge 单调递增；服务端 `ack {seq}` 后，到这个 seq 为止的都标成已送达。每次连接都发 `hello`、`snapshot`（它能看的机器和运行，含一天内结束的），再按顺序补发所有未确认的事件，所以不需要“补不上再发快照”的判断。webhook 的投递任务跳过 bridge 的行。
-- **指令**：`answer`、`start` 走和 HTTP 接口同一份代码（把路由里的逻辑抽成 `answer_as`、`start_as`）：bridge 以 `bridge:<名字>` 的身份、用集成的权限范围调用，范围、机器、目录、agent、频率、审计全部一样；只有确认它有对应范围之后，它自己的设备（`bridge-<id>`）才去取机器的控制权。`command_id` 的结果存在 `bridge_commands` 里，重复的指令直接返回原结果，Hub 重启后也一样。`message`、`cancel` 还没有实现，返回 501。
+- **指令**：`answer`、`start` 走和 HTTP 接口同一份代码（把路由里的逻辑抽成 `answer_as`、`start_as`）：bridge 以 `bridge:<名字>` 的身份、用集成的权限范围调用，范围、机器、目录、agent、频率、审计全部一样；只有确认它有对应范围之后，它自己的设备（`bridge-<id>`）才去取机器的控制权。`command_id` 的结果存在 `bridge_commands` 里，重复的指令直接返回原结果，Hub 重启后也一样。`cancel` 还没有实现，返回 501（`message` 在 OFF-143 实现）。
 - **连接维护**：每 30 秒 ping，90 秒没有任何消息就重连；退避从 1 秒到 60 秒加 ±25% 抖动，连上超过一分钟后重新从 1 秒算。关闭或删除集成时取消连接任务，连接当场断开。`offdesk bridges` 显示 connected / reconnecting（带原因）/ not paired。
-- **没做**：设置页里的 bridge 界面（B4）；`message`、`cancel`；证书固定；设计里机器的电量、睡眠摘要（快照只有在线与否）。
+- **没做**：设置页里的 bridge 界面（B4）；`cancel`；证书固定；设计里机器的电量、睡眠摘要（快照只有在线与否）。
 - **验证**：hub 测试用进程内的 WebSocket 服务端走一遍：配对时的头、hello、快照（`requests` 级别带问题原文）、实时事件和确认、超范围的回答被拒且只审计一次（重复的 command_id 返回同样结果）、读不懂的指令也有回复、服务端断开期间的事件在重连后按顺序只补发未确认的、第二次连接不再带配对码、删除后连接立刻关闭。接口测试覆盖 bridge 的创建校验（配对码、地址、不能 full、`runs:start` 要目录）和列表里不暴露密钥、配对码。隔离环境里（参考服务端 + Hub + 假 claude）：配对，服务端收到事件；提问后服务端用 `/answer` 回答，答案打进了终端，agent 继续（服务端收到 request_resolved 和 working）；没有 `runs:start` 时 `/start` 被拒（403）并以 `bridge:cloud` 记入审计；服务端停掉 10 分钟期间运行结束，重启后 Hub 自动重连，补发了这两条事件，没有重复。
 
 ### B4 MCP 工具和设置界面

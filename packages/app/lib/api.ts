@@ -144,7 +144,7 @@ export interface NewWebhook {
   name: string;
   url: string;
   events: string[];
-  content: "metadata" | "requests" | "notes";
+  content: "metadata" | "requests" | "notes" | "conversation";
   include_production: boolean;
 }
 export interface WebhookDelivery {
@@ -183,7 +183,7 @@ export interface NewBridge {
   url: string;
   pairing_code: string;
   scopes: TokenAccess["scopes"];
-  content: "metadata" | "requests" | "notes";
+  content: "metadata" | "requests" | "notes" | "conversation";
   include_production: boolean;
   dirs?: string[];
 }

@@ -71,6 +71,7 @@ fn sees(content: ContentLevel) -> &'static str {
         ContentLevel::Metadata => "status only",
         ContentLevel::Requests => "+ what runs ask",
         ContentLevel::Notes => "+ notes",
+        ContentLevel::Conversation => "+ conversation",
     }
 }
 

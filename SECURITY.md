@@ -30,15 +30,18 @@ authenticated. Mint one per agent or per script. Then a leak is one revoke, and
 
 A token can instead be limited to agent runs (Settings › API tokens, the
 default there, or `offdesk tokens create <name> --scope …`): seeing runs (`runs:read`), answering their questions
-(`runs:answer`), approving commands (`runs:approve`) and starting Claude Code or
-Codex (`runs:start`). It reaches nothing else: terminals, input, files,
+(`runs:answer`), approving commands (`runs:approve`), starting Claude Code or
+Codex (`runs:start`) and sending a running one a message (`runs:message`, typed into
+its terminal with Enter). It reaches nothing else: terminals, input, files,
 previews, machine settings, other tokens and the event stream refuse it (403),
 and a new hub route stays closed to it until it is opened on purpose
 (`crates/hub/src/auth.rs` `scoped_route`). Within its scopes:
 
 - **Machines**: every machine except production ones, unless named or let in.
-- **Content**: status only, or also what runs ask, or also their notes. Never
-  terminal output.
+- **Content**: status only, or also what runs ask, or also their notes, or also
+  the conversation (what the person and the agent said and each tool call in one line,
+  read from the agent's session file when asked, not kept by the hub). Never terminal
+  output, tool output or the agent's thinking.
 - **Starting**: only in the folders it lists. The hub refuses `..` and paths
   outside them; the machine then compares real paths, so a symlink inside an
   allowed folder can't lead out. There is no way to skip the agent's own

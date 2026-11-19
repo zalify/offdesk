@@ -58,6 +58,8 @@ content level:
 - **status only** (`metadata`): status, agent, folder, machine, times, label, reference.
 - **what they ask** (`requests`): also a request's text and options.
 - **their notes** (`notes`): also the agent's reports, the step it's on, and its session's title.
+- **the conversation** (`conversation`): events carry the same as `notes`; the conversation
+  itself is read on request (`GET /api/agent-runs/{id}/messages`), never pushed.
 
 Terminal output is never sent.
 

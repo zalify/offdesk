@@ -46,6 +46,7 @@ pub enum PendingResult {
     FsListResult {
         entries: Vec<DirEntry>,
     },
+    AgentTranscript(offdesk_protocol::AgentConversation),
     ForegroundProcessResult {
         has_foreground_process: bool,
         process_name: Option<String>,
@@ -2761,6 +2762,22 @@ impl MachineManager {
                         size,
                         path,
                     }))));
+                }
+            }
+            MachineToHub::AgentTranscriptResult {
+                request_id,
+                messages,
+                found,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::AgentTranscript(
+                        offdesk_protocol::AgentConversation { messages, found },
+                    )));
+                }
+            }
+            MachineToHub::AgentTranscriptError { request_id, error } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Err(error));
                 }
             }
             MachineToHub::FsListError { request_id, error } => {

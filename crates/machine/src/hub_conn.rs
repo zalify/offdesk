@@ -190,6 +190,7 @@ impl HubConnection {
                 offdesk_protocol::AGENT_CHOOSE_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_CAPABILITY.to_string(),
                 offdesk_protocol::AGENT_START_DIRS_CAPABILITY.to_string(),
+                offdesk_protocol::AGENT_TRANSCRIPT_CAPABILITY.to_string(),
             ],
             version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
@@ -881,6 +882,32 @@ async fn handle_hub_message(
                 if let Err(error) = pty.send_agent_keys(&terminal_id, &keys) {
                     tracing::warn!("answer for {terminal_id} not typed: {error}");
                 }
+            });
+        }
+        // The conversation of the agent in a terminal, from its session file
+        HubToMachine::AgentTranscript {
+            request_id,
+            terminal_id,
+            after,
+            limit,
+        } => {
+            let pty = pty.clone();
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let read = tokio::task::spawn_blocking(move || {
+                    pty.agent_transcript(&terminal_id, after.as_deref(), limit as usize)
+                })
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()));
+                let reply = match read {
+                    Ok(found) => MachineToHub::AgentTranscriptResult {
+                        request_id,
+                        found: found.is_some(),
+                        messages: found.unwrap_or_default(),
+                    },
+                    Err(error) => MachineToHub::AgentTranscriptError { request_id, error },
+                };
+                let _ = send_tx.send(OutboundHubMessage::Json(reply)).await;
             });
         }
         HubToMachine::DestroyTerminal { terminal_id } => {

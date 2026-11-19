@@ -515,6 +515,51 @@ impl PtyManager {
         if status.success() { Ok(()) } else { Err(format!("tmux send-keys failed: {status}")) }
     }
 
+    /// The conversation of the coding agent running in a terminal, from its session
+    /// file (`agent_transcript.rs`): None when no agent there has one.
+    pub fn agent_transcript(
+        &self,
+        id: &str,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Option<Vec<offdesk_protocol::AgentMessage>>, String> {
+        if !self
+            .list_terminal_ids()
+            .iter()
+            .any(|terminal| terminal == id)
+        {
+            return Err(format!("no terminal {id}"));
+        }
+        let target = format!("{}:0.0", tmux_session_name(id));
+        let output = tmux_cmd()
+            .args([
+                "-L",
+                tmux_socket(),
+                "display-message",
+                "-p",
+                "-t",
+                &target,
+                "#{pane_pid}",
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        let Some(pane_pid) = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|_| output.status.success())
+        else {
+            return Err("tmux display-message failed".to_string());
+        };
+        let processes = crate::codex_title::snapshot_processes();
+        let Some((format, path)) = crate::agent_transcript::locate(pane_pid, &processes) else {
+            return Ok(None);
+        };
+        crate::agent_transcript::read(format, &path, after, limit)
+            .map(Some)
+            .map_err(|e| e.to_string())
+    }
+
     /// The terminal a tmux pane (`$TMUX_PANE`, e.g. "%12") of this node belongs to.
     pub fn terminal_for_pane(&self, pane_id: &str) -> Option<String> {
         let output = tmux_cmd()

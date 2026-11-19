@@ -25,6 +25,7 @@ url = "2"
 clap = { version = "4", features = ["derive"] }
 hostname = "0.4"
 dirs = { workspace = true }
+chrono.workspace = true
 reqwest = { workspace = true }
 sysinfo = { workspace = true }
 bytes.workspace = true

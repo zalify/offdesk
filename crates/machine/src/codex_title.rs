@@ -139,6 +139,15 @@ pub(crate) fn thread_id_for_pane(pane: &PaneInfo, processes: &[Process]) -> Opti
     rollout_for_pane(pane, processes, open_files).map(|(_, thread, _)| thread)
 }
 
+/// The rollout the one codex process under `pane_pid` holds open: its conversation.
+pub(crate) fn rollout_path_for_pane_pid(pane_pid: u32, processes: &[Process]) -> Option<PathBuf> {
+    let pane = PaneInfo {
+        pid: Some(pane_pid),
+        ..PaneInfo::default()
+    };
+    rollout_for_pane(&pane, processes, open_files).map(|(_, _, path)| path)
+}
+
 fn rollout_identity(path: &Path) -> Option<(PathBuf, String)> {
     let filename = path.file_name()?.to_str()?;
     let stem = filename.strip_prefix("rollout-")?.strip_suffix(".jsonl")?;
