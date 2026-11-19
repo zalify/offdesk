@@ -66,6 +66,9 @@ main() {
     for name in $installed; do
         place "$name"
     done
+    case " ${installed} " in
+        *" offdesk "*) link_odc ;;
+    esac
 
     say ""
     for name in $installed; do
@@ -368,6 +371,22 @@ or with --prefix <dir> to install somewhere you own."
         fi
         mv -f "$src" "$dest"
     fi
+}
+
+# `odc` is `offdesk cloud` (the CLI checks the name it runs as): a symlink
+# beside it. A file named odc that isn't our link is left alone.
+link_odc() {
+    dest="${PREFIX}/odc"
+    if [ -e "$dest" ] && [ ! -L "$dest" ]; then
+        say "Not linking ${dest}: a different odc is there (use \`offdesk cloud\`)"
+        return 0
+    fi
+    if [ "$USE_SUDO" = yes ]; then
+        sudo ln -sf offdesk "$dest"
+    else
+        ln -sf offdesk "$dest"
+    fi
+    installed="${installed} odc"
 }
 
 # ── reporting ────────────────────────────────────────────────────────

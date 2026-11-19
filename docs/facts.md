@@ -157,6 +157,22 @@ rename mapping is at the bottom.
 - `offdesk bridges [add|on|off|rm]`; `examples/bridge-server` is a reference server with
   an HTTP control endpoint.
 
+## Offdesk Cloud in the CLI (implementation added 2026-11-19)
+
+- `offdesk cloud login|logout|whoami|comments|comment` talk to Offdesk Cloud
+  (offdesk.so) through its public API (`/api/v1/me`, `/api/v1/tasks/{ref}/comments`),
+  not to the hub (`crates/cli/src/cloud.rs`). Its key is an offdesk.so API key
+  (`odk_…`, Settings › API keys there), kept in the `[cloud]` table of config.toml
+  (`url`, `token`; `login` rewrites only that table and leaves the file 0600) or in
+  `OFFDESK_CLOUD_URL` / `OFFDESK_CLOUD_TOKEN`. The address defaults to https://offdesk.so.
+  The hub's `--url`/`--token` are refused with `cloud`, so a hub token is never sent there.
+- `odc` is the same binary under another name: run as `odc`, the CLI parses
+  `offdesk cloud …` (`cloud::argv_for_alias`). The installer links `odc -> offdesk`
+  beside the CLI, unless a different file named `odc` is already there.
+- Task refs with a team (`zalify/OFF-146`) are sent as one escaped path segment.
+- Comments made with the key show as typed by its owner (the API records them as from
+  the app); `offdesk run note` stays the way an agent in a task's run reports on that task.
+
 ## Tokens and webhooks in the CLI (implementation added 2026-10-15)
 
 - `offdesk tokens [create|rm|audit]` and `offdesk webhooks [add|test|on|off|rm|deliveries]`

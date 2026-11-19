@@ -458,6 +458,11 @@ offdesk webhooks add <name> <url> [--event run.request,run.ended,...] [--content
 offdesk webhooks test|on|off|rm|deliveries <webhook>
 offdesk bridges [--json]                        # bridges: servers the hub keeps connected, which see runs and act within what you allow
 offdesk bridges add <name> <wss-url> --code <pairing code> [--scope ...] [--content ...] [--dir ...]... (docs/agent-bridge-protocol.md)
+offdesk cloud login [--key odk_...]             # Offdesk Cloud (offdesk.so): save its API key (offdesk.so › Settings › API keys); its own key, not the hub's
+offdesk cloud whoami [--json]                   # who the key acts for, and their teams
+offdesk cloud comments <task> [--json]          # a task's comments, oldest first (OFF-146, or zalify/OFF-146)
+offdesk cloud comment <task> <text...>          # comment on it; @username notifies people; `-` reads the text from stdin
+offdesk cloud logout                            # forget the key. `odc ...` is short for `offdesk cloud ...`
 offdesk bridges on|off|rm <bridge>              # off and rm hang up at once
 ```
 

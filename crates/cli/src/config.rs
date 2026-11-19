@@ -8,6 +8,8 @@ use crate::CliError;
 pub struct ConfigFile {
     pub url: Option<String>,
     pub token: Option<String>,
+    /// Offdesk Cloud (offdesk.so): its own address and key, for `offdesk cloud`
+    pub cloud: Option<crate::cloud::CloudSection>,
 }
 
 /// Final hub connection settings after applying flag > env > file precedence.
@@ -107,6 +109,7 @@ mod tests {
         ConfigFile {
             url: url.map(str::to_string),
             token: token.map(str::to_string),
+            cloud: None,
         }
     }
 
