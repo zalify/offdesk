@@ -198,7 +198,7 @@ fn read_title(home: &Path, thread: &str, rollout: &Path) -> Option<String> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_files(pid: u32) -> Vec<PathBuf> {
+pub(crate) fn open_files(pid: u32) -> Vec<PathBuf> {
     std::fs::read_dir(format!("/proc/{pid}/fd"))
         .into_iter()
         .flatten()
@@ -208,7 +208,7 @@ fn open_files(pid: u32) -> Vec<PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_files(pid: u32) -> Vec<PathBuf> {
+pub(crate) fn open_files(pid: u32) -> Vec<PathBuf> {
     // -b avoids kernel operations that can block; -F avoids parsing spaces
     // in paths. lsof can return partial data with a nonzero exit status.
     std::process::Command::new("/usr/sbin/lsof")
@@ -229,7 +229,7 @@ fn parse_lsof(output: &str) -> Vec<PathBuf> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn open_files(_pid: u32) -> Vec<PathBuf> {
+pub(crate) fn open_files(_pid: u32) -> Vec<PathBuf> {
     Vec::new()
 }
 

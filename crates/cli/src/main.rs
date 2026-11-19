@@ -1252,6 +1252,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                     StartMode::Plan => offdesk_protocol::AgentPermissionMode::Plan,
                     StartMode::Auto => offdesk_protocol::AgentPermissionMode::Auto,
                 }),
+                resume: None,
                 device_id: None,
             };
             commands::runs::start(&hub_client, &machine, start, json).await

@@ -290,6 +290,12 @@ fn scoped_route(
         ) => Some(SEE_RUNS),
         // The conversation also needs the conversation content level (routes/agent_runs.rs)
         ("GET", "/api/agent-runs/{run_id}/messages") => Some(CHAT),
+        // The person's own sessions on a machine: the conversation level too
+        (
+            "GET",
+            "/api/machines/{machine_id}/sessions"
+            | "/api/machines/{machine_id}/sessions/{agent}/{session_id}/messages",
+        ) => Some(CHAT),
         ("POST", "/api/agent-runs/{run_id}/answer") => Some(ANSWER),
         ("POST", "/api/agent-runs/{run_id}/message") => Some(MESSAGE),
         ("POST", "/api/agent-runs") => Some(START),

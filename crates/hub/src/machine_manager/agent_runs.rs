@@ -10,7 +10,7 @@ use offdesk_protocol::{
     AgentAnswer, AgentKey, AgentReportKind, AgentRequestKind, AgentRunInfo, AgentRunRequest,
     AgentRunStatus, AgentSignal, AgentStart, BrowserEvent, HubToMachine, InstalledAgent, RunAgent,
     StartAgentRun, TerminalAttention, TerminalInfo, TerminalOpener, AGENT_CHOOSE_CAPABILITY,
-    AGENT_KEYS_CAPABILITY, AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY, AGENT_TRANSCRIPT_CAPABILITY, FOLDER_TRUST_PROMPT,
+    AGENT_KEYS_CAPABILITY, AGENT_START_CAPABILITY, AGENT_START_DIRS_CAPABILITY, AGENT_TRANSCRIPT_CAPABILITY, FOLDER_TRUST_PROMPT, LOCAL_SESSIONS_CAPABILITY,
     FOLDER_TRUST_SOURCE, FOLDER_TRUST_YES,
 };
 
@@ -506,6 +506,102 @@ impl MachineManager {
         }
     }
 
+    /// The person's own recent agent sessions on a machine that no Offdesk terminal runs
+    /// (`LocalSession`), written to in the last `days` days.
+    pub async fn local_sessions(
+        &self,
+        user_id: &str,
+        machine_id: &str,
+        days: u32,
+        limit: u32,
+    ) -> Result<Vec<offdesk_protocol::LocalSession>, AnswerError> {
+        self.local_sessions_ready(user_id, machine_id).await?;
+        let since_ms =
+            chrono::Utc::now().timestamp_millis() - i64::from(days.clamp(1, 30)) * 86_400_000;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let message = HubToMachine::LocalSessions {
+            request_id: request_id.clone(),
+            since_ms,
+            limit: limit.clamp(1, 100),
+        };
+        match self.ask_machine(machine_id, &request_id, message).await? {
+            super::PendingResult::LocalSessions(sessions) => Ok(sessions),
+            _ => Err(AnswerError::Internal),
+        }
+    }
+
+    /// One of those sessions' conversation, as `agent_run_conversation` reads a run's.
+    pub async fn local_session_conversation(
+        &self,
+        user_id: &str,
+        machine_id: &str,
+        agent: RunAgent,
+        session_id: &str,
+        after: Option<String>,
+        limit: u32,
+    ) -> Result<offdesk_protocol::AgentConversation, AnswerError> {
+        if !offdesk_protocol::is_session_id(session_id) {
+            return Err(AnswerError::NotFound);
+        }
+        self.local_sessions_ready(user_id, machine_id).await?;
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let message = HubToMachine::LocalSessionTranscript {
+            request_id: request_id.clone(),
+            agent,
+            session_id: session_id.to_string(),
+            after,
+            limit: limit.clamp(1, 200),
+        };
+        match self.ask_machine(machine_id, &request_id, message).await? {
+            super::PendingResult::AgentTranscript(conversation) => Ok(conversation),
+            _ => Err(AnswerError::Internal),
+        }
+    }
+
+    async fn local_sessions_ready(&self, user_id: &str, machine_id: &str) -> Result<(), AnswerError> {
+        if !self.user_can_access_machine(user_id, machine_id).await {
+            return Err(AnswerError::Unavailable("The machine is offline"));
+        }
+        if !self
+            .machine_supports(machine_id, LOCAL_SESSIONS_CAPABILITY)
+            .await
+        {
+            return Err(AnswerError::Unavailable(
+                "Update Offdesk on that machine to see its sessions here",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Sends a request to a node and waits for its answer (10 s).
+    async fn ask_machine(
+        &self,
+        machine_id: &str,
+        request_id: &str,
+        message: HubToMachine,
+    ) -> Result<super::PendingResult, AnswerError> {
+        let rx = self.register_pending(request_id).await;
+        if self.send_to_machine(machine_id, message).await.is_err() {
+            self.remove_pending(request_id).await;
+            return Err(AnswerError::Unavailable("The machine is offline"));
+        }
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(Ok(result))) => Ok(result),
+            Ok(Ok(Err(error))) => {
+                tracing::warn!("machine {machine_id} sessions: {error}");
+                Err(AnswerError::Unavailable(
+                    "The machine couldn't read its sessions",
+                ))
+            }
+            Ok(Err(_)) | Err(_) => {
+                self.remove_pending(request_id).await;
+                Err(AnswerError::Unavailable(
+                    "The machine didn't answer in time",
+                ))
+            }
+        }
+    }
+
     /// A person sends a run's agent a message: the node types it into its terminal and
     /// presses Enter, as if they typed it there. Not while it waits on a request (that
     /// takes an answer) or before the agent has started. Line breaks become spaces.
@@ -620,8 +716,23 @@ impl MachineManager {
             external_ref: AgentStart::normalize_label(start.external_ref.as_deref().unwrap_or(""))
                 .map_err(bad)?,
             allowed_dirs,
+            resume: start
+                .resume
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string),
         };
         agent_start.validate().map_err(bad)?;
+        if agent_start.resume.is_some()
+            && !self
+                .machine_supports(&start.machine_id, LOCAL_SESSIONS_CAPABILITY)
+                .await
+        {
+            return Err(StartError::Unavailable(
+                "Update Offdesk on that machine to continue its sessions from here".to_string(),
+            ));
+        }
         // Only a node that checks real paths can keep a token inside its folders
         if agent_start.allowed_dirs.is_some()
             && !self
@@ -647,6 +758,7 @@ impl MachineManager {
             "label": label,
             "external_ref": agent_start.external_ref,
             "prompt_chars": agent_start.prompt.as_deref().map_or(0, |p| p.chars().count()),
+            "resume": agent_start.resume,
         });
         let (run_id, agent, external_ref) = (
             agent_start.run_id.clone(),

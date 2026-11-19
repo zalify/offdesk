@@ -604,6 +604,10 @@ pub struct StartAgentRun {
     /// None: the agent's own settings decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<AgentPermissionMode>,
+    /// Continue this session of the agent's (a `LocalSession::session_id`) rather than
+    /// start a new one. Needs `LOCAL_SESSIONS_CAPABILITY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
     /// The calling device, which must hold the machine's control lease.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
@@ -634,6 +638,10 @@ pub struct AgentStart {
     /// `AGENT_START_DIRS_CAPABILITY`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_dirs: Option<Vec<String>>,
+    /// Continue this session (`claude --resume <id>`, `codex resume <id>`). Needs
+    /// `LOCAL_SESSIONS_CAPABILITY`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<String>,
 }
 
 /// A node that checks `AgentStart::allowed_dirs` against real paths.
@@ -642,6 +650,34 @@ pub const AGENT_START_DIRS_CAPABILITY: &str = "agent-start-dirs-v1";
 /// A node that reads an agent run's conversation from the agent's own session file
 /// (`HubToMachine::AgentTranscript`).
 pub const AGENT_TRANSCRIPT_CAPABILITY: &str = "agent-transcript-v1";
+
+/// A node that lists the person's own recent Claude Code and Codex sessions on its
+/// machine (`HubToMachine::LocalSessions`), reads one (`LocalSessionTranscript`), and
+/// starts an agent that continues one (`AgentStart::resume`).
+pub const LOCAL_SESSIONS_CAPABILITY: &str = "local-sessions-v1";
+
+/// One of the person's own recent agent sessions on a machine, from the agent's session
+/// files, that no Offdesk terminal runs: started in their own terminal, or ended.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LocalSession {
+    pub agent: RunAgent,
+    pub session_id: String,
+    pub cwd: String,
+    /// What the person first said in it, one line (content level `conversation`).
+    pub title: String,
+    pub updated_at_ms: i64,
+    /// An agent outside Offdesk has it open now: continuing it here would make two
+    /// write the same session.
+    pub open_elsewhere: bool,
+}
+
+/// Whether a string can be an agent's session id (a UUID, or Claude's ids).
+pub fn is_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !id.starts_with('-')
+}
 
 /// Who said a conversation message.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -876,6 +912,9 @@ impl AgentStart {
         }
         if let Some(mode) = self.permission_mode {
             mode.args(self.agent)?;
+        }
+        if self.resume.as_deref().is_some_and(|id| !is_session_id(id)) {
+            return Err("Invalid session id");
         }
         if let Some(prompt) = &self.prompt {
             if Self::normalize_prompt(prompt)?.as_deref() != Some(prompt.as_str()) {
@@ -1962,6 +2001,27 @@ pub enum HubToMachine {
         after: Option<String>,
         limit: u32,
     },
+    /// The person's recent agent sessions on the machine that no Offdesk terminal runs
+    /// (nodes with LOCAL_SESSIONS_CAPABILITY). Answered by `LocalSessionsResult` or
+    /// `LocalSessionsError`.
+    #[serde(rename = "local_sessions")]
+    LocalSessions {
+        request_id: String,
+        /// Sessions written to since then.
+        since_ms: i64,
+        limit: u32,
+    },
+    /// Read one of those sessions (nodes with LOCAL_SESSIONS_CAPABILITY). Answered by
+    /// `AgentTranscriptResult` or `AgentTranscriptError`.
+    #[serde(rename = "local_session_transcript")]
+    LocalSessionTranscript {
+        request_id: String,
+        agent: RunAgent,
+        session_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        after: Option<String>,
+        limit: u32,
+    },
     /// Type an answer into an agent run's terminal (nodes with AGENT_KEYS_CAPABILITY).
     #[serde(rename = "send_agent_keys")]
     SendAgentKeys {
@@ -2080,6 +2140,13 @@ pub enum MachineToHub {
     },
     #[serde(rename = "agent_transcript_error")]
     AgentTranscriptError { request_id: String, error: String },
+    #[serde(rename = "local_sessions_result")]
+    LocalSessionsResult {
+        request_id: String,
+        sessions: Vec<LocalSession>,
+    },
+    #[serde(rename = "local_sessions_error")]
+    LocalSessionsError { request_id: String, error: String },
     #[serde(rename = "fs_read_result")]
     FsReadResult {
         request_id: String,
@@ -3650,6 +3717,7 @@ mod tests {
             permission_mode: Some(AgentPermissionMode::Ask),
             external_ref: None,
             allowed_dirs: None,
+            resume: None,
         };
         assert_eq!(start.validate(), Ok(()));
         start.prompt = Some(" Fix it".into());

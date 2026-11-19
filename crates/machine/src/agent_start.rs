@@ -223,6 +223,15 @@ fn startup_command_in(
         }
         .to_string(),
     );
+    // Continuing one of the person's sessions: an id `validate` checked (letters, digits
+    // and dashes, never a leading dash), so it's one shell word as it is
+    if let Some(session) = &start.resume {
+        match start.agent {
+            RunAgent::Claude => words.push("--resume".into()),
+            _ => words.push("resume".into()),
+        }
+        words.push(session.clone());
+    }
     if let Some(mode) = start.permission_mode {
         words.extend(mode.args(start.agent)?.iter().map(|arg| arg.to_string()));
     }
@@ -402,6 +411,7 @@ mod tests {
             permission_mode: None,
             external_ref: None,
             allowed_dirs: None,
+            resume: None,
         }
     }
 
@@ -468,6 +478,39 @@ mod tests {
         );
         // The reference reaches the agent as it was given
         assert_eq!(run_fake(&command).1, "ZAL-12 $(id)");
+    }
+
+    #[test]
+    fn continuing_a_session_resumes_it_by_id() {
+        let dir = temp_dir("resume");
+        let mut claude = start(RunAgent::Claude, None);
+        claude.resume = Some("3f2c1a9e-1b2c-4d5e-8f90-123456789abc".into());
+        claude.permission_mode = Some(AgentPermissionMode::AcceptEdits);
+        let command = startup_command_in(&dir, TERMINAL, &claude, &no_hooks()).unwrap();
+        assert_eq!(
+            run_fake(&command).0,
+            [
+                "--resume",
+                "3f2c1a9e-1b2c-4d5e-8f90-123456789abc",
+                "--permission-mode",
+                "acceptEdits"
+            ]
+        );
+        let mut codex = start(RunAgent::Codex, None);
+        codex.resume = Some("01a1e949-c33c-7740-896d-873ba7421beb".into());
+        let command = startup_command_in(&dir, TERMINAL, &codex, &no_hooks()).unwrap();
+        assert_eq!(
+            run_fake(&command).0,
+            ["resume", "01a1e949-c33c-7740-896d-873ba7421beb"]
+        );
+        // Anything but an id is refused before a command exists
+        for bad in ["-x", "a b", "$(id)", "a;b", ""] {
+            codex.resume = Some(bad.into());
+            assert!(
+                startup_command_in(&dir, TERMINAL, &codex, &no_hooks()).is_err(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

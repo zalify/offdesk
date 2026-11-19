@@ -12,6 +12,7 @@ mod fs_upload;
 mod fs_zip;
 mod hub_conn;
 mod keep_awake;
+mod local_sessions;
 mod osc_title;
 mod terminal_attention;
 mod codex_title;

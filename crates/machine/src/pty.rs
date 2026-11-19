@@ -517,6 +517,22 @@ impl PtyManager {
 
     /// The conversation of the coding agent running in a terminal, from its session
     /// file (`agent_transcript.rs`): None when no agent there has one.
+    /// The root process of each of this node's terminals (their agents are runs).
+    pub fn pane_pids(&self) -> Vec<u32> {
+        tmux_cmd()
+            .args(["-L", tmux_socket(), "list-panes", "-a", "-F", "#{pane_pid}"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .filter_map(|line| line.trim().parse().ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn agent_transcript(
         &self,
         id: &str,

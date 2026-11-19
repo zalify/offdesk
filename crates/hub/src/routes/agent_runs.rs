@@ -356,6 +356,118 @@ pub(crate) async fn conversation_as(
         .map_err(answer_refusal)
 }
 
+#[derive(Deserialize)]
+pub(crate) struct SessionsQuery {
+    pub days: Option<u32>,
+    pub limit: Option<u32>,
+}
+
+/// A scoped caller (a token, a bridge) reaches a machine's own sessions only if it may
+/// reach the machine and see conversations: their titles are what the person said.
+fn may_see_sessions(
+    state: &AppState,
+    auth_user: &AuthUser,
+    machine_id: &str,
+) -> Result<(), Refusal> {
+    if auth_user.access.is_none() {
+        return Ok(());
+    }
+    if !auth_user.may_reach_machine(&state.db, machine_id) {
+        return Err(refused(StatusCode::NOT_FOUND, "Machine not found"));
+    }
+    if auth_user
+        .access
+        .as_ref()
+        .is_some_and(|access| access.content < ContentLevel::Conversation)
+    {
+        return Err(refused(
+            StatusCode::FORBIDDEN,
+            "This token can't see conversations; its content level isn't conversation",
+        ));
+    }
+    Ok(())
+}
+
+/// The person's own recent Claude Code and Codex sessions on a machine that no Offdesk
+/// terminal runs, newest first (`LocalSession`). Read from the session files each time.
+pub(crate) async fn sessions_as(
+    state: &AppState,
+    auth_user: &AuthUser,
+    machine_id: &str,
+    query: SessionsQuery,
+) -> Result<Vec<offdesk_protocol::LocalSession>, Refusal> {
+    may_see_sessions(state, auth_user, machine_id)?;
+    state
+        .manager
+        .local_sessions(
+            &auth_user.user_id,
+            machine_id,
+            query.days.unwrap_or(7),
+            query.limit.unwrap_or(50),
+        )
+        .await
+        .map_err(answer_refusal)
+}
+
+/// One of those sessions' conversation, as `conversation_as` reads a run's.
+pub(crate) async fn session_conversation_as(
+    state: &AppState,
+    auth_user: &AuthUser,
+    machine_id: &str,
+    agent: offdesk_protocol::RunAgent,
+    session_id: &str,
+    query: ConversationQuery,
+) -> Result<offdesk_protocol::AgentConversation, Refusal> {
+    may_see_sessions(state, auth_user, machine_id)?;
+    state
+        .manager
+        .local_session_conversation(
+            &auth_user.user_id,
+            machine_id,
+            agent,
+            session_id,
+            query.after,
+            query.limit.unwrap_or(100),
+        )
+        .await
+        .map_err(answer_refusal)
+}
+
+async fn machine_sessions(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path(machine_id): Path<String>,
+    Query(query): Query<SessionsQuery>,
+) -> Result<Json<Vec<offdesk_protocol::LocalSession>>, Response> {
+    sessions_as(&state, &auth_user, &machine_id, query)
+        .await
+        .map(Json)
+        .map_err(IntoResponse::into_response)
+}
+
+pub(crate) fn session_agent(name: &str) -> Option<offdesk_protocol::RunAgent> {
+    match name {
+        "claude" => Some(offdesk_protocol::RunAgent::Claude),
+        "codex" => Some(offdesk_protocol::RunAgent::Codex),
+        _ => None,
+    }
+}
+
+async fn machine_session_conversation(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path((machine_id, agent, session_id)): Path<(String, String, String)>,
+    Query(query): Query<ConversationQuery>,
+) -> Result<Json<offdesk_protocol::AgentConversation>, Response> {
+    let Some(agent) = session_agent(&agent) else {
+        return Err(refused(StatusCode::NOT_FOUND, "Session not found").into_response());
+    };
+    session_conversation_as(&state, &auth_user, &machine_id, agent, &session_id, query)
+        .await
+        .map(Json)
+        .map_err(IntoResponse::into_response)
+}
+
 async fn run_conversation(
     State(state): State<AppState>,
     auth_user: AuthUser,
@@ -606,6 +718,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/agent-runs/{run_id}/answer", post(answer_run))
         .route("/api/agent-runs/{run_id}/messages", get(run_conversation))
         .route("/api/agent-runs/{run_id}/message", post(message_run))
+        .route("/api/machines/{machine_id}/sessions", get(machine_sessions))
+        .route(
+            "/api/machines/{machine_id}/sessions/{agent}/{session_id}/messages",
+            get(machine_session_conversation),
+        )
 }
 
 #[cfg(test)]
@@ -937,6 +1054,152 @@ mod tests {
         let (status, _) = call(&state, "odk_read", "GET", "/api/agent-runs", None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(crate::auth::verify_bearer_token("odk_read", &state.db, &state.jwt_secret).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_machines_own_sessions_are_listed_and_read_at_the_conversation_level() {
+        use offdesk_protocol::{
+            AgentMessage, AgentMessageRole, ContentLevel, LocalSession, MachineToHub, TokenAccess,
+            TokenScope,
+        };
+        let state = test_state();
+        let machine = offdesk_protocol::MachineInfo {
+            id: "machine-a".into(),
+            name: "machine-a".into(),
+            os: "macos".into(),
+            home_dir: "/tmp".into(),
+            production: false,
+        };
+        let (_, mut commands) = state
+            .manager
+            .register_machine_with_capabilities(
+                machine,
+                Some("user-a".into()),
+                vec![offdesk_protocol::LOCAL_SESSIONS_CAPABILITY.into()],
+            )
+            .await;
+        token(
+            &state,
+            "odk_notes",
+            Some(TokenAccess {
+                scopes: vec![TokenScope::RunsRead],
+                content: ContentLevel::Notes,
+                ..Default::default()
+            }),
+        );
+        token(
+            &state,
+            "odk_chat",
+            Some(TokenAccess {
+                scopes: vec![TokenScope::RunsRead],
+                content: ContentLevel::Conversation,
+                ..Default::default()
+            }),
+        );
+        let list = "/api/machines/machine-a/sessions?days=3";
+        let (status, _) = call(&state, "odk_notes", "GET", list, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let reader = {
+            let state = state.clone();
+            tokio::spawn(async move { call(&state, "odk_chat", "GET", list, None).await })
+        };
+        let Some(HubToMachine::LocalSessions {
+            request_id,
+            since_ms,
+            limit,
+        }) = commands.recv().await
+        else {
+            panic!("the node is asked for its sessions");
+        };
+        let three_days = chrono::Utc::now().timestamp_millis() - since_ms;
+        assert!((3 * 86_400_000 - 60_000..=3 * 86_400_000 + 60_000).contains(&three_days));
+        assert_eq!(limit, 50);
+        let session = LocalSession {
+            agent: RunAgent::Codex,
+            session_id: "01a1e949-c33c-7740-896d-873ba7421beb".into(),
+            cwd: "/w/site".into(),
+            title: "Why is CI red?".into(),
+            updated_at_ms: 1,
+            open_elsewhere: true,
+        };
+        state
+            .manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::LocalSessionsResult {
+                    request_id,
+                    sessions: vec![session],
+                },
+            )
+            .await;
+        let (status, body) = reader.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body[0]["title"], "Why is CI red?");
+        assert_eq!(body[0]["open_elsewhere"], true);
+
+        // One of them, read by its agent and id
+        let read =
+            "/api/machines/machine-a/sessions/codex/01a1e949-c33c-7740-896d-873ba7421beb/messages";
+        let reader = {
+            let state = state.clone();
+            tokio::spawn(async move { call(&state, "odk_chat", "GET", read, None).await })
+        };
+        let Some(HubToMachine::LocalSessionTranscript {
+            request_id,
+            agent,
+            session_id,
+            ..
+        }) = commands.recv().await
+        else {
+            panic!("the node is asked for the session");
+        };
+        assert_eq!(
+            (agent, session_id.as_str()),
+            (RunAgent::Codex, "01a1e949-c33c-7740-896d-873ba7421beb")
+        );
+        let said = AgentMessage {
+            id: "0:0".into(),
+            role: AgentMessageRole::User,
+            text: "Why is CI red?".into(),
+            at_ms: None,
+        };
+        state
+            .manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentTranscriptResult {
+                    request_id,
+                    messages: vec![said],
+                    found: true,
+                },
+            )
+            .await;
+        let (status, body) = reader.await.unwrap();
+        assert_eq!(status, StatusCode::OK);
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["messages"][0]["text"], "Why is CI red?");
+        // An agent that isn't one, or an id that isn't one, never reaches the node
+        let (status, _) = call(
+            &state,
+            "odk_chat",
+            "GET",
+            "/api/machines/machine-a/sessions/vim/x/messages",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, _) = call(
+            &state,
+            "odk_chat",
+            "GET",
+            "/api/machines/machine-a/sessions/codex/a;b/messages",
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(commands.try_recv().is_err());
     }
 
     #[tokio::test]
