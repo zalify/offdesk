@@ -841,12 +841,33 @@ impl TokenAccess {
     /// Whether `cwd` is inside one of the allowed folders, by its text: absolute (or
     /// `~/…`), no `..`. The node then checks real paths, which catches symlinks.
     pub fn allows_dir(&self, cwd: &str) -> bool {
+        self.allows_dir_at(cwd, "")
+    }
+
+    /// [`Self::allows_dir`] on a machine whose home folder is `home`: `~` and `home`
+    /// are the same folder there, so `/Users/me/code/x` is inside `~/code` and
+    /// `~/code/x` inside `/Users/me/code`. An empty `home` (not known) compares text only.
+    pub fn allows_dir_at(&self, cwd: &str, home: &str) -> bool {
         if !is_plain_dir(cwd) {
             return false;
         }
-        let cwd = cwd.trim_end_matches('/');
+        let home = home.trim_end_matches('/');
+        let expand = |path: &str| -> String {
+            let path = path.trim_end_matches('/');
+            if !home.starts_with('/') {
+                return path.to_string();
+            }
+            if path == "~" {
+                home.to_string()
+            } else if let Some(rest) = path.strip_prefix("~/") {
+                format!("{home}/{rest}")
+            } else {
+                path.to_string()
+            }
+        };
+        let cwd = expand(cwd);
         self.dirs.as_deref().unwrap_or_default().iter().any(|dir| {
-            let dir = dir.trim_end_matches('/');
+            let dir = expand(dir);
             dir.is_empty() || cwd == dir || cwd.starts_with(&format!("{dir}/"))
         })
     }
@@ -3677,6 +3698,16 @@ mod tests {
         for outside in ["/w/shop/../etc", "/w/shopping", "/w", "w/shop", "~/notes/./x", "/w/shop/\u{1b}x"] {
             assert!(!access.allows_dir(outside), "{outside}");
         }
+        // On a machine with a known home, ~ and the home folder are the same folder
+        let home = "/Users/me";
+        assert!(access.allows_dir_at("/Users/me/notes", home) && access.allows_dir_at("/Users/me/notes/x/", home));
+        assert!(access.allows_dir_at("~/notes/x", home) && access.allows_dir_at("/w/shop/api", home));
+        for outside in ["/Users/me/notesy", "/Users/me", "/Users/other/notes", "/Users/me/notes/../x", "~"] {
+            assert!(!access.allows_dir_at(outside, home), "{outside}");
+        }
+        let absolute = TokenAccess { dirs: Some(vec!["/Users/me/code".into()]), ..access.clone() };
+        assert!(absolute.allows_dir_at("~/code/app", home) && !absolute.allows_dir("~/code/app"));
+        assert!(!absolute.allows_dir_at("~/code/app", "") && !absolute.allows_dir_at("~/code/app", "relative"));
         assert!(access.allows_agent(RunAgent::Claude) && !access.allows_agent(RunAgent::Codex));
         assert!(access.allows(TokenScope::RunsStart) && !access.allows(TokenScope::RunsApprove));
         // Production machines only when named or let in
