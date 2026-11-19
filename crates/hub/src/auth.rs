@@ -298,6 +298,13 @@ fn scoped_route(
         ) => Some(CHAT),
         ("POST", "/api/agent-runs/{run_id}/answer") => Some(ANSWER),
         ("POST", "/api/agent-runs/{run_id}/message") => Some(MESSAGE),
+        // Files for the agent, saved on the run's machine (routes/agent_runs/files.rs)
+        (
+            "POST",
+            "/api/agent-runs/{run_id}/files/begin"
+            | "/api/agent-runs/{run_id}/files/chunk"
+            | "/api/agent-runs/{run_id}/files/end",
+        ) => Some(MESSAGE),
         ("POST", "/api/agent-runs") => Some(START),
         ("GET", "/api/machines/{machine_id}/agents") => Some(START),
         // Answering, messaging and starting take the machine's control lease, as the CLI does

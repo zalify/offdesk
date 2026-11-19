@@ -22,6 +22,8 @@ use crate::auth::AuthUser;
 use crate::db::agent_runs;
 use crate::AppState;
 
+pub(crate) mod files;
+
 /// The machines a scoped token may reach; None: any of the caller's (full access).
 fn reachable_machines(
     db: &rusqlite::Connection,
@@ -723,6 +725,7 @@ pub fn router() -> Router<AppState> {
             "/api/machines/{machine_id}/sessions/{agent}/{session_id}/messages",
             get(machine_session_conversation),
         )
+        .merge(files::router())
 }
 
 #[cfg(test)]
@@ -974,11 +977,24 @@ mod tests {
             ("POST", "/api/auth/api-tokens"),
             ("POST", &format!("/api/agent-runs/{}/answer", waiting.id)),
             ("POST", "/api/agent-runs"),
+            ("POST", &format!("/api/agent-runs/{}/files/begin", waiting.id)),
         ] {
             let body = (method == "POST").then(|| serde_json::json!({}));
             let (status, _) = call(&state, "odk_read", method, uri, body).await;
             assert_eq!(status, StatusCode::FORBIDDEN, "{method} {uri}");
         }
+        // Files for the agent take runs:message, and 100 MB at most
+        token(&state, "odk_message", Some(TokenAccess { scopes: vec![TokenScope::RunsMessage], ..Default::default() }));
+        let files = format!("/api/agent-runs/{}/files/begin", waiting.id);
+        let too_big = serde_json::json!({ "name": "a.mov", "size": 100 * 1024 * 1024 + 1 });
+        let (status, _) = call(&state, "odk_message", "POST", &files, Some(too_big)).await;
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+        let small = serde_json::json!({ "name": "a.png", "size": 3 });
+        let (status, body) = call(&state, "odk_message", "POST", &files, Some(small)).await;
+        assert_eq!((status, body.as_str()), (StatusCode::SERVICE_UNAVAILABLE, "Update Offdesk on that machine to attach files from here"));
+        let chunk = serde_json::json!({ "upload_id": "nope", "index": 0, "data": "" });
+        let (status, _) = call(&state, "odk_message", "POST", &format!("/api/agent-runs/{}/files/chunk", waiting.id), Some(chunk)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
         // ...and so are the WebSockets and the beacon, which take full access only
         assert!(crate::auth::verify_bearer_token("odk_read", &state.db, &state.jwt_secret).is_err());
         assert!(crate::auth::verify_bearer_token("odk_full", &state.db, &state.jwt_secret).is_ok());

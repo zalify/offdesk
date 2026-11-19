@@ -255,3 +255,165 @@ fn bridge_urls_are_wss_or_this_machine() {
     assert!(new_key().starts_with("obk_") && new_key() != new_key());
     assert!(backoff(0) >= Duration::from_millis(750) && backoff(20) <= Duration::from_secs(75));
 }
+
+/// A hub with one person, machine-a, an open run and an ended one.
+fn upload_state() -> (AppState, std::path::PathBuf, String, String) {
+    let path = std::env::temp_dir().join(format!("offdesk-bridge-{}.db", uuid::Uuid::new_v4()));
+    let pool = db::create_pool(&path.to_string_lossy()).unwrap();
+    let (open, ended) = {
+        let conn = pool.get().unwrap();
+        db::init_db(&conn).unwrap();
+        db::users::create_user(&conn, "user-a", "test", "user-a", "user-a", None, "admin").unwrap();
+        db::machines::ensure_machine_for_user(&conn, "machine-a", "user-a", "studio", Some("linux"), Some("/tmp")).unwrap();
+        let open = db::agent_runs::insert(&conn, "machine-a", "t1", RunAgent::Claude, "/w", AgentRunStatus::Working).unwrap();
+        let ended = db::agent_runs::insert(&conn, "machine-a", "t2", RunAgent::Claude, "/w", AgentRunStatus::Working).unwrap();
+        db::agent_runs::set_status(&conn, &ended.id, AgentRunStatus::Done).unwrap();
+        (open.id, ended.id)
+    };
+    let state = AppState {
+        manager: Arc::new(MachineManager::new(pool.clone())),
+        router: Arc::new(HubRouter::new()),
+        web_previews: Arc::new(crate::web_preview::registry::Registry::default()),
+        db: pool,
+        jwt_secret: "test-secret".to_string(),
+        base_url: "http://localhost:4317".to_string(),
+        dev_mode: false,
+        github_client_id: None,
+        github_client_secret: None,
+        google_client_id: None,
+        google_client_secret: None,
+    };
+    (state, path, open, ended)
+}
+
+fn upload_bridge(id: &str, scopes: Vec<TokenScope>) -> Integration {
+    Integration {
+        id: id.into(),
+        user_id: "user-a".into(),
+        kind: "bridge".into(),
+        name: id.into(),
+        url: "ws://127.0.0.1:1/".into(),
+        secret: new_key(),
+        events: vec![],
+        access: TokenAccess { scopes, content: ContentLevel::Requests, ..Default::default() },
+        enabled: false,
+        created_at: 0,
+        last_delivery_at: None,
+        last_error: None,
+        pairing_code: None,
+    }
+}
+
+async fn send(state: &AppState, bridge: &Integration, command: Value) -> Value {
+    handle(state, bridge, &command.to_string()).await.expect("a result")
+}
+
+#[tokio::test]
+async fn a_bridge_saves_files_for_a_run_on_its_machine() {
+    use base64::Engine;
+    use offdesk_protocol::{FsOp, FsOpErrorCode, HubToMachine, MachineInfo, MachineToHub, OnConflict};
+    let (state, path, open, ended) = upload_state();
+    let reader = upload_bridge("bridge-r", vec![TokenScope::RunsRead]);
+    let bridge = upload_bridge("bridge-m", vec![TokenScope::RunsRead, TokenScope::RunsMessage]);
+    let other = upload_bridge("bridge-o", vec![TokenScope::RunsRead, TokenScope::RunsMessage]);
+    for b in [&reader, &bridge, &other] {
+        integrations::insert(&state.db.get().unwrap(), b).unwrap();
+    }
+    let begin = |command_id: &str, run_id: &str, name: &str, size: u64| {
+        json!({ "type": "upload_begin", "command_id": command_id, "run_id": run_id, "name": name, "size": size })
+    };
+
+    // Refusals: scope, unknown run, ended run, too big, machine offline
+    let result = send(&state, &reader, begin("c1", &open, "a.png", 3)).await;
+    assert_eq!((result["type"].as_str(), result["command_id"].as_str(), result["status"].as_u64()), (Some("result"), Some("c1"), Some(403)));
+    assert_eq!(result["error"], "This bridge can't attach files; it needs runs:message");
+    assert_eq!(send(&state, &bridge, begin("c2", "nope", "a.png", 3)).await["status"], 404);
+    assert_eq!(send(&state, &bridge, begin("c3", &ended, "a.png", 3)).await["status"], 409);
+    assert_eq!(send(&state, &bridge, begin("c4", &open, "a.png", 100 * 1024 * 1024 + 1)).await["status"], 413);
+    let result = send(&state, &bridge, begin("c5", &open, "a.png", 3)).await;
+    assert_eq!((result["status"].as_u64(), result["error"].as_str()), (Some(503), Some("The machine is offline")));
+
+    // A node without file operations
+    let info = |id: &str| MachineInfo { id: id.into(), name: "studio".into(), os: "linux".into(), home_dir: "/home/me".into(), production: false };
+    let (_, _old) = state.manager.register_machine_with_capabilities(info("machine-a"), Some("user-a".into()), vec![]).await;
+    let result = send(&state, &bridge, begin("c6", &open, "a.png", 3)).await;
+    assert_eq!(result["status"], 503);
+    assert!(result["error"].as_str().unwrap().starts_with("Update Offdesk on that machine"));
+
+    // A node that can: folders one level at a time ("exists" is fine), then the upload
+    let (_, mut commands) = state
+        .manager
+        .register_machine_with_capabilities(info("machine-a"), Some("user-a".into()), vec![offdesk_protocol::FS_OPS_CAPABILITY.into()])
+        .await;
+    let dir = format!("~/.offdesk/attachments/{open}");
+    let saved = format!("/home/me/.offdesk/attachments/{open}/passwd");
+    let made = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let machine_side = {
+        let (manager, dir, saved, made) = (state.manager.clone(), dir.clone(), saved.clone(), made.clone());
+        tokio::spawn(async move {
+            let mut received = 0u64;
+            while let Some(command) = commands.recv().await {
+                let reply = match command {
+                    HubToMachine::FsOp { request_id, op: FsOp::Mkdir { path } } => {
+                        let first = {
+                            let mut made = made.lock().unwrap();
+                            made.push(path.clone());
+                            made.len() == 1
+                        };
+                        if first {
+                            MachineToHub::FsOpError { request_id, code: FsOpErrorCode::Exists, message: "exists".into(), path: Some(path) }
+                        } else {
+                            MachineToHub::FsOpResult { request_id, paths: vec![path] }
+                        }
+                    }
+                    HubToMachine::FsUploadBegin { request_id, dest_dir, filename, size, on_conflict, chunk_bytes, .. } => {
+                        assert_eq!((dest_dir.as_str(), filename.as_str(), size, on_conflict, chunk_bytes), (dir.as_str(), "passwd", 5, OnConflict::KeepBoth, None));
+                        MachineToHub::FsUploadAck { request_id, received: 0, parallel: false }
+                    }
+                    HubToMachine::FsUploadChunk { request_id, data, .. } => {
+                        received += base64::engine::general_purpose::STANDARD.decode(data).unwrap().len() as u64;
+                        MachineToHub::FsUploadAck { request_id, received, parallel: false }
+                    }
+                    HubToMachine::FsUploadEnd { request_id, .. } => {
+                        MachineToHub::FsUploadDone { request_id, path: saved.clone(), size: received }
+                    }
+                    HubToMachine::FsUploadAbort { .. } => continue,
+                    other => panic!("unexpected {other:?}"),
+                };
+                manager.handle_machine_message("machine-a", reply).await;
+            }
+        })
+    };
+    let result = send(&state, &bridge, begin("c7", &open, "../../etc/passwd", 5)).await;
+    assert_eq!((result["ok"].as_bool(), result["chunk_bytes"].as_u64()), (Some(true), Some(1024 * 1024)));
+    let upload_id = result["upload_id"].as_str().unwrap().to_string();
+    let chunk = |command_id: &str, index: u32, bytes: &[u8]| {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        json!({ "type": "upload_chunk", "command_id": command_id, "upload_id": upload_id, "index": index, "data": data })
+    };
+    // Only the bridge that began it goes on
+    assert_eq!(send(&state, &other, chunk("o1", 0, b"abc")).await["status"], 404);
+    let result = send(&state, &bridge, chunk("c8", 0, b"abc")).await;
+    assert_eq!((result["ok"].as_bool(), result["received"].as_u64()), (Some(true), Some(3)));
+    // A repeat gets the same result, not a second write
+    assert_eq!(send(&state, &bridge, chunk("c8", 0, b"abc")).await["received"], 3);
+    let kept = integrations::command_result(&state.db.get().unwrap(), "bridge-m", "c8").unwrap().unwrap();
+    assert!(!kept.contains("YWJj"), "a chunk's data isn't kept");
+    assert_eq!(send(&state, &bridge, chunk("c9", 1, b"de")).await["received"], 5);
+    let end = |command_id: &str| json!({ "type": "upload_end", "command_id": command_id, "upload_id": upload_id });
+    assert_eq!(send(&state, &other, end("o2")).await["status"], 404);
+    let result = send(&state, &bridge, end("c10")).await;
+    assert_eq!((result["ok"].as_bool(), result["path"].as_str(), result["size"].as_u64()), (Some(true), Some(saved.as_str()), Some(5)));
+    // Done: the upload is gone
+    assert_eq!(send(&state, &bridge, end("c11")).await["status"], 404);
+    assert_eq!(*made.lock().unwrap(), ["~/.offdesk".to_string(), "~/.offdesk/attachments".into(), dir.clone()]);
+
+    let audit = db::tokens::list_audit(&state.db.get().unwrap(), "user-a", Some("bridge-m"), 20).unwrap();
+    let actions: Vec<(&str, &str, &str)> = audit.iter().map(|a| (a.action.as_str(), a.target.as_str(), a.result.as_str())).collect();
+    assert!(actions.contains(&("upload_end", saved.as_str(), "ok, 5 bytes")), "{actions:?}");
+    assert!(actions.contains(&("upload", open.as_str(), "ok")), "{actions:?}");
+    drop(state);
+    machine_side.abort();
+    let _ = machine_side.await;
+    let _ = std::fs::remove_file(&path);
+}
