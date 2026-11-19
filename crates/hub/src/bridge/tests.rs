@@ -185,6 +185,25 @@ async fn a_bridge_pairs_resumes_refuses_and_hangs_up_when_revoked() {
             .is_none(),
         "a read isn't kept for repeats"
     );
+    // The person's own sessions need the conversation level as well
+    let sessions = json!({ "type": "sessions", "command_id": "cmd-5" });
+    ws.send(Message::Text(sessions.to_string().into()))
+        .await
+        .unwrap();
+    let result = next(&mut ws).await;
+    assert_eq!(
+        (result["command_id"].as_str(), result["status"].as_u64()),
+        (Some("cmd-5"), Some(403))
+    );
+    let one = json!({ "type": "session_messages", "command_id": "cmd-6", "machine_id": "machine-a", "agent": "claude", "session_id": "abc" });
+    ws.send(Message::Text(one.to_string().into()))
+        .await
+        .unwrap();
+    let result = next(&mut ws).await;
+    assert_eq!(
+        (result["command_id"].as_str(), result["status"].as_u64()),
+        (Some("cmd-6"), Some(403))
+    );
 
     // The server goes away; what happens meanwhile waits for it
     drop(ws);

@@ -39,7 +39,7 @@ pub fn locate(pane_pid: u32, processes: &[Process]) -> Option<(Format, PathBuf)>
         .map(|path| (Format::Codex, path))
 }
 
-fn claude_home() -> Option<PathBuf> {
+pub(crate) fn claude_home() -> Option<PathBuf> {
     match std::env::var("CLAUDE_CONFIG_DIR") {
         Ok(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
         _ => dirs::home_dir().map(|home| home.join(".claude")),
@@ -59,7 +59,7 @@ fn is_session_id(id: &str) -> bool {
 }
 
 /// `<session>.jsonl` in whichever project folder Claude Code keeps it.
-fn claude_transcript(session: &str) -> Option<PathBuf> {
+pub(crate) fn claude_transcript(session: &str) -> Option<PathBuf> {
     let projects = claude_home()?.join("projects");
     let name = format!("{session}.jsonl");
     std::fs::read_dir(projects)
@@ -146,7 +146,7 @@ pub fn parse(format: Format, bytes: &[u8], base: u64, skip_first: bool) -> Vec<A
     messages
 }
 
-fn clip(text: &str, max: usize) -> String {
+pub(crate) fn clip(text: &str, max: usize) -> String {
     let text = text.trim();
     if text.chars().count() <= max {
         return text.to_string();
@@ -201,7 +201,7 @@ fn tool_line(name: &str, input: &Value) -> String {
     )
 }
 
-fn claude_entries(value: &Value) -> Vec<(AgentMessageRole, String)> {
+pub(crate) fn claude_entries(value: &Value) -> Vec<(AgentMessageRole, String)> {
     let kind = value.get("type").and_then(Value::as_str);
     if !matches!(kind, Some("user" | "assistant"))
         || value.get("isSidechain").and_then(Value::as_bool) == Some(true)
@@ -273,7 +273,7 @@ fn claude_entries(value: &Value) -> Vec<(AgentMessageRole, String)> {
     entries
 }
 
-fn codex_entries(value: &Value) -> Vec<(AgentMessageRole, String)> {
+pub(crate) fn codex_entries(value: &Value) -> Vec<(AgentMessageRole, String)> {
     if value.get("type").and_then(Value::as_str) != Some("response_item") {
         return Vec::new();
     }

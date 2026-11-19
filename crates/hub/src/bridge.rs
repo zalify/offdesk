@@ -388,6 +388,9 @@ enum ServerMessage {
         external_ref: Option<String>,
         #[serde(default)]
         permission_mode: Option<AgentPermissionMode>,
+        /// Continue one of the person's sessions (`sessions`) instead of starting anew
+        #[serde(default)]
+        resume: Option<String>,
     },
     Message {
         command_id: String,
@@ -400,6 +403,26 @@ enum ServerMessage {
     Messages {
         command_id: String,
         run_id: String,
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// The person's own recent sessions on its machines that no Offdesk terminal runs
+    /// (content level `conversation`). A read.
+    Sessions {
+        command_id: String,
+        #[serde(default)]
+        days: Option<u32>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// One of those sessions' conversation. A read.
+    SessionMessages {
+        command_id: String,
+        machine_id: String,
+        agent: String,
+        session_id: String,
         #[serde(default)]
         after: Option<String>,
         #[serde(default)]
@@ -442,6 +465,26 @@ async fn handle(state: &AppState, bridge: &Integration, text: &str) -> Option<Va
             result["command_id"] = command_id.clone().into();
             return Some(result);
         }
+        ServerMessage::Sessions { command_id, days, limit } => {
+            let mut result = sessions(state, bridge, *days, *limit).await;
+            result["type"] = "result".into();
+            result["command_id"] = command_id.clone().into();
+            return Some(result);
+        }
+        ServerMessage::SessionMessages { command_id, machine_id, agent, session_id, after, limit } => {
+            let caller = bridge_caller(bridge);
+            let query = crate::routes::agent_runs::ConversationQuery { after: after.clone(), limit: *limit };
+            let mut result = match crate::routes::agent_runs::session_agent(agent) {
+                None => json!({ "ok": false, "status": 404, "error": "Session not found" }),
+                Some(agent) => match crate::routes::agent_runs::session_conversation_as(state, &caller, machine_id, agent, session_id, query).await {
+                    Ok(conversation) => json!({ "ok": true, "messages": conversation.messages, "found": conversation.found }),
+                    Err(refused) => refusal(refused),
+                },
+            };
+            result["type"] = "result".into();
+            result["command_id"] = command_id.clone().into();
+            return Some(result);
+        }
         ServerMessage::Answer { command_id, .. }
         | ServerMessage::Start { command_id, .. }
         | ServerMessage::Message { command_id, .. }
@@ -467,6 +510,42 @@ async fn handle(state: &AppState, bridge: &Integration, text: &str) -> Option<Va
 
 fn refusal((status, reason): (axum::http::StatusCode, String)) -> Value {
     json!({ "ok": false, "status": status.as_u16(), "error": reason })
+}
+
+/// The sessions of every machine the bridge may reach that's online and can list them,
+/// each with its machine. A machine that can't answer is left out, not an error.
+async fn sessions(state: &AppState, bridge: &Integration, days: Option<u32>, limit: Option<u32>) -> Value {
+    let caller = bridge_caller(bridge);
+    if bridge.access.content < offdesk_protocol::ContentLevel::Conversation {
+        return json!({ "ok": false, "status": 403, "error": "This bridge can't see conversations; its content level isn't conversation" });
+    }
+    let machines: Vec<offdesk_protocol::MachineInfo> = state
+        .manager
+        .list_machines_for_user(&bridge.user_id)
+        .await
+        .into_iter()
+        .filter(|m| caller.may_reach_machine(&state.db, &m.id))
+        .collect();
+    let mut found = Vec::new();
+    let mut tasks = tokio::task::JoinSet::new();
+    for machine in machines {
+        let (state, caller) = (state.clone(), caller.clone());
+        tasks.spawn(async move {
+            let query = crate::routes::agent_runs::SessionsQuery { days, limit };
+            let listed = crate::routes::agent_runs::sessions_as(&state, &caller, &machine.id, query).await;
+            (machine.id, listed)
+        });
+    }
+    while let Some(Ok((machine_id, listed))) = tasks.join_next().await {
+        if let Ok(sessions) = listed {
+            for session in sessions {
+                let mut session = serde_json::to_value(session).unwrap_or(Value::Null);
+                session["machine_id"] = machine_id.clone().into();
+                found.push(session);
+            }
+        }
+    }
+    json!({ "ok": true, "sessions": found })
 }
 
 /// The bridge as a caller: its integration's access, audited as `bridge:<name>`.
@@ -504,7 +583,7 @@ async fn command(state: &AppState, bridge: &Integration, message: ServerMessage)
                 Err(refused) => refusal(refused),
             }
         }
-        ServerMessage::Start { machine_id, agent, cwd, prompt, label, external_ref, permission_mode, .. } => {
+        ServerMessage::Start { machine_id, agent, cwd, prompt, label, external_ref, permission_mode, resume, .. } => {
             if !caller.allows(TokenScope::RunsStart) {
                 let reason = "This bridge can't start agents; it needs runs:start";
                 caller.audit(&state.db, "start", &machine_id, reason);
@@ -521,6 +600,7 @@ async fn command(state: &AppState, bridge: &Integration, message: ServerMessage)
                 label,
                 external_ref,
                 permission_mode,
+                resume,
                 device_id: Some(device),
             };
             match crate::routes::agent_runs::start_as(state, &caller, start).await {
@@ -551,7 +631,12 @@ async fn command(state: &AppState, bridge: &Integration, message: ServerMessage)
             caller.audit(&state.db, "denied", &run_id, reason);
             json!({ "ok": false, "status": 501, "error": reason })
         }
-        ServerMessage::Ack { .. } | ServerMessage::Pong | ServerMessage::Other | ServerMessage::Messages { .. } => Value::Null,
+        ServerMessage::Ack { .. }
+        | ServerMessage::Pong
+        | ServerMessage::Other
+        | ServerMessage::Messages { .. }
+        | ServerMessage::Sessions { .. }
+        | ServerMessage::SessionMessages { .. } => Value::Null,
     }
 }
 

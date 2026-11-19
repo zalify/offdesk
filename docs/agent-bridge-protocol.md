@@ -86,9 +86,13 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
 { "type": "answer", "command_id": "…", "run_id": "…", "request_id": "…",
   "option_id": "2" }                            // or "text": "…", or "approve": true|false
 { "type": "start", "command_id": "…", "machine_id": "…", "agent": "claude", "cwd": "~/work/shop",
-  "prompt": "…", "label": "…", "external_ref": "…", "permission_mode": "ask" }
+  "prompt": "…", "label": "…", "external_ref": "…", "permission_mode": "ask",
+  "resume": "…" }                               // optional: continue that session
 { "type": "message", "command_id": "…", "run_id": "…", "text": "…" }
 { "type": "messages", "command_id": "…", "run_id": "…", "after": "…", "limit": 100 }
+{ "type": "sessions", "command_id": "…", "days": 7, "limit": 50 }
+{ "type": "session_messages", "command_id": "…", "machine_id": "…", "agent": "claude",
+  "session_id": "…", "after": "…", "limit": 100 }
 { "type": "pong" }
 ```
 
@@ -113,6 +117,21 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   what's new. `found` is false when the run has ended or its agent has no session file.
   A read: its result isn't kept, and a repeat reads again.
 - A node without the `agent-transcript-v1` capability (older ones) can't read conversations: `messages` gets status 503 for its runs.
+- **sessions** lists the person's own recent Claude Code and Codex sessions on its
+  machines that no Offdesk terminal runs: started in their own terminal, or ended. It
+  needs the `conversation` content level (a session's title is what the person first
+  said in it, or the name Claude Code gave it). Its result is `{ "ok": true, "sessions":
+  [{ "machine_id", "agent", "session_id", "cwd", "title", "updated_at_ms",
+  "open_elsewhere" }] }`, newest first, those written to in the last `days` (default 7,
+  at most 30). A machine that's offline or can't list them is left out.
+  `open_elsewhere`: an agent outside Offdesk has it open now. **session_messages** reads
+  one as **messages** reads a run. Both are reads, as **messages** is.
+- **start** with `resume` continues that session (`claude --resume`, `codex resume`) in a
+  new terminal, in `cwd` (the session's), under the same checks as any start. Continuing
+  one that's `open_elsewhere` makes two agents write it: ask the person to close the
+  other first.
+- A node without the `local-sessions-v1` capability gets status 503 for `session_messages`
+  and `start` with `resume`, and is left out of `sessions`.
 - `cancel` is reserved; this hub answers it with `ok: false`, status 501. Unknown types
   are ignored.
 

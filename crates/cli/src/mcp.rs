@@ -997,6 +997,7 @@ impl Server {
                         label: a.label,
                         external_ref: a.external_ref,
                         permission_mode: a.permission_mode,
+                        resume: None,
                         device_id: None,
                     };
                     let (started, _) = crate::commands::runs::start_run(&client, &a.machine, start).await?;

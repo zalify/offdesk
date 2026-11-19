@@ -47,6 +47,7 @@ pub enum PendingResult {
         entries: Vec<DirEntry>,
     },
     AgentTranscript(offdesk_protocol::AgentConversation),
+    LocalSessions(Vec<offdesk_protocol::LocalSession>),
     ForegroundProcessResult {
         has_foreground_process: bool,
         process_name: Option<String>,
@@ -2780,6 +2781,19 @@ impl MachineManager {
                     let _ = tx.send(Err(error));
                 }
             }
+            MachineToHub::LocalSessionsResult {
+                request_id,
+                sessions,
+            } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Ok(PendingResult::LocalSessions(sessions)));
+                }
+            }
+            MachineToHub::LocalSessionsError { request_id, error } => {
+                if let Some(tx) = self.pending.lock().await.remove(&request_id) {
+                    let _ = tx.send(Err(error));
+                }
+            }
             MachineToHub::FsListError { request_id, error } => {
                 if let Some(tx) = self.pending.lock().await.remove(&request_id) {
                     let _ = tx.send(Err(error));
@@ -5008,6 +5022,7 @@ mod tests {
             label: Some(" fix tax ".into()),
             external_ref: Some("ZAL-12".into()),
             permission_mode: Some(AgentPermissionMode::Ask),
+            resume: None,
             device_id: None,
         };
         let status = |id: &str| crate::db::agent_runs::find(&pool.get().unwrap(), id).unwrap().unwrap().status;
