@@ -585,7 +585,14 @@ pub(crate) async fn start_as(
         if !access.allows_agent(start.agent) {
             return Err(refuse(auth_user, state, "start", &machine_id, "This token can't start that agent"));
         }
-        if !access.allows_dir(start.cwd.trim()) {
+        // `~` is the machine's home there: a folder given in full matches one given with ~
+        let home = state
+            .manager
+            .machine_info_for_user(&user_id, &machine_id)
+            .await
+            .map(|info| info.home_dir)
+            .unwrap_or_default();
+        if !access.allows_dir_at(start.cwd.trim(), &home) {
             return Err(refuse(auth_user, state, "start", &machine_id, "That folder isn't one this token may start in"));
         }
         if over_limit(state, auth_user, &["start"], access.max_starts_per_hour) {
