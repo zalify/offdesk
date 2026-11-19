@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -37,11 +37,17 @@ function run({
     "offdesk-node-darwin-arm64",
     "offdesk-hub-darwin-arm64",
   ],
+  // Runs with the prefix made, before the installer: to put files there first
+  before,
 } = {}) {
   const tempDir = mkdtempSync(join(tmpdir(), "offdesk-install-"));
   const binDir = join(tempDir, "bin");
   const prefix = join(tempDir, "prefix");
   mkdirSync(binDir);
+  if (before) {
+    mkdirSync(prefix, { recursive: true });
+    before(prefix);
+  }
 
   writeExecutable(
     join(binDir, "uname"),
@@ -147,6 +153,26 @@ test("everything is installed by default, and the hub is started as a service", 
     assert.doesNotMatch(result.stdout, /Next: start the hub/);
   } finally {
     cleanup(tempDir);
+  }
+});
+
+test("odc is linked to the offdesk CLI, and a different odc is left alone", () => {
+  const first = run();
+  try {
+    assert.equal(first.result.status, 0, first.result.stderr);
+    const odc = join(first.prefix, "odc");
+    assert.equal(readlinkSync(odc), "offdesk");
+    assert.match(first.result.stdout, /Installed .*\/odc/);
+  } finally {
+    cleanup(first.tempDir);
+  }
+  const theirs = run({ before: (prefix) => writeFileSync(join(prefix, "odc"), "someone else's") });
+  try {
+    assert.equal(theirs.result.status, 0, theirs.result.stderr);
+    assert.equal(readFileSync(join(theirs.prefix, "odc"), "utf8"), "someone else's");
+    assert.match(theirs.result.stdout, /Not linking .*odc/);
+  } finally {
+    cleanup(theirs.tempDir);
   }
 });
 

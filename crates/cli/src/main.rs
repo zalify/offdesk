@@ -1,6 +1,7 @@
 mod agents;
 mod attach;
 mod client;
+mod cloud;
 mod commands;
 mod config;
 mod keys;
@@ -156,6 +157,12 @@ enum Commands {
     Run {
         #[command(subcommand)]
         action: RunAction,
+    },
+    /// Offdesk Cloud (offdesk.so) tasks: read and post comments, with your offdesk.so
+    /// API key (`offdesk cloud login`). Also installed as `odc`
+    Cloud {
+        #[command(subcommand)]
+        action: cloud::CloudAction,
     },
     /// Connect coding agents to Offdesk
     Agents {
@@ -850,7 +857,7 @@ enum MachinesAction {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(cloud::argv_for_alias(std::env::args_os().collect()));
     if cli.verbose {
         tracing_subscriber::fmt()
             .with_max_level(tracing::Level::DEBUG)
@@ -973,6 +980,17 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         return commands::fetch::run(paths, *plain);
     }
     let file = config::load_config_file()?;
+    // Offdesk Cloud is another service: the hub's --url/--token don't apply to it
+    if let Commands::Cloud { action } = cli.command {
+        if cli.url.is_some() || cli.token.is_some() {
+            return Err(CliError::Usage(
+                "--url and --token are the hub's; for Offdesk Cloud use `offdesk cloud login` \
+                 (or OFFDESK_CLOUD_URL / OFFDESK_CLOUD_TOKEN)"
+                    .to_string(),
+            ));
+        }
+        return cloud::run(action, file.as_ref()).await;
+    }
     let env_url = env_with_legacy("OFFDESK_URL", "WEBMUX_URL");
     // Needs no token: on the hub's machine the hub signs the link itself,
     // and anywhere else there is only an address to open.
@@ -1032,6 +1050,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             unreachable!("agent commands return early")
         }
         Commands::Fetch { .. } => unreachable!("fetch returns early"),
+        Commands::Cloud { .. } => unreachable!("cloud returns early"),
         Commands::Mcp => unreachable!("mcp returns early"),
         Commands::Browser { action } => match action {
             BrowserAction::Open {
