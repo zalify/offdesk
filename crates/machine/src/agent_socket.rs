@@ -41,8 +41,15 @@ pub fn accept(report: &LocalAgentReport, our_socket: &str) -> Result<(), &'stati
     Ok(())
 }
 
+/// Reports come from tmux panes over a Unix socket; neither exists on Windows.
+#[cfg(not(unix))]
+pub fn spawn(_pty: Arc<PtyManager>, _signals: broadcast::Sender<MachineToHub>) {
+    tracing::info!("agent socket: not available on this platform");
+}
+
 /// Listens on the agent socket until the node exits; each accepted report goes to
 /// `signals` for whichever hub connection is up (none: it's dropped).
+#[cfg(unix)]
 pub fn spawn(pty: Arc<PtyManager>, signals: broadcast::Sender<MachineToHub>) {
     let path = offdesk_protocol::agent_socket_path();
     tokio::spawn(async move {
@@ -91,6 +98,7 @@ pub fn spawn(pty: Arc<PtyManager>, signals: broadcast::Sender<MachineToHub>) {
     });
 }
 
+#[cfg(unix)]
 fn bind(path: &std::path::Path) -> std::io::Result<tokio::net::UnixListener> {
     use std::os::unix::fs::PermissionsExt;
     if let Some(dir) = path.parent() {

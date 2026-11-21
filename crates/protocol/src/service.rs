@@ -1,5 +1,5 @@
 //! Running an offdesk binary as a user service — a systemd user unit on Linux,
-//! a launchd agent on macOS.
+//! a launchd agent on macOS, a logon task in Task Scheduler on Windows.
 //!
 //! The agent has always had this; the hub needed it too, and there is nothing
 //! node-specific in "write a unit, enable it, start it". Each binary says who
@@ -37,7 +37,7 @@ pub struct ServiceSpec {
 
 // ── Shared helpers ─────────────────────────────────────────────────
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn xml_text(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
@@ -65,7 +65,7 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
     Ok(())
 }
 
-fn home() -> Result<String, String> {
+pub fn home() -> Result<String, String> {
     dirs::home_dir()
         .map(|p| p.to_string_lossy().to_string())
         .ok_or_else(|| "cannot determine home directory".to_string())
@@ -355,9 +355,173 @@ mod platform {
     }
 }
 
+// ── Windows (Task Scheduler) ──────────────────────────────────────
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_argument(value: &str) -> String {
+    // CommandLineToArgvW rules: backslashes are literal unless they precede a quote
+    let mut quoted = String::from('"');
+    let mut backslashes = 0;
+    for c in value.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                quoted.push_str(&"\\".repeat(backslashes * 2 + 1));
+                quoted.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                quoted.push_str(&"\\".repeat(backslashes));
+                quoted.push(c);
+                backslashes = 0;
+            }
+        }
+    }
+    quoted.push_str(&"\\".repeat(backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+#[cfg(target_os = "windows")]
+mod platform {
+    use super::*;
+
+    fn task_name(spec: &ServiceSpec) -> String {
+        format!("Offdesk\\{}", spec.label)
+    }
+
+    fn render_task(spec: &ServiceSpec, home_dir: &str, exe_path: &str) -> String {
+        let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+            (Ok(domain), Ok(name)) => format!("{domain}\\{name}"),
+            (_, Ok(name)) => name,
+            _ => String::new(),
+        };
+        let args = spec
+            .args
+            .iter()
+            .map(|a| windows_argument(a))
+            .collect::<Vec<_>>()
+            .join(" ");
+        // Starts at logon and restarts after a failure, as KeepAlive and Restart=always do
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>{description}</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>999</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{exe}</Command>
+      <Arguments>{args}</Arguments>
+      <WorkingDirectory>{home_dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"#,
+            description = xml_text(&spec.description),
+            user = xml_text(&user),
+            exe = xml_text(exe_path),
+            args = xml_text(&args),
+            home_dir = xml_text(home_dir),
+        )
+    }
+
+    fn task_path(spec: &ServiceSpec, home_dir: &str) -> PathBuf {
+        PathBuf::from(home_dir)
+            .join("AppData")
+            .join("Local")
+            .join("offdesk")
+            .join("services")
+            .join(format!("{}.xml", spec.label))
+    }
+
+    pub fn service_file_path(spec: &ServiceSpec, home_dir: &str) -> String {
+        task_path(spec, home_dir).to_string_lossy().to_string()
+    }
+
+    pub fn install(spec: &ServiceSpec) -> Result<(), String> {
+        let home_dir = home()?;
+        let exe_path = current_exe()?;
+        let task = render_task(spec, &home_dir, &exe_path);
+        let task_file = task_path(spec, &home_dir);
+        let task_dir = task_file
+            .parent()
+            .ok_or_else(|| "cannot determine the services directory".to_string())?;
+        fs::create_dir_all(task_dir)
+            .map_err(|e| format!("failed to create the services directory: {e}"))?;
+        // schtasks reads the declared UTF-16 only with a byte order mark
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(task.encode_utf16().flat_map(u16::to_le_bytes));
+        fs::write(&task_file, bytes).map_err(|e| format!("failed to write the task: {e}"))?;
+        let name = task_name(spec);
+        let _ = run_command("schtasks", &["/End", "/TN", &name]);
+        run_command(
+            "schtasks",
+            &["/Create", "/TN", &name, "/XML", &task_file.to_string_lossy(), "/F"],
+        )?;
+        run_command("schtasks", &["/Run", "/TN", &name])
+    }
+
+    pub fn uninstall(spec: &ServiceSpec) -> Result<(), String> {
+        let task_file = task_path(spec, &home()?);
+        if task_file.exists() {
+            let name = task_name(spec);
+            let _ = run_command("schtasks", &["/End", "/TN", &name]);
+            let _ = run_command("schtasks", &["/Delete", "/TN", &name, "/F"]);
+            fs::remove_file(&task_file).map_err(|e| format!("failed to remove the task: {e}"))?;
+        }
+        Ok(())
+    }
+
+    pub fn restart(spec: &ServiceSpec) -> Result<(), String> {
+        if !task_path(spec, &home()?).exists() {
+            return Err(not_installed(spec));
+        }
+        let name = task_name(spec);
+        let _ = run_command("schtasks", &["/End", "/TN", &name]);
+        run_command("schtasks", &["/Run", "/TN", &name])
+    }
+
+    pub fn status(spec: &ServiceSpec) {
+        let _ = Command::new("schtasks")
+            .args(["/Query", "/TN", &task_name(spec), "/V", "/FO", "LIST"])
+            .status();
+    }
+
+    pub fn is_active(spec: &ServiceSpec) -> Option<String> {
+        let output = Command::new("schtasks")
+            .args(["/Query", "/TN", &task_name(spec)])
+            .output()
+            .ok()?;
+        output.status.success().then(|| "active".to_string())
+    }
+}
+
 // ── Anything else ─────────────────────────────────────────────────
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod platform {
     use super::*;
 
@@ -412,5 +576,8 @@ mod quoting_tests {
         assert_eq!(unit_argument("/home/A B/$user%/hub.db"), "\"/home/A B/$$user%%/hub.db\"");
         assert_eq!(unit_argument("a\"b\\c\n"), "\"a\\\"b\\\\c\\n\"");
         assert_eq!(xml_text("/Users/A & B/<hub>.db"), "/Users/A &amp; B/&lt;hub&gt;.db");
+        assert_eq!(windows_argument(r"C:\Users\A B\hub.db"), r#""C:\Users\A B\hub.db""#);
+        assert_eq!(windows_argument(r"C:\dir\"), r#""C:\dir\\""#);
+        assert_eq!(windows_argument(r#"a\"b"#), r#""a\\\"b""#);
     }
 }
