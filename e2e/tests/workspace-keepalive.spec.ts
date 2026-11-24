@@ -116,7 +116,7 @@ async function focusTerminal(page: Page, terminalId: string): Promise<void> {
   expect(focused, "xterm helper textarea is not focused").toBe(true);
 }
 
-test("inactive group stays mounted for instant switch-back, capped at one", async ({
+test("inactive groups stay mounted for instant switch-back, capped at 4", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -189,17 +189,33 @@ test("inactive group stays mounted for instant switch-back, capped at one", asyn
     .toContain("STILL_ON_A");
   expect(await wsInputFor(page, terminalB)).toEqual([]);
 
-  // Cap of one hidden group: the LRU keeps [active, previous], so activating
-  // C keeps A (mounted [C, A]). A is only evicted by one more switch — to B
-  // (mounted [B, C]) — after which switching back to A re-attaches (WS
-  // construction count increases).
+  // Cap of 4 mounted groups on desktop (active + 3 recent within the 8-pane
+  // budget): visiting C and D keeps A warm ([D, C, A, B]). Visiting E pushes
+  // B out, and then visiting B pushes A out ([B, E, D, C]), after which
+  // switching back to A re-attaches (WS construction count increases).
   const groupC = await createWorkspaceGroupViaApi(page, `Keep C ${Date.now()}`);
   const terminalC = await createTerminalViaApi(page, {
     cwd: "/var",
     workspaceGroupId: groupC.id,
   });
+  const groupD = await createWorkspaceGroupViaApi(page, `Keep D ${Date.now()}`);
+  const terminalD = await createTerminalViaApi(page, {
+    cwd: "/etc",
+    workspaceGroupId: groupD.id,
+  });
+  const groupE = await createWorkspaceGroupViaApi(page, `Keep E ${Date.now()}`);
+  const terminalE = await createTerminalViaApi(page, {
+    cwd: "/usr",
+    workspaceGroupId: groupE.id,
+  });
   await page.getByTestId(`workspace-group-${groupC.id}`).click();
   await expect(page.getByTestId(`workspace-pane-${terminalC}`)).toBeVisible();
+  await page.getByTestId(`workspace-group-${groupD.id}`).click();
+  await expect(page.getByTestId(`workspace-pane-${terminalD}`)).toBeVisible();
+  // Still within 4-group LRU: A remains mounted.
+  await expect(page.getByTestId(`workspace-pane-${terminalA}`)).toHaveCount(1);
+  await page.getByTestId(`workspace-group-${groupE.id}`).click();
+  await expect(page.getByTestId(`workspace-pane-${terminalE}`)).toBeVisible();
   await page.getByTestId(`workspace-group-${groupB.id}`).click();
   await expect(page.getByTestId(`workspace-pane-${terminalB}`)).toBeVisible();
   // Evicted: A's pane is fully unmounted, not just hidden.
