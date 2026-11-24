@@ -9,7 +9,6 @@ name = "offdesk-node"
 path = "src/main.rs"
 
 [dependencies]
-offdesk-preview-transport = { path = "../preview-transport" }
 offdesk-protocol = { path = "../protocol" }
 tokio = { workspace = true }
 serde = { workspace = true }

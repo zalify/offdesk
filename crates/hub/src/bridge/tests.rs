@@ -86,7 +86,6 @@ async fn a_bridge_pairs_resumes_refuses_and_hangs_up_when_revoked() {
     let state = AppState {
         manager: Arc::new(MachineManager::new(pool.clone())),
         router: Arc::new(HubRouter::new()),
-        web_previews: Arc::new(crate::web_preview::registry::Registry::default()),
         db: pool.clone(),
         jwt_secret: "test-secret".to_string(),
         base_url: "http://localhost:4317".to_string(),
@@ -273,7 +272,6 @@ fn upload_state() -> (AppState, std::path::PathBuf, String, String) {
     let state = AppState {
         manager: Arc::new(MachineManager::new(pool.clone())),
         router: Arc::new(HubRouter::new()),
-        web_previews: Arc::new(crate::web_preview::registry::Registry::default()),
         db: pool,
         jwt_secret: "test-secret".to_string(),
         base_url: "http://localhost:4317".to_string(),

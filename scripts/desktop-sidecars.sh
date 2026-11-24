@@ -1,31 +1,22 @@
 #!/bin/sh
-# Build offdesk-hub (with the web UI baked in) and offdesk-node for the
-# desktop app to ship, named the way Tauri's externalBin wants them:
+# Build offdesk-hub (client-only) and offdesk-node for the desktop app to ship,
+# named the way Tauri's externalBin wants them:
 #
 #   scripts/desktop-sidecars.sh              # this machine's target
 #   scripts/desktop-sidecars.sh --universal  # macOS: both architectures, glued
 #
 # writes packages/desktop/src-tauri/binaries/offdesk-{hub,node}-<triple>.
-# The web UI must be built first (pnpm --filter @offdesk/shared build &&
-# pnpm --filter @offdesk/app build); the hub bakes packages/app/dist in.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="$root/packages/desktop/src-tauri/binaries"
 mkdir -p "$out"
 
-[ -f "$root/packages/app/dist/index.html" ] || {
-    echo "error: packages/app/dist is not built. Run:" >&2
-    echo "  pnpm --filter @offdesk/shared build && pnpm --filter @offdesk/app build" >&2
-    exit 1
-}
-
 build() {
     target="$1"
     (
         cd "$root"
-        cargo build --release --target "$target" --bin offdesk-node
-        cargo build --release --target "$target" --bin offdesk-hub --features offdesk-hub/embed-ui
+        cargo build --release --target "$target" --bin offdesk-node --bin offdesk-hub
     )
 }
 

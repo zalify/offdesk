@@ -8,23 +8,12 @@ license = "MIT"
 name = "offdesk-hub"
 path = "src/main.rs"
 
-[features]
-# The Web UI is FSL-1.1-MIT (packages/app/LICENSE.md), so a binary built with
-# this feature includes FSL code; without it the Hub is MIT only.
-# Bakes packages/app/dist into the binary so `offdesk-hub` serves the web UI
-# with nothing beside it. Off by default: a plain `cargo build` must not
-# require a built frontend. Release builds turn it on.
-embed-ui = ["dep:rust-embed", "dep:mime_guess"]
-
 [dependencies]
-offdesk-preview-transport = { path = "../preview-transport" }
 tokio-util.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 http-body-util.workspace = true
 url = "2"
-rust-embed = { version = "8", optional = true, features = ["interpolate-folder-path"] }
-mime_guess = { version = "2", optional = true }
 offdesk-protocol = { path = "../protocol" }
 tokio = { workspace = true }
 serde = { workspace = true }

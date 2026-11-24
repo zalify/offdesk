@@ -1,4 +1,3 @@
-import { WebPreviewDialog } from "./WebPreviewDialog";
 import {
   memo,
   useCallback,
@@ -117,7 +116,6 @@ interface TerminalWorkspaceProps {
 // Handlers the desktop chrome (TabBar, CommandPalette) invokes on the
 // workspace. Optional fields stay unset until the workspace mounts.
 export interface WorkspaceCommandChannel {
-  openWebPreview?: () => void;
   selectGroup?: (groupId: string) => void;
   reorderGroups?: (
     sourceGroupId: string,
@@ -249,7 +247,6 @@ function TerminalWorkspaceComponent({
   // depending on the state value (which would churn their identities).
   const maximizedTerminalIdRef = useRef<string | null>(null);
   maximizedTerminalIdRef.current = maximizedTerminalId;
-  const [webPreviewTerminal, setWebPreviewTerminal] = useState<TerminalInfo | null>(null);
   const [paneMenu, setPaneMenu] = useState<{
     terminalId: string;
     x: number;
@@ -1036,9 +1033,6 @@ function TerminalWorkspaceComponent({
   useEffect(() => {
     if (!commandsRef) return;
     commandsRef.current = {
-      openWebPreview: () => {
-        if (activeTerminal) setWebPreviewTerminal(activeTerminal);
-      },
       selectGroup: (groupId) => activateGroup(groupId),
       selectTerminal: (terminalId) => {
         if (
@@ -1253,7 +1247,6 @@ function TerminalWorkspaceComponent({
             />
           )}
         </div>
-        {webPreviewTerminal && <WebPreviewDialog machineId={webPreviewTerminal.machine_id} terminalId={webPreviewTerminal.id} onClose={() => setWebPreviewTerminal(null)} />}
       </div>
     );
   }
@@ -1263,7 +1256,6 @@ function TerminalWorkspaceComponent({
     : null;
   const paneMenuItems: ContextMenuEntry[] = paneMenuTerminal
     ? [
-        { label: "open web preview", onClick: () => setWebPreviewTerminal(paneMenuTerminal) },
         {
           label: "split right",
           shortcut: formatPrefixBinding("splitRight"),
@@ -1501,7 +1493,6 @@ function TerminalWorkspaceComponent({
           />
         )}
       </div>
-      {webPreviewTerminal && <WebPreviewDialog machineId={webPreviewTerminal.machine_id} terminalId={webPreviewTerminal.id} onClose={() => setWebPreviewTerminal(null)} />}
       {paneMenu && paneMenuTerminal && (
         <ContextMenu
           x={paneMenu.x}
