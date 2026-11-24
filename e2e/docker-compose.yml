@@ -23,7 +23,6 @@ services:
       OFFDESK_DEV_MODE: "true"
       JWT_SECRET: "e2e-test-secret"
       OFFDESK_BASE_URL: "http://hub:4317"
-      OFFDESK_PREVIEW_DOMAIN: "preview.test"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf -H 'Host: hub:4317' http://localhost:4317/api/auth/dev || exit 1"]
       interval: 3s
@@ -54,14 +53,6 @@ services:
       hub:
         condition: service_healthy
 
-  preview-edge:
-    build:
-      context: ..
-      dockerfile: e2e/Dockerfile.preview-edge
-    depends_on:
-      hub:
-        condition: service_healthy
-
   runner:
     build:
       context: ..
@@ -70,7 +61,6 @@ services:
     environment:
       CI: "true"
       PLAYWRIGHT_BASE_URL: "http://hub:4317"
-      PLAYWRIGHT_PREVIEW_EDGE: "preview-edge"
     # E2E_SHARD (e.g. 2/4) runs one slice of the suite; CI runs the slices
     # on separate runners, each with its own hub and node.
     command: ["pnpm", "exec", "playwright", "test", "--grep", "${E2E_TEST_GREP:-.*}", "--shard", "${E2E_SHARD:-1/1}"]
@@ -78,8 +68,6 @@ services:
       hub:
         condition: service_healthy
       node:
-        condition: service_started
-      preview-edge:
         condition: service_started
     volumes:
       - ./artifacts:/work/e2e/artifacts

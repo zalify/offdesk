@@ -9,14 +9,12 @@ services:
       - offdesk-data:/app/data
     environment:
       DATABASE_PATH: "/app/data/offdesk.db"
-      OFFDESK_STATIC_DIR: "/app/web"
       JWT_SECRET: "${JWT_SECRET}"
       GITHUB_CLIENT_ID: "${GITHUB_CLIENT_ID}"
       GITHUB_CLIENT_SECRET: "${GITHUB_CLIENT_SECRET}"
       GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
       GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET}"
       OFFDESK_BASE_URL: "${OFFDESK_BASE_URL}"
-      OFFDESK_PREVIEW_DOMAIN: "${OFFDESK_PREVIEW_DOMAIN:-}"
     labels:
       com.centurylinklabs.watchtower.enable: "true"
 

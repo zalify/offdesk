@@ -2028,7 +2028,6 @@ function TerminalCanvasInner() {
               onEngageViewOnly={handleEngageViewOnly}
               onDisengageViewOnly={handleDisengageViewOnly}
               onOpenSettings={() => setShowSettings(true)}
-              onOpenWebPreview={() => workspaceCommandsRef.current.openWebPreview?.()}
             >
               {scopedTerminals.length > 0 && workspaceTerminal?.machine_id === activeMachine?.id && workspaceTerminal ? (
                 <TerminalWorkspace

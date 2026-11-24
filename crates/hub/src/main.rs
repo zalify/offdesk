@@ -13,14 +13,11 @@ mod auth;
 mod bridge;
 mod first_run;
 mod setup_check;
-#[cfg(feature = "embed-ui")]
-mod embedded_ui;
 pub mod db;
 mod machine_manager;
 mod routes;
 mod versions;
 mod ws;
-mod web_preview;
 mod webhooks;
 
 use axum::body::Body;
@@ -338,7 +335,6 @@ fn run_link_json(args: &Args) {
 pub struct AppState {
     pub manager: Arc<MachineManager>,
     pub router: Arc<HubRouter>,
-    pub web_previews: Arc<web_preview::registry::Registry>,
     pub db: DbPool,
     pub jwt_secret: String,
     pub base_url: String,
@@ -472,22 +468,6 @@ async fn main() {
     let state = AppState {
         manager: Arc::new(MachineManager::new(pool.clone())),
         router: Arc::new(HubRouter::new()),
-        web_previews: Arc::new(match std::env::var("OFFDESK_PREVIEW_DOMAIN") {
-            Ok(domain) if !domain.is_empty() => {
-                let mut config = web_preview::registry::Config::new(&domain, &env_or("OFFDESK_BASE_URL", "http://localhost:4317"))
-                    .expect("Invalid preview configuration");
-                config.listener = args.listen.parse().ok();
-                for origin in env_or("OFFDESK_PREVIEW_CONTROL_ORIGINS", "").split(',').map(str::trim).filter(|s| !s.is_empty()) {
-                    config.add_control_origin(origin).expect("Invalid preview control origin");
-                }
-                if let Some(origin) = env_opt("OFFDESK_SECURE_BASE_URL") {
-                    config.add_control_origin(&origin).expect("Invalid secure Hub origin");
-                }
-                tracing::info!(control = %config.control_authority, aliases = ?config.control_aliases, listener = ?config.listener, "Web previews enabled; Docker published addresses must be listed in OFFDESK_PREVIEW_CONTROL_ORIGINS");
-                web_preview::registry::Registry::configured(config)
-            },
-            _ => web_preview::registry::Registry::default(),
-        }),
         db: pool,
         jwt_secret: jwt_secret.clone(),
         base_url: env_or("OFFDESK_BASE_URL", "http://localhost:4317"),
@@ -515,7 +495,6 @@ async fn main() {
         .merge(connections::router(args.listen.clone(), env_opt("OFFDESK_SECURE_BASE_URL"), database.clone()))
         .merge(routes::onboarding::router(env_opt("OFFDESK_SECURE_BASE_URL"), database.clone()))
         .merge(ws::router())
-        .merge(web_preview::router())
         .with_state(state.clone());
     let encrypted = secure::router(state.clone(), inner.clone(), &database)
         .expect("Could not initialize encrypted connections");
@@ -524,8 +503,7 @@ async fn main() {
         .route("/api/{*path}", any(api_not_found))
         .layer(CorsLayer::permissive())
         .fallback_service(ui_service(args.static_dir.as_deref()))
-        .layer(tower_http::compression::CompressionLayer::new())
-        .layer(axum::middleware::from_fn_with_state(state, web_preview::dispatch));
+        .layer(tower_http::compression::CompressionLayer::new());
 
     let listener = match tokio::net::TcpListener::bind(&args.listen).await {
         Ok(listener) => listener,
@@ -630,23 +608,24 @@ fn cache_control_for_static<B>(res: &http::Response<B>) -> Option<HeaderValue> {
     HeaderValue::from_str(directive).ok()
 }
 
-/// An explicit `--static-dir` always wins: it is how someone runs a hub
-/// against a frontend they are editing. Otherwise the baked-in UI, and
-/// otherwise the repo-relative path this has always defaulted to.
+/// Serve a local web UI only when `--static-dir` / `OFFDESK_STATIC_DIR` is
+/// explicitly configured (development / E2E). Production Hubs are client-only:
+/// connect with the Offdesk desktop or mobile app.
 fn ui_service(static_dir: Option<&str>) -> Router {
     if let Some(dir) = static_dir {
         tracing::info!("serving the web UI from {dir}");
         return static_file_service(dir);
     }
 
-    #[cfg(feature = "embed-ui")]
-    if embedded_ui::is_populated() {
-        tracing::info!("serving the web UI baked into this binary");
-        return Router::new().fallback(embedded_ui::serve);
-    }
+    tracing::info!("Hub running in client-only mode (no public web UI)");
+    Router::new().fallback(client_only_notice)
+}
 
-    tracing::info!("serving the web UI from packages/app/dist");
-    static_file_service("packages/app/dist")
+async fn client_only_notice() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        "Offdesk Hub is client-only. Connect with the Offdesk desktop or mobile app.\n",
+    )
 }
 
 fn static_file_service(static_dir: impl AsRef<Path>) -> Router {

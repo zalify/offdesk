@@ -14,34 +14,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  web-bundle:
-    # offdesk-hub bakes the web UI into the binary, and it is the same bundle
-    # on every target — built once here rather than four times in the matrix.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 10.23.0
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile=false
-      - run: pnpm --filter @offdesk/shared build
-      - run: cd packages/app && npx expo export --platform web
-      # Metro's entry chunk keeps its filename while its contents change, so
-      # without this a browser that cached one is pinned to an old chunk map.
-      - run: node scripts/stamp-build.mjs packages/app/dist "${{ inputs.tag || github.ref_name }}"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: web-bundle
-          path: packages/app/dist
-
   build:
-    needs: web-bundle
     strategy:
       fail-fast: false
       matrix:
@@ -72,11 +45,6 @@ jobs:
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
 
-      - uses: actions/download-artifact@v8
-        with:
-          name: web-bundle
-          path: packages/app/dist
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -91,16 +59,13 @@ jobs:
 
       # All three, or the installer only half works: it takes the CLI, the
       # agent and the hub from the same release, and a missing asset is a
-      # failed install. embed-ui bakes the web bundle into offdesk-hub so it
-      # runs with nothing beside it.
+      # failed install.
       - name: Build offdesk, offdesk-node and offdesk-hub
         run: |
           builder=cargo
           if [ "${{ matrix.use-cross }}" = "true" ]; then builder=cross; fi
           $builder build --release --target ${{ matrix.target }} \
-            --bin offdesk --bin offdesk-node
-          $builder build --release --target ${{ matrix.target }} \
-            --bin offdesk-hub --features offdesk-hub/embed-ui
+            --bin offdesk --bin offdesk-node --bin offdesk-hub
 
       - name: Name the binaries for the release
         run: |
