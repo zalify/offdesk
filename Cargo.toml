@@ -20,7 +20,7 @@ tracing-subscriber = "0.3"
 futures = "0.3"
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["fs", "cors", "set-header"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "set-header", "compression-gzip", "compression-br", "compression-zstd"] }
 portable-pty = "0.9"
 vt100 = "0.15"
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }

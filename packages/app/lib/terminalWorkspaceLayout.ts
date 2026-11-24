@@ -443,25 +443,41 @@ export function getActiveWorkspaceGroup(
 }
 
 // Group ids whose pane trees stay mounted, most-recently-active first.
-// At most one inactive group is kept alive (the previously active one —
-// covers the dominant A↔B flip): each live pane holds a WebGL context and
-// browsers cap contexts at ~8-16, so active(≤4) + one hidden group(≤4)
-// stays ≤8 with no gpu-suspend machinery. Touch devices get no keep-alive
-// (mobile WebView memory). Ids that no longer exist in the workspace (e.g.
-// a deleted group) are filtered out, so deletion paths need no
-// special-casing.
+// Each live pane holds a WebGL context and browsers cap contexts at ~8-16, so
+// we keep up to 4 recent groups mounted on desktop while staying within an
+// 8-pane budget (active group always mounts first). Single-pane tabs can keep
+// 4 tabs warm for instant switching; 4-pane split tabs still cap at 2 groups
+// (8 panes). Touch devices get no keep-alive (mobile WebView memory). Ids that
+// no longer exist in the workspace (e.g. a deleted group) are filtered out.
+const MAX_MOUNTED_DESKTOP_GROUPS = 4;
+const MAX_MOUNTED_DESKTOP_PANES = 8;
+
 export function mountedWorkspaceGroupIds(
   workspace: TerminalWorkspace,
-  previousActiveGroupId: string | null,
+  recentGroupIds: string | readonly string[] | null,
   isTouch: boolean,
 ): string[] {
-  const cap = isTouch ? 1 : 2;
-  const existing = new Set(workspace.groups.map((group) => group.id));
+  const groupCap = isTouch ? 1 : MAX_MOUNTED_DESKTOP_GROUPS;
+  const byId = new Map(workspace.groups.map((group) => [group.id, group]));
+  const recent =
+    recentGroupIds === null
+      ? []
+      : typeof recentGroupIds === "string"
+        ? [recentGroupIds]
+        : recentGroupIds;
   const ids: string[] = [];
-  for (const id of [workspace.activeGroupId, previousActiveGroupId]) {
-    if (ids.length >= cap) break;
-    if (id === null || !existing.has(id) || ids.includes(id)) continue;
+  let mountedPanes = 0;
+  for (const id of [workspace.activeGroupId, ...recent]) {
+    if (ids.length >= groupCap) break;
+    if (id === null || ids.includes(id)) continue;
+    const group = byId.get(id);
+    if (!group) continue;
+    const paneCount = collectPaneTerminalIds(group.root).length;
+    if (ids.length > 0 && mountedPanes + paneCount > MAX_MOUNTED_DESKTOP_PANES) {
+      continue;
+    }
     ids.push(id);
+    mountedPanes += paneCount;
   }
   return ids;
 }

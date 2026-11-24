@@ -150,7 +150,7 @@ impl HubConnection {
         let config = WebSocketConfig::default()
             .max_message_size(Some(32 * 1024 * 1024))
             .max_frame_size(Some(32 * 1024 * 1024));
-        let (ws_stream, _) = connect_async_with_config(&self.hub_url, Some(config), false)
+        let (ws_stream, _) = connect_async_with_config(&self.hub_url, Some(config), true)
             .await
             .map_err(|e| format!("WebSocket connect failed: {}", e))?;
 
@@ -1076,25 +1076,25 @@ async fn handle_hub_message(
             path,
             show_hidden,
         } => {
-            let resolved = expand_tilde(&path);
-            match read_directory(&resolved, show_hidden) {
-                Ok(entries) => {
-                    let _ = send_tx
-                        .send(OutboundHubMessage::Json(MachineToHub::FsListResult {
-                            request_id,
-                            entries,
-                        }))
-                        .await;
-                }
-                Err(e) => {
-                    let _ = send_tx
-                        .send(OutboundHubMessage::Json(MachineToHub::FsListError {
-                            request_id,
-                            error: e,
-                        }))
-                        .await;
-                }
-            }
+            // Directory reads can hit slow disks or large folders; keep them
+            // off the hub receive loop so keystrokes never stall.
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let resolved = expand_tilde(&path);
+                let result = tokio::task::spawn_blocking(move || read_directory(&resolved, show_hidden)).await;
+                let message = match result {
+                    Ok(Ok(entries)) => MachineToHub::FsListResult {
+                        request_id,
+                        entries,
+                    },
+                    Ok(Err(error)) => MachineToHub::FsListError { request_id, error },
+                    Err(error) => MachineToHub::FsListError {
+                        request_id,
+                        error: format!("Directory read failed: {error}"),
+                    },
+                };
+                let _ = send_tx.send(OutboundHubMessage::Json(message)).await;
+            });
         }
         HubToMachine::AuthResult { ok, message } => {
             if ok {
@@ -1158,16 +1158,24 @@ async fn handle_hub_message(
             request_id,
             terminal_id,
         } => {
-            let (has_fg, process_name) = pty.check_foreground_process(&terminal_id);
-            let _ = send_tx
-                .send(OutboundHubMessage::Json(
-                    MachineToHub::ForegroundProcessResult {
-                        request_id,
-                        has_foreground_process: has_fg,
-                        process_name,
-                    },
-                ))
-                .await;
+            let pty = pty.clone();
+            let send_tx = send_tx.clone();
+            tokio::spawn(async move {
+                let (has_fg, process_name) = tokio::task::spawn_blocking(move || {
+                    pty.check_foreground_process(&terminal_id)
+                })
+                .await
+                .unwrap_or((false, None));
+                let _ = send_tx
+                    .send(OutboundHubMessage::Json(
+                        MachineToHub::ForegroundProcessResult {
+                            request_id,
+                            has_foreground_process: has_fg,
+                            process_name,
+                        },
+                    ))
+                    .await;
+            });
         }
         HubToMachine::Ping => {
             let _ = send_tx
