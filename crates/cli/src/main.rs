@@ -797,6 +797,8 @@ impl From<ContentArg> for offdesk_protocol::ContentLevel {
 enum StartAgent {
     Claude,
     Codex,
+    #[value(alias = "agy")]
+    Antigravity,
 }
 
 impl StartAgent {
@@ -804,6 +806,7 @@ impl StartAgent {
         match self {
             StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
             StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
+            StartAgent::Antigravity => offdesk_protocol::RunAgent::Antigravity,
         }
     }
 }
@@ -1173,13 +1176,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                         scopes: scope,
                         content: content.map(Into::into),
                         dirs: dir,
-                        agents: agent
-                            .into_iter()
-                            .map(|a| match a {
-                                StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
-                                StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
-                            })
-                            .collect(),
+                        agents: agent.into_iter().map(StartAgent::run_agent).collect(),
                         machines: machine,
                         production,
                         max_starts_per_hour: max_starts,
@@ -1205,13 +1202,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                         scopes: scope,
                         content: content.map(Into::into),
                         dirs: dir,
-                        agents: agent
-                            .into_iter()
-                            .map(|a| match a {
-                                StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
-                                StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
-                            })
-                            .collect(),
+                        agents: agent.into_iter().map(StartAgent::run_agent).collect(),
                         machines: machine,
                         production,
                         max_starts_per_hour: max_starts,
@@ -1257,10 +1248,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             };
             let start = offdesk_protocol::StartAgentRun {
                 machine_id: String::new(),
-                agent: match agent {
-                    StartAgent::Claude => offdesk_protocol::RunAgent::Claude,
-                    StartAgent::Codex => offdesk_protocol::RunAgent::Codex,
-                },
+                agent: agent.run_agent(),
                 cwd,
                 prompt,
                 label,

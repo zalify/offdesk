@@ -5,7 +5,7 @@ use offdesk_protocol::TerminalAttention;
 /// Shared by the capture gate and screen adapter. Claude's native build can
 /// report `claude.exe` as pane_current_command even on macOS.
 pub fn supports_command(command: Option<&str>) -> bool {
-    matches!(command, Some("claude" | "claude.exe" | "codex" | "node"))
+    matches!(command, Some("claude" | "claude.exe" | "codex" | "agy" | "agy.exe" | "node"))
         || command.is_some_and(crate::agent_detect::is_native_claude)
 }
 
@@ -76,6 +76,27 @@ pub fn agent_working(screen: &str) -> bool {
         .take(8)
         .any(|line| line.to_ascii_lowercase().contains("esc to interrupt"));
     spinner || interrupt
+}
+
+/// Command-aware turn-in-progress check. Antigravity (`agy`) replaces its
+/// idle footer (`? for shortcuts`) with `esc to cancel` at the bottom edge
+/// while a turn is running.
+pub fn agent_working_for(command: Option<&str>, screen: &str) -> bool {
+    if matches!(command, Some("agy" | "agy.exe")) {
+        let agy_working = screen
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .is_some_and(|line| {
+                let lower = line.to_ascii_lowercase();
+                lower.starts_with("esc to cancel")
+                    && !lower.contains("enter to confirm")
+                    && !lower.contains("tab to amend")
+            });
+        return agy_working || agent_working(screen);
+    }
+    agent_working(screen)
 }
 
 pub fn detect(command: Option<&str>, screen: &str) -> Option<TerminalAttention> {
@@ -270,5 +291,17 @@ mod tests {
         // "esc to interrupt" far up the screen is history, not the live status.
         let history = format!("esc to interrupt\n{}", "line\n".repeat(10));
         assert!(!agent_working(&history));
+    }
+
+    #[test]
+    fn antigravity_working_reads_the_bottom_footer() {
+        let working = "⣯  0/5 steps · Running command...\n────────\n>\n────────\nesc to cancel                                                        auto · Gemini 4 Neon · medium\n";
+        let idle = "────────\n>\n────────\n? for shortcuts                                                      auto · Gemini 4 Neon · medium\n";
+        assert!(supports_command(Some("agy")));
+        assert!(agent_working_for(Some("agy"), working));
+        assert!(!agent_working_for(Some("agy"), idle));
+        // Claude's confirmation footer ("Esc to cancel · Tab to amend") must not count as working.
+        assert!(!agent_working_for(Some("claude"), CLAUDE));
+        assert!(!agent_working_for(Some("agy"), CLAUDE));
     }
 }

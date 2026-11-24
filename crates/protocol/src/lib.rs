@@ -579,7 +579,13 @@ impl AgentPermissionMode {
             }
             (RunAgent::Codex, AgentPermissionMode::Plan) => Err("Codex has no plan mode"),
             (RunAgent::Codex, AgentPermissionMode::Auto) => Ok(&["--yolo"]),
-            (RunAgent::Other, _) => Err("Only claude and codex can be started"),
+            (RunAgent::Antigravity, AgentPermissionMode::Ask) => Ok(&[]),
+            (RunAgent::Antigravity, AgentPermissionMode::AcceptEdits) => {
+                Ok(&["--mode", "accept-edits"])
+            }
+            (RunAgent::Antigravity, AgentPermissionMode::Plan) => Ok(&["--mode", "plan"]),
+            (RunAgent::Antigravity, AgentPermissionMode::Auto) => Ok(&["--mode", "auto"]),
+            (RunAgent::Other, _) => Err("Only claude, codex, and antigravity can be started"),
         }
     }
 }
@@ -925,8 +931,11 @@ impl AgentStart {
     /// Checks everything a node relies on: a known agent and mode, a run id that's a
     /// UUID, and a prompt and reference as `normalize_*` leaves them.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if !matches!(self.agent, RunAgent::Claude | RunAgent::Codex) {
-            return Err("Only claude and codex can be started");
+        if !matches!(
+            self.agent,
+            RunAgent::Claude | RunAgent::Codex | RunAgent::Antigravity
+        ) {
+            return Err("Only claude, codex, and antigravity can be started");
         }
         if uuid::Uuid::parse_str(&self.run_id).is_err() {
             return Err("Invalid run id");
@@ -1001,6 +1010,42 @@ pub fn claude_hook_groups(cli: &str) -> Vec<(&'static str, serde_json::Value)> {
         .collect()
 }
 
+/// The Antigravity (`agy`) hook events Offdesk listens to (`offdesk agents hooks install`).
+/// `PreToolUse` is intentionally omitted because Antigravity requires a permission
+/// `decision` on stdout and Offdesk hooks never make permission decisions.
+pub const ANTIGRAVITY_HOOK_EVENTS: [&str; 4] = [
+    "SessionStart",
+    "PreInvocation",
+    "PostToolUse",
+    "Stop",
+];
+
+/// The hook command Antigravity runs for `event`; `cli` is the `offdesk` program.
+pub fn antigravity_hook_command(cli: &str, event: &str) -> String {
+    format!("{} hook antigravity {event}", shell_word(cli))
+}
+
+/// The `"offdesk"` named hook entry for Antigravity's `~/.gemini/config/hooks.json`.
+/// `PostToolUse` uses the grouped `{ matcher, hooks }` wrapper; the other events are flat.
+pub fn antigravity_hooks_entry(cli: &str) -> serde_json::Value {
+    let handler = |event: &str| {
+        serde_json::json!({
+            "type": "command",
+            "command": antigravity_hook_command(cli, event),
+            "timeout": 5,
+        })
+    };
+    serde_json::json!({
+        "SessionStart": [handler("SessionStart")],
+        "PreInvocation": [handler("PreInvocation")],
+        "PostToolUse": [{
+            "matcher": "*",
+            "hooks": [handler("PostToolUse")],
+        }],
+        "Stop": [handler("Stop")],
+    })
+}
+
 /// A coding agent CLI a node found, for choosing what to start.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InstalledAgent {
@@ -1056,6 +1101,7 @@ pub struct LocalAgentReport {
 pub enum RunAgent {
     Claude,
     Codex,
+    Antigravity,
     /// An agent added by a newer hub or node, so older peers still read the run.
     #[serde(other)]
     Other,
@@ -1066,6 +1112,7 @@ impl RunAgent {
         match self {
             RunAgent::Claude => "claude",
             RunAgent::Codex => "codex",
+            RunAgent::Antigravity => "antigravity",
             RunAgent::Other => "other",
         }
     }
@@ -1074,6 +1121,7 @@ impl RunAgent {
         match name {
             "claude" => RunAgent::Claude,
             "codex" => RunAgent::Codex,
+            "antigravity" | "agy" => RunAgent::Antigravity,
             _ => RunAgent::Other,
         }
     }
@@ -3739,6 +3787,12 @@ mod tests {
         assert!(AgentPermissionMode::Plan.args(RunAgent::Codex).is_err());
         assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Claude).unwrap(), ["--permission-mode", "auto"]);
         assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Codex).unwrap(), ["--yolo"]);
+        assert_eq!(AgentPermissionMode::Ask.args(RunAgent::Antigravity).unwrap(), [] as [&str; 0]);
+        assert_eq!(AgentPermissionMode::AcceptEdits.args(RunAgent::Antigravity).unwrap(), ["--mode", "accept-edits"]);
+        assert_eq!(AgentPermissionMode::Plan.args(RunAgent::Antigravity).unwrap(), ["--mode", "plan"]);
+        assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Antigravity).unwrap(), ["--mode", "auto"]);
+        assert_eq!(RunAgent::from_name("antigravity"), RunAgent::Antigravity);
+        assert_eq!(RunAgent::from_name("agy"), RunAgent::Antigravity);
         assert!(serde_json::from_str::<AgentPermissionMode>(r#""bypass_permissions""#).is_err());
 
         let mut start = AgentStart {

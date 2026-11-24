@@ -27,6 +27,7 @@ pub fn agent_for_pane(
     match command? {
         "claude" | "claude.exe" => Some(RunAgent::Claude),
         "codex" => Some(RunAgent::Codex),
+        "agy" | "agy.exe" => Some(RunAgent::Antigravity),
         command if is_native_claude(command) => Some(RunAgent::Claude),
         "node" => {
             let pid = pane_pid?;
@@ -73,6 +74,14 @@ mod tests {
         assert_eq!(
             agent_for_pane(Some("codex"), Some(1), &[]),
             Some(RunAgent::Codex)
+        );
+        assert_eq!(
+            agent_for_pane(Some("agy"), Some(1), &[]),
+            Some(RunAgent::Antigravity)
+        );
+        assert_eq!(
+            agent_for_pane(Some("agy.exe"), Some(1), &[]),
+            Some(RunAgent::Antigravity)
         );
         assert_eq!(
             agent_for_pane(Some("2.1.307"), Some(1), &[]),

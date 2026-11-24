@@ -9,6 +9,7 @@ use std::path::PathBuf;
 pub enum AgentKind {
     Claude,
     Codex,
+    Antigravity,
 }
 
 /// A sanitized resume command captured while the agent was still running.
@@ -150,6 +151,36 @@ const CODEX_STRIP_BARE_FLAGS: &[&str] = &["resume", "--last"];
 const CODEX_STRIP_VALUE_FLAGS: &[&str] = &[];
 const CODEX_OPTIONAL_VALUE_FLAGS: &[&str] = &[];
 
+const AGY_BOOLEAN_FLAGS: &[&str] = &[
+    "--dangerously-skip-permissions",
+    "--sandbox",
+    "--remote-agent",
+    "--remote-control",
+];
+
+const AGY_VALUE_FLAGS: &[&str] = &[
+    "--add-dir",
+    "--agent",
+    "--effort",
+    "--mode",
+    "--model",
+    "--project",
+    "--settings",
+];
+
+const AGY_STRIP_VALUE_FLAGS: &[&str] = &[
+    "--conversation",
+    "--resume",
+    "-r",
+    "--prompt-interactive",
+    "-i",
+    "--print",
+    "-p",
+    "--prompt",
+];
+const AGY_STRIP_BARE_FLAGS: &[&str] = &["--continue", "-c", "--new-project"];
+const AGY_OPTIONAL_VALUE_FLAGS: &[&str] = &[];
+
 /// Shared core: walk the full original argv (skipping argv[0]) and keep only
 /// allowlisted flags in their original order.
 ///
@@ -264,6 +295,48 @@ pub fn sanitize_codex_argv(argv: &[String], thread_id: &str) -> Vec<String> {
         CODEX_STRIP_BARE_FLAGS,
     ));
     out
+}
+
+/// Rebuild the resume argv for an Antigravity (`agy`) session that was running in a pane.
+pub fn sanitize_agy_argv(argv: &[String], conversation_id: &str) -> Vec<String> {
+    let mut out = vec![
+        "agy".to_string(),
+        "--conversation".to_string(),
+        conversation_id.to_string(),
+    ];
+    out.extend(sanitize_flags(
+        argv,
+        AGY_BOOLEAN_FLAGS,
+        AGY_VALUE_FLAGS,
+        AGY_OPTIONAL_VALUE_FLAGS,
+        AGY_STRIP_VALUE_FLAGS,
+        AGY_STRIP_BARE_FLAGS,
+    ));
+    out
+}
+
+/// Extract a unique Antigravity conversation UUID from a process's open files
+/// (`.../antigravity-cli/presence/<uuid>.lock`).
+pub fn agy_conversation_id_from_files(files: &[PathBuf]) -> Option<String> {
+    let mut ids = files.iter().filter_map(|path| {
+        let name = path.file_name()?.to_str()?;
+        let id = name.strip_suffix(".lock")?;
+        let parent = path.parent()?.file_name()?.to_str()?;
+        if parent != "presence" {
+            return None;
+        }
+        let grandparent = path.parent()?.parent()?.file_name()?.to_str()?;
+        if grandparent != "antigravity-cli" {
+            return None;
+        }
+        uuid::Uuid::parse_str(id).ok()?;
+        Some(id.to_string())
+    });
+    let first = ids.next()?;
+    if ids.any(|other| other != first) {
+        return None;
+    }
+    Some(first)
 }
 
 // ── Claude session identity ─────────────────────────────────────────
@@ -403,12 +476,14 @@ fn resume_command_for_pane(
     claude_files: &[ClaudeSessionFile],
     tmux_name: &str,
     codex_thread: Option<String>,
+    agy_conversation: Option<String>,
     read_argv: impl Fn(u32) -> Option<Vec<String>>,
 ) -> Option<Option<ResumeCommand>> {
     let pane_pid = pane.pid?;
     let claude_pids = crate::codex_title::find_named_descendants(processes, pane_pid, "claude");
     let codex_pids = crate::codex_title::find_named_descendants(processes, pane_pid, "codex");
-    if claude_pids.is_empty() && codex_pids.is_empty() {
+    let agy_pids = crate::codex_title::find_named_descendants(processes, pane_pid, "agy");
+    if claude_pids.is_empty() && codex_pids.is_empty() && agy_pids.is_empty() {
         return Some(None);
     }
 
@@ -421,14 +496,26 @@ fn resume_command_for_pane(
         }));
     }
 
-    let thread = codex_thread?;
-    let [pid] = codex_pids.as_slice() else {
+    if !codex_pids.is_empty() {
+        let thread = codex_thread?;
+        let [pid] = codex_pids.as_slice() else {
+            return None;
+        };
+        let argv = read_argv(*pid)?;
+        return Some(Some(ResumeCommand {
+            agent: AgentKind::Codex,
+            argv: sanitize_codex_argv(&argv, &thread),
+        }));
+    }
+
+    let conversation = agy_conversation?;
+    let [pid] = agy_pids.as_slice() else {
         return None;
     };
     let argv = read_argv(*pid)?;
     Some(Some(ResumeCommand {
-        agent: AgentKind::Codex,
-        argv: sanitize_codex_argv(&argv, &thread),
+        agent: AgentKind::Antigravity,
+        argv: sanitize_agy_argv(&argv, &conversation),
     }))
 }
 
@@ -443,12 +530,20 @@ pub fn resolve_resume_commands(
     for (id, pane) in panes {
         let tmux_name = crate::pty::tmux_session_name(id);
         let codex_thread = crate::codex_title::thread_id_for_pane(pane, &processes);
+        let agy_conversation = pane.pid.and_then(|pane_pid| {
+            let pids = crate::codex_title::find_named_descendants(&processes, pane_pid, "agy");
+            let [pid] = pids.as_slice() else {
+                return None;
+            };
+            agy_conversation_id_from_files(&crate::codex_title::open_files(*pid))
+        });
         if let Some(command) = resume_command_for_pane(
             pane,
             &processes,
             &files,
             &tmux_name,
             codex_thread,
+            agy_conversation,
             process_argv,
         ) {
             resolved.insert(id.clone(), command);
@@ -822,7 +917,7 @@ mod tests {
     fn resume_command_for_pane_is_a_tri_state_over_the_process_tree() {
         let no_agent = vec![proc(11, Some(1), "fish")];
         assert_eq!(
-            resume_command_for_pane(&pane(Some(1)), &no_agent, &[], "odk_x", None, |_| None),
+            resume_command_for_pane(&pane(Some(1)), &no_agent, &[], "odk_x", None, None, |_| None),
             Some(None)
         );
 
@@ -839,7 +934,7 @@ mod tests {
             ]))
         };
         assert_eq!(
-            resume_command_for_pane(&pane(Some(1)), &claude, &files, "odk_x", None, read),
+            resume_command_for_pane(&pane(Some(1)), &claude, &files, "odk_x", None, None, read),
             Some(Some(ResumeCommand {
                 agent: AgentKind::Claude,
                 argv: argv(&[
@@ -862,7 +957,7 @@ mod tests {
             proc(13, Some(11), "claude"),
         ];
         assert_eq!(
-            resume_command_for_pane(&pane(Some(1)), &two, &ambiguous, "odk_x", None, read),
+            resume_command_for_pane(&pane(Some(1)), &two, &ambiguous, "odk_x", None, None, read),
             None
         );
 
@@ -876,6 +971,7 @@ mod tests {
                 &[],
                 "odk_x",
                 Some("uuid-1".into()),
+                None,
                 codex_read,
             ),
             Some(Some(ResumeCommand {
@@ -886,13 +982,80 @@ mod tests {
 
         // Codex present but no rollout identity -> keep the previous value.
         assert_eq!(
-            resume_command_for_pane(&pane(Some(1)), &codex, &[], "odk_x", None, codex_read),
+            resume_command_for_pane(&pane(Some(1)), &codex, &[], "odk_x", None, None, codex_read),
+            None
+        );
+
+        // Antigravity resumes by the resolved conversation uuid, stripping old selectors/prompts.
+        let agy = vec![proc(11, Some(1), "fish"), proc(12, Some(11), "agy")];
+        let agy_read = |_| {
+            Some(argv(&[
+                "agy",
+                "--dangerously-skip-permissions",
+                "--conversation=old-id",
+                "-i",
+                "initial prompt",
+                "--mode",
+                "accept-edits",
+            ]))
+        };
+        assert_eq!(
+            resume_command_for_pane(
+                &pane(Some(1)),
+                &agy,
+                &[],
+                "odk_x",
+                None,
+                Some("6d0eb52f-71b8-482a-b883-1d1156a3afec".into()),
+                agy_read,
+            ),
+            Some(Some(ResumeCommand {
+                agent: AgentKind::Antigravity,
+                argv: argv(&[
+                    "agy",
+                    "--conversation",
+                    "6d0eb52f-71b8-482a-b883-1d1156a3afec",
+                    "--dangerously-skip-permissions",
+                    "--mode",
+                    "accept-edits",
+                ]),
+            }))
+        );
+
+        // Antigravity present but no presence lock -> keep the previous value.
+        assert_eq!(
+            resume_command_for_pane(&pane(Some(1)), &agy, &[], "odk_x", None, None, agy_read),
             None
         );
 
         // No pane pid -> unresolvable.
         assert_eq!(
-            resume_command_for_pane(&pane(None), &claude, &files, "odk_x", None, read),
+            resume_command_for_pane(&pane(None), &claude, &files, "odk_x", None, None, read),
+            None
+        );
+    }
+
+    #[test]
+    fn agy_conversation_id_reads_unique_presence_lock() {
+        let id = "6d0eb52f-71b8-482a-b883-1d1156a3afec";
+        let lock = PathBuf::from(format!("/home/u/.gemini/antigravity-cli/presence/{id}.lock"));
+        assert_eq!(agy_conversation_id_from_files(&[lock.clone()]), Some(id.into()));
+        // Duplicate fd to the same lock is fine.
+        assert_eq!(
+            agy_conversation_id_from_files(&[lock.clone(), lock.clone()]),
+            Some(id.into())
+        );
+        // Two distinct locks -> ambiguous.
+        let other = PathBuf::from(
+            "/home/u/.gemini/antigravity-cli/presence/3e3764dc-b3c0-469b-ab41-f8ffc03ed285.lock",
+        );
+        assert_eq!(agy_conversation_id_from_files(&[lock, other]), None);
+        // Non-uuid or wrong dir -> ignored.
+        assert_eq!(
+            agy_conversation_id_from_files(&[
+                PathBuf::from("/home/u/.gemini/antigravity-cli/presence/not-a-uuid.lock"),
+                PathBuf::from(format!("/tmp/other/presence/{id}.lock")),
+            ]),
             None
         );
     }
