@@ -23,12 +23,18 @@ impl Route {
         let host = url.host_str().ok_or("Missing connection host")?;
         let local = host == "localhost"
             || host.ends_with(".local")
+            || host.ends_with(".ts.net")
             || host
                 .trim_matches(['[', ']'])
                 .parse::<std::net::IpAddr>()
                 .is_ok_and(|ip| match ip {
                     std::net::IpAddr::V4(ip) => {
-                        ip.is_private() || ip.is_loopback() || ip.is_link_local()
+                        let o = ip.octets();
+                        let is_cgnat_tailscale = o[0] == 100 && (o[1] & 0xc0) == 64;
+                        ip.is_private()
+                            || ip.is_loopback()
+                            || ip.is_link_local()
+                            || is_cgnat_tailscale
                     }
                     std::net::IpAddr::V6(ip) => {
                         ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
@@ -69,6 +75,14 @@ mod tests {
     fn validates_and_classifies_origins_without_trusting_advertised_labels() {
         assert_eq!(
             Route::from_url("http://192.168.1.2:4317/").unwrap().kind,
+            RouteKind::Local
+        );
+        assert_eq!(
+            Route::from_url("http://100.88.12.34:4317/").unwrap().kind,
+            RouteKind::Local
+        );
+        assert_eq!(
+            Route::from_url("https://nas.tail1234.ts.net/").unwrap().kind,
             RouteKind::Local
         );
         assert_eq!(
