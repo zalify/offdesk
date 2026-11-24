@@ -519,7 +519,14 @@ impl HubConnection {
                         last_sent.is_none() || !attach_mgr_for_titles.is_view_redraw(&terminal_id, *at)
                     });
                     let agent_working = agent
-                        .filter(|agent| matches!(agent, offdesk_protocol::RunAgent::Claude | offdesk_protocol::RunAgent::Codex))
+                        .filter(|agent| {
+                            matches!(
+                                agent,
+                                offdesk_protocol::RunAgent::Claude
+                                    | offdesk_protocol::RunAgent::Codex
+                                    | offdesk_protocol::RunAgent::Antigravity
+                            )
+                        })
                         .and(screen.agent_working);
                     let activity_ms = terminal_activity(
                         last_sent,

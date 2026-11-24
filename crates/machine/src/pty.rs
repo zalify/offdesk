@@ -404,7 +404,9 @@ impl PtyManager {
                             let screen = String::from_utf8_lossy(&o.stdout);
                             ScreenRead {
                                 attention: crate::terminal_attention::detect(command, &screen),
-                                agent_working: Some(crate::terminal_attention::agent_working(&screen)),
+                                agent_working: Some(crate::terminal_attention::agent_working_for(
+                                    command, &screen,
+                                )),
                             }
                         })
                         .unwrap_or_default()

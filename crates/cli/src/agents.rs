@@ -189,6 +189,15 @@ pub fn codex_notify_signal(payload: &str) -> Option<AgentSignal> {
     (value.get("type")?.as_str()? == "agent-turn-complete").then_some(AgentSignal::Idle)
 }
 
+/// An Antigravity (`agy`) hook event as a signal.
+pub fn antigravity_hook_signal(event: &str, _input: &Value) -> Option<AgentSignal> {
+    match event {
+        "SessionStart" | "Stop" => Some(AgentSignal::Idle),
+        "PreInvocation" | "PostToolUse" | "PostInvocation" => Some(AgentSignal::Working),
+        _ => None,
+    }
+}
+
 /// The pane this process runs in, if it's inside tmux: (`$TMUX_PANE`, the socket from `$TMUX`).
 fn tmux_pane() -> Option<(String, String)> {
     let pane = std::env::var("TMUX_PANE").ok().filter(|p| !p.is_empty())?;
@@ -230,6 +239,7 @@ pub fn hook(agent: &str, event: &str, args: &[String]) {
     let run_agent = match agent {
         "claude" => RunAgent::Claude,
         "codex" => RunAgent::Codex,
+        "antigravity" | "agy" => RunAgent::Antigravity,
         _ => return,
     };
     if event == "notify" {
@@ -259,10 +269,17 @@ pub fn hook(agent: &str, event: &str, args: &[String]) {
                 .read_to_string(&mut input);
         }
         let value = serde_json::from_str(&input).unwrap_or(Value::Null);
-        hook_signal(event, &value)
+        match run_agent {
+            RunAgent::Antigravity => antigravity_hook_signal(event, &value),
+            _ => hook_signal(event, &value),
+        }
     };
     if let Some(signal) = signal {
         let _ = report(Some(run_agent), "hooks", signal);
+    }
+    if run_agent == RunAgent::Antigravity {
+        // Antigravity hooks must return a JSON object on stdout.
+        println!("{{}}");
     }
 }
 
@@ -476,14 +493,65 @@ fn apply(
     Ok(true)
 }
 
-/// `offdesk agents hooks install|uninstall [--agent claude|codex] [--print]`: Claude Code's
-/// hooks and Codex's notify, or just the one named. Codex is skipped when it has no
-/// config folder and wasn't named.
+/// Antigravity's global hooks file: `~/.gemini/config/hooks.json`.
+pub fn antigravity_hooks_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".gemini").join("config").join("hooks.json"))
+}
+
+/// Antigravity CLI's data directory: `~/.gemini/antigravity-cli`.
+fn antigravity_cli_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(".gemini").join("antigravity-cli"))
+}
+
+/// Antigravity's `hooks.json` with Offdesk's `"offdesk"` named hook added (`install` true)
+/// or removed (`install` false). Other named hooks keep their order and text.
+pub fn update_antigravity_hooks(original: &str, exe: &Path, install: bool) -> Result<String, String> {
+    let mut hooks: IndexMap<String, Box<RawValue>> = if original.trim().is_empty() {
+        IndexMap::new()
+    } else {
+        serde_json::from_str(original).map_err(|error| format!("isn't a JSON object: {error}"))?
+    };
+    if install {
+        let entry = offdesk_protocol::antigravity_hooks_entry(&exe.to_string_lossy());
+        let raw = serde_json::to_string(&entry).map_err(|error| error.to_string())?;
+        hooks.insert(
+            "offdesk".into(),
+            RawValue::from_string(raw).map_err(|error| error.to_string())?,
+        );
+    } else {
+        hooks.shift_remove("offdesk");
+    }
+    if hooks.is_empty() {
+        return Ok("{}\n".to_string());
+    }
+    let mut out = String::from("{\n");
+    for (i, (key, raw)) in hooks.iter().enumerate() {
+        let pretty = match serde_json::from_str::<Value>(raw.get()) {
+            Ok(v) if key == "offdesk" => {
+                serde_json::to_string_pretty(&v).unwrap_or_else(|_| raw.get().to_string())
+            }
+            _ => raw.get().to_string(),
+        };
+        let indented = pretty.replace('\n', "\n  ");
+        out.push_str(&format!(
+            "  {}: {}{}\n",
+            serde_json::to_string(key).unwrap(),
+            indented,
+            if i + 1 < hooks.len() { "," } else { "" }
+        ));
+    }
+    out.push_str("}\n");
+    Ok(out)
+}
+
+/// `offdesk agents hooks install|uninstall [--agent claude|codex|antigravity] [--print]`:
+/// Claude Code's hooks, Codex's notify, and Antigravity's hooks, or just the one named.
+/// Codex and Antigravity are skipped when not set up here and not explicitly named.
 pub fn hooks(install: bool, print: bool, agent: Option<RunAgent>) -> Result<(), CliError> {
     let exe = std::env::current_exe()
         .map_err(|error| CliError::Usage(format!("can't find this program: {error}")))?;
     let home_missing = || CliError::Usage("can't find your home directory".into());
-    if agent != Some(RunAgent::Codex) {
+    if matches!(agent, None | Some(RunAgent::Claude)) {
         let path = claude_settings_path().ok_or_else(home_missing)?;
         if apply(&path, print, |original| update_claude_settings(original, &exe, install))? {
             crate::commands::out_line(&if install {
@@ -496,7 +564,7 @@ pub fn hooks(install: bool, print: bool, agent: Option<RunAgent>) -> Result<(), 
             });
         }
     }
-    if agent != Some(RunAgent::Claude) {
+    if matches!(agent, None | Some(RunAgent::Codex)) {
         let path = codex_config_path().ok_or_else(home_missing)?;
         let installed = path.parent().is_some_and(Path::exists);
         if agent.is_none() && !installed {
@@ -506,9 +574,7 @@ pub fn hooks(install: bool, print: bool, agent: Option<RunAgent>) -> Result<(), 
                     path.parent().map(|p| p.display().to_string()).unwrap_or_default()
                 ));
             }
-            return Ok(());
-        }
-        if apply(&path, print, |original| update_codex_config(original, &exe, install))? {
+        } else if apply(&path, print, |original| update_codex_config(original, &exe, install))? {
             crate::commands::out_line(&if install {
                 format!(
                     "Added Offdesk's notify to {}. Codex sessions in Offdesk terminals now report when a turn ends (new sessions); your own notify program, if any, still runs after it.",
@@ -516,6 +582,31 @@ pub fn hooks(install: bool, print: bool, agent: Option<RunAgent>) -> Result<(), 
                 )
             } else {
                 format!("Removed Offdesk's notify from {}; your own notify program, if any, is as it was", path.display())
+            });
+        }
+    }
+    if matches!(agent, None | Some(RunAgent::Antigravity)) {
+        let path = antigravity_hooks_path().ok_or_else(home_missing)?;
+        let installed = antigravity_cli_dir().is_some_and(|dir| dir.exists()) || path.exists();
+        if agent.is_none() && !installed {
+            if !print {
+                crate::commands::out_line(&format!(
+                    "Antigravity isn't set up here (no {}); skipped it",
+                    antigravity_cli_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default()
+                ));
+            }
+        } else if apply(&path, print, |original| {
+            update_antigravity_hooks(original, &exe, install)
+        })? {
+            crate::commands::out_line(&if install {
+                format!(
+                    "Added Offdesk's hooks to {}. Antigravity sessions started in Offdesk terminals now report their state (new sessions; restart running ones).",
+                    path.display()
+                )
+            } else {
+                format!("Removed Offdesk's hooks from {}", path.display())
             });
         }
     }
@@ -733,5 +824,57 @@ mod tests {
         .unwrap();
         assert_eq!(serde_json::from_str::<Value>(&empty).unwrap(), json!({}));
         assert!(update_claude_settings("[1]", exe, true).is_err());
+    }
+
+    #[test]
+    fn antigravity_hooks_install_preserve_and_uninstall_cleanly() {
+        assert_eq!(antigravity_hook_signal("SessionStart", &json!({})), Some(AgentSignal::Idle));
+        assert_eq!(antigravity_hook_signal("PreInvocation", &json!({})), Some(AgentSignal::Working));
+        assert_eq!(antigravity_hook_signal("PostToolUse", &json!({})), Some(AgentSignal::Working));
+        assert_eq!(antigravity_hook_signal("Stop", &json!({})), Some(AgentSignal::Idle));
+        assert_eq!(antigravity_hook_signal("PreToolUse", &json!({})), None);
+
+        let exe = Path::new("/Users/a/.local/bin/offdesk");
+        let original = r#"{
+  "my-lint": {"PostToolUse": [{"matcher": "run_command", "hooks": [{"command": "./lint.sh"}]}]}
+}
+"#;
+        let installed = update_antigravity_hooks(original, exe, true).unwrap();
+        let value: Value = serde_json::from_str(&installed).unwrap();
+        assert_eq!(value["my-lint"]["PostToolUse"][0]["matcher"], "run_command");
+        assert_eq!(
+            value["offdesk"]["SessionStart"][0]["command"],
+            "/Users/a/.local/bin/offdesk hook antigravity SessionStart"
+        );
+        assert_eq!(
+            value["offdesk"]["PreInvocation"][0]["command"],
+            "/Users/a/.local/bin/offdesk hook antigravity PreInvocation"
+        );
+        assert_eq!(
+            value["offdesk"]["PostToolUse"][0]["matcher"],
+            "*"
+        );
+        assert_eq!(
+            value["offdesk"]["PostToolUse"][0]["hooks"][0]["command"],
+            "/Users/a/.local/bin/offdesk hook antigravity PostToolUse"
+        );
+        assert_eq!(
+            value["offdesk"]["Stop"][0]["command"],
+            "/Users/a/.local/bin/offdesk hook antigravity Stop"
+        );
+        // PreToolUse must not be registered so Offdesk never makes permission decisions.
+        assert!(value["offdesk"].get("PreToolUse").is_none());
+        // Idempotent reinstall
+        assert_eq!(update_antigravity_hooks(&installed, exe, true).unwrap(), installed);
+        // Uninstall keeps user's hooks
+        let removed: Value =
+            serde_json::from_str(&update_antigravity_hooks(&installed, exe, false).unwrap())
+                .unwrap();
+        assert!(removed.get("offdesk").is_none());
+        assert_eq!(removed["my-lint"]["PostToolUse"][0]["matcher"], "run_command");
+        // Empty file install & uninstall
+        let fresh = update_antigravity_hooks("", exe, true).unwrap();
+        assert_eq!(update_antigravity_hooks(&fresh, exe, false).unwrap(), "{}\n");
+        assert!(update_antigravity_hooks("[1]", exe, true).is_err());
     }
 }

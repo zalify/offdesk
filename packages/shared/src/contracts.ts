@@ -208,7 +208,7 @@ export interface BrowserStateSnapshot {
 // ── Agent runs — mirrors crates/protocol/src/lib.rs (docs/plans/2026-10-14-agent-runs.md) ──
 
 /** A coding agent CLI in a terminal; "other" is one a newer Hub knows. */
-export type RunAgent = 'claude' | 'codex' | 'other'
+export type RunAgent = 'claude' | 'codex' | 'antigravity' | 'other'
 
 export type AgentRunStatus = 'starting' | 'working' | 'waiting' | 'idle' | 'done' | 'error' | 'gone' | 'other'
 
@@ -257,7 +257,7 @@ export type AgentPermissionMode = 'ask' | 'accept_edits' | 'plan' | 'auto'
 /** `POST /api/agent-runs`: the Hub builds the command; it never takes a command line. */
 export interface StartAgentRun {
   machine_id: string
-  agent: 'claude' | 'codex'
+  agent: 'claude' | 'codex' | 'antigravity'
   cwd: string
   /** Its first message, passed as one argument. */
   prompt?: string

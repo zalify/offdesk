@@ -62,7 +62,7 @@ fn find_tools() -> Tools {
         }
     }
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin"].map(PathBuf::from));
-    for name in ["offdesk", "claude", "codex"] {
+    for name in ["offdesk", "claude", "codex", "agy"] {
         if found.iter().any(|(n, _)| n == name) {
             continue;
         }
@@ -80,7 +80,11 @@ fn find_tools() -> Tools {
             .find(|(n, _)| n == name)
             .map(|(_, p)| p.clone())
     };
-    let agents = [(RunAgent::Claude, "claude"), (RunAgent::Codex, "codex")]
+    let agents = [
+        (RunAgent::Claude, "claude"),
+        (RunAgent::Codex, "codex"),
+        (RunAgent::Antigravity, "agy"),
+    ]
         .into_iter()
         .filter_map(|(agent, name)| {
             let path = path_of(name)?;
@@ -106,9 +110,9 @@ fn shell_lookup() -> Vec<(String, PathBuf)> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
     let fish = shell.ends_with("/fish");
     let script = if fish {
-        "for t in offdesk claude codex; echo \"$t=\"(command -v $t); end"
+        "for t in offdesk claude codex agy; echo \"$t=\"(command -v $t); end"
     } else {
-        "for t in offdesk claude codex; do printf '%s=%s\\n' \"$t\" \"$(command -v \"$t\")\"; done"
+        "for t in offdesk claude codex agy; do printf '%s=%s\\n' \"$t\" \"$(command -v \"$t\")\"; done"
     };
     let Some(out) = output_of(std::process::Command::new(&shell).args(["-i", "-l", "-c", script]))
     else {
@@ -123,7 +127,7 @@ fn parse_lookup(out: &str) -> Vec<(String, PathBuf)> {
         .filter_map(|line| {
             let (name, path) = line.trim().split_once('=')?;
             let path = PathBuf::from(path);
-            (["offdesk", "claude", "codex"].contains(&name) && path.is_absolute())
+            (["offdesk", "claude", "codex", "agy"].contains(&name) && path.is_absolute())
                 .then(|| (name.to_string(), path))
         })
         .collect()
@@ -219,6 +223,7 @@ fn startup_command_in(
     words.push(
         match start.agent {
             RunAgent::Claude => "claude",
+            RunAgent::Antigravity => "agy",
             _ => "codex",
         }
         .to_string(),
@@ -228,6 +233,7 @@ fn startup_command_in(
     if let Some(session) = &start.resume {
         match start.agent {
             RunAgent::Claude => words.push("--resume".into()),
+            RunAgent::Antigravity => words.push("--conversation".into()),
             _ => words.push("resume".into()),
         }
         words.push(session.clone());
@@ -264,6 +270,9 @@ fn startup_command_in(
         }
     }
     if let Some(prompt) = &start.prompt {
+        if start.agent == RunAgent::Antigravity {
+            words.push("-i".into());
+        }
         words.push(file_word(format!("{terminal_id}.prompt"), prompt)?);
     }
     Ok(words.join(" "))
@@ -428,7 +437,7 @@ mod tests {
     fn run_fake(command: &str) -> (Vec<String>, String) {
         use std::os::unix::fs::PermissionsExt;
         let bin = temp_dir("fake-bin");
-        for name in ["claude", "codex"] {
+        for name in ["claude", "codex", "agy"] {
             let path = bin.join(name);
             std::fs::write(
                 &path,
@@ -648,14 +657,34 @@ mod tests {
     }
 
     #[test]
+    fn antigravity_starts_with_mode_and_interactive_prompt() {
+        let dir = temp_dir("agy");
+        let mut agy = start(RunAgent::Antigravity, Some("Fix it"));
+        agy.permission_mode = Some(AgentPermissionMode::AcceptEdits);
+        let command = startup_command_in(&dir, TERMINAL, &agy, &no_hooks()).unwrap();
+        assert!(command.contains(" agy --mode accept-edits -i \"$(cat "), "{command}");
+        assert_eq!(run_fake(&command).0, ["--mode", "accept-edits", "-i", "Fix it"]);
+
+        let mut ask = start(RunAgent::Antigravity, None);
+        ask.permission_mode = Some(AgentPermissionMode::Ask);
+        assert_eq!(
+            startup_command_in(&dir, TERMINAL, &ask, &no_hooks()).unwrap(),
+            format!("env OFFDESK_RUN_ID={RUN} agy")
+        );
+    }
+
+    #[test]
     fn lookups_take_paths_only() {
-        let found = parse_lookup("noise from .zshrc\noffdesk=/Users/a/.local/bin/offdesk\nclaude=claude: aliased to x\ncodex=\n");
+        let found = parse_lookup("noise from .zshrc\noffdesk=/Users/a/.local/bin/offdesk\nagy=/Users/a/.local/bin/agy\nclaude=claude: aliased to x\ncodex=\n");
         assert_eq!(
             found,
-            vec![(
-                "offdesk".to_string(),
-                PathBuf::from("/Users/a/.local/bin/offdesk")
-            )]
+            vec![
+                (
+                    "offdesk".to_string(),
+                    PathBuf::from("/Users/a/.local/bin/offdesk")
+                ),
+                ("agy".to_string(), PathBuf::from("/Users/a/.local/bin/agy")),
+            ]
         );
     }
 }
