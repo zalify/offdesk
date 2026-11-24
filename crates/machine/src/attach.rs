@@ -359,6 +359,12 @@ fn run_attach_task(
     events_tx: mpsc::Sender<AttachEvent>,
     mut command_rx: mpsc::Receiver<AttachCommand>,
 ) {
+    #[cfg(unix)]
+    if crate::pty::use_native_pty_backend() {
+        run_native_attach_task(attach_id, session_id, cols, rows, events_tx, command_rx);
+        return;
+    }
+
     let _ = attach_id; // reserved for tracing in a future change
 
     // Spawn the tmux attach. On failure we report Died and bail.
@@ -456,6 +462,101 @@ fn run_attach_task(
     // Force the child down so the reader thread sees PTY EOF and finishes.
     let _ = child.kill();
     let _ = child.wait();
+    let _ = reader_handle.join();
+}
+
+#[cfg(unix)]
+fn run_native_attach_task(
+    _attach_id: String,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+    events_tx: mpsc::Sender<AttachEvent>,
+    mut command_rx: mpsc::Receiver<AttachCommand>,
+) {
+    use crate::pty_daemon::{NativeAttachFrame, NativeAttachStream};
+
+    let stream = match NativeAttachStream::connect(&session_id, cols, rows) {
+        Ok(v) => v,
+        Err(e) => {
+            let _ = events_tx.blocking_send(AttachEvent::Died(AttachExitReason::IoError(e)));
+            return;
+        }
+    };
+    let (mut reader, mut writer) = stream.split();
+    let pending_composer_ack: Arc<std::sync::Mutex<Option<tokio::sync::oneshot::Sender<bool>>>> =
+        Arc::new(std::sync::Mutex::new(None));
+
+    let reader_events_tx = events_tx.clone();
+    let ack_for_reader = Arc::clone(&pending_composer_ack);
+    let reader_handle = std::thread::spawn(move || {
+        let exit = loop {
+            match reader.read_frame() {
+                Ok(NativeAttachFrame::Output(chunk)) => {
+                    if !chunk.is_empty()
+                        && reader_events_tx
+                            .blocking_send(AttachEvent::Output(chunk))
+                            .is_err()
+                    {
+                        break AttachExitReason::HubRequested;
+                    }
+                }
+                Ok(NativeAttachFrame::Died) => break AttachExitReason::ProcessExited,
+                Ok(NativeAttachFrame::ComposerAck(ok)) => {
+                    if let Ok(mut slot) = ack_for_reader.lock() {
+                        if let Some(ack) = slot.take() {
+                            let _ = ack.send(ok);
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                    break AttachExitReason::ProcessExited;
+                }
+                Err(e) => break AttachExitReason::IoError(e.to_string()),
+            }
+        };
+        if let Ok(mut slot) = ack_for_reader.lock() {
+            if let Some(ack) = slot.take() {
+                let _ = ack.send(false);
+            }
+        }
+        let _ = reader_events_tx.blocking_send(AttachEvent::Died(exit));
+    });
+
+    while let Some(command) = command_rx.blocking_recv() {
+        match command {
+            AttachCommand::Composer { paste, ack } => {
+                if let Ok(mut slot) = pending_composer_ack.lock() {
+                    *slot = Some(ack);
+                }
+                if writer.send_composer(&paste).is_err() {
+                    if let Ok(mut slot) = pending_composer_ack.lock() {
+                        if let Some(ack) = slot.take() {
+                            let _ = ack.send(false);
+                        }
+                    }
+                    break;
+                }
+            }
+            AttachCommand::Input(chunk) => {
+                if writer.send_input(&chunk).is_err() {
+                    break;
+                }
+            }
+            AttachCommand::Resize { cols, rows } => {
+                if writer.send_resize(cols, rows).is_err() {
+                    break;
+                }
+            }
+            AttachCommand::Refresh => {
+                if writer.send_refresh().is_err() {
+                    break;
+                }
+            }
+        }
+    }
+
+    writer.shutdown();
     let _ = reader_handle.join();
 }
 

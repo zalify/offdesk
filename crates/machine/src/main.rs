@@ -17,6 +17,7 @@ mod osc_title;
 mod terminal_attention;
 mod codex_title;
 mod pty;
+mod pty_daemon;
 mod revive;
 mod service;
 mod session_watcher;
@@ -74,6 +75,13 @@ enum Command {
 
     /// Show node status
     Status,
+
+    /// Run the standalone persistent native PTY daemon (used when OFFDESK_PTY_BACKEND=native)
+    PtyDaemon {
+        /// Unix domain socket path
+        #[arg(long)]
+        socket: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -126,6 +134,13 @@ async fn main() {
         },
         Some(Command::Status) => {
             cmd_status();
+        }
+        Some(Command::PtyDaemon { socket }) => {
+            let sock = socket.unwrap_or_else(pty_daemon::default_socket_path);
+            if let Err(e) = pty_daemon::run_server(&sock) {
+                eprintln!("error: pty-daemon failed: {}", e);
+                std::process::exit(1);
+            }
         }
         None => {
             // Default to start with no overrides
@@ -367,13 +382,17 @@ fn build_ws_url(hub_url: &str) -> String {
 }
 
 async fn run_start(hub_url: Option<String>, name: Option<String>, id: Option<String>) {
-    // Mandatory tmux check before doing any other work — fail fast with an
-    // actionable message instead of falling back / running half-broken.
-    if !pty::check_tmux_available() {
+    if pty::use_native_pty_backend() {
+        tracing::info!("OFFDESK_PTY_BACKEND=native: using pure-Rust persistent pty-daemon");
+        if let Err(e) = pty_daemon::ensure_daemon_running() {
+            eprintln!("error: failed to start native pty-daemon: {}", e);
+            std::process::exit(1);
+        }
+    } else if !pty::check_tmux_available() {
         eprintln!(
             "error: tmux is not installed or not in PATH.\n\
              \n\
-             offdesk-node requires tmux. Install it and re-run:\n\
+             offdesk-node requires tmux (or set OFFDESK_PTY_BACKEND=native). Install it and re-run:\n\
              \n\
              Debian / Ubuntu:  sudo apt install tmux\n\
              macOS (Homebrew): brew install tmux\n\

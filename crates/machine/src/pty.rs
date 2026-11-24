@@ -60,6 +60,21 @@ pub fn tmux_socket() -> &'static str {
     tmux_naming().0
 }
 
+/// Whether this node should use the experimental pure-Rust persistent
+/// `pty-daemon` backend instead of `tmux` (`OFFDESK_PTY_BACKEND=native`).
+pub fn use_native_pty_backend() -> bool {
+    #[cfg(unix)]
+    {
+        std::env::var("OFFDESK_PTY_BACKEND")
+            .map(|v| v.trim().eq_ignore_ascii_case("native"))
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
 fn tmux_prefix() -> &'static str {
     tmux_naming().1
 }
@@ -145,6 +160,16 @@ impl PtyManager {
     /// `offdesk-node start` for the user-facing check that fails fast on
     /// missing tmux. tmux is mandatory in this build.
     pub fn new() -> Self {
+        if use_native_pty_backend() {
+            if let Err(e) = crate::pty_daemon::ensure_daemon_running() {
+                panic!("failed to start native pty-daemon: {}", e);
+            }
+            return Self {
+                codex_titles: Default::default(),
+                sessions: Arc::new(Mutex::new(HashMap::new())),
+                resume_commands: Mutex::new(HashMap::new()),
+            };
+        }
         if !check_tmux_available() {
             panic!(
                 "tmux not found in PATH. offdesk-node requires tmux. \
@@ -167,9 +192,35 @@ impl PtyManager {
         cols: u16,
         rows: u16,
     ) -> Result<SessionInfo, String> {
-        let tmux_name = tmux_session_name(id);
         let resolved_cwd = resolve_cwd(cwd);
         let shell = detect_login_shell();
+
+        #[cfg(unix)]
+        if use_native_pty_backend() {
+            ensure_utf8_locale();
+            let mut env = Vec::new();
+            for var in &["CLAUDE_CODE_NO_FLICKER"] {
+                if let Ok(val) = std::env::var(var) {
+                    env.push(((*var).to_string(), val));
+                }
+            }
+            crate::pty_daemon::create_session(id, &resolved_cwd, cols, rows, &shell, env)?;
+            let info = SessionInfo {
+                id: id.to_string(),
+                title: String::new(),
+                cwd: cwd.to_string(),
+                cols,
+                rows,
+            };
+            self.sessions
+                .lock()
+                .map_err(|e| format!("Lock poisoned: {}", e))?
+                .insert(id.to_string(), info.clone());
+            self.persist();
+            return Ok(info);
+        }
+
+        let tmux_name = tmux_session_name(id);
 
         let cols_s = cols.to_string();
         let rows_s = rows.to_string();
@@ -291,6 +342,13 @@ impl PtyManager {
             .map_err(|e| format!("Lock poisoned: {}", e))?
             .remove(id);
         if removed.is_some() {
+            #[cfg(unix)]
+            if use_native_pty_backend() {
+                let _ = crate::pty_daemon::destroy_session(id);
+            } else {
+                tmux_kill_session(id);
+            }
+            #[cfg(not(unix))]
             tmux_kill_session(id);
             self.resume_commands.lock().unwrap().remove(id);
             self.persist();
@@ -304,6 +362,11 @@ impl PtyManager {
     /// replay startup_command after terminal creation. Goes through
     /// `tmux send-keys`, so we don't need a long-lived PTY here.
     pub fn write_to_terminal(&self, id: &str, data: &[u8]) -> Result<(), String> {
+        #[cfg(unix)]
+        if use_native_pty_backend() {
+            return crate::pty_daemon::write_input(id, data);
+        }
+
         let text = std::str::from_utf8(data)
             .map_err(|e| format!("write_to_terminal expects UTF-8 data: {}", e))?;
 
@@ -350,6 +413,18 @@ impl PtyManager {
             return (false, None);
         }
 
+        #[cfg(unix)]
+        if use_native_pty_backend() {
+            let cmd = crate::pty_daemon::list_sessions()
+                .into_iter()
+                .find(|s| s.id == id)
+                .and_then(|s| s.current_command);
+            return match cmd {
+                Some(c) if !c.is_empty() && !is_shell_name(&c) => (true, Some(c)),
+                _ => (false, None),
+            };
+        }
+
         let tmux_name = tmux_session_name(id);
         let output = tmux_cmd()
             .args([
@@ -386,28 +461,50 @@ impl PtyManager {
             .map(|id| {
                 let command = panes.get(&id).and_then(|p| p.current_command.as_deref());
                 let read = if crate::terminal_attention::supports_command(command) {
-                    let target = format!("{}:0.0", tmux_session_name(&id));
-                    tmux_cmd()
-                        .args([
-                            "-L",
-                            tmux_socket(),
-                            "capture-pane",
-                            "-p",
-                            "-J",
-                            "-t",
-                            &target,
-                        ])
-                        .output()
-                        .ok()
-                        .filter(|o| o.status.success())
-                        .map(|o| {
-                            let screen = String::from_utf8_lossy(&o.stdout);
-                            ScreenRead {
-                                attention: crate::terminal_attention::detect(command, &screen),
-                                agent_working: Some(crate::terminal_attention::agent_working_for(
-                                    command, &screen,
-                                )),
-                            }
+                    #[cfg(unix)]
+                    let captured: Option<String> = if use_native_pty_backend() {
+                        crate::pty_daemon::capture_screen(&id)
+                    } else {
+                        let target = format!("{}:0.0", tmux_session_name(&id));
+                        tmux_cmd()
+                            .args([
+                                "-L",
+                                tmux_socket(),
+                                "capture-pane",
+                                "-p",
+                                "-J",
+                                "-t",
+                                &target,
+                            ])
+                            .output()
+                            .ok()
+                            .filter(|o| o.status.success())
+                            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                    };
+                    #[cfg(not(unix))]
+                    let captured: Option<String> = {
+                        let target = format!("{}:0.0", tmux_session_name(&id));
+                        tmux_cmd()
+                            .args([
+                                "-L",
+                                tmux_socket(),
+                                "capture-pane",
+                                "-p",
+                                "-J",
+                                "-t",
+                                &target,
+                            ])
+                            .output()
+                            .ok()
+                            .filter(|o| o.status.success())
+                            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+                    };
+                    captured
+                        .map(|screen| ScreenRead {
+                            attention: crate::terminal_attention::detect(command, &screen),
+                            agent_working: Some(crate::terminal_attention::agent_working_for(
+                                command, &screen,
+                            )),
                         })
                         .unwrap_or_default()
                 } else {
@@ -453,6 +550,41 @@ impl PtyManager {
         }
         if keys.is_empty() || keys.len() > 8 || !keys.iter().all(AgentKey::is_allowed) {
             return Err("keys not allowed".to_string());
+        }
+        #[cfg(unix)]
+        if use_native_pty_backend() {
+            let mut after_text = false;
+            for key in keys {
+                if let AgentKey::Choose(label) = key {
+                    let screen = crate::pty_daemon::capture_screen(id)
+                        .ok_or_else(|| "native capture_screen failed".to_string())?;
+                    let moves = crate::terminal_attention::choose_moves(&screen, label)
+                        .ok_or_else(|| "that option isn't on the screen".to_string())?;
+                    let seq: &[u8] = if moves < 0 { b"\x1b[A" } else { b"\x1b[B" };
+                    for _ in 0..moves.unsigned_abs() {
+                        crate::pty_daemon::write_input(id, seq)?;
+                        std::thread::sleep(std::time::Duration::from_millis(60));
+                    }
+                    crate::pty_daemon::write_input(id, b"\r")?;
+                    after_text = false;
+                    continue;
+                }
+                if after_text && matches!(key, AgentKey::Enter) {
+                    std::thread::sleep(std::time::Duration::from_millis(150));
+                }
+                match key {
+                    AgentKey::Text(text) => crate::pty_daemon::write_input(id, text.as_bytes())?,
+                    AgentKey::Digit(digit) => {
+                        let s = digit.to_string();
+                        crate::pty_daemon::write_input(id, s.as_bytes())?;
+                    }
+                    AgentKey::Enter => crate::pty_daemon::write_input(id, b"\r")?,
+                    AgentKey::Escape => crate::pty_daemon::write_input(id, b"\x1b")?,
+                    AgentKey::Choose(_) => unreachable!(),
+                }
+                after_text = matches!(key, AgentKey::Text(_));
+            }
+            return Ok(());
         }
         let target = format!("{}:0.0", tmux_session_name(id));
         let mut after_text = false;
@@ -521,6 +653,13 @@ impl PtyManager {
     /// file (`agent_transcript.rs`): None when no agent there has one.
     /// The root process of each of this node's terminals (their agents are runs).
     pub fn pane_pids(&self) -> Vec<u32> {
+        #[cfg(unix)]
+        if use_native_pty_backend() {
+            return crate::pty_daemon::list_sessions()
+                .into_iter()
+                .filter_map(|s| s.pid)
+                .collect();
+        }
         tmux_cmd()
             .args(["-L", tmux_socket(), "list-panes", "-a", "-F", "#{pane_pid}"])
             .output()
@@ -600,21 +739,68 @@ impl PtyManager {
     /// sees rich OSC titles the per-attach scanner can't. One subprocess per
     /// call; a tmux failure (server down) yields an empty map, never a panic.
     pub fn pane_infos(&self) -> HashMap<String, PaneInfo> {
-        let output = tmux_cmd()
-            .args([
-                "-L",
-                tmux_socket(),
-                "list-panes",
-                "-a",
-                "-F",
-                "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}\t#{window_activity}",
-            ])
-            .output();
-        let mut panes = match output {
-            Ok(out) if out.status.success() => {
-                parse_pane_info(&String::from_utf8_lossy(&out.stdout), &current_hostname())
+        #[cfg(unix)]
+        let mut panes = if use_native_pty_backend() {
+            let host = current_hostname();
+            crate::pty_daemon::list_sessions()
+                .into_iter()
+                .map(|s| {
+                    let title = if s.title.is_empty() || s.title == host {
+                        None
+                    } else {
+                        Some(s.title)
+                    };
+                    let current_command = s
+                        .current_command
+                        .filter(|c| !c.is_empty() && !is_shell_name(c));
+                    (
+                        s.id,
+                        PaneInfo {
+                            pid: s.pid,
+                            title,
+                            cwd: (!s.cwd.is_empty()).then_some(s.cwd),
+                            current_command,
+                            activity_ms: (s.activity_ms > 0).then_some(s.activity_ms),
+                        },
+                    )
+                })
+                .collect()
+        } else {
+            let output = tmux_cmd()
+                .args([
+                    "-L",
+                    tmux_socket(),
+                    "list-panes",
+                    "-a",
+                    "-F",
+                    "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}\t#{window_activity}",
+                ])
+                .output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    parse_pane_info(&String::from_utf8_lossy(&out.stdout), &current_hostname())
+                }
+                _ => HashMap::new(),
             }
-            _ => HashMap::new(),
+        };
+        #[cfg(not(unix))]
+        let mut panes = {
+            let output = tmux_cmd()
+                .args([
+                    "-L",
+                    tmux_socket(),
+                    "list-panes",
+                    "-a",
+                    "-F",
+                    "#{session_name}\t#{pane_title}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_pid}\t#{window_activity}",
+                ])
+                .output();
+            match output {
+                Ok(out) if out.status.success() => {
+                    parse_pane_info(&String::from_utf8_lossy(&out.stdout), &current_hostname())
+                }
+                _ => HashMap::new(),
+            }
         };
         let titles = crate::codex_title::resolve(&panes);
         for (id, title) in &titles {
@@ -1203,6 +1389,13 @@ fn load_sessions_file() -> HashMap<String, PersistedSession> {
 }
 
 pub fn tmux_list_sessions() -> Vec<String> {
+    #[cfg(unix)]
+    if use_native_pty_backend() {
+        return crate::pty_daemon::list_sessions()
+            .into_iter()
+            .map(|s| tmux_session_name(&s.id))
+            .collect();
+    }
     sessions_on_socket(tmux_socket())
 }
 
@@ -1341,6 +1534,11 @@ pub fn refresh_tmux_client_by_pid(pid: u32) {
 }
 
 pub fn tmux_resize_window(session_id: &str, cols: u16, rows: u16) {
+    #[cfg(unix)]
+    if use_native_pty_backend() {
+        let _ = crate::pty_daemon::resize_session(session_id, cols, rows);
+        return;
+    }
     let name = tmux_session_name(session_id);
     let _ = tmux_cmd()
         .args([
@@ -1362,6 +1560,13 @@ pub fn tmux_resize_window(session_id: &str, cols: u16, rows: u16) {
 /// it, and with `window-size manual` the window keeps the last size any
 /// controller set, however many clients attach since.
 pub fn tmux_window_size(session_id: &str) -> Option<(u16, u16)> {
+    #[cfg(unix)]
+    if use_native_pty_backend() {
+        return crate::pty_daemon::list_sessions()
+            .into_iter()
+            .find(|s| s.id == session_id)
+            .and_then(|s| (s.cols > 0 && s.rows > 0).then_some((s.cols, s.rows)));
+    }
     let name = tmux_session_name(session_id);
     let output = tmux_cmd()
         .args([
