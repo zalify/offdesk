@@ -491,6 +491,32 @@ export interface CompactSwitchHold {
   to: string;
 }
 
+export const MAX_MOUNTED_COMPACT_TERMINALS = 4;
+
+// Keeps the active compact (mobile) terminal, any outgoing cover terminal, and
+// up to MAX_MOUNTED_COMPACT_TERMINALS recently visited terminals mounted so
+// switching back and forth on mobile is instant (0ms, no WS/tmux reconnect).
+export function mountedCompactTerminalIds(
+  activeTerminalId: string | null,
+  coverTerminalId: string | null,
+  recentTerminalIds: readonly string[],
+  availableIds: ReadonlySet<string>,
+  cap: number = MAX_MOUNTED_COMPACT_TERMINALS,
+): string[] {
+  const result: string[] = [];
+  const add = (id: string | null) => {
+    if (!id || !availableIds.has(id) || result.includes(id)) return;
+    result.push(id);
+  };
+  add(activeTerminalId);
+  add(coverTerminalId);
+  for (const id of recentTerminalIds) {
+    if (result.length >= cap) break;
+    add(id);
+  }
+  return result;
+}
+
 export function nextCompactSwitchHold(
   hold: CompactSwitchHold | null,
   shownTerminalId: string | null,

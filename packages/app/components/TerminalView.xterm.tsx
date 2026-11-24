@@ -58,6 +58,11 @@ import {
 } from "@/lib/remoteFileLinks";
 import { useDisplayMode } from "@/lib/hooks";
 import { usePrefixKey } from "@/lib/prefixKeyContext";
+import {
+  captureTerminalSnapshot,
+  getTerminalSnapshot,
+  type TerminalScreenSnapshot,
+} from "@/lib/terminalSnapshotCache";
 import { filterBrowserGeneratedTerminalInput } from "@/lib/terminalInputFilter";
 import {
   createInputBatcher,
@@ -368,6 +373,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     // The chosen theme's colours: read when the terminal is created, and
     // applied in place when the theme changes (below).
     const terminalColors = useTerminalTheme();
+    const [cachedSnapshot, setCachedSnapshot] =
+      useState<TerminalScreenSnapshot | null>(() =>
+        getTerminalSnapshot(terminalId),
+      );
     const terminalColorsRef = useRef(terminalColors);
     terminalColorsRef.current = terminalColors;
     const wsRef = useRef<WebSocket | null>(null);
@@ -430,6 +439,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, []);
     const handleLocalEchoOutput = useCallback(
       (chunk: Uint8Array) => {
+        if (chunk.byteLength > 0) {
+          setCachedSnapshot((prev) => (prev ? null : prev));
+        }
         const snap = localEchoRef.current?.onOutput(chunk);
         if (snap) renderLocalEcho(snap);
       },
@@ -742,6 +754,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const reportReady = useCallback(() => {
       if (readyRef.current) return;
       readyRef.current = true;
+      setCachedSnapshot(null);
       outputPaintWatcherRef.current = null;
       if (resizeRedrawWaitRef.current !== null) {
         window.clearTimeout(resizeRedrawWaitRef.current);
@@ -1507,6 +1520,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
         restoreMouseCoordinates();
         restoreCompositionHelper();
+        captureTerminalSnapshot(terminalId, term);
         gpuRenderer.dispose();
         term.dispose();
         if (termRef.current === term) {
@@ -1658,6 +1672,49 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               display: displayMode === "immersive" ? "inline-block" : "block",
             }}
           />
+          {cachedSnapshot && (
+            <div
+              data-testid="terminal-snapshot-overlay"
+              aria-hidden="true"
+              style={{
+                position: "absolute",
+                inset: 0,
+                zIndex: 1,
+                pointerEvents: "none",
+                overflow: "hidden",
+                background: terminalColors.theme.background ?? colors.termBg,
+                color: terminalColors.theme.foreground ?? colors.fg0,
+                padding: 0,
+              }}
+            >
+              <pre
+                style={{
+                  margin: 0,
+                  fontFamily: cachedSnapshot.fontFamily,
+                  fontSize: cachedSnapshot.fontSize,
+                  lineHeight: 1.2,
+                  whiteSpace: "pre",
+                  opacity: 0.92,
+                }}
+              >
+                {cachedSnapshot.lines.join("\n")}
+              </pre>
+              <span
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  right: 10,
+                  fontSize: 11,
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                  background: colorAlpha.overlay,
+                  color: colors.fg2,
+                }}
+              >
+                syncing…
+              </span>
+            </div>
+          )}
           <span
             ref={localEchoOverlayRef}
             aria-hidden="true"
