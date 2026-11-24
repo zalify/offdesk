@@ -24,6 +24,9 @@ interface UseTerminalLiveSocketOptions {
   // Runs in the socket's open handler, before any of its messages. Must be
   // stable: it is an effect dependency.
   onSocketOpen?: () => void;
+  // Optional observer called synchronously with each raw/inflated output chunk
+  // (used by adaptive local echo prediction to advance/clear predictions).
+  onOutputChunk?: (chunk: Uint8Array) => void;
   // While set, called as each output write is issued; the callback it
   // returns runs once that write is parsed and painted. TerminalView sets it
   // only until its first screen is up, so streaming output pays nothing.
@@ -57,6 +60,7 @@ export function useTerminalLiveSocket({
   onControlMessage,
   onSocketClose,
   onSocketOpen,
+  onOutputChunk,
   outputPaintWatcherRef,
 }: UseTerminalLiveSocketOptions) {
   useEffect(() => {
@@ -153,6 +157,7 @@ export function useTerminalLiveSocket({
 
     const enqueueOutput = (chunk: Uint8Array) => {
       recordEchoProbeSample();
+      onOutputChunk?.(chunk);
       if (!rafId && pendingBytes === 0) {
         // Interactive path: nothing queued this frame — write immediately so
         // a keystroke echo doesn't wait for the next animation frame. The rAF
@@ -288,6 +293,7 @@ export function useTerminalLiveSocket({
     onControlMessage,
     onSocketClose,
     onSocketOpen,
+    onOutputChunk,
     outputPaintWatcherRef,
     wsRef,
     wsUrl,

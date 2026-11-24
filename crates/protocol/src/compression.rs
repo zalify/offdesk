@@ -23,10 +23,11 @@ pub struct AttachCompressor {
 
 impl AttachCompressor {
     pub fn new() -> Self {
-        // Raw deflate (zlib_header=false); flate2's default window bits are
-        // 15, so no zlib-rs backend / new_with_window_bits is needed.
+        // Raw deflate (zlib_header=false), level 3: ~3x faster CPU per
+        // SyncFlush frame than level 6 with nearly identical ratio on ANSI
+        // terminal streams.
         Self {
-            inner: Compress::new(Compression::new(6), false),
+            inner: Compress::new(Compression::new(3), false),
         }
     }
 

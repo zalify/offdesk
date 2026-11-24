@@ -946,19 +946,30 @@ pub async fn secure_socket_open<R: Runtime>(
     state: State<'_, SecureState>,
     id: String,
     path: String,
-    events: Channel<Response>,
+    events: Channel<tauri::ipc::InvokeResponseBody>,
 ) -> Result<(), String> {
     let _gate = state.1.read().await;
     let client = connected(&app, &state).await?;
     let mut receiver = client.open_socket(id.clone(), path).await?;
     tauri::async_runtime::spawn(async move {
         while let Some(response) = receiver.recv().await {
-            if events.send(response).is_err() {
+            let body = match response {
+                // Deliver binary socket frames directly as raw ArrayBuffer over
+                // Tauri IPC — skips Base64 encoding in Rust and atob() in JS.
+                Response::Binary { data, .. } => tauri::ipc::InvokeResponseBody::Raw(data),
+                other => match serde_json::to_string(&other) {
+                    Ok(json) => tauri::ipc::InvokeResponseBody::Json(json),
+                    Err(_) => continue,
+                },
+            };
+            if events.send(body).is_err() {
                 break;
             }
         }
         let _ = client.close_socket(id.clone()).await;
-        let _ = events.send(Response::Closed { id });
+        if let Ok(json) = serde_json::to_string(&Response::Closed { id }) {
+            let _ = events.send(tauri::ipc::InvokeResponseBody::Json(json));
+        }
     });
     Ok(())
 }

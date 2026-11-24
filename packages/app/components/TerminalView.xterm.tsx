@@ -70,6 +70,11 @@ import {
   createPendingTerminalInput,
   type PendingTerminalInput,
 } from "@/lib/pendingTerminalInput";
+import {
+  createLocalEchoController,
+  type LocalEchoController,
+  type LocalEchoSnapshot,
+} from "@/lib/localEcho";
 import { activateGpuRenderer } from "@/lib/terminalGpuRenderer";
 import { readTerminalFontPreferences, subscribeFontPreferences } from "@/lib/fontPreferences";
 
@@ -412,12 +417,64 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         now: () => performance.now(),
       });
     }
-    const sendInputFrame = useCallback((ws: WebSocket, data: string) => {
-      ws.send(JSON.stringify({ type: "input", data }));
-      if (echoProbeEnabledRef.current) {
-        echoProbeSentAtRef.current = performance.now();
+    const localEchoRef = useRef<LocalEchoController | null>(null);
+    if (localEchoRef.current === null) {
+      localEchoRef.current = createLocalEchoController();
+    }
+    const localEchoOverlayRef = useRef<HTMLSpanElement | null>(null);
+    const renderLocalEcho = useCallback((snap: LocalEchoSnapshot) => {
+      const el = localEchoOverlayRef.current;
+      const term = termRef.current;
+      if (!el || !term || !snap.text) {
+        if (el && el.style.display !== "none") {
+          el.style.display = "none";
+          el.textContent = "";
+        }
+        return;
       }
+      const metrics = readXtermCellMetrics(term);
+      if (!metrics || metrics.width <= 0 || metrics.height <= 0) {
+        el.style.display = "none";
+        return;
+      }
+      el.textContent = snap.text;
+      el.style.left = `${snap.startCol * metrics.width}px`;
+      el.style.top = `${snap.startRow * metrics.height}px`;
+      el.style.height = `${metrics.height}px`;
+      el.style.lineHeight = `${metrics.height}px`;
+      el.style.fontFamily = term.options.fontFamily ?? DEFAULT_TERMINAL_FONT;
+      el.style.fontSize = `${term.options.fontSize ?? 14}px`;
+      el.style.color = terminalColorsRef.current.foreground;
+      el.style.background = terminalColorsRef.current.background;
+      el.style.display = "block";
     }, []);
+    const handleLocalEchoOutput = useCallback(
+      (chunk: Uint8Array) => {
+        const snap = localEchoRef.current?.onOutput(chunk);
+        if (snap) renderLocalEcho(snap);
+      },
+      [renderLocalEcho],
+    );
+    const sendInputFrame = useCallback(
+      (ws: WebSocket, data: string) => {
+        ws.send(JSON.stringify({ type: "input", data }));
+        const term = termRef.current;
+        if (term && localEchoRef.current) {
+          const buf = term.buffer.active;
+          const snap = localEchoRef.current.onInput(data, {
+            col: buf.cursorX,
+            row: buf.cursorY,
+            cols: term.cols,
+            alternateScreen: buf.type === "alternate",
+          });
+          renderLocalEcho(snap);
+        }
+        if (echoProbeEnabledRef.current) {
+          echoProbeSentAtRef.current = performance.now();
+        }
+      },
+      [renderLocalEcho],
+    );
     const deliverInput = useCallback(
       (data: string) => {
         if (!canTypeRef.current) return;
@@ -1546,6 +1603,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       setSessionGeneration,
       onReconnectingChange: handleReconnectingChange,
       onSocketOpen: handleSocketOpen,
+      onOutputChunk: handleLocalEchoOutput,
       outputPaintWatcherRef,
     });
 
@@ -1612,6 +1670,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       >
         <div
           style={{
+            position: "relative",
             width: frameWidth,
             height: frameHeight,
             flex: "0 0 auto",
@@ -1623,6 +1682,21 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               width: displayMode === "immersive" ? undefined : "100%",
               height: displayMode === "immersive" ? undefined : "100%",
               display: displayMode === "immersive" ? "inline-block" : "block",
+            }}
+          />
+          <span
+            ref={localEchoOverlayRef}
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              display: "none",
+              pointerEvents: "none",
+              whiteSpace: "pre",
+              textDecoration: "underline",
+              textDecorationStyle: "dotted",
+              textUnderlineOffset: "2px",
+              opacity: 0.85,
+              zIndex: 2,
             }}
           />
         </div>

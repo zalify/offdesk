@@ -198,10 +198,23 @@ class SecureSocket extends EventTarget {
     if (!enabled || !status || !allowed) throw new Error("Socket origin does not match the paired Hub");
     target.searchParams.delete("token");
     const { Channel } = await import("@tauri-apps/api/core");
-    const events = new Channel<WireResponse>();
-    events.onmessage = (message) => this.receive(message);
+    const events = new Channel<WireResponse | ArrayBuffer>();
+    events.onmessage = (message) => {
+      if (message instanceof ArrayBuffer) {
+        this.receiveBinary(message);
+      } else {
+        this.receive(message);
+      }
+    };
     await invoke("secure_socket_open", { id: this.id, path: target.pathname + target.search, events });
     if (this.readyState >= 2) await invoke("secure_socket_close", { id: this.id });
+  }
+  private receiveBinary(buffer: ArrayBuffer) {
+    if (this.readyState >= 2) return;
+    const data = this.binaryType === "arraybuffer" ? buffer : new Blob([buffer]);
+    const event = new MessageEvent("message", { data });
+    this.dispatchEvent(event);
+    this.onmessage?.(event);
   }
   private receive(message: WireResponse) {
     if (message.id !== this.id || this.readyState >= 2) return;
