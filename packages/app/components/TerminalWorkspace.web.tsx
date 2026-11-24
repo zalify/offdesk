@@ -42,6 +42,7 @@ import {
   flattenWorkspacePanes,
   getActiveWorkspaceGroup,
   isWorkspaceGroupFull,
+  mountedCompactTerminalIds,
   mountedWorkspaceGroupIds,
   nextCompactSwitchHold,
   reconcileTerminalWorkspace,
@@ -117,6 +118,8 @@ interface TerminalWorkspaceProps {
 // workspace. Optional fields stay unset until the workspace mounts.
 export interface WorkspaceCommandChannel {
   selectGroup?: (groupId: string) => void;
+  /** Speculatively mount a desktop group in the keep-alive pool before selection. */
+  prewarmGroup?: (groupId: string) => void;
   reorderGroups?: (
     sourceGroupId: string,
     targetGroupId: string,
@@ -402,19 +405,33 @@ function TerminalWorkspaceComponent({
   }, []);
   const compactHoldRef = useRef<CompactSwitchHold | null>(null);
   const compactFadingIdRef = useRef<string | null>(null);
+  const recentCompactTerminalIdsRef = useRef<string[]>([]);
+  const compactReadyRef = useRef(new Set<string>());
   const renderedCompactTerminalIdRef = useRef(workspace.activeTerminalId);
   if (workspace.activeTerminalId !== renderedCompactTerminalIdRef.current) {
+    const prev = renderedCompactTerminalIdRef.current;
     const to = workspace.activeTerminalId;
-    // Back to the fading pane: still mounted and drawn, nothing to wait for.
+    if (prev) {
+      recentCompactTerminalIdsRef.current = [
+        prev,
+        ...recentCompactTerminalIdsRef.current.filter(
+          (id) => id !== prev && id !== to,
+        ),
+      ].slice(0, 6);
+    }
+    // Back to a fading or already-warm keep-alive pane: still mounted and drawn,
+    // so switch in 0ms without a hold cover.
     const backToFading = to !== null && to === compactFadingIdRef.current;
+    const targetWarm = to !== null && compactReadyRef.current.has(to);
     compactFadingIdRef.current = null;
     compactHoldRef.current = nextCompactSwitchHold(
       compactHoldRef.current,
-      renderedCompactTerminalIdRef.current,
+      prev,
       to,
-      // An unreachable terminal never attaches, so it has nothing to wait for.
+      // An unreachable or already-warm terminal has nothing to wait for.
       isCompact &&
         !backToFading &&
+        !targetWarm &&
         Boolean(to && terminalsById.get(to)?.reachable),
     );
     renderedCompactTerminalIdRef.current = to;
@@ -430,6 +447,7 @@ function TerminalWorkspaceComponent({
   const onActivePaneReadyRef = useRef(onActivePaneReady);
   onActivePaneReadyRef.current = onActivePaneReady;
   const releaseCompactHold = useCallback((terminalId: string) => {
+    compactReadyRef.current.add(terminalId);
     onActivePaneReadyRef.current?.(terminalId);
     const hold = compactHoldRef.current;
     if (hold?.to !== terminalId) return;
@@ -452,6 +470,20 @@ function TerminalWorkspaceComponent({
       : null;
   // The pane over the incoming one: held while it waits, then fading.
   const compactCoverTerminal = compactHeldTerminal ?? compactFadingTerminal;
+  const mountedCompactIds = isCompact
+    ? mountedCompactTerminalIds(
+        activeTerminal?.id ?? null,
+        compactCoverTerminal?.id ?? null,
+        recentCompactTerminalIdsRef.current,
+        new Set(terminalsById.keys()),
+      )
+    : [];
+  if (isCompact) {
+    const mountedCompactSet = new Set(mountedCompactIds);
+    for (const id of compactReadyRef.current) {
+      if (!mountedCompactSet.has(id)) compactReadyRef.current.delete(id);
+    }
+  }
   // Panes in the active group — a group with a single pane renders no
   // focused-pane accent border (a lone pane needs no focus indicator).
   const activeGroupPaneCount = activeGroup
@@ -1034,6 +1066,16 @@ function TerminalWorkspaceComponent({
     if (!commandsRef) return;
     commandsRef.current = {
       selectGroup: (groupId) => activateGroup(groupId),
+      prewarmGroup: (groupId) => {
+        if (isTouch || groupId === workspaceRef.current.activeGroupId) return;
+        const alreadyMounted = mountedGroups.some((g) => g.id === groupId);
+        if (alreadyMounted) return;
+        recentGroupIdsRef.current = [
+          groupId,
+          ...recentGroupIdsRef.current.filter((id) => id !== groupId),
+        ].slice(0, 6);
+        rerenderAfterHold();
+      },
       selectTerminal: (terminalId) => {
         if (
           !workspaceRef.current.groups.some((group) =>
@@ -1152,91 +1194,111 @@ function TerminalWorkspaceComponent({
         >
           {activeTerminal ? (
             <>
-              {/* Keyed slots, active first: a switch inserts the incoming pane
-                  before the held one without moving (and remounting or
-                  blurring) it, and the held one only changes style. */}
-              <div
-                key={activeTerminal.id}
-                style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex" }}
-              >
-                <WorkspacePaneLeaf
-                  terminal={activeTerminal}
-                  isActive
-                  isController={isController}
-                  canType={canType}
-                  eventsReconnecting={eventsReconnecting}
-                  deviceId={deviceId}
-                  isCompact
-                  isTouch={isTouch}
-                  focusRing={activeGroupPaneCount > 1}
-                  fitRequestNonce={
-                    fitRequest?.terminalIds.includes(activeTerminal.id)
-                      ? fitRequest.nonce
-                      : null
-                  }
-                  fitRequestShouldFocus={
-                    fitRequest?.focusTerminalId === activeTerminal.id
-                  }
-                  onActiveRef={(ref) => {
-                    activeCardRef.current = ref;
-                  }}
-                  onFitRequestHandled={handleFitRequestHandled}
-                  onFocus={activateTerminal}
-                  onDestroy={handleDestroy}
-                  onRequestControl={onRequestControl}
-                  onReleaseControl={onReleaseControl}
-                  onReady={releaseCompactHold}
-                />
-              </div>
-              {compactCoverTerminal && (
-                <div
-                  key={compactCoverTerminal.id}
-                  data-testid={
-                    compactHeldTerminal ? "compact-held-pane" : "compact-fading-pane"
-                  }
-                  inert
-                  aria-hidden
-                  onAnimationEnd={(event) => {
-                    // The dim, bar and cursor animate inside; only the
-                    // pane's own fade ends it.
-                    if (event.target !== event.currentTarget) return;
-                    finishCompactFade(compactCoverTerminal.id);
-                  }}
-                  style={{
-                    position: "absolute",
-                    inset: 0,
-                    zIndex: 1,
-                    display: "flex",
-                    pointerEvents: "none",
-                    animation: compactHeldTerminal
-                      ? undefined
-                      : `offdeskFadeOut ${COMPACT_FADE_MS}ms ease-out both`,
-                  }}
-                >
-                  <WorkspacePaneLeaf
-                    terminal={compactCoverTerminal}
-                    isActive={false}
-                    isController={isController}
-                    canType={canType}
-                    eventsReconnecting={eventsReconnecting}
-                    deviceId={deviceId}
-                    isCompact
-                    isTouch={isTouch}
-                    focusRing={false}
-                    fitRequestNonce={null}
-                    fitRequestShouldFocus={false}
-                    onActiveRef={NOOP_ACTIVE_REF}
-                    onFitRequestHandled={handleFitRequestHandled}
-                    onFocus={activateTerminal}
-                    onDestroy={handleDestroy}
-                    onRequestControl={onRequestControl}
-                    onReleaseControl={onReleaseControl}
-                  />
-                  {/* Frozen while fading, so the dim and bar leave with the
-                      screen instead of jumping away or still fading in. */}
-                  <CompactSwitchProgress paused={!compactHeldTerminal} />
-                </div>
-              )}
+              {/* Keyed slots for active, outgoing cover, and LRU warm mobile
+                  panes: keeping recent terminals mounted in hidden layers makes
+                  switching back and forth on mobile 0ms instant with no
+                  WebSocket/tmux reconnect. */}
+              {mountedCompactIds.map((termId) => {
+                const paneTerminal = terminalsById.get(termId);
+                if (!paneTerminal) return null;
+                const isActivePane = termId === activeTerminal.id;
+                const isCoverPane = termId === compactCoverTerminal?.id;
+                const isHiddenKeepAlive = !isActivePane && !isCoverPane;
+                return (
+                  <div
+                    key={paneTerminal.id}
+                    data-testid={
+                      isCoverPane
+                        ? compactHeldTerminal
+                          ? "compact-held-pane"
+                          : "compact-fading-pane"
+                        : isHiddenKeepAlive
+                          ? `compact-keepalive-layer-${paneTerminal.id}`
+                          : undefined
+                    }
+                    inert={isCoverPane || isHiddenKeepAlive ? true : undefined}
+                    aria-hidden={isCoverPane || isHiddenKeepAlive ? true : undefined}
+                    onAnimationEnd={
+                      isCoverPane
+                        ? (event) => {
+                            // The dim, bar and cursor animate inside; only the
+                            // pane's own fade ends it.
+                            if (event.target !== event.currentTarget) return;
+                            finishCompactFade(paneTerminal.id);
+                          }
+                        : undefined
+                    }
+                    style={
+                      isActivePane
+                        ? { flex: 1, minWidth: 0, minHeight: 0, display: "flex" }
+                        : isCoverPane
+                          ? {
+                              position: "absolute",
+                              inset: 0,
+                              zIndex: 1,
+                              display: "flex",
+                              pointerEvents: "none",
+                              animation: compactHeldTerminal
+                                ? undefined
+                                : `offdeskFadeOut ${COMPACT_FADE_MS}ms ease-out both`,
+                            }
+                          : {
+                              position: "absolute",
+                              inset: 0,
+                              zIndex: 0,
+                              visibility: "hidden",
+                              pointerEvents: "none",
+                              display: "flex",
+                            }
+                    }
+                  >
+                    <WorkspacePaneLeaf
+                      terminal={paneTerminal}
+                      isActive={isActivePane}
+                      testIdOverride={
+                        isHiddenKeepAlive
+                          ? `compact-keepalive-pane-${paneTerminal.id}`
+                          : undefined
+                      }
+                      isController={isController}
+                      canType={canType}
+                      eventsReconnecting={eventsReconnecting}
+                      deviceId={deviceId}
+                      isCompact
+                      isTouch={isTouch}
+                      focusRing={isActivePane && activeGroupPaneCount > 1}
+                      fitRequestNonce={
+                        isActivePane &&
+                        fitRequest?.terminalIds.includes(paneTerminal.id)
+                          ? fitRequest.nonce
+                          : null
+                      }
+                      fitRequestShouldFocus={
+                        isActivePane &&
+                        fitRequest?.focusTerminalId === paneTerminal.id
+                      }
+                      onActiveRef={
+                        isActivePane
+                          ? (ref) => {
+                              activeCardRef.current = ref;
+                            }
+                          : NOOP_ACTIVE_REF
+                      }
+                      onFitRequestHandled={handleFitRequestHandled}
+                      onFocus={activateTerminal}
+                      onDestroy={handleDestroy}
+                      onRequestControl={onRequestControl}
+                      onReleaseControl={onReleaseControl}
+                      onReady={isActivePane ? releaseCompactHold : undefined}
+                    />
+                    {isCoverPane && (
+                      /* Frozen while fading, so the dim and bar leave with the
+                         screen instead of jumping away or still fading in. */
+                      <CompactSwitchProgress paused={!compactHeldTerminal} />
+                    )}
+                  </div>
+                );
+              })}
               {compactCover}
             </>
           ) : (
@@ -1648,6 +1710,7 @@ function WorkspacePaneTree({
 export function WorkspacePaneLeaf({
   terminal,
   isActive,
+  testIdOverride,
   isController,
   canType,
   eventsReconnecting,
@@ -1668,6 +1731,7 @@ export function WorkspacePaneLeaf({
 }: {
   terminal: TerminalInfo;
   isActive: boolean;
+  testIdOverride?: string;
   isController: boolean;
   canType: boolean;
   eventsReconnecting: boolean;
@@ -1760,7 +1824,7 @@ export function WorkspacePaneLeaf({
 
   return (
     <div
-      data-testid={`workspace-pane-${terminal.id}`}
+      data-testid={testIdOverride ?? `workspace-pane-${terminal.id}`}
       onMouseDown={() => onFocus(terminal.id)}
       onMouseMove={(event) => {
         if (isTouch || isActive) return;

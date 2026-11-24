@@ -16,6 +16,7 @@ import {
   flattenWorkspacePanes,
   getMobileWorkspaceTabs,
   isWorkspaceGroupFull,
+  mountedCompactTerminalIds,
   mountedWorkspaceGroupIds,
   nextCompactSwitchHold,
   planNewTerminalPlacement,
@@ -1453,5 +1454,21 @@ describe("nextCompactSwitchHold", () => {
     expect(nextCompactSwitchHold({ from: "a", to: "b" }, "b", "c", false)).toBeNull();
     expect(nextCompactSwitchHold(null, null, "b", true)).toBeNull();
     expect(nextCompactSwitchHold(null, "a", null, true)).toBeNull();
+  });
+});
+
+describe("mountedCompactTerminalIds", () => {
+  it("keeps active, cover, and recent terminals up to the cap", () => {
+    const available = new Set(["a", "b", "c", "d", "e"]);
+    expect(
+      mountedCompactTerminalIds("d", "c", ["c", "b", "a", "e"], available, 4),
+    ).toEqual(["d", "c", "b", "a"]);
+  });
+
+  it("drops unavailable or duplicate ids", () => {
+    const available = new Set(["a", "b"]);
+    expect(
+      mountedCompactTerminalIds("a", "a", ["gone", "b", "a"], available, 4),
+    ).toEqual(["a", "b"]);
   });
 });

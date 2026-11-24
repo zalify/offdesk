@@ -700,9 +700,11 @@ test("mobile title bar and grouped switcher expose titles, host stats, and creat
   expect(created?.cwd).toBe("/root");
   expect(created?.workspace_group_id).toBe(firstGroup.id);
   await expect(page.getByTestId(`workspace-pane-${created!.id}`)).toBeVisible();
+  // Mobile LRU keep-alive keeps the newly created active terminal and the
+  // previously visited terminal warm (while unvisited terminals stay cold).
   await expect
-    .poll(() => getMountedXtermIds(page))
-    .toEqual([created!.id]);
+    .poll(async () => (await getMountedXtermIds(page)).sort())
+    .toEqual([created!.id, firstTerminalId].sort());
 });
 
 test("the mobile session sheet lists the latest output first and Machines shows each machine's load", async ({

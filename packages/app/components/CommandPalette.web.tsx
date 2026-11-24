@@ -9,8 +9,8 @@ import { colors, colorAlpha } from "@/lib/colors";
 import { AgentMarker } from "./Primitives.web";
 import { rem } from "@/lib/rem";
 
-export type PaletteSection = "actions" | "tabs" | "hosts";
-export type PaletteFilter = "all" | "tabs" | "hosts";
+export type PaletteSection = "terminals" | "actions" | "tabs" | "hosts";
+export type PaletteFilter = "all" | "terminals" | "tabs" | "hosts";
 
 export interface PaletteRow {
   id: string;
@@ -25,9 +25,14 @@ export interface PaletteRow {
   // Set when an agent opened a terminal in this tab: the opener's label
   // ("" when it gave none) — rendered as the `⌁ opened by agent` chip.
   opener?: string;
+  // Highlighted when an agent in this terminal needs confirmation/attention.
+  waiting?: boolean;
   // Machines only: the status dot.
   online?: boolean;
   disabled?: boolean;
+  // Optional speculative pre-warm callback fired after the row stays
+  // highlighted for ~120ms.
+  onHighlight?: () => void;
   action: () => void;
 }
 
@@ -64,17 +69,18 @@ export function CommandPalette({
   }, []);
 
   const visibleRows = useMemo(() => {
+    const trimmed = query.trim();
+    const orderMap = trimmed ? SEARCH_SECTION_ORDER : SECTION_ORDER;
     const sectioned = (
       filter === "all" ? rows : rows.filter((row) => row.section === filter)
     )
-      // Grouped under their section titles: actions, tabs, machines.
+      // Grouped under their section titles.
       .map((row, order) => ({ row, order }))
-      .sort((a, b) => SECTION_ORDER[a.row.section] - SECTION_ORDER[b.row.section] || a.order - b.order)
+      .sort((a, b) => orderMap[a.row.section] - orderMap[b.row.section] || a.order - b.order)
       .map(({ row }) => row);
-    const trimmed = query.trim();
     if (!trimmed) return sectioned;
     return sectioned.filter((row) =>
-      fuzzyMatch(trimmed, `${row.label} ${row.keywords ?? ""}`),
+      fuzzyMatch(trimmed, `${row.label} ${row.keywords ?? ""} ${row.meta ?? ""}`),
     );
   }, [rows, filter, query]);
 
@@ -82,6 +88,16 @@ export function CommandPalette({
   useEffect(() => {
     setSelectedIndex(0);
   }, [visibleRows.length, query, filter]);
+
+  // Speculative pre-warm: when a terminal or tab row stays highlighted for
+  // 120ms (hover or arrow navigation), mount its group ahead of Enter/click.
+  const highlightedRow = visibleRows[selectedIndex];
+  useEffect(() => {
+    const onHighlight = highlightedRow?.onHighlight;
+    if (!onHighlight || highlightedRow?.disabled) return;
+    const timer = window.setTimeout(onHighlight, 120);
+    return () => window.clearTimeout(timer);
+  }, [highlightedRow]);
 
   const runRow = (row: PaletteRow | undefined) => {
     if (!row || row.disabled) return;
@@ -251,6 +267,22 @@ export function CommandPalette({
                     <span aria-hidden="true" style={{ width: 9, flexShrink: 0 }}>{selected ? "❯" : ""}</span>
                   )}
                   <span style={{ ...truncateStyle, flex: 1 }}>{row.label}</span>
+                  {row.waiting && (
+                    <span
+                      style={{
+                        fontSize: rem(11),
+                        fontWeight: 600,
+                        padding: "1px 6px",
+                        borderRadius: 3,
+                        background: selected ? colorAlpha.overlay : colorAlpha.warningSubtle,
+                        color: selected ? colors.onPrimary : colors.accent,
+                        whiteSpace: "nowrap",
+                        flexShrink: 0,
+                      }}
+                    >
+                      waiting
+                    </span>
+                  )}
                   {row.opener !== undefined && (
                     <AgentMarker
                       label={row.opener}
@@ -286,12 +318,25 @@ export function CommandPalette({
 }
 
 const SECTION_TITLES: Record<PaletteSection, string> = {
+  terminals: "terminals",
   actions: "actions",
   tabs: "tabs",
   hosts: "machines",
 };
 
-const SECTION_ORDER: Record<PaletteSection, number> = { actions: 0, tabs: 1, hosts: 2 };
+const SECTION_ORDER: Record<PaletteSection, number> = {
+  actions: 0,
+  terminals: 1,
+  tabs: 2,
+  hosts: 3,
+};
+
+const SEARCH_SECTION_ORDER: Record<PaletteSection, number> = {
+  terminals: 0,
+  tabs: 1,
+  actions: 2,
+  hosts: 3,
+};
 
 const truncateStyle: CSSProperties = {
   overflow: "hidden",

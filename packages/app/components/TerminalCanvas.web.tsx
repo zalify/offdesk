@@ -99,6 +99,7 @@ import {
   collectGroupPaneTerminalIds,
   collectPaneTerminalIds,
   createTerminalWorkspace,
+  labelFromCwd,
   pickWorkspaceTerminal,
   planNewTerminalPlacement,
   type WorkspaceGroup,
@@ -1719,9 +1720,113 @@ function TerminalCanvasInner() {
     };
   }, []);
 
+  // Track MRU terminal & machine visit history for instant back-and-forth
+  // switching (Cmd+J / Ctrl+Shift+J), MRU ordering in the Quick Switcher,
+  // and cross-machine keep-alive.
+  const mruTerminalIdsRef = useRef<string[]>([]);
+  const lastTrackedTerminalIdRef = useRef<string | null>(null);
+  if (
+    workspaceTerminal?.id &&
+    workspaceTerminal.id !== lastTrackedTerminalIdRef.current
+  ) {
+    lastTrackedTerminalIdRef.current = workspaceTerminal.id;
+    mruTerminalIdsRef.current = [
+      workspaceTerminal.id,
+      ...mruTerminalIdsRef.current.filter((id) => id !== workspaceTerminal.id),
+    ].slice(0, 64);
+  }
+  const recentMachineIdsRef = useRef<string[]>([]);
+  const lastTrackedMachineIdRef = useRef<string | null>(null);
+  if (
+    activeMachine?.id &&
+    activeMachine.id !== lastTrackedMachineIdRef.current
+  ) {
+    lastTrackedMachineIdRef.current = activeMachine.id;
+    recentMachineIdsRef.current = [
+      activeMachine.id,
+      ...recentMachineIdsRef.current.filter((id) => id !== activeMachine.id),
+    ].slice(0, 2);
+  }
+  const mountedDesktopMachineIds = useMemo(() => {
+    if (isCompact || !activeMachine?.id) return [];
+    const ids: string[] = [];
+    for (const id of [activeMachine.id, ...recentMachineIdsRef.current]) {
+      if (ids.length >= 2) break;
+      if (ids.includes(id)) continue;
+      if (terminals.some((t) => t.machine_id === id)) {
+        ids.push(id);
+      }
+    }
+    return ids;
+  }, [isCompact, activeMachine?.id, terminals]);
+
+  const handleSwitchToTerminal = useCallback(
+    (target: TerminalInfo) => {
+      if (target.machine_id !== activeMachine?.id) {
+        setActiveMachineId(target.machine_id);
+        handleZoomTerminal(target.id);
+      } else {
+        const handled = workspaceCommandsRef.current.selectTerminal?.(target.id);
+        if (!handled) {
+          handleZoomTerminal(target.id);
+        }
+      }
+    },
+    [activeMachine?.id, handleZoomTerminal],
+  );
+
+  const handleLastTerminal = useCallback(() => {
+    const currentId = workspaceTerminal?.id ?? null;
+    const prevId = mruTerminalIdsRef.current.find(
+      (id) => id !== currentId && terminals.some((t) => t.id === id),
+    );
+    if (!prevId) return;
+    const target = terminals.find((t) => t.id === prevId);
+    if (target) handleSwitchToTerminal(target);
+  }, [workspaceTerminal?.id, terminals, handleSwitchToTerminal]);
+
+  const handleNextWaitingTerminal = useCallback(() => {
+    const waiting = terminals
+      .filter((t) => t.reachable && Boolean(t.attention))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    if (waiting.length === 0) return;
+    const currentId = workspaceTerminal?.id ?? null;
+    const idx = waiting.findIndex((t) => t.id === currentId);
+    const next = waiting[(idx + 1) % waiting.length];
+    if (next) handleSwitchToTerminal(next);
+  }, [terminals, workspaceTerminal?.id, handleSwitchToTerminal]);
+
   useEffect(() => {
     if (isCompact) return;
     const onKeydown = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      // Direct power-user shortcuts that never collide with terminal Ctrl+K / Ctrl+J / Ctrl+A:
+      // - Cmd+K (macOS) or Ctrl+Shift+K: Quick Switcher / Command Palette
+      // - Cmd+J (macOS) or Ctrl+Shift+J: Last terminal (MRU back-and-forth)
+      // - Cmd+Shift+A (macOS) or Ctrl+Shift+A: Next waiting agent terminal
+      const isCmdOnly = event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+      const isCtrlShift = event.ctrlKey && event.shiftKey && !event.metaKey && !event.altKey;
+      const isCmdShift = event.metaKey && event.shiftKey && !event.ctrlKey && !event.altKey;
+      if ((isCmdOnly || isCtrlShift) && key === "k") {
+        event.preventDefault();
+        event.stopPropagation();
+        setPaletteState((current) =>
+          current.open ? { ...current, open: false } : { open: true, filter: "all" },
+        );
+        return;
+      }
+      if ((isCmdOnly || isCtrlShift) && key === "j") {
+        event.preventDefault();
+        event.stopPropagation();
+        handleLastTerminal();
+        return;
+      }
+      if ((isCmdShift || isCtrlShift) && key === "a") {
+        event.preventDefault();
+        event.stopPropagation();
+        handleNextWaitingTerminal();
+        return;
+      }
       const insideTerminal =
         event.target instanceof Element &&
         Boolean(event.target.closest(".xterm"));
@@ -1733,7 +1838,7 @@ function TerminalCanvasInner() {
     };
     window.addEventListener("keydown", onKeydown);
     return () => window.removeEventListener("keydown", onKeydown);
-  }, [isCompact]);
+  }, [isCompact, handleLastTerminal, handleNextWaitingTerminal]);
 
   // Esc unzooms the expanded view, unless focus is inside xterm (which needs
   // Esc for its own bindings — the expanded overlay handles that case).
@@ -1777,7 +1882,77 @@ function TerminalCanvasInner() {
         (Boolean(machineStats[machine.id]) ||
           terminals.some((t) => t.machine_id === machine.id && t.reachable)),
     );
+    const machinesById = new Map(machines.map((m) => [m.id, m]));
+    const groupByTerminalId = new Map<string, string>();
+    for (const group of tabGroups) {
+      for (const id of collectPaneTerminalIds(group.root)) {
+        groupByTerminalId.set(id, group.id);
+      }
+    }
+    const mruRank = new Map(
+      mruTerminalIdsRef.current.map((id, index) => [id, index]),
+    );
+    const sortedTerminals = [...terminals].sort((a, b) => {
+      const aWait = a.reachable && Boolean(a.attention) ? 1 : 0;
+      const bWait = b.reachable && Boolean(b.attention) ? 1 : 0;
+      if (aWait !== bWait) return bWait - aWait;
+      const aRank = mruRank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+      const bRank = mruRank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
+      return (b.last_activity_ms ?? 0) - (a.last_activity_ms ?? 0);
+    });
+    const waitingCount = terminals.filter(
+      (t) => t.reachable && Boolean(t.attention),
+    ).length;
+    const hasPreviousTerminal = mruTerminalIdsRef.current.some(
+      (id) => id !== workspaceTerminal?.id && terminals.some((t) => t.id === id),
+    );
     return [
+      {
+        id: "last-terminal",
+        section: "actions",
+        label: "last terminal",
+        keywords: "previous back mru switch toggle",
+        hint: "⌘J / ⌃⇧J",
+        disabled: !hasPreviousTerminal,
+        action: () => handleLastTerminal(),
+      },
+      {
+        id: "next-waiting-agent",
+        section: "actions",
+        label: "next waiting agent",
+        keywords: "attention confirmation approval agent jump",
+        meta: waitingCount > 0 ? `${waitingCount} waiting` : undefined,
+        waiting: waitingCount > 0,
+        hint: "⌘⇧A / ⌃⇧A",
+        disabled: waitingCount === 0,
+        action: () => handleNextWaitingTerminal(),
+      },
+      ...sortedTerminals.map((term): PaletteRow => {
+        const machineName = machinesById.get(term.machine_id)?.name ?? "";
+        const folder = labelFromCwd(term.cwd);
+        const groupId =
+          term.machine_id === activeMachine?.id
+            ? groupByTerminalId.get(term.id)
+            : undefined;
+        return {
+          id: `terminal-${term.id}`,
+          section: "terminals",
+          label: displayTerminalTitle(term),
+          meta:
+            machines.length > 1 && machineName
+              ? `${folder} · ${machineName}`
+              : folder,
+          opener:
+            term.opened_by?.label ?? (term.opened_by ? "" : undefined),
+          waiting: Boolean(term.reachable && term.attention),
+          keywords: `${term.cwd} ${machineName} ${term.opened_by?.label ?? ""} ${term.attention ? "waiting attention" : ""}`,
+          onHighlight: groupId
+            ? () => workspaceCommandsRef.current.prewarmGroup?.(groupId)
+            : undefined,
+          action: () => handleSwitchToTerminal(term),
+        };
+      }),
       {
         id: "new-terminal",
         section: "actions",
@@ -1844,6 +2019,8 @@ function TerminalCanvasInner() {
           keywords: `${group.label} ${group.cwd}`,
           hint:
             index < 9 ? formatPrefixBinding(tabAction, bindings) : undefined,
+          onHighlight: () =>
+            workspaceCommandsRef.current.prewarmGroup?.(group.id),
           action: () => workspaceCommandsRef.current.selectGroup?.(group.id),
         };
       }),
@@ -1903,6 +2080,10 @@ function TerminalCanvasInner() {
     handleNewTerminalFromHeader,
     handleNewGroup,
     handleOpenFiles,
+    handleLastTerminal,
+    handleNextWaitingTerminal,
+    handleSwitchToTerminal,
+    workspaceTerminal?.id,
     machineOnline,
     logout,
   ]);
@@ -2207,7 +2388,7 @@ function TerminalCanvasInner() {
                 </div>
               )}
 
-              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column" }}>
+              <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", position: "relative" }}>
               {scopedTerminals.length === 0 ? (
                 <EmptyState
                   scopeLabel={scopeLabel}
@@ -2218,8 +2399,9 @@ function TerminalCanvasInner() {
                   } : undefined}
                   onNewTerminal={handleNewTerminalFromHeader}
                 />
-              ) : (
+              ) : mountedDesktopMachineIds.length <= 1 ? (
                 <TerminalWorkspace
+                  key={workspaceTerminal!.machine_id}
                   terminal={workspaceTerminal!}
                   siblings={scopedTerminals}
                   workspaceGroups={activeMachineWorkspaceGroups}
@@ -2243,6 +2425,65 @@ function TerminalCanvasInner() {
                   commandsRef={workspaceCommandsRef}
                   onActiveGroupChange={setActiveGroupId}
                 />
+              ) : (
+                mountedDesktopMachineIds.map((machineId) => {
+                  const isCurrent = machineId === activeMachine?.id;
+                  const mTerminals = isCurrent
+                    ? scopedTerminals
+                    : terminals.filter((t) => t.machine_id === machineId);
+                  const mTerminal = isCurrent
+                    ? workspaceTerminal!
+                    : mTerminals[0];
+                  if (!mTerminal) return null;
+                  const mGroups = isCurrent
+                    ? activeMachineWorkspaceGroups
+                    : workspaceGroups.filter((g) => g.machine_id === machineId);
+                  const mLayouts = isCurrent
+                    ? activeMachineWorkspaceLayouts
+                    : workspaceLayouts.filter((l) => l.machine_id === machineId);
+                  return (
+                    <div
+                      key={machineId}
+                      inert={!isCurrent ? true : undefined}
+                      aria-hidden={!isCurrent ? true : undefined}
+                      style={{
+                        position: "absolute",
+                        inset: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                        visibility: isCurrent ? "visible" : "hidden",
+                        pointerEvents: isCurrent ? "auto" : "none",
+                        zIndex: isCurrent ? 1 : 0,
+                      }}
+                    >
+                      <TerminalWorkspace
+                        key={machineId}
+                        terminal={mTerminal}
+                        siblings={mTerminals}
+                        workspaceGroups={mGroups}
+                        workspaceLayouts={mLayouts}
+                        isController={isMachineController(machineId)}
+                        canType={canTypeOnMachine(machineId)}
+                        eventsReconnecting={eventsReconnecting}
+                        deviceId={deviceId ?? ""}
+                        isCompact={isCompact}
+                        isTouch={isTouch}
+                        onPick={handleZoomTerminal}
+                        onDestroy={handleDestroyTerminal}
+                        onSplit={handleSplitWorkspacePane}
+                        onCreatePane={handleCreateWorkspacePane}
+                        onReorderGroups={handleReorderWorkspaceGroups}
+                        onSaveWorkspaceLayout={handleSaveWorkspaceLayout}
+                        onAssignGroup={handleAssignWorkspaceGroup}
+                        onPromoteGroup={handlePromoteWorkspaceGroup}
+                        onRequestControl={handleRequestControl}
+                        onReleaseControl={handleReleaseControl}
+                        commandsRef={isCurrent ? workspaceCommandsRef : undefined}
+                        onActiveGroupChange={isCurrent ? setActiveGroupId : undefined}
+                      />
+                    </div>
+                  );
+                })
               )}
               </div>
               <WorkspaceKeyBarSlot />
