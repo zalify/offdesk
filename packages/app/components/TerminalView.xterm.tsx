@@ -444,8 +444,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       el.style.lineHeight = `${metrics.height}px`;
       el.style.fontFamily = term.options.fontFamily ?? DEFAULT_TERMINAL_FONT;
       el.style.fontSize = `${term.options.fontSize ?? 14}px`;
-      el.style.color = terminalColorsRef.current.foreground;
-      el.style.background = terminalColorsRef.current.background;
+      el.style.color = terminalColorsRef.current.theme.foreground ?? "currentColor";
+      el.style.background = terminalColorsRef.current.theme.background ?? "transparent";
       el.style.display = "block";
     }, []);
     const handleLocalEchoOutput = useCallback(
