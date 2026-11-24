@@ -62,6 +62,7 @@ import { usePrefixKey } from "@/lib/prefixKeyContext";
 import { filterBrowserGeneratedTerminalInput } from "@/lib/terminalInputFilter";
 import {
   createInputBatcher,
+  isPureWheelInput,
   type InputBatcher,
 } from "@/lib/terminalInputBatcher";
 import { createWheelDirectionGate } from "@/lib/terminalWheelGate";
@@ -86,6 +87,9 @@ const TERMINAL_SCROLL_SENSITIVITY = 3;
 // resize the hub drops (control moved meanwhile) never brings a redraw.
 // Generous, since the redraw needs a full round trip over remote links.
 const RESIZE_REDRAW_WAIT_MS = 3000;
+// Drop pure wheel bursts when the browser WS send buffer is already backed up
+// over a slow external link so scrolling stops immediately when fingers stop.
+const WHEEL_BACKPRESSURE_BYTES = 4096;
 // SGR (1006) and X10 mouse reports, which xterm emits through onData.
 const MOUSE_REPORT_RE = /\x1b\[<\d+;\d+;\d+[Mm]|\x1b\[M[\s\S]{3}/g;
 
@@ -419,6 +423,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (!canTypeRef.current) return;
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN && !reconnectPendingRef.current) {
+          if (
+            ws.bufferedAmount > WHEEL_BACKPRESSURE_BYTES &&
+            isPureWheelInput(data)
+          ) {
+            return;
+          }
           sendInputFrame(ws, data);
           return;
         }
@@ -1042,7 +1052,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // queued and sent on the next socket when it opens (deliverInput).
       echoProbeEnabledRef.current =
         localStorage.getItem("offdesk:echo-probe") === "1";
-      const batcher = createInputBatcher(deliverInput);
+      const batcher = createInputBatcher(
+        deliverInput,
+        (cb) => queueMicrotask(cb),
+        (cb) => requestAnimationFrame(cb),
+      );
       inputBatcherRef.current = batcher;
       term.onData((data) => {
         const userInput = filterBrowserGeneratedTerminalInput(data);
@@ -1218,13 +1232,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       container.addEventListener("mousedown", handleSelectMouseDown);
 
       // Touch scroll handling for mobile. Quantize finger travel with the
-      // measured cell height, not fontSize*lineHeight: rendered cells are
+      // live measured cell height, not fontSize*lineHeight: rendered cells are
       // taller than that for most fonts (14px font → 17px cell), and xterm
       // re-quantizes wheel deltas against its own cell metrics, so a
-      // misestimated quantum loses ~20% of the scroll distance.
-      const lineHeight =
+      // misestimated quantum loses ~20% of the scroll distance. Reading it
+      // dynamically keeps touch scroll accurate after font loads or zoom.
+      const getLineHeight = () =>
         readXtermCellMetrics(term)?.height ??
         (term.options.fontSize ?? 14) * (term.options.lineHeight ?? 1);
+      const cachedViewport = container.querySelector(".xterm-viewport");
       let lastTouchY = 0;
       let accumulatedDelta = 0;
       let tapStart: { x: number; y: number; at: number } | null = null;
@@ -1251,10 +1267,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // Convert vertical pixel travel into per-line synthetic wheel events on
       // the xterm viewport (xterm turns them into SGR reports for tmux).
       const scrollByPixels = (dy: number, clientX: number, clientY: number) => {
+        const lineHeight = getLineHeight();
         accumulatedDelta += dy;
         const lines = Math.trunc(accumulatedDelta / lineHeight);
         if (lines === 0) return;
-        const vp = container.querySelector(".xterm-viewport");
+        const vp = cachedViewport ?? container.querySelector(".xterm-viewport");
         if (vp) {
           for (let i = 0; i < Math.abs(lines); i++) {
             vp.dispatchEvent(

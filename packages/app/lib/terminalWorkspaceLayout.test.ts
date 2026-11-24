@@ -956,6 +956,14 @@ describe("terminalWorkspaceLayout", () => {
     expect(mountedWorkspaceGroupIds(workspace, "a", true)).toEqual(["b"]);
   });
 
+  it("keeps up to 4 recent groups mounted on desktop within the 8-pane budget", () => {
+    const workspace = workspaceWithGroups(["a", "b", "c", "d", "e"], "e");
+
+    expect(
+      mountedWorkspaceGroupIds(workspace, ["d", "c", "b", "a"], false),
+    ).toEqual(["e", "d", "c", "b"]);
+  });
+
   it("finds adjacent panes by visual direction", () => {
     const workspace = splitWorkspacePane(
       createTerminalWorkspace([terminal("left", "/repo")], "left"),

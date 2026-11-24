@@ -309,16 +309,16 @@ function TerminalWorkspaceComponent({
   }, [siblings, terminal.id, workspaceGroups, workspaceLayouts]);
 
   const activeGroup = getActiveWorkspaceGroup(workspace);
-  // Keep-alive LRU (size 2): the group active on the previous render stays
-  // mounted-but-hidden so flipping back is instant (no xterm/WS/tmux
-  // rebuild). Refs update during render — same pattern as
-  // maximizedTerminalIdRef — because the switched-away group must already
-  // appear in THIS render's mounted list; an effect would run too late and
-  // unmount it first.
+  // Keep-alive LRU (up to 4 groups within an 8-pane WebGL budget): recently
+  // active groups stay mounted-but-hidden so flipping back is instant (no
+  // xterm/WS/tmux rebuild). Refs update during render — same pattern as
+  // maximizedTerminalIdRef — because switched-away groups must already appear
+  // in THIS render's mounted list; an effect would run too late and unmount
+  // them first.
   const renderedActiveGroupIdRef = useRef<string | null>(
     workspace.activeGroupId,
   );
-  const previousActiveGroupIdRef = useRef<string | null>(null);
+  const recentGroupIdsRef = useRef<string[]>([]);
   // Desktop group switch hold, the compact switch hold's counterpart for
   // groups: switching to a group that isn't mounted builds every pane fresh
   // (xterm, socket, tmux attach), blank for a round trip. Hovering across
@@ -344,7 +344,14 @@ function TerminalWorkspaceComponent({
       workspace.activeGroupId,
       !isCompact && !isTouch && groupWaiting(workspace.activeGroupId),
     );
-    previousActiveGroupIdRef.current = shown;
+    if (shown) {
+      recentGroupIdsRef.current = [
+        shown,
+        ...recentGroupIdsRef.current.filter(
+          (id) => id !== shown && id !== workspace.activeGroupId,
+        ),
+      ].slice(0, 6);
+    }
     renderedActiveGroupIdRef.current = workspace.activeGroupId;
   }
   if (groupHoldRef.current && !groupWaiting(groupHoldRef.current.to)) {
@@ -353,7 +360,7 @@ function TerminalWorkspaceComponent({
   const heldGroupId = groupHoldRef.current?.from ?? null;
   const mountedGroups = mountedWorkspaceGroupIds(
     workspace,
-    previousActiveGroupIdRef.current,
+    recentGroupIdsRef.current,
     isTouch,
   )
     .map((id) => workspace.groups.find((group) => group.id === id))

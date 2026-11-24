@@ -1,12 +1,20 @@
 // Coalesce terminal input written in the same tick into one WS message.
 //
 // Scroll gestures are the heavy case: xterm emits one onData per SGR wheel
-// report, so a single trackpad frame can produce a burst of tiny
-// `{type:"input"}` messages that each pay WS framing + hub forwarding
-// overhead. Joining a synchronous burst into one message is semantically
-// identical for the PTY (same byte stream, same order) and flushes in a
-// microtask, so no added latency is observable — the bytes leave before the
-// browser yields to the event loop.
+// report, and 60-120Hz trackpads emit several wheel events per animation
+// frame. Pure wheel-report bursts are coalesced across the animation frame
+// (`scheduleWheel`, e.g. requestAnimationFrame) so high-rate scroll gestures
+// turn into one WS message and one tmux redraw per frame. Any non-wheel input
+// (keystrokes, clicks, pastes) flushes in a microtask so typing latency stays
+// zero and byte ordering is strictly preserved.
+
+// SGR mouse wheel reports: button 64 (wheel up) and 65 (wheel down), with
+// optional modifier bits (64..79 / 65..79).
+const PURE_WHEEL_REPORT_RE = /^(?:\x1b\[<(?:64|65|68|69|72|73|76|77|80|81|84|85|88|89|92|93);\d+;\d+M)+$/;
+
+export function isPureWheelInput(data: string): boolean {
+  return data.length > 0 && PURE_WHEEL_REPORT_RE.test(data);
+}
 
 export interface InputBatcher {
   push(data: string): void;
@@ -18,12 +26,15 @@ export interface InputBatcher {
 export function createInputBatcher(
   send: (data: string) => void,
   schedule: (cb: () => void) => void = (cb) => queueMicrotask(cb),
+  scheduleWheel?: (cb: () => void) => void,
 ): InputBatcher {
   let pending: string[] = [];
-  let scheduled = false;
+  let scheduledImmediate = false;
+  let scheduledWheel = false;
 
   const flush = () => {
-    scheduled = false;
+    scheduledImmediate = false;
+    scheduledWheel = false;
     if (pending.length === 0) return;
     const data = pending.length === 1 ? pending[0] : pending.join("");
     pending = [];
@@ -33,8 +44,15 @@ export function createInputBatcher(
   return {
     push(data: string) {
       pending.push(data);
-      if (!scheduled) {
-        scheduled = true;
+      if (scheduleWheel && isPureWheelInput(data)) {
+        if (!scheduledImmediate && !scheduledWheel) {
+          scheduledWheel = true;
+          scheduleWheel(flush);
+        }
+        return;
+      }
+      if (!scheduledImmediate) {
+        scheduledImmediate = true;
         schedule(flush);
       }
     },

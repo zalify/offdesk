@@ -46,7 +46,7 @@ impl Client {
             .max_frame_size(Some(MAX_RECORD));
         let (mut socket, _) = tokio::time::timeout(
             Duration::from_secs(15),
-            tokio_tungstenite::connect_async_with_config(url, Some(config), false),
+            tokio_tungstenite::connect_async_with_config(url, Some(config), true),
         )
         .await
         .map_err(|_| "Could not reach the Hub")?

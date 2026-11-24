@@ -524,6 +524,7 @@ async fn main() {
         .route("/api/{*path}", any(api_not_found))
         .layer(CorsLayer::permissive())
         .fallback_service(ui_service(args.static_dir.as_deref()))
+        .layer(tower_http::compression::CompressionLayer::new())
         .layer(axum::middleware::from_fn_with_state(state, web_preview::dispatch));
 
     let listener = match tokio::net::TcpListener::bind(&args.listen).await {
