@@ -197,6 +197,21 @@ describe("route checks", () => {
     await pending;
     expect(transport.connectionRoutesSnapshot()).toEqual({ status: paired, routes: [local, remote], discovery_available: true });
   });
+
+  it("delivers raw ArrayBuffer binary frames from native IPC without Base64 decoding", async () => {
+    mock.invoke.mockImplementation(async command => command === "secure_status" ? paired : undefined);
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    const socket = transport.openSocket("wss://paired.example/ws/terminal/m1/t1");
+    socket.binaryType = "arraybuffer";
+    const received: unknown[] = [];
+    socket.onmessage = (event) => received.push(event.data);
+    await tick();
+    const raw = new Uint8Array([0x1b, 0x5b, 0x48]).buffer;
+    mock.channels.at(-1)!.onmessage(raw);
+    expect(received).toHaveLength(1);
+    expect(received[0]).toBe(raw);
+  });
 });
 
 describe("routeLatencyLabel", () => {
