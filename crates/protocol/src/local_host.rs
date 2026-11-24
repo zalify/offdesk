@@ -19,7 +19,9 @@ pub fn is_local_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return match ip {
             std::net::IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local()
+                let octets = v4.octets();
+                let is_cgnat_tailscale = octets[0] == 100 && (octets[1] & 0xc0) == 64;
+                v4.is_loopback() || v4.is_private() || v4.is_link_local() || is_cgnat_tailscale
             }
             // `is_unique_local` and `is_unicast_link_local` are still
             // unstable, so the prefixes are matched directly: fc00::/7 and
@@ -36,6 +38,7 @@ pub fn is_local_host(host: &str) -> bool {
         || lower.ends_with(".localhost")
         || lower.ends_with(".local")
         || lower.ends_with(".internal")
+        || lower.ends_with(".ts.net")
 }
 
 /// The host part of a URL, for [`is_local_host`]. Accepts the ws/wss forms the
@@ -61,14 +64,28 @@ mod tests {
 
     #[test]
     fn a_lan_address_is_local() {
-        for host in ["127.0.0.1", "192.168.1.223", "10.0.2.2", "172.16.4.4", "169.254.1.1"] {
+        for host in [
+            "127.0.0.1",
+            "192.168.1.223",
+            "10.0.2.2",
+            "172.16.4.4",
+            "169.254.1.1",
+            "100.64.0.1",
+            "100.100.42.7",
+        ] {
             assert!(is_local_host(host), "{host} should be local");
         }
     }
 
     #[test]
     fn a_lan_name_is_local() {
-        for host in ["localhost", "nas.local", "MacBook-Pro.local", "hub.internal"] {
+        for host in [
+            "localhost",
+            "nas.local",
+            "MacBook-Pro.local",
+            "hub.internal",
+            "nas.tail1234.ts.net",
+        ] {
             assert!(is_local_host(host), "{host} should be local");
         }
     }
