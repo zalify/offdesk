@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createInputBatcher } from "./terminalInputBatcher";
+import { createInputBatcher, isPureWheelInput } from "./terminalInputBatcher";
 
 function createHarness() {
   const sent: string[] = [];
@@ -50,5 +50,40 @@ describe("createInputBatcher", () => {
     batcher.push("only");
     runScheduled();
     expect(sent).toEqual(["only"]);
+  });
+
+  it("coalesces wheel reports on the wheel scheduler and upgrades to immediate on keystrokes", () => {
+    const sent: string[] = [];
+    const immediate: (() => void)[] = [];
+    const wheel: (() => void)[] = [];
+    const batcher = createInputBatcher(
+      (data) => sent.push(data),
+      (cb) => immediate.push(cb),
+      (cb) => wheel.push(cb),
+    );
+    const up = "\x1b[<64;10;10M";
+    const down = "\x1b[<65;10;10M";
+    expect(isPureWheelInput(up)).toBe(true);
+    expect(isPureWheelInput(up + down)).toBe(true);
+    expect(isPureWheelInput("a")).toBe(false);
+
+    batcher.push(up);
+    batcher.push(up);
+    expect(immediate).toHaveLength(0);
+    expect(wheel).toHaveLength(1);
+    wheel.shift()?.();
+    expect(sent).toEqual([up + up]);
+
+    // A keystroke arriving while wheel reports are queued upgrades to immediate
+    // flush and preserves strict order.
+    batcher.push(down);
+    batcher.push("x");
+    expect(wheel).toHaveLength(1);
+    expect(immediate).toHaveLength(1);
+    immediate.shift()?.();
+    expect(sent).toEqual([up + up, down + "x"]);
+    // The stale wheel callback becomes a no-op.
+    wheel.shift()?.();
+    expect(sent).toEqual([up + up, down + "x"]);
   });
 });
