@@ -1256,11 +1256,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             void uploadFiles(files);
           }
         }}
-        onContextMenu={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setCtxMenu({ x: e.clientX, y: e.clientY });
-        }}
         onMouseDown={(e) => {
           setCtxMenu(null);
           if (e.button === 0) {
