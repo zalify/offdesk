@@ -650,17 +650,26 @@ pub fn public_query(
     ctx: &DbContext,
     q: &PublicQuery,
 ) -> R<PublicQueryResult> {
+    let all = dd::get_database(conn, &share.user_id, &ctx.db_id)?.columns;
     let sorts = match &q.sorts {
         Some(s) => {
-            let all = dd::get_database(conn, &share.user_id, &ctx.db_id)?.columns;
             for sort in s {
                 if ctx.is_hidden_key(&all, &sort.column) {
-                    return bad(format!("unknown column '{}'", sort.column));
+                    // Same message as any other bad sort: no hidden-column name oracle.
+                    return bad("invalid sort or search");
                 }
             }
             s.clone()
         }
-        None => ctx.view.sorts.clone(),
+        // The view's own sorts minus hidden columns, so row order never leaks
+        // the ranking of a column the viewer cannot see.
+        None => ctx
+            .view
+            .sorts
+            .iter()
+            .filter(|sort| !ctx.is_hidden_key(&all, &sort.column))
+            .cloned()
+            .collect(),
     };
     let req = QueryRequest {
         // Always the stored view's filters, re-read for this request.
