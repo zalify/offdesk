@@ -113,7 +113,7 @@ fn well_known_binary(name: &str) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
-enum SessionCommand {
+pub(crate) enum SessionCommand {
     Prompt {
         text: String,
     },
@@ -161,6 +161,7 @@ impl AcpManager {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_session(
         &self,
         session_id: String,
@@ -169,10 +170,40 @@ impl AcpManager {
         auto_run: bool,
         resume_acp_session_id: Option<String>,
         requested_model_id: Option<String>,
+        initial_seq: u64,
+        env_vars: HashMap<String, String>,
     ) {
         // A stale handle (session already running, e.g. duplicate start) is
         // replaced: kill the old process before spawning a new one.
         self.kill(&session_id).await;
+
+        // Fast path: when local `claude` or `codex` CLI is installed and no
+        // explicit `acp_agents` override is configured, use the direct
+        // headless stream-JSON runner (<1s startup instead of ~57s npx ACP).
+        if let Some(binary) =
+            crate::headless_agent::resolve_direct_binary(&self.overrides, agent_kind)
+        {
+            let handle = crate::headless_agent::spawn_headless_session(
+                session_id.clone(),
+                agent_kind,
+                binary,
+                cwd,
+                auto_run,
+                resume_acp_session_id,
+                requested_model_id,
+                initial_seq,
+                env_vars,
+                self.outbound.clone(),
+            );
+            self.sessions.lock().unwrap().insert(
+                session_id,
+                AcpSessionHandle {
+                    cmd_tx: handle.cmd_tx,
+                    ended: handle.ended,
+                },
+            );
+            return;
+        }
 
         let argv = resolve_agent_command(&self.overrides, agent_kind);
         let spawn = tokio::process::Command::new(&argv[0])
@@ -1377,6 +1408,8 @@ mod tests {
                 auto_run,
                 resume_acp_session_id,
                 None,
+                0,
+                HashMap::new(),
             )
             .await;
         collect_until(rx, session_ready).await
@@ -1495,6 +1528,8 @@ mod tests {
                 true,
                 None,
                 None,
+                0,
+                HashMap::new(),
             )
             .await;
         manager.prompt("s-queued", "hello early".to_string()).await;
@@ -1775,6 +1810,8 @@ mod tests {
                 true,
                 None,
                 Some("fake-model-b".to_string()),
+                0,
+                HashMap::new(),
             )
             .await;
         manager

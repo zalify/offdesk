@@ -17,6 +17,10 @@ use crate::AppState;
 pub struct CreateAgentSessionRequest {
     pub agent_kind: AgentKind,
     pub cwd: String,
+    /// Optional friendly Bot name / handle (e.g. `architect`, `backend`).
+    /// Defaults to the last path segment of `cwd` when omitted.
+    #[serde(default)]
+    pub title: Option<String>,
     /// Defaults to `!machine.production` when omitted.
     #[serde(default)]
     pub auto_run: Option<bool>,
@@ -175,7 +179,21 @@ async fn create_agent_session(
 
     let auto_run = req.auto_run.unwrap_or(!machine.production);
     let session_id = uuid::Uuid::new_v4().to_string();
-    let title = title_from_cwd(&req.cwd);
+    let project_group = title_from_cwd(&req.cwd);
+    let title = req
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| project_group.clone());
+    let vault_key = crate::db::vault::derive_vault_key(&state.jwt_secret);
+    let env_vars = crate::db::vault::resolve_env_for_project(
+        &conn,
+        &vault_key,
+        &auth_user.user_id,
+        &project_group,
+    );
 
     // The machine must be online to host the session; create nothing otherwise.
     state
@@ -189,6 +207,8 @@ async fn create_agent_session(
                 auto_run,
                 resume_acp_session_id: None,
                 model_id: req.model_id.clone(),
+                initial_seq: None,
+                env_vars,
             },
         )
         .await
@@ -358,6 +378,13 @@ async fn resume_agent_session(
         ));
     }
 
+    let env_vars = {
+        let conn = state.db.get().map_err(db_error)?;
+        let vault_key = crate::db::vault::derive_vault_key(&state.jwt_secret);
+        let project_group = title_from_cwd(&row.cwd);
+        crate::db::vault::resolve_env_for_project(&conn, &vault_key, &auth_user.user_id, &project_group)
+    };
+
     state
         .manager
         .send_to_machine(
@@ -369,6 +396,8 @@ async fn resume_agent_session(
                 auto_run: row.auto_run,
                 resume_acp_session_id: row.acp_session_id.clone(),
                 model_id: None,
+                initial_seq: Some(row.last_event_seq.max(0) as u64),
+                env_vars,
             },
         )
         .await
@@ -532,8 +561,18 @@ async fn delete_machine(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn list_agent_sessions(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+) -> Result<Json<Vec<AgentSessionInfo>>, (StatusCode, String)> {
+    let conn = state.db.get().map_err(db_error)?;
+    let rows = agent_sessions::find_sessions_by_user(&conn, &auth_user.user_id).map_err(db_error)?;
+    Ok(Json(rows.iter().map(row_to_info).collect()))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/api/agent-sessions", get(list_agent_sessions))
         .route(
             "/api/machines/{machine_id}/agent-sessions",
             post(create_agent_session),
@@ -736,6 +775,7 @@ mod tests {
                 auto_run,
                 resume_acp_session_id,
                 model_id,
+                ..
             } => {
                 assert_eq!(cmd_session_id, session_id);
                 assert_eq!(agent_kind, offdesk_protocol::AgentKind::Kimi);

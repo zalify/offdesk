@@ -1,4 +1,5 @@
 mod acp;
+mod headless_agent;
 mod agent_detect;
 mod agent_socket;
 mod agent_start;

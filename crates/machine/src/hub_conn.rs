@@ -1452,6 +1452,8 @@ async fn handle_hub_message(
             auto_run,
             resume_acp_session_id,
             model_id,
+            initial_seq,
+            env_vars,
         } => {
             acp_manager
                 .start_session(
@@ -1461,6 +1463,8 @@ async fn handle_hub_message(
                     auto_run,
                     resume_acp_session_id,
                     model_id,
+                    initial_seq.unwrap_or(0),
+                    env_vars,
                 )
                 .await;
         }

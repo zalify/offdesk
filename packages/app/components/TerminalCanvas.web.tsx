@@ -20,6 +20,7 @@ import type {
 } from "@offdesk/shared";
 import { AppTitleBar } from "./AppTitleBar.web";
 import { DraftsDrawer } from "./DraftsDrawer.web";
+import { BotChatWorkspace } from "./BotChatWorkspace.web";
 import { TabBar } from "./TabBar.web";
 import {
   CommandPalette,
@@ -1721,6 +1722,7 @@ function TerminalCanvasInner() {
   }, [prefixKey]);
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
   const [draftsOpen, setDraftsOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [draftsCount, setDraftsCount] = useState(0);
 
   const handleSendDraftToTerminal = useCallback(
@@ -2229,6 +2231,7 @@ function TerminalCanvasInner() {
               filesButton={filesButtonProps}
               onToggleFiles={handleToggleFiles}
               onOpenDrafts={() => setDraftsOpen(true)}
+              onOpenChat={() => setChatOpen(true)}
               draftsCount={draftsCount}
               filesSurface={
                 filesState && filesMachine ? (
@@ -2580,6 +2583,7 @@ function TerminalCanvasInner() {
                   setPaletteState({ open: true, filter: "all" })
                 }
                 onOpenDrafts={() => setDraftsOpen(true)}
+                onOpenChat={() => setChatOpen(true)}
                 draftsCount={draftsCount}
                 browserWaiting={(() => {
                   const browser = scopedAgentBrowsers.find(browserNeedsPerson);
@@ -2687,6 +2691,17 @@ function TerminalCanvasInner() {
               : undefined
           }
           onCountChange={setDraftsCount}
+        />
+
+        <BotChatWorkspace
+          open={chatOpen}
+          isCompact={isCompact}
+          machines={machines}
+          machineOnline={machineOnline}
+          activeMachineId={activeMachine?.id ?? null}
+          defaultCwd={workspaceTerminal?.cwd ?? activeMachine?.home_dir}
+          deviceId={deviceId}
+          onClose={() => setChatOpen(false)}
         />
 
         {hostRemoveTarget && (

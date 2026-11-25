@@ -273,6 +273,70 @@ struct MachineConnection {
     pub installed_agents: Vec<offdesk_protocol::InstalledAgent>,
 }
 
+/// Maximum automated Bot→Bot handoff hops in a `#channel` group chat to
+/// prevent infinite ping-pong loops.
+pub const MAX_GROUP_CHAT_HOPS: u8 = 3;
+
+#[derive(Debug, Clone)]
+struct PendingChannelReply {
+    user_id: String,
+    channel: String,
+    thread_id: String,
+    bot_title: String,
+    hop: u8,
+    buffer: String,
+}
+
+/// Extract lowercase `@handle` mentions from a chat message.
+pub fn extract_mentions(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'@' {
+            let prev_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            if prev_ok {
+                let start = i + 1;
+                let mut end = start;
+                while end < bytes.len()
+                    && (bytes[end].is_ascii_alphanumeric()
+                        || bytes[end] == b'-'
+                        || bytes[end] == b'_')
+                {
+                    end += 1;
+                }
+                if end > start {
+                    let handle = text[start..end].to_ascii_lowercase();
+                    if !out.contains(&handle) {
+                        out.push(handle);
+                    }
+                }
+                i = end;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn bot_handle_slug(title: &str) -> String {
+    title
+        .trim()
+        .trim_start_matches('@')
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
 pub struct MachineManager {
     machines: Arc<Mutex<HashMap<String, MachineConnection>>>,
     /// Pending request/response tracking
@@ -312,6 +376,8 @@ pub struct MachineManager {
     /// Who asked for each terminal still being created, by request id, so
     /// the terminal carries it from the moment the machine reports it.
     pending_openers: Arc<std::sync::Mutex<HashMap<String, TerminalOpener>>>,
+    /// Active `#channel` group-chat turns keyed by `agent_session_id`.
+    pending_channel_replies: Arc<std::sync::Mutex<HashMap<String, PendingChannelReply>>>,
 }
 
 impl MachineManager {
@@ -379,7 +445,134 @@ impl MachineManager {
             db,
             persisted_terminals: Arc::new(Mutex::new(persisted_terminals)),
             pending_openers: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            pending_channel_replies: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Route a `#channel` group-chat message to `@mentioned` Bots (or the
+    /// channel's default Bot when sent by a human with no `@mention`).
+    /// Enforces `MAX_GROUP_CHAT_HOPS` so Bot→Bot handoffs cannot loop forever.
+    pub async fn route_channel_message(
+        &self,
+        user_id: &str,
+        channel: &str,
+        thread_id: &str,
+        from_label: &str,
+        body: &str,
+        hop: u8,
+    ) -> Vec<String> {
+        if hop > MAX_GROUP_CHAT_HOPS {
+            return Vec::new();
+        }
+        let (live_bots, recent_lines) = {
+            let Ok(conn) = self.db.get() else {
+                return Vec::new();
+            };
+            let sessions = crate::db::agent_sessions::find_sessions_by_user(&conn, user_id)
+                .unwrap_or_default();
+            let live: Vec<_> = sessions
+                .into_iter()
+                .filter(|s| matches!(s.status.as_str(), "idle" | "working" | "starting"))
+                .collect();
+            let recent = crate::db::messages::list_messages(
+                &conn,
+                user_id,
+                crate::db::messages::ListMessagesFilter {
+                    to_terminal_id: None,
+                    to_label: None,
+                    channel: Some(channel),
+                    thread_id: None,
+                    unread_only: false,
+                    limit: 8,
+                },
+            )
+            .unwrap_or_default();
+            let lines: Vec<String> = recent
+                .into_iter()
+                .map(|m| format!("[{}]: {}", m.from_label, m.body))
+                .collect();
+            (live, lines)
+        };
+
+        if live_bots.is_empty() {
+            return Vec::new();
+        }
+
+        let from_slug = bot_handle_slug(from_label);
+        let mentions = extract_mentions(body);
+        let mut targets: Vec<_> = live_bots
+            .iter()
+            .filter(|b| {
+                let slug = bot_handle_slug(&b.title);
+                !slug.is_empty() && slug != from_slug && mentions.iter().any(|m| m == &slug)
+            })
+            .cloned()
+            .collect();
+
+        // Only human-originated messages (hop == 0) fall back to a default bot.
+        if targets.is_empty() && hop == 0 && mentions.is_empty() {
+            let channel_slug = channel.trim_start_matches('#').to_ascii_lowercase();
+            let preferred = live_bots.iter().find(|b| {
+                b.cwd
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .map(|seg| seg.eq_ignore_ascii_case(&channel_slug))
+                    .unwrap_or(false)
+            });
+            if let Some(bot) = preferred.or_else(|| live_bots.first()) {
+                targets.push(bot.clone());
+            }
+        }
+
+        let peer_handles: Vec<String> = live_bots
+            .iter()
+            .map(|b| format!("@{}", bot_handle_slug(&b.title)))
+            .collect();
+        let context_block = if recent_lines.is_empty() {
+            String::new()
+        } else {
+            format!("Recent messages in {channel}:\n{}\n\n", recent_lines.join("\n"))
+        };
+
+        let mut routed = Vec::new();
+        for bot in targets {
+            let prompt = format!(
+                "[Group Chat {channel} | Participants: {}]\n{context_block}[New message from @{from_label}]:\n{body}\n\n\
+                 Reply directly for the group chat. Only @mention another participant if you explicitly need them to take over.",
+                peer_handles.join(", ")
+            );
+            {
+                let mut map = self.pending_channel_replies.lock().unwrap();
+                map.insert(
+                    bot.id.clone(),
+                    PendingChannelReply {
+                        user_id: user_id.to_string(),
+                        channel: channel.to_string(),
+                        thread_id: thread_id.to_string(),
+                        bot_title: bot.title.clone(),
+                        hop,
+                        buffer: String::new(),
+                    },
+                );
+            }
+            if self
+                .send_to_machine(
+                    &bot.machine_id,
+                    HubToMachine::AgentSessionPrompt {
+                        session_id: bot.id.clone(),
+                        text: prompt,
+                    },
+                )
+                .await
+                .is_ok()
+            {
+                routed.push(bot.title.clone());
+            } else {
+                self.pending_channel_replies.lock().unwrap().remove(&bot.id);
+            }
+        }
+        routed
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<EventEnvelope> {
@@ -3116,11 +3309,59 @@ impl MachineManager {
                 self.send_event(
                     Some(row.user_id.clone()),
                     BrowserEvent::AgentSessionEvent {
-                        session_id,
+                        session_id: session_id.clone(),
                         seq,
-                        event,
+                        event: event.clone(),
                     },
                 );
+
+                // Accumulate `#channel` group-chat replies and auto-post + route `@mentions` on TurnEnded.
+                let finished_reply = {
+                    let mut map = self.pending_channel_replies.lock().unwrap();
+                    match &event {
+                        offdesk_protocol::AgentEvent::AgentMessageChunk { text } => {
+                            if let Some(pending) = map.get_mut(&session_id) {
+                                pending.buffer.push_str(text);
+                            }
+                            None
+                        }
+                        offdesk_protocol::AgentEvent::TurnEnded { .. } => map.remove(&session_id),
+                        _ => None,
+                    }
+                };
+                if let Some(reply) = finished_reply {
+                    let text = reply.buffer.trim().to_string();
+                    if !text.is_empty() {
+                        if let Ok(conn) = self.db.get() {
+                            let _ = crate::db::messages::post_message(
+                                &conn,
+                                crate::db::messages::NewAgentMessage {
+                                    user_id: &reply.user_id,
+                                    thread_id: Some(&reply.thread_id),
+                                    channel: Some(&reply.channel),
+                                    from_terminal_id: Some(&session_id),
+                                    from_label: &reply.bot_title,
+                                    to_terminal_id: None,
+                                    to_label: None,
+                                    body: &text,
+                                    draft_id: None,
+                                },
+                            );
+                        }
+                        if reply.hop < MAX_GROUP_CHAT_HOPS {
+                            let _ = self
+                                .route_channel_message(
+                                    &reply.user_id,
+                                    &reply.channel,
+                                    &reply.thread_id,
+                                    &reply.bot_title,
+                                    &text,
+                                    reply.hop + 1,
+                                )
+                                .await;
+                        }
+                    }
+                }
             }
             MachineToHub::AgentBrowserResult {
                 request_id,

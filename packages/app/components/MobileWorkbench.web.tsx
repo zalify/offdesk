@@ -116,6 +116,7 @@ interface MobileWorkbenchProps {
   onToggleFiles?: () => void;
   filesSurface?: React.ReactNode;
   onOpenDrafts?: () => void;
+  onOpenChat?: () => void;
   draftsCount?: number;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
@@ -186,6 +187,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     onToggleFiles,
     filesSurface,
     onOpenDrafts,
+    onOpenChat,
     draftsCount = 0,
     canCreateTerminal,
     canSendAttention,
@@ -1336,6 +1338,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 {updateCopy === "copied" ? "copied" : "copy update command"}
               </Button>
             </div>
+          )}
+          {onOpenChat && (
+            <MenuRow
+              icon={<Bot size={17} />}
+              label="Bots & Chat (Beta)"
+              testid="mobile-menu-bot-chat"
+              onClick={() => {
+                setHostSheetOpen(false);
+                onOpenChat();
+              }}
+            />
           )}
           {onOpenDrafts && (
             <MenuRow
