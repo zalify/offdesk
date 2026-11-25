@@ -18,6 +18,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 portable-pty = { workspace = true }
+alacritty_terminal = "0.25"
 vt100 = { workspace = true }
 tokio-tungstenite = { workspace = true }
 url = "2"
