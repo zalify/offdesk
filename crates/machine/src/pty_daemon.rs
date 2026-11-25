@@ -411,6 +411,101 @@ mod unix_impl {
             out
         }
 
+        fn render_ansi_with_scrollback(&self, max_scrollback: usize) -> Vec<u8> {
+            use std::fmt::Write as _;
+
+            let grid = self.term.grid();
+            let history_size = grid.history_size();
+            let mode = *self.term.mode();
+            if history_size == 0 || mode.contains(TermMode::ALT_SCREEN) {
+                return self.render_ansi_at_scrollback(0).0;
+            }
+            let replay = history_size.min(max_scrollback);
+            let app_wants_mouse = mode.intersects(TermMode::MOUSE_MODE);
+
+            let mut out = String::with_capacity((replay + self.rows as usize) * 64);
+            out.push_str("\x1b[?2026h\x1b[0m\x1b[r\x1b[3J\x1b[2J\x1b[H");
+
+            let mut cur_fg = AnsiColor::Named(NamedColor::Foreground);
+            let mut cur_bg = AnsiColor::Named(NamedColor::Background);
+            let mut cur_flags = CellFlags::empty();
+
+            let total = replay + self.rows as usize;
+            for idx in 0..total {
+                let line = Line(idx as i32 - replay as i32);
+                let mut last_used: Option<usize> = None;
+                for col in (0..self.cols as usize).rev() {
+                    let cell = &grid[line][Column(col)];
+                    let has_bg = cell.bg != AnsiColor::Named(NamedColor::Background);
+                    let has_inv = cell.flags.contains(CellFlags::INVERSE);
+                    let has_char = cell.c != ' ' && cell.c != '\0';
+                    if has_char || has_bg || has_inv {
+                        last_used = Some(col);
+                        break;
+                    }
+                }
+                if let Some(end_col) = last_used {
+                    for col in 0..=end_col {
+                        let cell = &grid[line][Column(col)];
+                        if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                            continue;
+                        }
+                        let style_flags = cell.flags
+                            & (CellFlags::BOLD
+                                | CellFlags::DIM
+                                | CellFlags::ITALIC
+                                | CellFlags::UNDERLINE
+                                | CellFlags::INVERSE
+                                | CellFlags::STRIKEOUT);
+                        if cell.fg != cur_fg || cell.bg != cur_bg || style_flags != cur_flags {
+                            write_sgr(&mut out, cell.fg, cell.bg, style_flags);
+                            cur_fg = cell.fg;
+                            cur_bg = cell.bg;
+                            cur_flags = style_flags;
+                        }
+                        out.push(if cell.c == '\0' { ' ' } else { cell.c });
+                        if let Some(zw) = cell.zerowidth() {
+                            for &z in zw {
+                                out.push(z);
+                            }
+                        }
+                    }
+                }
+                if idx + 1 < total {
+                    if cur_fg != AnsiColor::Named(NamedColor::Foreground)
+                        || cur_bg != AnsiColor::Named(NamedColor::Background)
+                        || !cur_flags.is_empty()
+                    {
+                        out.push_str("\x1b[0m");
+                        cur_fg = AnsiColor::Named(NamedColor::Foreground);
+                        cur_bg = AnsiColor::Named(NamedColor::Background);
+                        cur_flags = CellFlags::empty();
+                    }
+                    out.push_str("\r\n");
+                }
+            }
+
+            out.push_str("\x1b[0m");
+            let (crow, ccol) = self.cursor_position();
+            let _ = write!(out, "\x1b[{};{}H", crow + 1, ccol + 1);
+            if mode.contains(TermMode::SHOW_CURSOR) {
+                out.push_str("\x1b[?25h");
+            } else {
+                out.push_str("\x1b[?25l");
+            }
+            if mode.contains(TermMode::BRACKETED_PASTE) {
+                out.push_str("\x1b[?2004h");
+            }
+            if mode.contains(TermMode::APP_CURSOR) {
+                out.push_str("\x1b[?1h");
+            }
+            if !app_wants_mouse {
+                out.push_str("\x1b[?1000h\x1b[?1006h");
+            }
+            out.push_str("\x1b[?2026l");
+            out.into_bytes()
+        }
+
         fn render_ansi_at_scrollback(&self, requested_offset: usize) -> (Vec<u8>, usize) {
             use std::fmt::Write as _;
 
@@ -634,6 +729,13 @@ mod unix_impl {
 
         fn state_formatted(&self) -> Vec<u8> {
             self.state_formatted_at_scrollback(0).0
+        }
+
+        fn initial_attach_snapshot(&self) -> Vec<u8> {
+            let Ok(parser) = self.parser.lock() else {
+                return Vec::new();
+            };
+            parser.render_ansi_with_scrollback(1500)
         }
 
         fn app_wants_mouse(&self) -> bool {
@@ -1047,8 +1149,8 @@ mod unix_impl {
 
                 let write_stream = Arc::new(Mutex::new(stream));
 
-                // Emit initial formatted screen state (< 1ms from memory).
-                let initial = session.state_formatted();
+                // Emit initial formatted screen + scrollback replay (< 5ms from memory).
+                let initial = session.initial_attach_snapshot();
                 if !initial.is_empty() {
                     if let Ok(mut ws) = write_stream.lock() {
                         if write_bin_frame(&mut *ws, TAG_OUTPUT, &initial).is_err() {
