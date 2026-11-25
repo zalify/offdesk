@@ -4,9 +4,7 @@ use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
-use std::sync::Arc;
 use wgpu::util::DeviceExt;
-use winit::window::Window;
 
 pub const SIDEBAR_WIDTH: f32 = 240.0;
 pub const TOPBAR_HEIGHT: f32 = 34.0;
@@ -61,6 +59,12 @@ pub struct UiSnapshot<'a> {
     pub palette: Option<PaletteOverlay<'a>>,
 }
 
+/// Platform-independent GPU renderer backed by `wgpu` + `glyphon`.
+///
+/// Works identically across:
+/// - Desktop (`winit::Window` on macOS Metal / Linux Vulkan / Windows DX12)
+/// - Android (`ANativeWindow` from `SurfaceView` via Vulkan/GLES)
+/// - iOS (`CAMetalLayer` from `UIView` / SwiftUI via Metal)
 pub struct GpuRenderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -78,12 +82,15 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
-    pub fn new(window: Arc<Window>, font_size: f32) -> Result<Self, String> {
-        let size = window.inner_size();
-        let instance = wgpu::Instance::default();
-        let surface = instance
-            .create_surface(window)
-            .map_err(|e| format!("create_surface: {e}"))?;
+    /// Create a renderer attached to any `wgpu::Surface<'static>` (desktop window,
+    /// Android `ANativeWindow`, or iOS `CAMetalLayer`).
+    pub fn from_surface(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        width: u32,
+        height: u32,
+        font_size: f32,
+    ) -> Result<Self, String> {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
@@ -113,8 +120,8 @@ impl GpuRenderer {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width: width.max(1),
+            height: height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -212,7 +219,7 @@ impl GpuRenderer {
         self.cell_height = ch;
     }
 
-    /// Compute exact terminal (cols, rows) that fit inside the terminal pane.
+    /// Compute exact terminal (cols, rows) that fit inside the desktop terminal pane.
     pub fn terminal_grid_size(&self) -> (u16, u16) {
         let term_w = (self.config.width as f32 - SIDEBAR_WIDTH - 16.0).max(160.0);
         let term_h =
@@ -222,60 +229,44 @@ impl GpuRenderer {
         (cols, rows)
     }
 
-    pub fn render(&mut self, ui: UiSnapshot<'_>) -> Result<(), String> {
+    /// Compute exact terminal (cols, rows) for a full-bleed mobile surface
+    /// where native UI (SwiftUI / Jetpack Compose) draws the surrounding chrome.
+    pub fn full_bleed_grid_size(&self, padding_x: f32, padding_y: f32) -> (u16, u16) {
+        let term_w = (self.config.width as f32 - padding_x * 2.0).max(80.0);
+        let term_h = (self.config.height as f32 - padding_y * 2.0).max(60.0);
+        let cols = (term_w / self.cell_width).floor().max(20.0) as u16;
+        let rows = (term_h / self.cell_height).floor().max(6.0) as u16;
+        (cols, rows)
+    }
+
+    /// Render ONLY the terminal grid full-bleed (for Android `SurfaceView` and
+    /// iOS `CAMetalLayer` embedded inside native mobile shells).
+    pub fn render_terminal_only(
+        &mut self,
+        frame: Option<&RenderFrame>,
+        padding_x: f32,
+        padding_y: f32,
+    ) -> Result<(), String> {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
-
-        let mut quads: Vec<QuadVertex> = Vec::with_capacity(2048);
-        let push_rect = |quads: &mut Vec<QuadVertex>, x: f32, y: f32, rw: f32, rh: f32, c: [f32; 4]| {
-            let x0 = (x / w) * 2.0 - 1.0;
-            let y0 = 1.0 - (y / h) * 2.0;
-            let x1 = ((x + rw) / w) * 2.0 - 1.0;
-            let y1 = 1.0 - ((y + rh) / h) * 2.0;
-            quads.extend_from_slice(&[
-                QuadVertex { pos: [x0, y0], color: c },
-                QuadVertex { pos: [x1, y0], color: c },
-                QuadVertex { pos: [x1, y1], color: c },
-                QuadVertex { pos: [x0, y0], color: c },
-                QuadVertex { pos: [x1, y1], color: c },
-                QuadVertex { pos: [x0, y1], color: c },
-            ]);
+        let mut quads: Vec<QuadVertex> = Vec::with_capacity(512);
+        let mut buffers: Vec<(Buffer, f32, f32, Color, TextBounds)> = Vec::new();
+        let term_metrics = Metrics::new(self.font_size, self.cell_height);
+        let term_bounds = TextBounds {
+            left: padding_x as i32,
+            top: padding_y as i32,
+            right: (w - padding_x).max(padding_x) as i32,
+            bottom: (h - padding_y).max(padding_y) as i32,
         };
 
-        // Sidebar, topbar, statusbar chrome backgrounds.
-        push_rect(&mut quads, 0.0, 0.0, SIDEBAR_WIDTH, h - STATUSBAR_HEIGHT, [0.095, 0.098, 0.105, 1.0]);
-        push_rect(&mut quads, SIDEBAR_WIDTH, 0.0, 1.0, h - STATUSBAR_HEIGHT, [0.18, 0.19, 0.21, 1.0]);
-        push_rect(&mut quads, SIDEBAR_WIDTH + 1.0, 0.0, w - SIDEBAR_WIDTH, TOPBAR_HEIGHT, [0.09, 0.093, 0.10, 1.0]);
-        push_rect(&mut quads, SIDEBAR_WIDTH + 1.0, TOPBAR_HEIGHT, w - SIDEBAR_WIDTH, 1.0, [0.18, 0.19, 0.21, 1.0]);
-        push_rect(&mut quads, 0.0, h - STATUSBAR_HEIGHT, w, STATUSBAR_HEIGHT, [0.085, 0.088, 0.095, 1.0]);
-        push_rect(&mut quads, 0.0, h - STATUSBAR_HEIGHT, w, 1.0, [0.18, 0.19, 0.21, 1.0]);
-
-        // Sidebar active/waiting highlights.
-        for (idx, row) in ui.sidebar_rows.iter().enumerate() {
-            let y = 38.0 + idx as f32 * 30.0;
-            if y + 28.0 > h - STATUSBAR_HEIGHT {
-                break;
-            }
-            if row.active {
-                push_rect(&mut quads, 6.0, y, SIDEBAR_WIDTH - 12.0, 26.0, [0.18, 0.20, 0.24, 1.0]);
-            }
-            if row.waiting {
-                push_rect(&mut quads, 12.0, y + 9.0, 7.0, 7.0, [0.95, 0.65, 0.20, 1.0]);
-            } else if row.active {
-                push_rect(&mut quads, 12.0, y + 9.0, 7.0, 7.0, [0.30, 0.82, 0.45, 1.0]);
-            }
-        }
-
-        let term_x = SIDEBAR_WIDTH + 8.0;
-        let term_y = TOPBAR_HEIGHT + 6.0;
-
-        // Terminal cell backgrounds + cursor.
-        if let Some(frame) = ui.frame {
+        if let Some(frame) = frame {
             for run in &frame.bg_runs {
-                let rx = term_x + run.col as f32 * self.cell_width;
-                let ry = term_y + run.row as f32 * self.cell_height;
+                let rx = padding_x + run.col as f32 * self.cell_width;
+                let ry = padding_y + run.row as f32 * self.cell_height;
                 push_rect(
                     &mut quads,
+                    w,
+                    h,
                     rx,
                     ry,
                     run.len as f32 * self.cell_width,
@@ -286,6 +277,86 @@ impl GpuRenderer {
             if let Some((cx, cy)) = frame.cursor {
                 push_rect(
                     &mut quads,
+                    w,
+                    h,
+                    padding_x + cx as f32 * self.cell_width,
+                    padding_y + cy as f32 * self.cell_height,
+                    self.cell_width,
+                    self.cell_height,
+                    CURSOR_COLOR,
+                );
+            }
+            for (row_idx, spans) in frame.spans_by_row.iter().enumerate() {
+                let y = padding_y + row_idx as f32 * self.cell_height;
+                for span in spans {
+                    let x = padding_x + span.col as f32 * self.cell_width;
+                    let weight = if span.bold { Weight::BOLD } else { Weight::NORMAL };
+                    buffers.push((
+                        make_buffer(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
+                        x,
+                        y,
+                        Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
+                        term_bounds,
+                    ));
+                }
+            }
+        }
+
+        self.present_pass(quads, buffers)
+    }
+
+    /// Render the full desktop workspace (sidebar, topbar, terminal pane, statusbar, Cmd+K palette).
+    pub fn render(&mut self, ui: UiSnapshot<'_>) -> Result<(), String> {
+        let w = self.config.width as f32;
+        let h = self.config.height as f32;
+        let mut quads: Vec<QuadVertex> = Vec::with_capacity(2048);
+
+        // Sidebar, topbar, statusbar chrome backgrounds.
+        push_rect(&mut quads, w, h, 0.0, 0.0, SIDEBAR_WIDTH, h - STATUSBAR_HEIGHT, [0.095, 0.098, 0.105, 1.0]);
+        push_rect(&mut quads, w, h, SIDEBAR_WIDTH, 0.0, 1.0, h - STATUSBAR_HEIGHT, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, 0.0, w - SIDEBAR_WIDTH, TOPBAR_HEIGHT, [0.09, 0.093, 0.10, 1.0]);
+        push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, TOPBAR_HEIGHT, w - SIDEBAR_WIDTH, 1.0, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, h - STATUSBAR_HEIGHT, w, STATUSBAR_HEIGHT, [0.085, 0.088, 0.095, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, h - STATUSBAR_HEIGHT, w, 1.0, [0.18, 0.19, 0.21, 1.0]);
+
+        for (idx, row) in ui.sidebar_rows.iter().enumerate() {
+            let y = 38.0 + idx as f32 * 30.0;
+            if y + 28.0 > h - STATUSBAR_HEIGHT {
+                break;
+            }
+            if row.active {
+                push_rect(&mut quads, w, h, 6.0, y, SIDEBAR_WIDTH - 12.0, 26.0, [0.18, 0.20, 0.24, 1.0]);
+            }
+            if row.waiting {
+                push_rect(&mut quads, w, h, 12.0, y + 9.0, 7.0, 7.0, [0.95, 0.65, 0.20, 1.0]);
+            } else if row.active {
+                push_rect(&mut quads, w, h, 12.0, y + 9.0, 7.0, 7.0, [0.30, 0.82, 0.45, 1.0]);
+            }
+        }
+
+        let term_x = SIDEBAR_WIDTH + 8.0;
+        let term_y = TOPBAR_HEIGHT + 6.0;
+
+        if let Some(frame) = ui.frame {
+            for run in &frame.bg_runs {
+                let rx = term_x + run.col as f32 * self.cell_width;
+                let ry = term_y + run.row as f32 * self.cell_height;
+                push_rect(
+                    &mut quads,
+                    w,
+                    h,
+                    rx,
+                    ry,
+                    run.len as f32 * self.cell_width,
+                    self.cell_height,
+                    run.color,
+                );
+            }
+            if let Some((cx, cy)) = frame.cursor {
+                push_rect(
+                    &mut quads,
+                    w,
+                    h,
                     term_x + cx as f32 * self.cell_width,
                     term_y + cy as f32 * self.cell_height,
                     self.cell_width,
@@ -295,18 +366,19 @@ impl GpuRenderer {
             }
         }
 
-        // Quick Switcher overlay background (Cmd+K).
         if let Some(pal) = &ui.palette {
-            push_rect(&mut quads, 0.0, 0.0, w, h, [0.0, 0.0, 0.0, 0.45]);
+            push_rect(&mut quads, w, h, 0.0, 0.0, w, h, [0.0, 0.0, 0.0, 0.45]);
             let pw = 560.0_f32.min(w - 40.0);
             let ph = (48.0 + pal.rows.len().min(12) as f32 * 30.0 + 16.0).min(h - 80.0);
             let px = (w - pw) * 0.5;
             let py = 72.0;
-            push_rect(&mut quads, px, py, pw, ph, [0.12, 0.125, 0.14, 0.98]);
-            push_rect(&mut quads, px, py + 42.0, pw, 1.0, [0.24, 0.25, 0.28, 1.0]);
+            push_rect(&mut quads, w, h, px, py, pw, ph, [0.12, 0.125, 0.14, 0.98]);
+            push_rect(&mut quads, w, h, px, py + 42.0, pw, 1.0, [0.24, 0.25, 0.28, 1.0]);
             if pal.selected < pal.rows.len().min(12) {
                 push_rect(
                     &mut quads,
+                    w,
+                    h,
                     px + 8.0,
                     py + 48.0 + pal.selected as f32 * 30.0,
                     pw - 16.0,
@@ -316,12 +388,10 @@ impl GpuRenderer {
             }
         }
 
-        // Build glyphon text buffers.
         let mut buffers: Vec<(Buffer, f32, f32, Color, TextBounds)> = Vec::new();
         let ui_metrics = Metrics::new(13.0, 18.0);
         let term_metrics = Metrics::new(self.font_size, self.cell_height);
 
-        // Sidebar title
         buffers.push((
             make_buffer(&mut self.font_system, "OFFDESK NATIVE", ui_metrics, Weight::BOLD, false),
             14.0,
@@ -330,7 +400,6 @@ impl GpuRenderer {
             TextBounds { left: 0, top: 0, right: SIDEBAR_WIDTH as i32, bottom: 34 },
         ));
 
-        // Sidebar items
         for (idx, row) in ui.sidebar_rows.iter().enumerate() {
             let y = 42.0 + idx as f32 * 30.0;
             if y + 22.0 > h - STATUSBAR_HEIGHT {
@@ -362,7 +431,6 @@ impl GpuRenderer {
             ));
         }
 
-        // Top header bar
         buffers.push((
             make_buffer(&mut self.font_system, ui.header_title, ui_metrics, Weight::MEDIUM, false),
             SIDEBAR_WIDTH + 14.0,
@@ -371,7 +439,6 @@ impl GpuRenderer {
             TextBounds { left: SIDEBAR_WIDTH as i32, top: 0, right: w as i32 - 12, bottom: TOPBAR_HEIGHT as i32 },
         ));
 
-        // Status bar
         buffers.push((
             make_buffer(&mut self.font_system, ui.status_left, ui_metrics, Weight::NORMAL, false),
             12.0,
@@ -387,7 +454,6 @@ impl GpuRenderer {
             TextBounds { left: (w - 290.0).max(SIDEBAR_WIDTH) as i32, top: (h - STATUSBAR_HEIGHT) as i32, right: w as i32 - 8, bottom: h as i32 },
         ));
 
-        // Terminal spans
         let term_bounds = TextBounds {
             left: term_x as i32,
             top: term_y as i32,
@@ -411,7 +477,6 @@ impl GpuRenderer {
             }
         }
 
-        // Quick switcher text
         if let Some(pal) = &ui.palette {
             let pw = 560.0_f32.min(w - 40.0);
             let px = (w - pw) * 0.5;
@@ -445,6 +510,14 @@ impl GpuRenderer {
             }
         }
 
+        self.present_pass(quads, buffers)
+    }
+
+    fn present_pass(
+        &mut self,
+        quads: Vec<QuadVertex>,
+        buffers: Vec<(Buffer, f32, f32, Color, TextBounds)>,
+    ) -> Result<(), String> {
         let text_areas: Vec<TextArea<'_>> = buffers
             .iter()
             .map(|(buf, left, top, color, bounds)| TextArea {
@@ -524,6 +597,30 @@ impl GpuRenderer {
         self.atlas.trim();
         Ok(())
     }
+}
+
+fn push_rect(
+    quads: &mut Vec<QuadVertex>,
+    w: f32,
+    h: f32,
+    x: f32,
+    y: f32,
+    rw: f32,
+    rh: f32,
+    c: [f32; 4],
+) {
+    let x0 = (x / w) * 2.0 - 1.0;
+    let y0 = 1.0 - (y / h) * 2.0;
+    let x1 = ((x + rw) / w) * 2.0 - 1.0;
+    let y1 = 1.0 - ((y + rh) / h) * 2.0;
+    quads.extend_from_slice(&[
+        QuadVertex { pos: [x0, y0], color: c },
+        QuadVertex { pos: [x1, y0], color: c },
+        QuadVertex { pos: [x1, y1], color: c },
+        QuadVertex { pos: [x0, y0], color: c },
+        QuadVertex { pos: [x1, y1], color: c },
+        QuadVertex { pos: [x0, y1], color: c },
+    ]);
 }
 
 fn make_buffer(

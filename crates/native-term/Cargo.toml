@@ -1,0 +1,35 @@
+[package]
+name = "offdesk-native-term"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Shared pure-Rust GPU terminal engine (wgpu + glyphon + alacritty_terminal) for Offdesk Desktop, Android, and iOS"
+
+[lib]
+name = "offdesk_term"
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+offdesk-protocol = { path = "../protocol" }
+alacritty_terminal = "0.25"
+wgpu = "24"
+glyphon = "0.8"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+raw-window-handle = "0.6"
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+dirs = { workspace = true }
+tracing = { workspace = true }
+url = "2"
+uuid = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-sys = "0.6"
