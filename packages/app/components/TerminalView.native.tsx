@@ -187,10 +187,18 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const wsRef = useRef<WebSocket | null>(null);
     const frameRef = useRef<NativeTermFrame | null>(null);
-    const dimsRef = useRef<{ cols: number; rows: number }>({
-      cols: Math.max(20, initialCols || 120),
-      rows: Math.max(6, initialRows || 36),
+    const ptyDimsRef = useRef<{ cols: number; rows: number }>({
+      cols: Math.max(20, initialCols || 80),
+      rows: Math.max(6, initialRows || 24),
     });
+    const dimsRef = useRef<{ cols: number; rows: number }>({
+      cols: Math.max(20, initialCols || 80),
+      rows: Math.max(6, initialRows || 24),
+    });
+    const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(null);
+    const resizeConfirmTimerRef = useRef<number | null>(null);
+    const resizeDebounceTimerRef = useRef<number | null>(null);
+    const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const metricsRef = useRef<{ cellW: number; cellH: number }>({ cellW: 8.4, cellH: 18 });
     const readyFiredRef = useRef(false);
     const composingRef = useRef(false);
@@ -210,7 +218,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const scrollRafRef = useRef<number | null>(null);
     const paintRafRef = useRef<number | null>(null);
     const lastScrollBadgeUpdateRef = useRef(0);
-    const openPromiseRef = useRef<Promise<void>>(Promise.resolve());
+    const termOpChainRef = useRef<Promise<void>>(Promise.resolve());
+    const enqueueTermOp = useCallback(<T,>(op: () => Promise<T>): Promise<T> => {
+      const next = termOpChainRef.current.then(op, op);
+      termOpChainRef.current = next.then(
+        () => undefined,
+        () => undefined,
+      );
+      return next;
+    }, []);
     const controlListenersRef = useRef(new Set<(text: string) => void>());
     const subscribeControl = useCallback((listener: (text: string) => void) => {
       controlListenersRef.current.add(listener);
@@ -259,9 +275,32 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
     useEffect(() => subscribeFontPreferences(() => setFontPrefs(readTerminalFontPreferences())), []);
 
-    const fontFamily = `${fontPrefs.fontFamily || DEFAULT_TERMINAL_FONT}, ${TERMINAL_SYMBOL_FONT}, monospace`;
+    const fontFamily = fontPrefs.fontFamily;
     const fontSize = fontPrefs.fontSize || 14;
     const lineHeight = Math.round(fontSize * 1.32);
+
+    const measureCellMetrics = useCallback(() => {
+      if (typeof document === "undefined") {
+        return { cellW: fontSize * 0.6, cellH: lineHeight };
+      }
+      if (!measureCanvasRef.current) {
+        measureCanvasRef.current = document.createElement("canvas");
+      }
+      const ctx = measureCanvasRef.current.getContext("2d");
+      if (!ctx) {
+        return { cellW: fontSize * 0.6, cellH: lineHeight };
+      }
+      ctx.font = `${fontSize}px ${fontFamily}`;
+      const mw =
+        Math.max(
+          ctx.measureText("MMMMMMMMMM").width,
+          ctx.measureText("0123456789").width,
+        ) / 10;
+      const cellW = mw > 4 ? mw : fontSize * 0.6;
+      const cellH = lineHeight;
+      metricsRef.current = { cellW, cellH };
+      return { cellW, cellH };
+    }, [fontSize, fontFamily, lineHeight]);
 
     const paintFrame = useCallback(
       (frame: NativeTermFrame | null) => {
@@ -293,11 +332,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
         const padX = 8;
         const padY = 6;
-        ctx.font = `${fontSize}px ${fontFamily}`;
-        const measuredW = ctx.measureText("MMMMMMMMMM").width / 10;
-        const cellW = measuredW > 4 ? measuredW : fontSize * 0.6;
-        const cellH = lineHeight;
-        metricsRef.current = { cellW, cellH };
+        const { cellW, cellH } = measureCellMetrics();
 
         if (!frame) {
           ctx.restore();
@@ -380,7 +415,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
         ctx.restore();
       },
-      [theme, fontSize, fontFamily, lineHeight],
+      [theme, fontSize, fontFamily, lineHeight, measureCellMetrics],
     );
 
     const schedulePaint = useCallback(() => {
@@ -496,66 +531,153 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [canType, inputTransformRef, terminalId, applyFrame],
     );
 
+    const resizeLocalEmulator = useCallback(
+      (cols: number, rows: number) => {
+        const nextCols = Math.max(20, cols);
+        const nextRows = Math.max(6, rows);
+        ptyDimsRef.current = { cols: nextCols, rows: nextRows };
+        void enqueueTermOp(() =>
+          invoke<NativeTermFrame>("native_term_resize", {
+            id: terminalId,
+            cols: nextCols,
+            rows: nextRows,
+          }),
+        )
+          .then(applyFrame)
+          .catch(() => {});
+      },
+      [enqueueTermOp, terminalId, applyFrame],
+    );
+
     const fitToContainer = useCallback(
-      (opts?: { skipIfUnchanged?: boolean }) => {
+      (opts?: { skipIfUnchanged?: boolean; immediate?: boolean }) => {
         const container = containerRef.current;
-        const canvas = canvasRef.current;
-        if (!container || !canvas) return;
+        if (!container) return;
         const rect = container.getBoundingClientRect();
         if (rect.width < 40 || rect.height < 40) return;
 
-        // Measure font cell accurately before computing cols/rows.
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          ctx.font = `${fontSize}px ${fontFamily}`;
-          const mw = ctx.measureText("MMMMMMMMMM").width / 10;
-          metricsRef.current = {
-            cellW: mw > 4 ? mw : fontSize * 0.6,
-            cellH: lineHeight,
-          };
-        }
-
-        const { cellW, cellH } = metricsRef.current;
+        const { cellW, cellH } = measureCellMetrics();
         const cols = Math.max(20, Math.floor((rect.width - 16) / cellW));
         const rows = Math.max(6, Math.floor((rect.height - 12) / cellH));
         const unchanged = dimsRef.current.cols === cols && dimsRef.current.rows === rows;
         dimsRef.current = { cols, rows };
 
-        void openPromiseRef.current
-          .then(() => invoke<NativeTermFrame>("native_term_resize", { id: terminalId, cols, rows }))
-          .then(applyFrame)
-          .catch(() => {});
-
-        if (canResizeTerminal && !(opts?.skipIfUnchanged && unchanged)) {
+        const sendResizeNow = () => {
+          if (!callbacksRef.current.canResizeTerminal) return;
           const ws = wsRef.current;
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "resize", cols, rows }));
+          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          const prevSent = lastSentResizeRef.current;
+          if (opts?.skipIfUnchanged && prevSent && prevSent.cols === cols && prevSent.rows === rows) {
+            return;
+          }
+          lastSentResizeRef.current = { cols, rows };
+          ws.send(JSON.stringify({ type: "resize", cols, rows }));
+          // Fallback local resize if remote PTY was already at (cols, rows) and Hub
+          // does not emit a new TerminalResized event.
+          if (resizeConfirmTimerRef.current !== null) {
+            window.clearTimeout(resizeConfirmTimerRef.current);
+          }
+          resizeConfirmTimerRef.current = window.setTimeout(() => {
+            resizeConfirmTimerRef.current = null;
+            if (ptyDimsRef.current.cols !== cols || ptyDimsRef.current.rows !== rows) {
+              resizeLocalEmulator(cols, rows);
+            }
+          }, 120);
+        };
+
+        if (canResizeTerminal) {
+          if (opts?.immediate || !unchanged) {
+            if (resizeDebounceTimerRef.current !== null) {
+              window.clearTimeout(resizeDebounceTimerRef.current);
+              resizeDebounceTimerRef.current = null;
+            }
+            if (opts?.immediate) {
+              sendResizeNow();
+            } else {
+              resizeDebounceTimerRef.current = window.setTimeout(() => {
+                resizeDebounceTimerRef.current = null;
+                sendResizeNow();
+              }, 40);
+            }
           }
         }
       },
-      [fontSize, fontFamily, lineHeight, terminalId, canResizeTerminal, applyFrame],
+      [measureCellMetrics, canResizeTerminal, resizeLocalEmulator],
     );
+    const fitToContainerRef = useRef(fitToContainer);
+    fitToContainerRef.current = fitToContainer;
 
-    // Open Rust alacritty_terminal instance on mount; keep a promise so
-    // initial WebSocket snapshot frames never race ahead of native_term_open.
+    // Open Rust alacritty_terminal instance at the remote PTY's current size so
+    // the initial state_formatted() snapshot is ALWAYS parsed at exact matching width.
     useEffect(() => {
       readyFiredRef.current = false;
+      lastSentResizeRef.current = null;
       let cancelled = false;
-      const openPromise = invoke<NativeTermFrame>("native_term_open", {
-        id: terminalId,
-        cols: dimsRef.current.cols,
-        rows: dimsRef.current.rows,
-      })
+      const openCols = ptyDimsRef.current.cols;
+      const openRows = ptyDimsRef.current.rows;
+      void enqueueTermOp(() =>
+        invoke<NativeTermFrame>("native_term_open", {
+          id: terminalId,
+          cols: openCols,
+          rows: openRows,
+        }),
+      )
         .then((frame) => {
           if (!cancelled) applyFrame(frame);
         })
         .catch(() => {});
-      openPromiseRef.current = openPromise;
       return () => {
         cancelled = true;
-        void invoke("native_term_close", { id: terminalId }).catch(() => {});
+        if (resizeConfirmTimerRef.current !== null) {
+          window.clearTimeout(resizeConfirmTimerRef.current);
+          resizeConfirmTimerRef.current = null;
+        }
+        if (resizeDebounceTimerRef.current !== null) {
+          window.clearTimeout(resizeDebounceTimerRef.current);
+          resizeDebounceTimerRef.current = null;
+        }
+        void enqueueTermOp(() => invoke("native_term_close", { id: terminalId })).catch(() => {});
       };
-    }, [terminalId, applyFrame]);
+    }, [terminalId, applyFrame, enqueueTermOp]);
+
+    // Single source of truth: whenever Hub reports the remote PTY's true size
+    // (initial TerminalInfo or TerminalResized), lock local alacritty_terminal to it.
+    useEffect(() => {
+      const nextCols = Math.max(20, initialCols || 80);
+      const nextRows = Math.max(6, initialRows || 24);
+      if (ptyDimsRef.current.cols === nextCols && ptyDimsRef.current.rows === nextRows) {
+        return;
+      }
+      if (resizeConfirmTimerRef.current !== null) {
+        window.clearTimeout(resizeConfirmTimerRef.current);
+        resizeConfirmTimerRef.current = null;
+      }
+      resizeLocalEmulator(nextCols, nextRows);
+    }, [initialCols, initialRows, resizeLocalEmulator]);
+
+    // Wait for bundled/custom terminal webfonts to finish loading before locking cellW.
+    useEffect(() => {
+      let disposed = false;
+      const loadFonts = async () => {
+        try {
+          await Promise.allSettled([
+            document.fonts?.load(`${fontSize}px ${fontFamily}`),
+            document.fonts?.load(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`),
+            document.fonts?.load(`${fontSize}px "${TERMINAL_SYMBOL_FONT}"`, "⏵"),
+          ]);
+        } catch {
+          // fall back to system monospace
+        }
+        if (disposed) return;
+        measureCellMetrics();
+        fitToContainer({ skipIfUnchanged: true, immediate: true });
+        paintFrame(frameRef.current);
+      };
+      void loadFonts();
+      return () => {
+        disposed = true;
+      };
+    }, [fontSize, fontFamily, measureCellMetrics, fitToContainer, paintFrame]);
 
     // Exact container ResizeObserver (zero setTimeout hacks!).
     useEffect(() => {
@@ -563,7 +685,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       if (!el) return;
       const ro = new ResizeObserver(() => fitToContainer({ skipIfUnchanged: true }));
       ro.observe(el);
-      fitToContainer({ skipIfUnchanged: false });
+      fitToContainer({ skipIfUnchanged: false, immediate: true });
       return () => ro.disconnect();
     }, [fitToContainer]);
 
@@ -593,14 +715,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const batch = concatChunks(pendingChunks);
         pendingChunks = [];
         inFlight = true;
-        void openPromiseRef.current
-          .then(() => {
-            if (disposed) return null;
-            return invoke<NativeTermFrame>("native_term_feed", {
-              id: terminalId,
-              dataB64: bytesToBase64(batch),
-            });
-          })
+        void enqueueTermOp(() => {
+          if (disposed) return Promise.resolve(null);
+          return invoke<NativeTermFrame>("native_term_feed", {
+            id: terminalId,
+            dataB64: bytesToBase64(batch),
+          });
+        })
           .then((frame) => {
             if (frame && !disposed) applyFrame(frame);
           })
@@ -636,10 +757,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (disposed) return;
         reconnect.handleSocketOpen();
         callbacksRef.current.onReconnectingChange?.(false);
-        if (callbacksRef.current.canResizeTerminal) {
-          const { cols, rows } = dimsRef.current;
-          ws.send(JSON.stringify({ type: "resize", cols, rows }));
-        }
+        lastSentResizeRef.current = null;
+        fitToContainerRef.current({ skipIfUnchanged: false, immediate: true });
       };
 
       ws.onmessage = (event) => {
