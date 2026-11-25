@@ -447,6 +447,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
     const scrollbarDragRef = useRef(false);
     const wheelAccumPxRef = useRef(0);
+    const remoteWheelActiveRef = useRef(false);
     const touchScrollRef = useRef<{ lastY: number; accumPx: number; clientX: number; clientY: number } | null>(null);
     const paintOffsetYRef = useRef(0);
     const pendingScrollLinesRef = useRef(0);
@@ -968,6 +969,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     useEffect(() => {
       readyFiredRef.current = false;
       lastSentResizeRef.current = null;
+      remoteWheelActiveRef.current = false;
       let cancelled = false;
       const openCols = ptyDimsRef.current.cols;
       const openRows = ptyDimsRef.current.rows;
@@ -1632,7 +1634,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, [scrollToTrackClientY]);
 
     const visibleRows = frameRef.current?.rows ?? dimsRef.current.rows;
-    const remoteOwnsScroll = Boolean(frameRef.current?.wants_mouse);
+    const remoteOwnsScroll =
+      Boolean(frameRef.current?.wants_mouse) ||
+      (remoteWheelActiveRef.current && historySize <= 5);
     const totalLines = Math.max(visibleRows, visibleRows + historySize);
     const hasScrollback = !remoteOwnsScroll && (historySize > 0 || scrollbackOffset > 0);
     const thumbHeightPct = hasScrollback
@@ -1822,10 +1826,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           wheelAccumPxRef.current += lines * stepPx;
 
           const frame = frameRef.current;
+          const hist = frame?.history_size ?? 0;
+          const off = frame?.display_offset ?? 0;
+          if (hist > 5 && !frame?.wants_mouse) {
+            remoteWheelActiveRef.current = false;
+          }
           const sendRemoteWheel =
             Boolean(frame?.wants_mouse) ||
-            ((frame?.history_size ?? 0) === 0 && (frame?.display_offset ?? 0) === 0);
+            hist <= 5 ||
+            (remoteWheelActiveRef.current && off === 0);
           if (sendRemoteWheel) {
+            if (!frame?.wants_mouse) {
+              remoteWheelActiveRef.current = true;
+            }
+            if (off > 0) {
+              void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
+                .then(applyFrame)
+                .catch(() => {});
+            }
             const btn = lines > 0 ? 64 : 65;
             const count = Math.min(5, Math.max(1, Math.abs(lines)));
             const cell = pointerToCell(e.clientX, e.clientY);
