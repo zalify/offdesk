@@ -13,7 +13,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Bot, Ellipsis, Folder, Globe, History, PanelLeft, Plus, Settings as SettingsIcon, Smartphone, X } from "lucide-react";
+import { Bot, Ellipsis, Folder, FolderGit2, Globe, History, PanelLeft, Plus, Settings as SettingsIcon, Smartphone, X } from "lucide-react";
 import type { MachineInfo, ResourceStats, TerminalInfo } from "@offdesk/shared";
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 
@@ -63,6 +63,7 @@ export interface SessionsSidebarPanels {
   browserButton?: { count: number; needsPerson: boolean; open: boolean };
   onToggleBrowser?: () => void;
   onOpenPhone?: () => void;
+  onOpenChat?: () => void;
   onOpenSettings: () => void;
 }
 
@@ -90,6 +91,8 @@ interface SessionsSidebarProps {
   ) => void;
   onMoveTerminal: (terminal: TerminalInfo, targetGroup: WorkspaceGroup) => void;
   onCloseTerminal: (terminal: TerminalInfo) => void;
+  shelvedTerminalIds?: Set<string>;
+  onShelfTerminal?: (terminal: TerminalInfo) => void;
 }
 
 type Drag = { kind: "group"; groupId: string } | { kind: "row"; terminalId: string; groupId: string };
@@ -114,10 +117,13 @@ function SessionsSidebarComponent({
   onReorderGroups,
   onMoveTerminal,
   onCloseTerminal,
+  shelvedTerminalIds,
+  onShelfTerminal,
 }: SessionsSidebarProps) {
   const isDrawer = placement === "drawer";
 
   const [order, setOrder] = useState<SessionOrder>(readSessionOrder);
+  const [projectMode, setProjectMode] = useState(false);
   const toggleOrder = () => {
     const next = order === "recent" ? "tabs" : "recent";
     setOrder(next);
@@ -242,6 +248,14 @@ function SessionsSidebarComponent({
   const rowMenuItems = (terminal: TerminalInfo, group: WorkspaceGroup): ContextMenuEntry[] => {
     const targets = moveTargets(group.id);
     return [
+      ...(onShelfTerminal
+        ? [
+            {
+              label: "minimize to shelf (—)",
+              onClick: () => onShelfTerminal(terminal),
+            },
+          ]
+        : []),
       ...(targets.length > 0
         ? [
             {
@@ -461,12 +475,38 @@ function SessionsSidebarComponent({
       .map((group) => {
         const all = collectPaneTerminalIds(group.root)
           .map((id) => terminalsById.get(id))
-          .filter((terminal): terminal is TerminalInfo => Boolean(terminal));
+          .filter(
+            (terminal): terminal is TerminalInfo =>
+              terminal != null && !shelvedTerminalIds?.has(terminal.id),
+          );
         const terminals = filter === "all" ? all : all.filter(matchesFilter);
         return { group, terminals, totalCount: all.length };
       })
       .filter(({ terminals }) => filter === "all" || terminals.length > 0);
-  }, [filter, groups, matchesFilter, terminalsById]);
+  }, [filter, groups, matchesFilter, terminalsById, shelvedTerminalIds]);
+
+  const projectGroups = useMemo(() => {
+    if (!projectMode) return [];
+    const byProject = new Map<string, { terminal: TerminalInfo; group: WorkspaceGroup }[]>();
+    for (const group of groups) {
+      for (const id of collectPaneTerminalIds(group.root)) {
+        const terminal = terminalsById.get(id);
+        if (!terminal || shelvedTerminalIds?.has(terminal.id)) continue;
+        if (filter !== "all" && !matchesFilter(terminal)) continue;
+        const raw = (terminal.cwd || "~").replace(/\/+$/, "");
+        const segs = raw.split("/").filter(Boolean);
+        let proj = segs[segs.length - 1] || "~";
+        const pIdx = segs.findIndex((s) =>
+          ["projects", "repos", "code", "work", "workspaces"].includes(s.toLowerCase()),
+        );
+        if (pIdx >= 0 && segs[pIdx + 1]) proj = segs[pIdx + 1];
+        const arr = byProject.get(proj) ?? [];
+        arr.push({ terminal, group });
+        byProject.set(proj, arr);
+      }
+    }
+    return Array.from(byProject.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [projectMode, groups, terminalsById, shelvedTerminalIds, filter, matchesFilter]);
 
   const list = !hasTerminals && groups.length === 0 ? (
     <div data-testid="sessions-empty" className="odk-sessions-empty">
@@ -488,8 +528,24 @@ function SessionsSidebarComponent({
     </div>
   ) : order === "recent" ? (
     <div data-testid="sessions-recent" className="odk-sessions-section">
-      {filteredRecentRows.map(({ terminal, group }) => renderRow(terminal, group, true))}
+      {filteredRecentRows
+        .filter(({ terminal }) => !shelvedTerminalIds?.has(terminal.id))
+        .map(({ terminal, group }) => renderRow(terminal, group, true))}
     </div>
+  ) : projectMode ? (
+    projectGroups.map(([projName, items]) => (
+      <section key={projName} className="odk-sessions-section" aria-label={projName}>
+        <div className="odk-sessions-group">
+          <span className="odk-sessions-group-name">
+            <span>{projName}</span>
+          </span>
+          <span className="odk-sessions-group-count">{items.length}</span>
+        </div>
+        <div className="odk-sessions-rows">
+          {items.map(({ terminal, group }) => renderRow(terminal, group, false))}
+        </div>
+      </section>
+    ))
   ) : (
     visibleGroups.map(({ group, terminals }) => {
       const waiting = groupWaitingCount(group, terminalsById);
@@ -586,6 +642,17 @@ function SessionsSidebarComponent({
         </button>
         <button
           type="button"
+          data-testid="sessions-sidebar-project-mode"
+          aria-label="Group by project"
+          title={projectMode ? "Grouped by project (click for tabs)" : "Group by project (collapse worktrees)"}
+          aria-pressed={projectMode}
+          onClick={() => setProjectMode((v) => !v)}
+          className="odk-sessions-icon"
+        >
+          <FolderGit2 size={15} aria-hidden />
+        </button>
+        <button
+          type="button"
           data-testid="sessions-sidebar-order"
           aria-label="Latest output first"
           title={order === "recent" ? "Latest output first (on)" : "Latest output first"}
@@ -607,6 +674,53 @@ function SessionsSidebarComponent({
           <Plus size={15} aria-hidden />
         </button>
       </div>
+
+      {panels?.onOpenChat && (
+        <div
+          style={{
+            display: "flex",
+            gap: 4,
+            padding: "4px 10px 6px",
+          }}
+        >
+          <span
+            style={{
+              flex: 1,
+              textAlign: "center",
+              padding: "4px 6px",
+              borderRadius: 6,
+              fontSize: 11.5,
+              fontWeight: 600,
+              background: "rgb(var(--color-accent) / 0.14)",
+              color: "rgb(var(--color-fg-0))",
+            }}
+          >
+            Terminals
+          </span>
+          <button
+            type="button"
+            data-testid="sessions-sidebar-bots"
+            onClick={panels.onOpenChat}
+            style={{
+              flex: 1,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 5,
+              padding: "4px 6px",
+              borderRadius: 6,
+              border: "1px solid rgb(var(--color-border))",
+              background: "transparent",
+              color: "rgb(var(--color-fg-2))",
+              fontSize: 11.5,
+              cursor: "pointer",
+            }}
+          >
+            <Bot size={12} aria-hidden />
+            <span>Bots &amp; Chat</span>
+          </button>
+        </div>
+      )}
 
       {machine && (
         <div className="odk-sessions-machine">

@@ -181,6 +181,58 @@ enum MsgAction {
 }
 
 #[derive(Subcommand)]
+enum VaultAction {
+    /// List saved secrets (masked previews only)
+    List {
+        /// Filter by project scope
+        #[arg(long)]
+        project: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Save an encrypted secret (reads value from --value or stdin)
+    Set {
+        /// Human-friendly name (e.g. "OpenAI Prod Key")
+        name: String,
+        /// Secret value (omit to read from stdin)
+        #[arg(long)]
+        value: Option<String>,
+        /// Category: api_key, account, token, ssh, other
+        #[arg(long, default_value = "api_key")]
+        category: String,
+        /// Project scope ("*" for Global, or a project folder name)
+        #[arg(long, default_value = "*")]
+        project: String,
+        /// Env var name to auto-inject into Bots (e.g. OPENAI_API_KEY)
+        #[arg(long)]
+        env: Option<String>,
+        /// Optional account/username
+        #[arg(long)]
+        username: Option<String>,
+        /// Optional notes
+        #[arg(long)]
+        notes: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Reveal and print a secret's decrypted value by id or prefix
+    Reveal {
+        /// Secret id or unique prefix
+        id: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a secret by id or prefix
+    Rm {
+        /// Secret id or unique prefix
+        id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum DraftAction {
     /// Save or update a temporary draft (reads content from stdin if omitted)
     Write {
@@ -247,6 +299,11 @@ enum Commands {
     Draft {
         #[command(subcommand)]
         action: DraftAction,
+    },
+    /// Encrypted Secrets, Accounts & API Keys Vault (`list`, `set`, `reveal`, `rm`)
+    Vault {
+        #[command(subcommand)]
+        action: VaultAction,
     },
     /// List machines, or forget one
     Machines {
@@ -1534,6 +1591,36 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 timeout,
                 json,
             } => commands::msg::wait(&hub_client, &thread, timeout, json).await,
+        },
+        Commands::Vault { action } => match action {
+            VaultAction::List { project, json } => {
+                commands::vault::list(&hub_client, project.as_deref(), json).await
+            }
+            VaultAction::Set {
+                name,
+                value,
+                category,
+                project,
+                env,
+                username,
+                notes,
+                json,
+            } => {
+                commands::vault::set(
+                    &hub_client,
+                    &name,
+                    value,
+                    &category,
+                    &project,
+                    env.as_deref(),
+                    username.as_deref(),
+                    notes.as_deref(),
+                    json,
+                )
+                .await
+            }
+            VaultAction::Reveal { id, json } => commands::vault::reveal(&hub_client, &id, json).await,
+            VaultAction::Rm { id } => commands::vault::rm(&hub_client, &id).await,
         },
         Commands::Draft { action } => match action {
             DraftAction::Write {

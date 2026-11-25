@@ -21,7 +21,27 @@ import {
   waitForWsOpen,
 } from "@/lib/terminalImagePaste";
 import { UploadError, uploadFallsBackToLegacy, uploadFileChunked } from "@/lib/terminalUpload";
+import { createExternalUrlOpener } from "@/lib/terminalLinks";
+import { readClipboardText } from "@/lib/readClipboardText";
 import type { SelectionSnapshot, TerminalViewProps, TerminalViewRef } from "./TerminalView.types";
+
+const openExternalUrl = createExternalUrlOpener({
+  isTauri: () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window,
+  tauriOpenUrl: (url) => invoke("plugin:opener|open_url", { url }),
+  tauriShellOpen: (url) => invoke("plugin:shell|open", { path: url }),
+  windowOpen: (url) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  },
+});
+
+function resolveRemotePath(raw: string, cwd?: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("/") || trimmed.startsWith("~")) return trimmed;
+  if (!cwd) return trimmed;
+  const base = cwd.replace(/\/+$/, "");
+  return `${base}/${trimmed.replace(/^\.\//, "")}`;
+}
 
 function isWideChar(cp: number): boolean {
   return (
@@ -63,6 +83,7 @@ interface NativeTermFrame {
   bgs: NativeBgRun[];
   cursor: [number, number] | null;
   display_offset: number;
+  history_size?: number;
   wants_mouse: boolean;
   bracketed_paste: boolean;
   title?: string;
@@ -145,6 +166,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
   function NativeTerminalView(props, ref) {
     const {
       terminalId,
+      machineId,
+      cwd,
       wsUrl,
       cols: initialCols,
       rows: initialRows,
@@ -153,6 +176,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       onTitleChange,
       onReconnectingChange,
       onReady,
+      onOpenDirectory,
       inputTransformRef,
       style,
     } = props;
@@ -173,6 +197,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
+    const [historySize, setHistorySize] = useState(0);
+    const [scrollbarVisible, setScrollbarVisible] = useState(false);
+    const [scrollbarHover, setScrollbarHover] = useState(false);
+    const maxObservedOffsetRef = useRef(0);
+    const scrollbarFadeTimerRef = useRef<number | null>(null);
+    const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+    const scrollbarDragRef = useRef(false);
     const wheelAccumPxRef = useRef(0);
     const pendingScrollLinesRef = useRef(0);
     const scrollInFlightRef = useRef(false);
@@ -193,6 +224,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       total?: number;
       error?: boolean;
     } | null>(null);
+    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+    const [searchOpen, setSearchOpen] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchMatches, setSearchMatches] = useState<number[]>([]);
+    const [searchIndex, setSearchIndex] = useState(0);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const plainLinesRef = useRef<string[]>([]);
     useEffect(() => {
       if (!uploadStatus || uploadStatus.total !== undefined) return;
       const t = window.setTimeout(() => setUploadStatus(null), uploadStatus.error ? 6000 : 2500);
@@ -353,6 +391,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       });
     }, [paintFrame]);
 
+    const pingScrollbar = useCallback(() => {
+      setScrollbarVisible(true);
+      if (scrollbarFadeTimerRef.current !== null) {
+        window.clearTimeout(scrollbarFadeTimerRef.current);
+      }
+      scrollbarFadeTimerRef.current = window.setTimeout(() => {
+        scrollbarFadeTimerRef.current = null;
+        setScrollbarVisible(false);
+      }, 1200);
+    }, []);
+
     useEffect(
       () => () => {
         if (paintRafRef.current !== null) {
@@ -363,6 +412,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           window.cancelAnimationFrame(scrollRafRef.current);
           scrollRafRef.current = null;
         }
+        if (scrollbarFadeTimerRef.current !== null) {
+          window.clearTimeout(scrollbarFadeTimerRef.current);
+          scrollbarFadeTimerRef.current = null;
+        }
       },
       [],
     );
@@ -371,13 +424,25 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       (frame: NativeTermFrame) => {
         const prevOffset = frameRef.current?.display_offset ?? 0;
         frameRef.current = frame;
+        if (frame.display_offset > maxObservedOffsetRef.current) {
+          maxObservedOffsetRef.current = frame.display_offset;
+        }
+        const effectiveHistory =
+          typeof frame.history_size === "number"
+            ? frame.history_size
+            : maxObservedOffsetRef.current;
         const now = performance.now();
         if (
+          frame.display_offset !== prevOffset ||
           (frame.display_offset === 0) !== (prevOffset === 0) ||
           now - lastScrollBadgeUpdateRef.current > 80
         ) {
           lastScrollBadgeUpdateRef.current = now;
           setScrollbackOffset(frame.display_offset);
+          setHistorySize(effectiveHistory);
+        }
+        if (frame.display_offset !== prevOffset) {
+          pingScrollbar();
         }
         if (frame.title && callbacksRef.current.onTitleChange) {
           callbacksRef.current.onTitleChange(frame.title);
@@ -388,7 +453,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           callbacksRef.current.onReady?.();
         }
       },
-      [schedulePaint],
+      [schedulePaint, pingScrollbar],
     );
 
     const flushPendingScroll = useCallback(() => {
@@ -828,6 +893,116 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [canType, subscribeControl],
     );
 
+    const rowToPlainString = useCallback((row: number): string => {
+      const frame = frameRef.current;
+      if (!frame || row < 0 || row >= frame.spans.length) return "";
+      const chars = new Array<string>(frame.cols).fill(" ");
+      for (const sp of frame.spans[row] ?? []) {
+        let col = sp.c;
+        for (const ch of sp.t) {
+          const cp = ch.codePointAt(0) ?? 0;
+          const w = isWideChar(cp) ? 2 : 1;
+          if (col < frame.cols) chars[col] = ch;
+          if (w === 2 && col + 1 < frame.cols) chars[col + 1] = "";
+          col += w;
+        }
+      }
+      return chars.join("");
+    }, []);
+
+    const tokenAtCell = useCallback(
+      (col: number, row: number): { token: string; startCol: number; endCol: number } | null => {
+        const frame = frameRef.current;
+        if (!frame || row < 0 || row >= frame.spans.length) return null;
+        const cells = new Array<string>(frame.cols).fill(" ");
+        for (const sp of frame.spans[row] ?? []) {
+          let c = sp.c;
+          for (const ch of sp.t) {
+            const cp = ch.codePointAt(0) ?? 0;
+            const w = isWideChar(cp) ? 2 : 1;
+            if (c < frame.cols) cells[c] = ch;
+            if (w === 2 && c + 1 < frame.cols) cells[c + 1] = "";
+            c += w;
+          }
+        }
+        const isTokenChar = (ch: string) => ch !== "" && !/\s|['"()[\]{}<>,;`]/.test(ch);
+        let c0 = Math.min(col, frame.cols - 1);
+        if (c0 < 0) return null;
+        if (cells[c0] === "" && c0 > 0) c0 -= 1;
+        if (!isTokenChar(cells[c0])) return null;
+        let start = c0;
+        while (start > 0 && (cells[start - 1] === "" || isTokenChar(cells[start - 1]))) {
+          start -= 1;
+        }
+        let end = c0 + 1;
+        while (end < frame.cols && (cells[end] === "" || isTokenChar(cells[end]))) {
+          end += 1;
+        }
+        const token = cells.slice(start, end).join("").replace(/[.:]+$/, "");
+        if (!token) return null;
+        return { token, startCol: start, endCol: end };
+      },
+      [],
+    );
+
+    const openSearchBar = useCallback(() => {
+      setSearchOpen(true);
+      void invoke<string[]>("native_term_plain_lines", { id: terminalId })
+        .then((lines) => {
+          plainLinesRef.current = lines;
+        })
+        .catch(() => {});
+      window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    }, [terminalId]);
+
+    const jumpToSearchMatch = useCallback(
+      (matches: number[], idx: number) => {
+        if (matches.length === 0) return;
+        const wrapped = ((idx % matches.length) + matches.length) % matches.length;
+        setSearchIndex(wrapped);
+        const total = plainLinesRef.current.length;
+        const lineIdx = matches[wrapped];
+        const rows = frameRef.current?.rows ?? dimsRef.current.rows;
+        const curOff = frameRef.current?.display_offset ?? 0;
+        const targetOff = Math.max(0, total - lineIdx - Math.ceil(rows / 2));
+        const deltaLines = targetOff - curOff;
+        if (deltaLines !== 0) {
+          void invoke<NativeTermFrame>("native_term_scroll", { id: terminalId, deltaLines })
+            .then(applyFrame)
+            .catch(() => {});
+        }
+      },
+      [terminalId, applyFrame],
+    );
+
+    useEffect(() => {
+      if (!searchOpen) return;
+      const q = searchQuery.trim().toLowerCase();
+      if (!q) {
+        setSearchMatches([]);
+        setSearchIndex(0);
+        return;
+      }
+      const lines = plainLinesRef.current;
+      const found: number[] = [];
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (lines[i].toLowerCase().includes(q)) found.push(i);
+      }
+      setSearchMatches(found);
+      if (found.length > 0) jumpToSearchMatch(found, 0);
+    }, [searchOpen, searchQuery, jumpToSearchMatch]);
+
+    useEffect(() => {
+      if (!ctxMenu) return;
+      const close = () => setCtxMenu(null);
+      window.addEventListener("mousedown", close);
+      window.addEventListener("blur", close);
+      return () => {
+        window.removeEventListener("mousedown", close);
+        window.removeEventListener("blur", close);
+      };
+    }, [ctxMenu]);
+
     const pointerToCell = (clientX: number, clientY: number) => {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return { col: 0, row: 0 };
@@ -839,6 +1014,62 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         row: Math.min(row, Math.max(0, dimsRef.current.rows - 1)),
       };
     };
+
+    const scrollToTrackClientY = useCallback(
+      (clientY: number) => {
+        const track = scrollbarTrackRef.current;
+        const frame = frameRef.current;
+        if (!track || !frame) return;
+        const maxOff =
+          typeof frame.history_size === "number"
+            ? frame.history_size
+            : maxObservedOffsetRef.current;
+        if (maxOff <= 0) return;
+        const rect = track.getBoundingClientRect();
+        if (rect.height <= 0) return;
+        const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+        const targetOffset = Math.round((1 - ratio) * maxOff);
+        const deltaLines = targetOffset - frame.display_offset;
+        if (deltaLines === 0) return;
+        pingScrollbar();
+        pendingScrollLinesRef.current = deltaLines;
+        if (!scrollInFlightRef.current && scrollRafRef.current === null) {
+          scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+        }
+      },
+      [flushPendingScroll, pingScrollbar],
+    );
+
+    useEffect(() => {
+      const onMove = (e: MouseEvent) => {
+        if (!scrollbarDragRef.current) return;
+        e.preventDefault();
+        scrollToTrackClientY(e.clientY);
+      };
+      const onUp = () => {
+        scrollbarDragRef.current = false;
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+    }, [scrollToTrackClientY]);
+
+    const visibleRows = frameRef.current?.rows ?? dimsRef.current.rows;
+    const totalLines = Math.max(visibleRows, visibleRows + historySize);
+    const hasScrollback = historySize > 0 || scrollbackOffset > 0;
+    const thumbHeightPct = hasScrollback
+      ? Math.max(8, Math.min(100, (visibleRows / totalLines) * 100))
+      : 100;
+    const thumbTopPct =
+      hasScrollback && historySize > 0
+        ? ((historySize - Math.min(scrollbackOffset, historySize)) / historySize) *
+          (100 - thumbHeightPct)
+        : 100 - thumbHeightPct;
+    const showScrollbar =
+      hasScrollback && (scrollbarVisible || scrollbarHover || scrollbarDragRef.current || scrollbackOffset > 0);
 
     return (
       <div
@@ -856,10 +1087,39 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             void uploadFiles(files);
           }
         }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setCtxMenu({ x: e.clientX, y: e.clientY });
+        }}
         onMouseDown={(e) => {
+          setCtxMenu(null);
           inputRef.current?.focus();
           if (e.button !== 0) return;
           const cell = pointerToCell(e.clientX, e.clientY);
+          if (e.detail === 2) {
+            const tok = tokenAtCell(cell.col, cell.row);
+            if (tok) {
+              selectionRef.current = {
+                start: { col: tok.startCol, row: cell.row },
+                end: { col: tok.endCol, row: cell.row },
+              };
+              draggingRef.current = false;
+              paintFrame(frameRef.current);
+              void copyToClipboard(tok.token);
+              return;
+            }
+          }
+          if (e.detail >= 3) {
+            const lineText = rowToPlainString(cell.row).trimEnd();
+            selectionRef.current = {
+              start: { col: 0, row: cell.row },
+              end: { col: dimsRef.current.cols, row: cell.row },
+            };
+            draggingRef.current = false;
+            paintFrame(frameRef.current);
+            if (lineText) void copyToClipboard(lineText);
+            return;
+          }
           selectionRef.current = { start: cell, end: cell };
           draggingRef.current = true;
           paintFrame(frameRef.current);
@@ -872,12 +1132,32 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           };
           paintFrame(frameRef.current);
         }}
-        onMouseUp={() => {
+        onMouseUp={(e) => {
           if (!draggingRef.current) return;
           draggingRef.current = false;
           const text = getSelectionText();
           if (text) {
             void copyToClipboard(text);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey) {
+            const cell = pointerToCell(e.clientX, e.clientY);
+            const tok = tokenAtCell(cell.col, cell.row);
+            if (tok) {
+              if (/^https?:\/\//i.test(tok.token)) {
+                openExternalUrl(tok.token);
+                return;
+              }
+              const cleaned = tok.token.replace(/^file:\/\//i, "").replace(/:\d+(?::\d+)?$/, "");
+              if (
+                onOpenDirectory &&
+                machineId &&
+                (cleaned.includes("/") || /\.[a-z0-9]{1,8}$/i.test(cleaned))
+              ) {
+                const resolved = resolveRemotePath(cleaned, cwd) ?? cleaned;
+                onOpenDirectory(machineId, resolved);
+              }
+            }
           }
         }}
         onWheel={(e) => {
@@ -964,6 +1244,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
           }}
           onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+              e.preventDefault();
+              openSearchBar();
+              return;
+            }
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "c") {
               const sel = getSelectionText();
               if (sel) {
@@ -1014,6 +1299,162 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             pointerEvents: "none",
           }}
         />
+        {searchOpen && (
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "absolute",
+              top: 8,
+              right: 14,
+              zIndex: 12,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "5px 8px",
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(22,23,27,0.96)",
+              color: "#e4e4e7",
+              fontSize: 12,
+            }}
+          >
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  setSearchOpen(false);
+                  inputRef.current?.focus();
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  jumpToSearchMatch(searchMatches, searchIndex + (e.shiftKey ? -1 : 1));
+                }
+              }}
+              placeholder="Find in scrollback…"
+              style={{
+                width: 170,
+                background: "rgba(0,0,0,0.35)",
+                color: "#e4e4e7",
+                border: "1px solid rgba(255,255,255,0.14)",
+                borderRadius: 5,
+                padding: "3px 7px",
+                fontSize: 12,
+                outline: "none",
+              }}
+            />
+            <span style={{ fontSize: 11, color: "rgba(228,228,231,0.65)", minWidth: 38, textAlign: "center" }}>
+              {searchMatches.length > 0 ? `${searchIndex + 1}/${searchMatches.length}` : "0/0"}
+            </span>
+            <button
+              type="button"
+              onClick={() => jumpToSearchMatch(searchMatches, searchIndex - 1)}
+              style={{ border: "none", background: "transparent", color: "#e4e4e7", cursor: "pointer", padding: "0 4px" }}
+              title="Previous match"
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => jumpToSearchMatch(searchMatches, searchIndex + 1)}
+              style={{ border: "none", background: "transparent", color: "#e4e4e7", cursor: "pointer", padding: "0 4px" }}
+              title="Next match"
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchOpen(false);
+                inputRef.current?.focus();
+              }}
+              style={{ border: "none", background: "transparent", color: "rgba(228,228,231,0.7)", cursor: "pointer", padding: "0 4px" }}
+              title="Close (Esc)"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+        {ctxMenu && (
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: "fixed",
+              left: ctxMenu.x,
+              top: ctxMenu.y,
+              zIndex: 80,
+              minWidth: 150,
+              padding: 4,
+              borderRadius: 8,
+              border: "1px solid rgba(255,255,255,0.16)",
+              background: "rgba(24,25,29,0.98)",
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+              display: "flex",
+              flexDirection: "column",
+              gap: 2,
+              fontSize: 12.5,
+              color: "#e4e4e7",
+            }}
+          >
+            {[
+              {
+                label: "Copy",
+                action: () => {
+                  const sel = getSelectionText();
+                  if (sel) void copyToClipboard(sel);
+                },
+              },
+              {
+                label: "Paste",
+                action: () => {
+                  void readClipboardText().then((txt) => {
+                    if (!txt) return;
+                    const payload = frameRef.current?.bracketed_paste
+                      ? `\x1b[200~${txt}\x1b[201~`
+                      : txt;
+                    sendRawInput(payload);
+                  });
+                },
+              },
+              {
+                label: "Find (⌘F)",
+                action: () => openSearchBar(),
+              },
+              {
+                label: "Clear Screen",
+                action: () => sendRawInput("\x0c"),
+              },
+              {
+                label: "Jump to Bottom",
+                action: () => {
+                  void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
+                    .then(applyFrame)
+                    .catch(() => {});
+                },
+              },
+            ].map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={() => {
+                  setCtxMenu(null);
+                  item.action();
+                }}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#e4e4e7",
+                  textAlign: "left",
+                  padding: "6px 10px",
+                  borderRadius: 5,
+                  cursor: "pointer",
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+        )}
         {uploadStatus && (
           <div
             style={{
@@ -1032,6 +1473,46 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             {uploadStatus.total && uploadStatus.total > 0 && uploadStatus.sent !== undefined
               ? ` (${Math.min(100, Math.round((uploadStatus.sent / uploadStatus.total) * 100))}%)`
               : ""}
+          </div>
+        )}
+        {hasScrollback && (
+          <div
+            ref={scrollbarTrackRef}
+            data-testid="native-terminal-scrollbar"
+            onMouseEnter={() => setScrollbarHover(true)}
+            onMouseLeave={() => setScrollbarHover(false)}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              scrollbarDragRef.current = true;
+              scrollToTrackClientY(e.clientY);
+            }}
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 2,
+              bottom: 4,
+              width: scrollbarHover || scrollbarDragRef.current ? 12 : 8,
+              cursor: "pointer",
+              opacity: showScrollbar ? 1 : 0,
+              transition: "opacity 180ms ease, width 120ms ease",
+              zIndex: 5,
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: 2,
+                right: 2,
+                top: `${thumbTopPct}%`,
+                height: `${thumbHeightPct}%`,
+                borderRadius: 999,
+                background:
+                  scrollbarHover || scrollbarDragRef.current
+                    ? "rgba(255,255,255,0.48)"
+                    : "rgba(255,255,255,0.28)",
+              }}
+            />
           </div>
         )}
         {scrollbackOffset > 0 && (
