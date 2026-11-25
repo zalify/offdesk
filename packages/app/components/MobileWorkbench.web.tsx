@@ -298,6 +298,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   // The sheet's order: under each tab, or flat with the latest output first.
   // The same choice as the desktop sidebar's, kept per device.
   const [sessionOrder, setSessionOrder] = useState<SessionOrder>(readSessionOrder);
+  const [sessionFilter, setSessionFilter] = useState<"all" | "waiting" | "working">("all");
   const toggleSessionOrder = () => {
     const next = sessionOrder === "recent" ? "tabs" : "recent";
     setSessionOrder(next);
@@ -307,11 +308,50 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     () => (sessionOrder === "recent" ? recentMobileSessionPanes(sessionGroups) : []),
     [sessionOrder, sessionGroups],
   );
+  const mobileWaitingTotal = useMemo(
+    () => chips.filter(({ terminal }) => sessionState(terminal, now) === "waiting").length,
+    [chips, now],
+  );
+  const mobileWorkingTotal = useMemo(
+    () => chips.filter(({ terminal }) => sessionState(terminal, now) === "working").length,
+    [chips, now],
+  );
+  const otherWaitingTerminal = useMemo(
+    () =>
+      terminals.find(
+        (t) =>
+          t.reachable &&
+          t.attention === "confirmation" &&
+          t.id !== activeTerminalId &&
+          machines.some((m) => m.id === t.machine_id),
+      ) ?? null,
+    [terminals, activeTerminalId, machines],
+  );
+  const matchesMobileFilter = useCallback(
+    (terminal: TerminalInfo) => {
+      if (sessionFilter === "all") return true;
+      return sessionState(terminal, now) === sessionFilter;
+    },
+    [sessionFilter, now],
+  );
+  const filteredRecentPanes = useMemo(
+    () => (sessionFilter === "all" ? recentPanes : recentPanes.filter(({ terminal }) => matchesMobileFilter(terminal))),
+    [sessionFilter, matchesMobileFilter, recentPanes],
+  );
+  const visibleSessionGroups = useMemo(
+    () =>
+      sessionGroups
+        .map(({ group, panes }) => ({
+          group,
+          panes: sessionFilter === "all" ? panes : panes.filter(({ terminal }) => matchesMobileFilter(terminal)),
+        }))
+        .filter(({ panes }) => sessionFilter === "all" || panes.length > 0),
+    [sessionFilter, matchesMobileFilter, sessionGroups],
+  );
 
   const activeChip =
     chips.find((chip) => chip.terminal.id === activeTerminalId) ?? null;
   const activeGroup = activeChip?.group ?? null;
-  const activeGroupIndex = activeGroup ? sessionGroups.findIndex(({ group }) => group.id === activeGroup.id) : -1;
   const activePosition = activeChip
     ? chips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
     : 0;
@@ -629,7 +669,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               >
                 {resumeNotice ?? (<>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-                    {activeGroupIndex >= 0 ? `${activeGroupIndex}:` : ""}{activeChip.group.label} ·{" "}
+                    {activeChip.group.label} ·{" "}
                     <span
                       data-testid="mobile-title-bar-dot"
                       role="img"
@@ -666,6 +706,42 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         </button>
 
 
+        {otherWaitingTerminal && (
+          <button
+            type="button"
+            data-testid="mobile-title-bar-waiting"
+            data-title-bar-swipe="ignore"
+            aria-label={`Jump to waiting terminal ${displayTerminalTitle(otherWaitingTerminal)}`}
+            title={`Jump to waiting: ${displayTerminalTitle(otherWaitingTerminal)}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelectMachine(otherWaitingTerminal.machine_id);
+              onPickTerminal(otherWaitingTerminal.id);
+            }}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            style={{
+              flexShrink: 0,
+              height: 28,
+              padding: "0 8px",
+              borderRadius: 999,
+              border: `1px solid ${colors.err}`,
+              background: "rgb(var(--color-err) / 0.14)",
+              color: colors.err,
+              fontFamily: fontDisplay,
+              fontSize: rem(11),
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <span aria-hidden="true">●</span>
+            <span>waiting</span>
+          </button>
+        )}
+
         {filesButton && onToggleFiles && wideTitleBar && (
           <span
             onClick={(event) => event.stopPropagation()}
@@ -683,7 +759,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               onClick={onToggleFiles}
               style={titleBarButton}
             >
-              [f]
+              <FolderOpen size={17} aria-hidden />
             </TextButton>
           </span>
         )}
@@ -705,11 +781,15 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               aria-pressed={browserButton.open}
               title={browserButton.needsPerson ? "The agent needs you" : "Browser"}
               onClick={onToggleBrowser}
-              style={titleBarButton}
+              style={{ ...titleBarButton, position: "relative" }}
             >
-              [b
+              <Globe size={17} aria-hidden />
               {browserButton.count > 0 && (
-                <span data-testid="mobile-title-bar-browser-count" aria-hidden="true" style={{ fontSize: rem(10), color: colors.fg2 }}>
+                <span
+                  data-testid="mobile-title-bar-browser-count"
+                  aria-hidden="true"
+                  style={{ fontSize: rem(9.5), color: colors.fg2, marginLeft: 2 }}
+                >
                   {browserButton.count}
                 </span>
               )}
@@ -718,12 +798,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   role="img"
                   aria-label="The agent needs you"
                   data-testid="mobile-title-bar-browser-attention"
-                  style={{ color: colors.err }}
+                  style={{ color: colors.err, fontWeight: 700, marginLeft: 1 }}
                 >
                   !
                 </span>
               )}
-              ]
             </button>
           </span>
         )}
@@ -741,7 +820,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           onTouchEnd={event => event.stopPropagation()}
           style={titleBarButton}
         >
-          [m]
+          <Monitor size={17} aria-hidden />
         </button>
       </div>
 
@@ -910,11 +989,54 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           onClose={() => setSessionSwitcherOpen(false)}
         >
           <div className="odk-sessions-touch">
-            {sessionOrder === "recent" ? (
+            {chips.length > 0 && (
+              <div
+                className="odk-sessions-filters"
+                role="tablist"
+                aria-label="Filter terminals"
+                data-testid="mobile-sessions-filter-bar"
+                style={{ margin: "2px 0 8px" }}
+              >
+                {(
+                  [
+                    { id: "all", label: "All", count: chips.length },
+                    { id: "waiting", label: "Waiting", count: mobileWaitingTotal },
+                    { id: "working", label: "Working", count: mobileWorkingTotal },
+                  ] as const
+                ).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={sessionFilter === item.id}
+                    data-testid={`mobile-sessions-filter-${item.id}`}
+                    data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
+                    className="odk-sessions-filter-pill"
+                    style={{ height: 30, fontSize: rem(12) }}
+                    onClick={() => setSessionFilter(item.id)}
+                  >
+                    <span>{item.label}</span>
+                    {item.count > 0 && item.id !== "all" && (
+                      <span className="odk-sessions-filter-count">{item.count}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            {sessionFilter !== "all" &&
+            ((sessionOrder === "recent" && filteredRecentPanes.length === 0) ||
+              (sessionOrder !== "recent" && visibleSessionGroups.length === 0)) ? (
+              <div className="odk-sessions-empty">
+                <span>No {sessionFilter} terminals right now.</span>
+                <Button kind="secondary" size="xs" onClick={() => setSessionFilter("all")}>
+                  show all
+                </Button>
+              </div>
+            ) : sessionOrder === "recent" ? (
               <section data-testid="mobile-session-recent" aria-label="Latest output first" className="odk-sessions-section">
-                {recentPanes.map((pane) => renderSessionRow(pane, true))}
+                {filteredRecentPanes.map((pane) => renderSessionRow(pane, true))}
               </section>
-            ) : sessionGroups.map(({ group, panes }) => {
+            ) : visibleSessionGroups.map(({ group, panes }) => {
               const waiting = groupWaitingCount(group, scopedTerminalsById);
               return (
                 <section key={group.id} aria-label={group.label} className="odk-sessions-section">
@@ -925,6 +1047,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                     title="Tab actions"
                     onClick={() => setGroupSheet(group)}
                     className="odk-sessions-touch-group"
+                    style={panes.length === 0 ? { opacity: 0.52 } : undefined}
                   >
                     <span className="odk-sessions-touch-group-label">{group.label}</span>
                     <span className="odk-sessions-group-count">{panes.length}</span>
