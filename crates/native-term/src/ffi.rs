@@ -183,6 +183,7 @@ impl OffdeskTermHandle {
                     "machine_id": t.machine_id,
                     "title": t.display_name(),
                     "cwd": t.cwd,
+                    "project_group": t.project_group(),
                     "reachable": t.reachable,
                     "waiting": t.is_waiting(),
                     "last_activity_ms": t.last_activity_ms,

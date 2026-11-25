@@ -26,6 +26,7 @@ data class NativeTerminalSummary(
     val machineId: String,
     val title: String,
     val cwd: String,
+    val projectGroup: String,
     val waiting: Boolean,
     val working: Boolean,
 )
@@ -45,8 +46,10 @@ fun NativeConsoleScreen(
     var surfaceViewRef by remember { mutableStateOf<NativeTerminalSurfaceView?>(null) }
     var terminals by remember { mutableStateOf<List<NativeTerminalSummary>>(emptyList()) }
     var activeId by remember { mutableStateOf<String?>(null) }
+    var shelfIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var sheetOpen by remember { mutableStateOf(false) }
     var filter by remember { mutableStateOf("all") }
+    var selectedProject by remember { mutableStateOf<String?>(null) }
     var composeText by remember { mutableStateOf("") }
     var showKeys by remember { mutableStateOf(false) }
 
@@ -70,6 +73,11 @@ fun NativeConsoleScreen(
 
     val active = terminals.firstOrNull { it.id == activeId }
     val otherWaiting = terminals.firstOrNull { it.waiting && it.id != activeId }
+    val shelfItems = remember(terminals, shelfIds) {
+        shelfIds
+            .mapNotNull { id -> terminals.firstOrNull { it.id == id } }
+            .sortedByDescending { if (it.waiting) 2 else if (it.working) 1 else 0 }
+    }
 
     Column(
         modifier = Modifier
@@ -113,6 +121,31 @@ fun NativeConsoleScreen(
                 }
             }
 
+            if (active != null) {
+                Surface(
+                    modifier = Modifier.clickable {
+                        if (!shelfIds.contains(active.id)) {
+                            shelfIds = shelfIds + active.id
+                        }
+                        val next = terminals.firstOrNull { it.id != active.id && !shelfIds.contains(it.id) }
+                        if (next != null) {
+                            activeId = next.id
+                            surfaceViewRef?.selectTerminal(next.machineId, next.id)
+                        }
+                    },
+                    color = Color(0xFF202227),
+                    shape = RoundedCornerShape(6.dp),
+                ) {
+                    Text(
+                        text = "—",
+                        color = Color(0xFFB4B8C2),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    )
+                }
+            }
+
             if (otherWaiting != null) {
                 Surface(
                     modifier = Modifier.clickable {
@@ -129,6 +162,55 @@ fun NativeConsoleScreen(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                     )
+                }
+            }
+        }
+
+        // Background Shelf pill strip (auto-hidden when empty; waiting pills first)
+        if (shelfItems.isNotEmpty()) {
+            androidx.compose.foundation.lazy.LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color(0xFF15161A))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(shelfItems, key = { it.id }) { pill ->
+                    Surface(
+                        modifier = Modifier.clickable {
+                            shelfIds = shelfIds.filterNot { it == pill.id }
+                            activeId = pill.id
+                            surfaceViewRef?.selectTerminal(pill.machineId, pill.id)
+                        },
+                        color = if (pill.waiting) Color(0x33EF4444) else Color(0xFF22252C),
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            pill.waiting -> Color(0xFFEF4444)
+                                            pill.working -> Color(0xFF22C55E)
+                                            else -> Color(0xFF71717A)
+                                        }
+                                    )
+                            )
+                            Text(
+                                text = pill.title,
+                                color = if (pill.waiting) Color(0xFFFCA5A5) else Color(0xFFD4D4D8),
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -227,47 +309,113 @@ fun NativeConsoleScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
+                val projects = terminals.map { it.projectGroup }.distinct().sorted()
+                if (projects.size > 1) {
+                    androidx.compose.foundation.lazy.LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedProject == null,
+                                onClick = { selectedProject = null },
+                                label = { Text("All Projects", fontSize = 11.sp) },
+                            )
+                        }
+                        items(projects, key = { it }) { proj ->
+                            val hasWait = terminals.any { it.projectGroup == proj && it.waiting }
+                            FilterChip(
+                                selected = selectedProject == proj,
+                                onClick = { selectedProject = if (selectedProject == proj) null else proj },
+                                label = {
+                                    Text(
+                                        if (hasWait) "● $proj" else proj,
+                                        color = if (hasWait) Color(0xFFFCA5A5) else Color.Unspecified,
+                                        fontSize = 11.sp,
+                                    )
+                                },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
                 val filtered = terminals.filter {
-                    when (filter) {
+                    val matchStatus = when (filter) {
                         "waiting" -> it.waiting
                         "working" -> it.working
                         else -> true
                     }
+                    val matchProject = selectedProject == null || it.projectGroup == selectedProject
+                    matchStatus && matchProject
                 }
+                val grouped = filtered.groupBy { it.projectGroup }.entries.sortedWith(
+                    compareByDescending<Map.Entry<String, List<NativeTerminalSummary>>> { e ->
+                        e.value.any { it.waiting }
+                    }.thenBy { it.key }
+                )
                 LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
-                    items(filtered, key = { it.id }) { item ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    activeId = item.id
-                                    surfaceViewRef?.selectTerminal(item.machineId, item.id)
-                                    sheetOpen = false
-                                }
-                                .padding(vertical = 10.dp, horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        ) {
-                            Box(
+                    grouped.forEach { (group, groupItems) ->
+                        item(key = "hdr-$group") {
+                            val waitCount = groupItems.count { it.waiting }
+                            Row(
                                 modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        when {
-                                            item.waiting -> Color(0xFFEF4444)
-                                            item.working -> Color(0xFF22C55E)
-                                            else -> Color(0xFF52525B)
-                                        }
+                                    .fillMaxWidth()
+                                    .background(Color(0xFF1F2127))
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    text = "$group (${groupItems.size})",
+                                    color = Color(0xFFA1A7B3),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                                if (waitCount > 0) {
+                                    Text(
+                                        text = "● $waitCount waiting",
+                                        color = Color(0xFFFCA5A5),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
                                     )
-                            )
-                            Text(
-                                text = item.title,
-                                color = if (item.id == activeId) Color.White else Color(0xFFD4D4D8),
-                                fontWeight = if (item.id == activeId) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                                }
+                            }
+                        }
+                        items(groupItems, key = { it.id }) { item ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        shelfIds = shelfIds.filterNot { it == item.id }
+                                        activeId = item.id
+                                        surfaceViewRef?.selectTerminal(item.machineId, item.id)
+                                        sheetOpen = false
+                                    }
+                                    .padding(vertical = 10.dp, horizontal = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            when {
+                                                item.waiting -> Color(0xFFEF4444)
+                                                item.working -> Color(0xFF22C55E)
+                                                else -> Color(0xFF52525B)
+                                            }
+                                        )
+                                )
+                                Text(
+                                    text = item.title,
+                                    color = if (item.id == activeId) Color.White else Color(0xFFD4D4D8),
+                                    fontWeight = if (item.id == activeId) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -288,6 +436,7 @@ private fun parseInventoryJson(raw: String): List<NativeTerminalSummary> {
             machineId = obj.optString("machine_id"),
             title = obj.optString("title", "shell"),
             cwd = obj.optString("cwd", ""),
+            projectGroup = obj.optString("project_group", "~"),
             waiting = obj.optBoolean("waiting", false),
             working = lastMs > 0 && (now - lastMs) < 60_000L,
         )

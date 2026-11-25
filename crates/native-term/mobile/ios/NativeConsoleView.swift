@@ -6,9 +6,14 @@ public struct NativeTerminalItem: Identifiable, Decodable {
     public let machine_id: String
     public let title: String
     public let cwd: String
+    public let project_group: String?
     public let reachable: Bool
     public let waiting: Bool
     public let last_activity_ms: Int64?
+
+    public var projectGroupName: String {
+        project_group ?? "~"
+    }
 
     public var isWorking: Bool {
         guard let ms = last_activity_ms else { return false }
@@ -31,8 +36,10 @@ public struct NativeConsoleView: View {
 
     @State private var terminals: [NativeTerminalItem] = []
     @State private var activeTerminal: NativeTerminalItem?
+    @State private var shelfIds: [String] = []
     @State private var sheetOpen = false
     @State private var filter = "all"
+    @State private var selectedProject: String? = nil
     @State private var composeText = ""
     @State private var showKeys = false
     @State private var metalView: OffdeskMetalTerminalView?
@@ -67,6 +74,25 @@ public struct NativeConsoleView: View {
                     .cornerRadius(6)
                 }
 
+                if let active = activeTerminal {
+                    Button {
+                        if !shelfIds.contains(active.id) {
+                            shelfIds.append(active.id)
+                        }
+                        if let next = terminals.first(where: { $0.id != active.id && !shelfIds.contains($0.id) }) {
+                            select(next)
+                        }
+                    } label: {
+                        Text("—")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor(.gray)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(white: 0.14))
+                            .cornerRadius(6)
+                    }
+                }
+
                 if let waiting = terminals.first(where: { $0.waiting && $0.id != activeTerminal?.id }) {
                     Button {
                         select(waiting)
@@ -84,6 +110,37 @@ public struct NativeConsoleView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(Color(white: 0.09))
+
+            // Background Shelf pill strip (auto-hidden when empty; waiting pills first)
+            if !shelfItems.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(shelfItems) { pill in
+                            Button {
+                                shelfIds.removeAll { $0 == pill.id }
+                                select(pill)
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Circle()
+                                        .fill(pill.waiting ? Color.red : pill.isWorking ? Color.green : Color.gray)
+                                        .frame(width: 6, height: 6)
+                                    Text(pill.title)
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(pill.waiting ? Color.red.opacity(0.9) : Color(white: 0.85))
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(pill.waiting ? Color.red.opacity(0.18) : Color(white: 0.15))
+                                .clipShape(Capsule())
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                }
+                .background(Color(white: 0.085))
+            }
 
             // 120Hz Metal GPU terminal surface
             MetalTerminalHost(
@@ -196,18 +253,69 @@ public struct NativeConsoleView: View {
                 .pickerStyle(.segmented)
                 .padding(.horizontal)
 
-                List(filteredTerminals) { item in
-                    Button {
-                        select(item)
-                        sheetOpen = false
-                    } label: {
-                        HStack(spacing: 10) {
-                            Circle()
-                                .fill(item.waiting ? Color.red : item.isWorking ? Color.green : Color.gray)
-                                .frame(width: 8, height: 8)
-                            Text(item.title)
-                                .foregroundColor(.primary)
-                                .lineLimit(1)
+                if projectGroups.count > 1 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            Button {
+                                selectedProject = nil
+                            } label: {
+                                Text("All Projects")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(selectedProject == nil ? Color.blue.opacity(0.35) : Color.gray.opacity(0.2))
+                                    .cornerRadius(999)
+                            }
+                            ForEach(projectGroups, id: \.self) { proj in
+                                let hasWait = terminals.contains { $0.projectGroupName == proj && $0.waiting }
+                                Button {
+                                    selectedProject = (selectedProject == proj) ? nil : proj
+                                } label: {
+                                    Text(hasWait ? "● \(proj)" : proj)
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(hasWait ? .red : .primary)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(selectedProject == proj ? Color.blue.opacity(0.35) : Color.gray.opacity(0.2))
+                                        .cornerRadius(999)
+                                }
+                            }
+                        }
+                        .padding(.horizontal)
+                    }
+                }
+
+                List {
+                    ForEach(groupedTerminals, id: \.0) { group, items in
+                        let waitCount = items.filter { $0.waiting }.count
+                        Section(
+                            header: HStack {
+                                Text("\(group) (\(items.count))")
+                                    .font(.system(size: 12, weight: .bold))
+                                Spacer()
+                                if waitCount > 0 {
+                                    Text("● \(waitCount) waiting")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundColor(.red)
+                                }
+                            }
+                        ) {
+                            ForEach(items) { item in
+                                Button {
+                                    shelfIds.removeAll { $0 == item.id }
+                                    select(item)
+                                    sheetOpen = false
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Circle()
+                                            .fill(item.waiting ? Color.red : item.isWorking ? Color.green : Color.gray)
+                                            .frame(width: 8, height: 8)
+                                        Text(item.title)
+                                            .foregroundColor(.primary)
+                                            .lineLimit(1)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -218,11 +326,41 @@ public struct NativeConsoleView: View {
         .presentationDetents([.medium, .large])
     }
 
+    private var projectGroups: [String] {
+        Array(Set(terminals.map { $0.projectGroupName })).sorted()
+    }
+
+    private var groupedTerminals: [(String, [NativeTerminalItem])] {
+        let grouped = Dictionary(grouping: filteredTerminals, by: { $0.projectGroupName })
+        return grouped
+            .map { ($0.key, $0.value) }
+            .sorted { a, b in
+                let wa = a.1.contains { $0.waiting }
+                let wb = b.1.contains { $0.waiting }
+                if wa != wb { return wa }
+                return a.0 < b.0
+            }
+    }
+
+    private var shelfItems: [NativeTerminalItem] {
+        shelfIds
+            .compactMap { id in terminals.first(where: { $0.id == id }) }
+            .sorted { a, b in
+                let rank: (NativeTerminalItem) -> Int = { $0.waiting ? 2 : ($0.isWorking ? 1 : 0) }
+                return rank(a) > rank(b)
+            }
+    }
+
     private var filteredTerminals: [NativeTerminalItem] {
-        switch filter {
-        case "waiting": return terminals.filter { $0.waiting }
-        case "working": return terminals.filter { $0.isWorking }
-        default: return terminals
+        terminals.filter { item in
+            let matchStatus: Bool
+            switch filter {
+            case "waiting": matchStatus = item.waiting
+            case "working": matchStatus = item.isWorking
+            default: matchStatus = true
+            }
+            let matchProject = selectedProject == nil || item.projectGroupName == selectedProject
+            return matchStatus && matchProject
         }
     }
 }

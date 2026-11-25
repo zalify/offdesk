@@ -91,6 +91,71 @@ impl TerminalEntry {
     pub fn is_waiting(&self) -> bool {
         self.reachable && self.attention.is_some()
     }
+
+    /// Derive a stable project/workspace group name from `cwd` (zero-config).
+    /// Git worktrees under `~/projects/<repo>/<worktree>` automatically group under `<repo>`.
+    pub fn project_group(&self) -> String {
+        let raw = self.cwd.trim().trim_end_matches('/');
+        if raw.is_empty() || raw == "~" || raw == "/" {
+            return "~".to_string();
+        }
+        let segments: Vec<&str> = raw.split('/').filter(|s| !s.is_empty()).collect();
+        // Treat bare home directories (`/home/<user>` or `/Users/<user>`) as `~`.
+        if segments.len() == 2 && matches!(segments[0], "home" | "Users") {
+            return "~".to_string();
+        }
+        // If path passes through a common projects root, use the immediate child as the project name
+        // so sibling worktrees (e.g. `.../projects/webmux/feat-foo`) stay in the same group.
+        for (i, seg) in segments.iter().enumerate() {
+            if matches!(
+                seg.to_ascii_lowercase().as_str(),
+                "projects" | "project" | "repos" | "repo" | "code" | "workspace" | "workspaces" | "work" | "dev" | "github"
+            ) {
+                if let Some(project) = segments.get(i + 1) {
+                    return (*project).to_string();
+                }
+            }
+        }
+        segments
+            .last()
+            .copied()
+            .unwrap_or("~")
+            .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn term_with_cwd(cwd: &str) -> TerminalEntry {
+        TerminalEntry {
+            id: "t1".into(),
+            machine_id: "m1".into(),
+            title: "agy".into(),
+            cwd: cwd.into(),
+            cols: 120,
+            rows: 40,
+            reachable: true,
+            attention: None,
+            last_activity_ms: None,
+        }
+    }
+
+    #[test]
+    fn project_group_extracts_repo_and_collapses_worktrees() {
+        assert_eq!(
+            term_with_cwd("/home/chareice/projects/webmux/feat-antigravity-support").project_group(),
+            "webmux"
+        );
+        assert_eq!(
+            term_with_cwd("/home/chareice/projects/jiashun").project_group(),
+            "jiashun"
+        );
+        assert_eq!(term_with_cwd("/home/chareice").project_group(), "~");
+        assert_eq!(term_with_cwd("~").project_group(), "~");
+        assert_eq!(term_with_cwd("/var/services/offdesk").project_group(), "offdesk");
+    }
 }
 
 #[derive(Debug, Clone)]
