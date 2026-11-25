@@ -712,6 +712,39 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           <ChevronsUpDown aria-hidden size={16} style={{ flexShrink: 0, color: colors.fg1 }} />
         </button>
 
+        {activeMachine && !isController && !viewOnlyLocked && (
+          <button
+            type="button"
+            data-testid="mobile-title-bar-take-control"
+            data-title-bar-swipe="ignore"
+            aria-label={`Take control of ${activeMachine.name}`}
+            title="Take control"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRequestControl(activeMachine.id);
+            }}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            style={{
+              flexShrink: 0,
+              height: 30,
+              padding: "0 10px",
+              borderRadius: 999,
+              border: `1px solid ${colors.accent}`,
+              background: colors.accent,
+              color: colors.onPrimary,
+              fontFamily: fontDisplay,
+              fontSize: rem(11.5),
+              fontWeight: 600,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              whiteSpace: "nowrap",
+            }}
+          >
+            control
+          </button>
+        )}
 
         {otherWaitingTerminal && (
           <button

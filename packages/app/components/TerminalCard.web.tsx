@@ -234,8 +234,16 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   // reflects the last toggle, and refocusing would unexpectedly reopen it.
   const handleToolbarKey = useCallback((data: string) => {
     if (!canType) return;
-    termViewRef.current?.sendCommandInput(modifiers.transform(data));
-  }, [canType, modifiers.transform]);
+    const transformed = modifiers.transform(data);
+    if (!isController) {
+      // Hub rejects `command_input` from watchers; claim control and send via
+      // regular `input` so the very first keybar tap works on mobile.
+      onRequestControl?.(terminal.machine_id);
+      termViewRef.current?.sendInput(transformed);
+      return;
+    }
+    termViewRef.current?.sendCommandInput(transformed);
+  }, [canType, isController, modifiers.transform, onRequestControl, terminal.machine_id]);
 
   const handleAttachFile = useCallback(async (file: File, onProgress?: (sent: number, total: number) => void) => {
     if (!canType) throw new Error("Unlock view only to attach a file.");
