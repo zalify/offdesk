@@ -104,12 +104,12 @@ test.describe("draft sharing", () => {
       const resp = await pub.goto(path);
       expect(resp?.status()).toBe(200);
       expect(resp?.headers()["content-security-policy"] ?? "").toContain("sandbox");
-      await expect(pub.locator("h1")).toContainText(title, { timeout: 15_000 });
+      await expect(pub.locator("h1").first()).toContainText(title, { timeout: 15_000 });
       await expect(pub.getByText("snapshot body marker one")).toBeVisible();
 
       await patchDraft(page, draft.id, { content: "# Heading\n\nsnapshot body marker two" });
       await pub.reload();
-      await expect(pub.locator("h1")).toContainText(title, { timeout: 15_000 });
+      await expect(pub.locator("h1").first()).toContainText(title, { timeout: 15_000 });
       await expect(pub.getByText("snapshot body marker one")).toBeVisible();
       await expect(pub.getByText("snapshot body marker two")).toHaveCount(0);
     } finally {
