@@ -20,6 +20,7 @@ import {
   safeFilename,
   waitForWsOpen,
 } from "@/lib/terminalImagePaste";
+import { UploadError, uploadFallsBackToLegacy, uploadFileChunked } from "@/lib/terminalUpload";
 import type { SelectionSnapshot, TerminalViewProps, TerminalViewRef } from "./TerminalView.types";
 
 function isWideChar(cp: number): boolean {
@@ -179,6 +180,25 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const paintRafRef = useRef<number | null>(null);
     const lastScrollBadgeUpdateRef = useRef(0);
     const openPromiseRef = useRef<Promise<void>>(Promise.resolve());
+    const controlListenersRef = useRef(new Set<(text: string) => void>());
+    const subscribeControl = useCallback((listener: (text: string) => void) => {
+      controlListenersRef.current.add(listener);
+      return () => {
+        controlListenersRef.current.delete(listener);
+      };
+    }, []);
+    const [uploadStatus, setUploadStatus] = useState<{
+      text: string;
+      sent?: number;
+      total?: number;
+      error?: boolean;
+    } | null>(null);
+    useEffect(() => {
+      if (!uploadStatus || uploadStatus.total !== undefined) return;
+      const t = window.setTimeout(() => setUploadStatus(null), uploadStatus.error ? 6000 : 2500);
+      return () => window.clearTimeout(t);
+    }, [uploadStatus]);
+    const uploadLockRef = useRef(false);
     const callbacksRef = useRef({
       onReady,
       onTitleChange,
@@ -561,6 +581,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (disposed) return;
         if (typeof event.data === "string") {
           compression.handleText(event.data);
+          for (const listener of Array.from(controlListenersRef.current)) {
+            listener(event.data);
+          }
           return;
         }
         const buf = event.data as ArrayBuffer;
@@ -699,19 +722,37 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         },
         focus: () => inputRef.current?.focus(),
         blur: () => inputRef.current?.blur(),
-        sendImageFile: async (file) => {
+        sendImageFile: async (file, onProgress) => {
           const ws = await waitForWsOpen(() => wsRef.current, 5000);
           if (!ws) throw new Error("Terminal socket is not open");
-          if (file.size > MAX_IMAGE_PASTE_BYTES) {
-            throw new Error("File exceeds maximum paste size");
+          try {
+            await uploadFileChunked({
+              file,
+              onProgress,
+              subscribe: subscribeControl,
+              send: (text) => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                  throw new UploadError("disconnected", "Connection lost during upload.");
+                }
+                ws.send(text);
+              },
+            });
+          } catch (error) {
+            if (uploadFallsBackToLegacy(error, file.size)) {
+              if (file.size > MAX_IMAGE_PASTE_BYTES) {
+                throw new Error("File exceeds maximum paste size");
+              }
+              const { base64, mime } = await readFileAsBase64(file);
+              const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : ".png";
+              ws.send(
+                JSON.stringify(
+                  buildImagePasteMessage(base64, mime, safeFilename(file.name ?? "", ext)),
+                ),
+              );
+              return;
+            }
+            throw error;
           }
-          const { base64, mime } = await readFileAsBase64(file);
-          const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : ".png";
-          ws.send(
-            JSON.stringify(
-              buildImagePasteMessage(base64, mime, safeFilename(file.name ?? "", ext)),
-            ),
-          );
         },
         setMouseTrackingEnabled: () => {},
         getSelection: getSelectionText,
@@ -735,6 +776,58 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [sendRawInput, fitToContainer, terminalId, applyFrame, getSelectionText, fontFamily, fontSize],
     );
 
+    const uploadFiles = useCallback(
+      async (files: File[]) => {
+        if (!canType || files.length === 0 || uploadLockRef.current) return;
+        uploadLockRef.current = true;
+        try {
+          for (const file of files) {
+            const name = file.name || "pasted-file";
+            setUploadStatus({ text: `Uploading ${name}`, sent: 0, total: file.size });
+            try {
+              const ws = await waitForWsOpen(() => wsRef.current, 5000);
+              if (!ws) throw new Error("Terminal socket is not open");
+              try {
+                await uploadFileChunked({
+                  file,
+                  onProgress: (sent, total) => setUploadStatus({ text: `Uploading ${name}`, sent, total }),
+                  subscribe: subscribeControl,
+                  send: (text) => {
+                    if (ws.readyState !== WebSocket.OPEN) {
+                      throw new UploadError("disconnected", "Connection lost during upload.");
+                    }
+                    ws.send(text);
+                  },
+                });
+              } catch (err) {
+                if (uploadFallsBackToLegacy(err, file.size)) {
+                  const { base64, mime } = await readFileAsBase64(file);
+                  const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : "";
+                  ws.send(
+                    JSON.stringify(
+                      buildImagePasteMessage(base64, mime, safeFilename(file.name ?? "", ext)),
+                    ),
+                  );
+                } else {
+                  throw err;
+                }
+              }
+              setUploadStatus({ text: `Uploaded ${name}` });
+            } catch (err) {
+              setUploadStatus({
+                text: `${name}: ${err instanceof Error ? err.message : "Upload failed"}`,
+                error: true,
+              });
+              break;
+            }
+          }
+        } finally {
+          uploadLockRef.current = false;
+        }
+      },
+      [canType, subscribeControl],
+    );
+
     const pointerToCell = (clientX: number, clientY: number) => {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return { col: 0, row: 0 };
@@ -751,6 +844,18 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       <div
         ref={containerRef}
         data-testid="native-terminal-view"
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types.includes("Files")) {
+            e.preventDefault();
+          }
+        }}
+        onDrop={(e) => {
+          const files = Array.from(e.dataTransfer?.files ?? []);
+          if (files.length > 0) {
+            e.preventDefault();
+            void uploadFiles(files);
+          }
+        }}
         onMouseDown={(e) => {
           inputRef.current?.focus();
           if (e.button !== 0) return;
@@ -874,6 +979,22 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
           }}
           onPaste={(e) => {
+            const pastedFiles: File[] = [];
+            if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+              pastedFiles.push(...Array.from(e.clipboardData.files));
+            } else if (e.clipboardData.items) {
+              for (const item of Array.from(e.clipboardData.items)) {
+                if (item.kind === "file") {
+                  const f = item.getAsFile();
+                  if (f) pastedFiles.push(f);
+                }
+              }
+            }
+            if (pastedFiles.length > 0) {
+              e.preventDefault();
+              void uploadFiles(pastedFiles);
+              return;
+            }
             const text = e.clipboardData.getData("text");
             if (text) {
               e.preventDefault();
@@ -893,6 +1014,26 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             pointerEvents: "none",
           }}
         />
+        {uploadStatus && (
+          <div
+            style={{
+              position: "absolute",
+              left: 12,
+              bottom: 10,
+              padding: "4px 10px",
+              borderRadius: 999,
+              border: `1px solid ${uploadStatus.error ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.18)"}`,
+              background: "rgba(24,25,29,0.92)",
+              color: uploadStatus.error ? "#fca5a5" : "#e4e4e7",
+              fontSize: 11,
+            }}
+          >
+            {uploadStatus.text}
+            {uploadStatus.total && uploadStatus.total > 0 && uploadStatus.sent !== undefined
+              ? ` (${Math.min(100, Math.round((uploadStatus.sent / uploadStatus.total) * 100))}%)`
+              : ""}
+          </div>
+        )}
         {scrollbackOffset > 0 && (
           <button
             type="button"

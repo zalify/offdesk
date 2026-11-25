@@ -209,6 +209,16 @@ export function FileBrowser({
       .catch((err) => {
         if (!live) return;
         clearTimeout(slowTimer);
+        // If `path` was actually a file (e.g. opened from a terminal file:// link),
+        // navigate to its parent directory and open the built-in in-app FilePreview!
+        const errText = err instanceof Error ? err.message : String(err);
+        if (/not a directory|enotdir|is a file/i.test(errText) && path.includes("/")) {
+          const idx = path.lastIndexOf("/");
+          const parent = idx > 0 ? path.slice(0, idx) : "/";
+          setPath(parent);
+          setPreviewPath(path);
+          return;
+        }
         const message = describeListError(err, path);
         // A transient failure keeps the list already shown; if the folder itself
         // is gone or closed, that list is stale and the error replaces it.
