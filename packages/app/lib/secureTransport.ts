@@ -169,6 +169,26 @@ export async function secureFetch(method: string, path: string, body?: string, s
 /** The existing terminal code keeps its WebSocket interface. Encryption and
  * credentials stay in native Rust; IPC channels are private to this caller. */
 const sockets = new Set<SecureSocket>();
+
+/** A socket's binary frame as Tauri hands it over, as an ArrayBuffer; null for a
+ * JSON message (opened, text, error, closed). The native side sends binary frames
+ * as raw channel bodies, and Tauri delivers those in different forms:
+ * - an ArrayBuffer on desktop, and on Android for frames under 1 KB;
+ * - on Android, a plain number[] for frames of 1 KB or more. Android has no
+ *   custom-protocol IPC, so large bodies come back through the channel's fetch
+ *   command over postMessage, where a raw response is serialized as JSON.
+ * Checked by tag rather than `instanceof`, which fails for an ArrayBuffer made in
+ * another realm. Treating anything but an ArrayBuffer as JSON dropped every large
+ * frame on Android, so a terminal never drew (OFF-151). */
+export function channelBytes(message: unknown): ArrayBuffer | null {
+  if (Object.prototype.toString.call(message) === "[object ArrayBuffer]") return message as ArrayBuffer;
+  if (ArrayBuffer.isView(message)) {
+    return new Uint8Array(message.buffer, message.byteOffset, message.byteLength).slice().buffer;
+  }
+  if (Array.isArray(message)) return Uint8Array.from(message as number[]).buffer;
+  return null;
+}
+
 class SecureSocket extends EventTarget {
   readonly url: string;
   readonly protocol = "";
@@ -198,12 +218,13 @@ class SecureSocket extends EventTarget {
     if (!enabled || !status || !allowed) throw new Error("Socket origin does not match the paired Hub");
     target.searchParams.delete("token");
     const { Channel } = await import("@tauri-apps/api/core");
-    const events = new Channel<WireResponse | ArrayBuffer>();
+    const events = new Channel<WireResponse | ArrayBuffer | ArrayBufferView | number[]>();
     events.onmessage = (message) => {
-      if (message instanceof ArrayBuffer) {
-        this.receiveBinary(message);
+      const bytes = channelBytes(message);
+      if (bytes) {
+        this.receiveBinary(bytes);
       } else {
-        this.receive(message);
+        this.receive(message as WireResponse);
       }
     };
     await invoke("secure_socket_open", { id: this.id, path: target.pathname + target.search, events });
