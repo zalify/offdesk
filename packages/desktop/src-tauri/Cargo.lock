@@ -3127,7 +3127,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-secure"
-version = "0.33.0"
+version = "0.33.1"
 dependencies = [
  "base64 0.22.1",
  "futures",
