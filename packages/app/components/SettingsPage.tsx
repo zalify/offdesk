@@ -1,4 +1,8 @@
-import { TERMINAL_RENDERER_STORAGE_KEY, useNativeTerminalProbeStatus } from "./TerminalView.web";
+import {
+  shouldPreferNativeRenderer,
+  TERMINAL_RENDERER_STORAGE_KEY,
+  useNativeTerminalProbeStatus,
+} from "./TerminalView.web";
 import { UiUpdateNotification } from "./UiUpdateNotification";
 import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
@@ -1744,15 +1748,7 @@ const pxInput: React.CSSProperties = {
 
 function TerminalEngineSettingRow() {
   const probe = useNativeTerminalProbeStatus();
-  const saved = (() => {
-    try {
-      return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm"
-        ? "xterm"
-        : "native";
-    } catch {
-      return "native";
-    }
-  })();
+  const saved = shouldPreferNativeRenderer() ? "native" : "xterm";
   const statusNote =
     saved === "xterm"
       ? "Active: Legacy (xterm.js)"

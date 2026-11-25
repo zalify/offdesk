@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { TerminalViewRef, TerminalViewProps } from "./TerminalView.types";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 import { lazyWithReload } from "@/lib/lazyWithReload";
-import { isTauri } from "@/lib/platform";
+import { isTauri, isTauriMobile } from "@/lib/platform";
 
 const LazyXtermImpl = lazy(() =>
   lazyWithReload(() =>
@@ -20,22 +20,35 @@ const LazyNativeImpl = lazy(loadNativeImpl);
 
 export const TERMINAL_RENDERER_STORAGE_KEY = "offdesk:terminalRenderer";
 
+/**
+ * Desktop Tauri defaults to Native Rust (alacritty_terminal).
+ * Mobile Tauri (iOS / Android) defaults to xterm.js because xterm.js carries
+ * full mobile touch scrolling, Android/iOS IME composition patches, local echo,
+ * and mobile viewport/keyboard fitting — unless the user explicitly selects
+ * "native" in Settings.
+ */
+export function shouldPreferNativeRenderer(): boolean {
+  if (typeof window === "undefined" || !isTauri()) return false;
+  let pref: string | null = null;
+  try {
+    pref = window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY);
+  } catch {
+    pref = null;
+  }
+  if (pref === "xterm") return false;
+  if (pref === "native") return true;
+  return !isTauriMobile();
+}
+
 let cachedNativeProbe: boolean | null = null;
 let cachedNativeProbeError: string | null = null;
 let nativeProbePromise: Promise<boolean> | null = null;
 
 // Eagerly kick off IPC probe + native module preload at boot so the first
 // terminal mount has zero probe latency and zero Suspense chunk stall.
-if (typeof window !== "undefined" && isTauri()) {
-  try {
-    if (window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) !== "xterm") {
-      void loadNativeImpl();
-      void Promise.resolve().then(() => probeNativeTerminalIpc());
-    }
-  } catch {
-    void loadNativeImpl();
-    void Promise.resolve().then(() => probeNativeTerminalIpc());
-  }
+if (shouldPreferNativeRenderer()) {
+  void loadNativeImpl();
+  void Promise.resolve().then(() => probeNativeTerminalIpc());
 }
 
 function probeNativeTerminalIpc(): Promise<boolean> {
@@ -102,21 +115,15 @@ export function useNativeTerminalProbeStatus(): {
 }
 
 export function useNativeRustTerminal(): boolean | null {
-  const optedOut = (() => {
-    try {
-      return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm";
-    } catch {
-      return false;
-    }
-  })();
+  const preferNative = shouldPreferNativeRenderer();
 
   const [available, setAvailable] = useState<boolean | null>(() => {
-    if (!isTauri() || optedOut) return false;
+    if (!preferNative) return false;
     return cachedNativeProbe;
   });
 
   useEffect(() => {
-    if (!isTauri() || optedOut) {
+    if (!preferNative) {
       setAvailable(false);
       return;
     }
@@ -127,7 +134,7 @@ export function useNativeRustTerminal(): boolean | null {
     return () => {
       alive = false;
     };
-  }, [optedOut]);
+  }, [preferNative]);
 
   return available;
 }
