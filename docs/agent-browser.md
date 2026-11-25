@@ -77,6 +77,15 @@ backdrop. The terminals underneath stay mounted and keep their connections.
   Closing the overlay stops streaming but does not hand control back: it is
   released automatically 2 minutes after this device stops watching (see
   Auto-release).
+- **Minimising.** **[_]** in the corner shrinks the overlay to a small live
+  window in the bottom-right corner, so you can watch the agent while you work in
+  terminals. The mini window is read-only: it takes no focus, ignores Esc and
+  forwards no input, and shows the selected tab with its state (agent in control,
+  needs you, you in control). Click it, or the Browser button, to expand; **[x]**
+  closes it. Minimising keeps streaming and keeps control if this device holds
+  it, so Auto-release does not start; **[hand back]** on the mini window releases
+  control without expanding. A new handoff turns its border red, switches it to
+  the tab that asks, and still shows the toast.
 - **Shortcuts.** Workspace shortcuts (including the Ctrl+B prefix) do not fire while
   you type in the address field or control a page.
 - **Handoffs while the overlay is closed.** A new handoff shows a toast, "The agent

@@ -366,6 +366,121 @@ test.describe("agent browser", () => {
     await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
   });
 
+  test("minimising keeps the stream in a mini window that leaves the terminals alone", async ({
+    page,
+  }) => {
+    const sockets = trackViewerSockets(page);
+    const terminalId = await createTerminalViaApi(page, { cwd: "/root" });
+    const opened = await openAgentBrowserViaApi(page, { url: animatedPage("Mini page") });
+    await openOverlay(page);
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(0);
+
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    const mini = page.getByTestId("agent-browser-mini");
+    await expect(mini).toBeVisible();
+    await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+    await expect(page.getByTestId("agent-browser-overlay-backdrop")).toHaveCount(0);
+    await expect(mini).toContainText("Mini page");
+    await expect(page.getByTestId("agent-browser-mini-state")).toHaveText("agent in control");
+    // The toolbar is gone; the same pane keeps its one socket and its frames.
+    await expect(mini.getByTestId("agent-browser-header")).toHaveCount(0);
+    expect(sockets.open()).toBe(1);
+    const before = await frames(page, opened.id);
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(before);
+    expect(sockets.open()).toBe(1);
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-mini-viewing.png" });
+
+    // A terminal takes focus and keeps it; Esc does not close the mini.
+    const pane = page.getByTestId(`workspace-pane-${terminalId}`);
+    await pane.click();
+    await expect
+      .poll(() =>
+        pane.evaluate((node) => node.contains(document.activeElement)),
+      )
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(mini).toBeVisible();
+
+    // The top-bar button expands; minimise again, then clicking the mini expands too.
+    await page.getByTestId("tab-bar-browser").click();
+    await expect(page.getByTestId("agent-browser-overlay")).toBeVisible();
+    await expect(page.getByTestId("agent-browser-mini")).toHaveCount(0);
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    await expect(mini).toBeVisible();
+    await page.getByTestId("agent-browser-mini-expand").click();
+    await expect(page.getByTestId("agent-browser-overlay")).toBeVisible();
+    await expect(page.getByTestId("agent-browser-overlay-backdrop")).toBeVisible();
+    expect(sockets.open()).toBe(1);
+
+    // The close button closes entirely.
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    await page.getByTestId("agent-browser-mini-close").click();
+    await expect(page.getByTestId("agent-browser-mini")).toHaveCount(0);
+    await expect.poll(() => sockets.open()).toBe(0);
+  });
+
+  test("minimising keeps control; the mini shows it and hands back", async ({ page }) => {
+    const opened = await openAgentBrowserViaApi(page, { url: formPage() });
+    await openOverlay(page);
+    const pane = page.getByTestId(`agent-browser-pane-${opened.id}`);
+    await expect.poll(() => frames(page, opened.id)).toBeGreaterThan(0);
+    await pane.getByTestId("agent-browser-take").click();
+    await expect(pane.getByTestId("agent-browser-release")).toBeVisible();
+
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    await expect(page.getByTestId("agent-browser-mini")).toBeVisible();
+    await expect(page.getByTestId("agent-browser-mini-state")).toHaveText("you in control");
+    expect((await getAgentBrowserViaApi(page, opened.id))?.controller).toBe("human");
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-mini-control.png" });
+
+    // Read-only: typing and clicking over the mini reach neither page nor control.
+    await page.keyboard.type("nope");
+    const box = (await page.getByTestId("agent-browser-canvas").boundingBox())!;
+    await page.mouse.move(box.x + 20, box.y + 20);
+    await page.mouse.wheel(0, 100);
+    await page.waitForTimeout(500);
+    expect(await agentBrowserSnapshotViaApi(page, opened.id)).not.toContain("typed:nope");
+
+    await page.getByTestId("agent-browser-mini-release").click();
+    await expect
+      .poll(async () => (await getAgentBrowserViaApi(page, opened.id))?.controller)
+      .toBe("agent");
+    await expect(page.getByTestId("agent-browser-mini-state")).toHaveText("agent in control");
+    await expect(page.getByTestId("agent-browser-mini")).toBeVisible();
+  });
+
+  test("the mini window follows a handoff and goes away with the last tab", async ({ page }) => {
+    const first = await openAgentBrowserViaApi(page, { url: animatedPage("Mini first") });
+    const second = await openAgentBrowserViaApi(page, { url: animatedPage("Mini second") });
+    await openOverlay(page);
+    await page.getByTestId(`agent-browser-tab-${first.id}`).click();
+    await expect.poll(() => frames(page, first.id)).toBeGreaterThan(0);
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    const mini = page.getByTestId("agent-browser-mini");
+    await expect(mini).toContainText("Mini first");
+
+    // A handoff on the other tab: toast, the mini switches to it and says why.
+    await requestAgentBrowserHandoffViaApi(page, second.id, "Please log in");
+    await expect(page.getByTestId("workspace-toast")).toContainText("Please log in");
+    await expect(mini).toContainText("Mini second");
+    await expect(page.getByTestId("agent-browser-mini-state")).toHaveText(
+      "needs you: Please log in",
+    );
+    await expect(page.getByTestId("agent-browser-mini-status")).toHaveAttribute(
+      "data-tone",
+      "needsYou",
+    );
+    await expect.poll(() => frames(page, second.id)).toBeGreaterThan(0);
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-mini-handoff.png" });
+
+    // The agent closes its browsers: nothing left to show, the mini closes.
+    await closeAgentBrowserViaApi(page, second.id);
+    await expect(mini).toContainText("Mini first");
+    await closeAgentBrowserViaApi(page, first.id);
+    await expect(mini).toHaveCount(0);
+    await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+  });
+
   test("the toolbar goes back and forward, reloads, loads a typed address and has shortcuts", async ({
     page,
   }) => {
