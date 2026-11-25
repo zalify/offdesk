@@ -1,5 +1,6 @@
 pub mod bridges;
 pub mod browser;
+pub mod draft;
 pub mod fetch;
 pub mod key;
 pub mod kill;

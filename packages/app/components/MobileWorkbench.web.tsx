@@ -35,6 +35,7 @@ import {
   ChevronRight,
   CircuitBoard,
   Eye,
+  FileText,
   FolderTree,
   FolderOpen,
   Globe,
@@ -114,6 +115,8 @@ interface MobileWorkbenchProps {
   filesButton?: { open: boolean };
   onToggleFiles?: () => void;
   filesSurface?: React.ReactNode;
+  onOpenDrafts?: () => void;
+  draftsCount?: number;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
   /** "Picked up where you left off": shown in the subtitle line for a moment. */
@@ -182,6 +185,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     filesButton,
     onToggleFiles,
     filesSurface,
+    onOpenDrafts,
+    draftsCount = 0,
     canCreateTerminal,
     canSendAttention,
     resumeNotice,
@@ -742,6 +747,41 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           </button>
         )}
 
+        {onOpenDrafts && wideTitleBar && (
+          <span
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            style={{ display: "flex", flexShrink: 0, position: "relative" }}
+          >
+            <TextButton
+              square
+              testId="mobile-title-bar-drafts"
+              label="Drafts"
+              onClick={onOpenDrafts}
+              style={titleBarButton}
+            >
+              <FileText size={17} aria-hidden />
+            </TextButton>
+            {draftsCount > 0 && (
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  right: 6,
+                  width: 7,
+                  height: 7,
+                  borderRadius: 999,
+                  background: colors.accent,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
+          </span>
+        )}
+
         {filesButton && onToggleFiles && wideTitleBar && (
           <span
             onClick={(event) => event.stopPropagation()}
@@ -1296,6 +1336,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 {updateCopy === "copied" ? "copied" : "copy update command"}
               </Button>
             </div>
+          )}
+          {onOpenDrafts && (
+            <MenuRow
+              icon={<FileText size={17} />}
+              label={draftsCount > 0 ? `Drafts (${draftsCount})` : "Drafts"}
+              testid="mobile-menu-drafts"
+              onClick={() => {
+                setHostSheetOpen(false);
+                onOpenDrafts();
+              }}
+            />
           )}
           {filesButton && onToggleFiles && (
             <MenuRow

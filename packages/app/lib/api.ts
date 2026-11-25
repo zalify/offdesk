@@ -65,6 +65,51 @@ async function request<T>(
 
 // Auth
 export const getMe = (signal?: AbortSignal) => request<User>("GET", "/api/auth/me", undefined, signal);
+
+// Agent Scratchpad Drafts
+export interface DraftInfo {
+  id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  project_group: string;
+  source_terminal_id: string | null;
+  pinned: boolean;
+  archived: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export const listDrafts = (options?: { project?: string; includeArchived?: boolean }) => {
+  const qs = new URLSearchParams();
+  if (options?.project) qs.set("project", options.project);
+  if (options?.includeArchived) qs.set("include_archived", "true");
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  return request<DraftInfo[]>("GET", `/api/drafts${suffix}`);
+};
+
+export const upsertDraft = (payload: {
+  title: string;
+  content: string;
+  project_group?: string;
+  source_terminal_id?: string | null;
+  pinned?: boolean;
+  force_new?: boolean;
+}) => request<DraftInfo>("POST", "/api/drafts", payload);
+
+export const updateDraft = (
+  draftId: string,
+  patch: {
+    title?: string;
+    content?: string;
+    project_group?: string;
+    pinned?: boolean;
+    archived?: boolean;
+  },
+) => request<DraftInfo>("PATCH", `/api/drafts/${encodeURIComponent(draftId)}`, patch);
+
+export const deleteDraft = (draftId: string) =>
+  request<void>("DELETE", `/api/drafts/${encodeURIComponent(draftId)}`);
 export const devLogin = () =>
   request<{ token: string }>("GET", "/api/auth/dev");
 

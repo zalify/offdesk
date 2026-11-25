@@ -90,7 +90,68 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum DraftAction {
+    /// Save or update a temporary draft (reads content from stdin if omitted)
+    Write {
+        /// Draft title (re-writing same title in same project updates it in place)
+        title: String,
+        /// Optional inline content (omit to read from stdin)
+        content: Option<String>,
+        /// Project group name (auto-inferred from current directory if omitted)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Pin this draft so it never auto-archives
+        #[arg(long)]
+        pin: bool,
+        /// Always create a new draft even if one with the same title exists
+        #[arg(long)]
+        new: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List active drafts
+    List {
+        /// Filter by project group
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Include archived drafts
+        #[arg(long)]
+        all: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print a draft's content
+    Read {
+        /// Draft id or unique prefix
+        draft: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Archive (or --restore) a draft
+    Archive {
+        /// Draft id or unique prefix
+        draft: String,
+        /// Restore an archived draft back to active
+        #[arg(long)]
+        restore: bool,
+    },
+    /// Permanently delete a draft
+    Rm {
+        /// Draft id or unique prefix
+        draft: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
+    /// Temporary scratchpad drafts (for agents & humans across desktop/mobile)
+    Draft {
+        #[command(subcommand)]
+        action: DraftAction,
+    },
     /// List machines, or forget one
     Machines {
         #[command(subcommand)]
@@ -1329,6 +1390,26 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             };
             commands::layout::run(&hub_client, op, args.machine, &args.group, args.json).await
         }
+        Commands::Draft { action } => match action {
+            DraftAction::Write {
+                title,
+                content,
+                project,
+                pin,
+                new,
+                json,
+            } => commands::draft::write(&hub_client, &title, content, project, pin, new, json).await,
+            DraftAction::List { project, all, json } => {
+                commands::draft::list(&hub_client, project, all, json).await
+            }
+            DraftAction::Read { draft, json } => {
+                commands::draft::read(&hub_client, &draft, json).await
+            }
+            DraftAction::Archive { draft, restore } => {
+                commands::draft::archive(&hub_client, &draft, restore).await
+            }
+            DraftAction::Rm { draft } => commands::draft::rm(&hub_client, &draft).await,
+        },
         Commands::Version => unreachable!("version returns early"),
         Commands::Update => commands::version::update(&hub_client).await,
     };

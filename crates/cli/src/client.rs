@@ -93,6 +93,69 @@ impl HubClient {
         parse_json(response).await
     }
 
+    pub async fn list_drafts(
+        &self,
+        project: Option<&str>,
+        include_archived: bool,
+    ) -> Result<Vec<crate::commands::draft::DraftInfo>, CliError> {
+        let mut req = self.http.get(self.url("/drafts"));
+        if let Some(p) = project {
+            req = req.query(&[("project", p)]);
+        }
+        if include_archived {
+            req = req.query(&[("include_archived", "true")]);
+        }
+        let response = req.send().await.map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn upsert_draft(
+        &self,
+        payload: &crate::commands::draft::UpsertDraftPayload<'_>,
+    ) -> Result<crate::commands::draft::DraftInfo, CliError> {
+        let response = self
+            .http
+            .post(self.url("/drafts"))
+            .json(payload)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn patch_draft(
+        &self,
+        draft_id: &str,
+        payload: &crate::commands::draft::PatchDraftPayload<'_>,
+    ) -> Result<crate::commands::draft::DraftInfo, CliError> {
+        let response = self
+            .http
+            .patch(self.url(&format!("/drafts/{draft_id}")))
+            .json(payload)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn delete_draft(&self, draft_id: &str) -> Result<(), CliError> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/drafts/{draft_id}")))
+            .send()
+            .await
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::Protocol(format!(
+                "hub returned {status}: {}",
+                error_message(&body).unwrap_or(body)
+            )));
+        }
+        Ok(())
+    }
+
     /// Claim the per-(user, machine) control lease (last-writer-wins) so the
     /// hub allows mutating calls from this device. Never released: the lease
     /// stays with this device until someone else claims it.

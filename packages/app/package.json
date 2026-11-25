@@ -25,6 +25,7 @@
     "lucide-react": "^1.8.0",
     "mammoth": "1.13.0",
     "marked": "18.1.0",
+    "mermaid": "^12.3.0",
     "nativewind": "^4.2.3",
     "pdfjs-dist": "5.4.149",
     "qrcode": "^1.5.4",

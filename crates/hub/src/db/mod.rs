@@ -10,6 +10,7 @@ pub mod agent_runs;
 pub mod integrations;
 pub mod agent_sessions;
 pub mod bookmarks;
+pub mod drafts;
 pub mod hub_state;
 pub mod machines;
 pub mod onboarding;
@@ -86,6 +87,22 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             sort_order INTEGER NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS drafts (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            project_group TEXT NOT NULL DEFAULT '~',
+            source_terminal_id TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            archived INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_drafts_user_updated
+            ON drafts(user_id, archived, pinned DESC, updated_at DESC);
 
         CREATE TABLE IF NOT EXISTS workspace_groups (
             id TEXT PRIMARY KEY,
