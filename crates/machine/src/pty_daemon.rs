@@ -767,6 +767,7 @@ mod unix_impl {
             cmd.env("TERM", "xterm-256color");
             cmd.env("COLORTERM", "truecolor");
             cmd.env("OFFDESK_SESSION", &id);
+            cmd.env("OFFDESK_TERMINAL_ID", &id);
             for (k, v) in env {
                 cmd.env(k, v);
             }

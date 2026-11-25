@@ -90,6 +90,97 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum MsgAction {
+    /// Send a direct message to another agent/terminal (optionally attaching a draft or waking it)
+    Send {
+        /// Recipient terminal id/prefix or role label
+        #[arg(long)]
+        to: String,
+        /// Reply to an existing thread id/prefix
+        #[arg(long)]
+        thread: Option<String>,
+        /// Attach a draft id (from `offdesk draft write`)
+        #[arg(long)]
+        draft: Option<String>,
+        /// Sender label override
+        #[arg(long)]
+        from: Option<String>,
+        /// Nudge the recipient terminal to check its inbox
+        #[arg(long)]
+        wake: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+        /// Message body
+        #[arg(required = true)]
+        message: Vec<String>,
+    },
+    /// Post a message to a shared project channel (defaults to current project)
+    Post {
+        /// Channel name (auto-inferred from cwd if omitted)
+        #[arg(short, long)]
+        channel: Option<String>,
+        /// Attach a draft id
+        #[arg(long)]
+        draft: Option<String>,
+        /// Sender label override
+        #[arg(long)]
+        from: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+        /// Message body
+        #[arg(required = true)]
+        message: Vec<String>,
+    },
+    /// Read messages addressed to this terminal/agent
+    Inbox {
+        /// Recipient terminal id/prefix (defaults to $OFFDESK_TERMINAL_ID)
+        #[arg(long)]
+        to: Option<String>,
+        /// Only show unread messages
+        #[arg(long)]
+        unread: bool,
+        /// Mark returned messages as read
+        #[arg(long)]
+        mark_read: bool,
+        /// Max messages to return
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Tail a shared project channel or thread
+    Tail {
+        /// Project channel name (auto-inferred from cwd if omitted)
+        #[arg(short, long)]
+        channel: Option<String>,
+        /// Specific thread id/prefix
+        #[arg(long)]
+        thread: Option<String>,
+        /// Max messages to show
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait for a reply on a thread (exits 0 with reply, 1 on timeout)
+    Wait {
+        /// Thread id or unique prefix
+        #[arg(long)]
+        thread: String,
+        /// Timeout in seconds
+        #[arg(long, default_value_t = 120)]
+        timeout: u64,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum DraftAction {
     /// Save or update a temporary draft (reads content from stdin if omitted)
     Write {
@@ -147,6 +238,11 @@ enum DraftAction {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Agent-to-agent communication bus (direct messages, project channels, threads)
+    Msg {
+        #[command(subcommand)]
+        action: MsgAction,
+    },
     /// Temporary scratchpad drafts (for agents & humans across desktop/mobile)
     Draft {
         #[command(subcommand)]
@@ -1390,6 +1486,55 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             };
             commands::layout::run(&hub_client, op, args.machine, &args.group, args.json).await
         }
+        Commands::Msg { action } => match action {
+            MsgAction::Send {
+                to,
+                thread,
+                draft,
+                from,
+                wake,
+                json,
+                message,
+            } => {
+                commands::msg::send(
+                    &hub_client,
+                    &resolved,
+                    &to,
+                    message,
+                    thread,
+                    draft,
+                    from,
+                    wake,
+                    json,
+                )
+                .await
+            }
+            MsgAction::Post {
+                channel,
+                draft,
+                from,
+                json,
+                message,
+            } => commands::msg::post(&hub_client, channel, message, draft, from, json).await,
+            MsgAction::Inbox {
+                to,
+                unread,
+                mark_read,
+                limit,
+                json,
+            } => commands::msg::inbox(&hub_client, to, unread, mark_read, limit, json).await,
+            MsgAction::Tail {
+                channel,
+                thread,
+                limit,
+                json,
+            } => commands::msg::tail(&hub_client, channel, thread, limit, json).await,
+            MsgAction::Wait {
+                thread,
+                timeout,
+                json,
+            } => commands::msg::wait(&hub_client, &thread, timeout, json).await,
+        },
         Commands::Draft { action } => match action {
             DraftAction::Write {
                 title,

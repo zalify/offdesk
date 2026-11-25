@@ -8,6 +8,7 @@ pub mod layout;
 pub mod ls;
 pub mod onepassword;
 pub mod machines;
+pub mod msg;
 pub mod open;
 pub mod read;
 pub mod read_all;

@@ -156,6 +156,65 @@ impl HubClient {
         Ok(())
     }
 
+    pub async fn post_agent_message(
+        &self,
+        payload: &crate::commands::msg::PostAgentMessagePayload<'_>,
+    ) -> Result<crate::commands::msg::AgentMessageInfo, CliError> {
+        let response = self
+            .http
+            .post(self.url("/messages"))
+            .json(payload)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn list_agent_messages(
+        &self,
+        to: Option<&str>,
+        channel: Option<&str>,
+        thread: Option<&str>,
+        unread: bool,
+        limit: usize,
+    ) -> Result<Vec<crate::commands::msg::AgentMessageInfo>, CliError> {
+        let mut req = self.http.get(self.url("/messages"));
+        if let Some(v) = to {
+            req = req.query(&[("to", v)]);
+        }
+        if let Some(v) = channel {
+            req = req.query(&[("channel", v)]);
+        }
+        if let Some(v) = thread {
+            req = req.query(&[("thread", v)]);
+        }
+        if unread {
+            req = req.query(&[("unread", "true")]);
+        }
+        req = req.query(&[("limit", limit.to_string())]);
+        let response = req.send().await.map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn mark_agent_messages_read(&self, ids: &[String]) -> Result<(), CliError> {
+        let response = self
+            .http
+            .post(self.url("/messages/read"))
+            .json(&serde_json::json!({ "ids": ids }))
+            .send()
+            .await
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::Protocol(format!(
+                "hub returned {status}: {}",
+                error_message(&body).unwrap_or(body)
+            )));
+        }
+        Ok(())
+    }
+
     /// Claim the per-(user, machine) control lease (last-writer-wins) so the
     /// hub allows mutating calls from this device. Never released: the lease
     /// stays with this device until someone else claims it.

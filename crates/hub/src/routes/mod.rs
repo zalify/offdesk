@@ -8,6 +8,7 @@ mod bootstrap;
 mod drafts;
 mod focus;
 mod integrations;
+mod messages;
 mod mode;
 pub(crate) mod onboarding;
 mod registration;
@@ -33,6 +34,7 @@ pub fn router() -> Router<AppState> {
         .merge(registration::router())
         .merge(bookmarks::router())
         .merge(drafts::router())
+        .merge(messages::router())
         .merge(api_tokens::router())
         .merge(mode::router())
         .merge(settings::router())
