@@ -7,7 +7,10 @@ import {
   dialogText,
   findNewHandoffs,
   findNewReclaims,
+  browserOverlayModeForFiles,
   followPopups,
+  miniBrowserStatus,
+  toggleBrowserOverlayMode,
   normalizeBrowserUrl,
   pickBrowserToOpen,
   pickSelectedBrowserId,
@@ -170,6 +173,38 @@ describe("dialogText", () => {
       message: "Changes you made may not be saved.",
       accept: "Leave",
       dismiss: "Stay",
+    });
+  });
+});
+
+describe("browser overlay modes", () => {
+  it("the button opens closed and mini to expanded, and closes expanded", () => {
+    expect(toggleBrowserOverlayMode("closed")).toBe("expanded");
+    expect(toggleBrowserOverlayMode("mini")).toBe("expanded");
+    expect(toggleBrowserOverlayMode("expanded")).toBe("closed");
+  });
+  it("opening files closes only the expanded dialog", () => {
+    expect(browserOverlayModeForFiles("expanded")).toBe("closed");
+    expect(browserOverlayModeForFiles("mini")).toBe("mini");
+    expect(browserOverlayModeForFiles("closed")).toBe("closed");
+  });
+});
+
+describe("miniBrowserStatus", () => {
+  it("says who is in control", () => {
+    expect(miniBrowserStatus(browser("a"), "me")).toEqual({
+      text: "agent in control",
+      tone: "agent",
+    });
+    const mine = browser("a", { controller: "human", controller_device_id: "me" });
+    expect(miniBrowserStatus(mine, "me")).toEqual({ text: "you in control", tone: "you" });
+    expect(miniBrowserStatus(mine, "other").tone).toBe("other");
+  });
+  it("shows the handoff reason when the agent needs the person", () => {
+    const asking = browser("a", { handoff: { reason: "Please log in", requested_at: 1 } });
+    expect(miniBrowserStatus(asking, "me")).toEqual({
+      text: "needs you: Please log in",
+      tone: "needsYou",
     });
   });
 });

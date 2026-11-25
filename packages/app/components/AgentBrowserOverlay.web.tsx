@@ -1,16 +1,34 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import type { AgentBrowserInfo } from "@offdesk/shared";
 import { Globe, Plus, X } from "lucide-react";
+import { controlAgentBrowser } from "@/lib/api";
 import { AgentBrowserPane } from "./AgentBrowserPane.web";
 import {
   browserControlledBy,
   browserLabel,
   browserNeedsPerson,
+  miniBrowserStatus,
 } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useAgentBrowserTabs } from "@/lib/useAgentBrowserTabs";
 import { rem } from "@/lib/rem";
+
+/** Distance of the mini window from the bottom edge: clears the status bar and the background-shelf bar above it. */
+export const MINI_BOTTOM = 72;
+
+const miniTextButton = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  cursor: "pointer",
+  font: "inherit",
+  textAlign: "left",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  minWidth: 0,
+} as const;
 
 const iconButton = {
   background: "none",
@@ -23,11 +41,23 @@ const iconButton = {
   borderRadius: 4,
 } as const;
 
+/** Canvas area of the mini window: 16:10, the ratio of the 1280x800 viewport. */
+export const MINI_CANVAS_WIDTH = 320;
+export const MINI_CANVAS_HEIGHT = 200;
+/** Height of the mini window's status line (plus its border). */
+export const MINI_STATUS_HEIGHT = 28;
+/** Total height of the mini window, borders included. */
+export const MINI_TOTAL_HEIGHT = MINI_CANVAS_HEIGHT + MINI_STATUS_HEIGHT + 2;
+
 // A floating panel over the workspace with one tab per agent browser of the
 // machine, like a browser window. The workspace underneath stays mounted, so
 // its terminals keep their connections. Only the selected tab streams; the
 // body is AgentBrowserPane, which owns take over / hand back and input
 // forwarding.
+//
+// `mini` shrinks the same mounted tree into a read-only picture-in-picture
+// window (bottom-right, no backdrop) so the stream and its WebSocket survive
+// minimising; only the container styling and the chrome around the pane change.
 export function AgentBrowserOverlay({
   machineId,
   machineName,
@@ -36,6 +66,9 @@ export function AgentBrowserOverlay({
   deviceId,
   onSelect,
   onClose,
+  mini = false,
+  onMinimize,
+  onExpand,
 }: {
   machineId: string;
   machineName: string;
@@ -45,6 +78,10 @@ export function AgentBrowserOverlay({
   deviceId: string | null;
   onSelect: (browserId: string) => void;
   onClose: () => void;
+  /** Show as the small read-only window instead of the dialog. */
+  mini?: boolean;
+  onMinimize: () => void;
+  onExpand: () => void;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const {
@@ -70,17 +107,23 @@ export function AgentBrowserOverlay({
     onSelect,
   });
 
-  // Take focus off whatever is below (an xterm would keep eating keystrokes)
-  // and give it back on close.
+  // Expanded: take focus off whatever is below (an xterm would keep eating
+  // keystrokes). Mini and close give it back; the mini never takes focus.
+  const previousFocusRef = useRef<Element | null>(null);
   useEffect(() => {
-    const previous = document.activeElement;
+    const active = document.activeElement;
+    if (!panelRef.current?.contains(active) && active !== document.body) {
+      previousFocusRef.current = active;
+    }
+    if (mini) return;
     panelRef.current?.focus({ preventScroll: true });
     return () => {
+      const previous = previousFocusRef.current;
       if (previous instanceof HTMLElement && previous.isConnected) {
         previous.focus({ preventScroll: true });
       }
     };
-  }, []);
+  }, [mini]);
 
   // Esc closes the overlay, except while this device controls the page: then
   // Esc belongs to the page (the pane already swallows it; this is the guard
@@ -88,13 +131,31 @@ export function AgentBrowserOverlay({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      if (controlling) return;
+      if (mini || controlling) return;
       event.preventDefault();
       onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [controlling, onClose]);
+  }, [mini, controlling, onClose]);
+
+  const [handBackBusy, setHandBackBusy] = useState(false);
+  // The mini keeps control when minimised; hand back without expanding.
+  const handBack = async () => {
+    if (!selected || deviceId === null) return;
+    setHandBackBusy(true);
+    try {
+      await controlAgentBrowser(machineId, selected.id, {
+        action: "release",
+        device_id: deviceId,
+      });
+    } catch {
+      // The control state in the status line stays as it was; expanding shows the error.
+    } finally {
+      setHandBackBusy(false);
+    }
+  };
+  const status = selected ? miniBrowserStatus(selected, deviceId) : null;
 
   const onAddressKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Escape") return;
@@ -110,41 +171,49 @@ export function AgentBrowserOverlay({
 
   return (
     <div
-      data-testid="agent-browser-overlay-backdrop"
+      data-testid={mini ? undefined : "agent-browser-overlay-backdrop"}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
+        if (!mini && event.target === event.currentTarget) onClose();
       }}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 900,
-        background: colorAlpha.overlay,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
+      style={
+        mini
+          ? { position: "fixed", right: 16, bottom: MINI_BOTTOM, zIndex: 56 }
+          : {
+              position: "fixed",
+              inset: 0,
+              zIndex: 900,
+              background: colorAlpha.overlay,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }
+      }
     >
       <div
         ref={panelRef}
         role="dialog"
         aria-label={`Browser on ${machineName}`}
-        data-testid="agent-browser-overlay"
+        data-testid={mini ? "agent-browser-mini" : "agent-browser-overlay"}
+        data-mini={mini ? "true" : "false"}
         tabIndex={-1}
+        // The mini never steals focus from the terminal under it.
+        onMouseDown={mini ? (event) => event.preventDefault() : undefined}
         style={{
-          width: "min(92vw, 1400px)",
-          height: "min(86vh, 900px)",
+          width: mini ? MINI_CANVAS_WIDTH + 2 : "min(92vw, 1400px)",
+          height: mini ? MINI_TOTAL_HEIGHT : "min(86vh, 900px)",
           display: "flex",
           flexDirection: "column",
           background: colors.bg1,
           color: colors.fg0,
-          border: `1px solid ${colors.line}`,
+          border: `1px solid ${mini && status?.tone === "needsYou" ? colors.err : colors.line}`,
           borderRadius: 6,
-          boxShadow: "0 24px 64px rgb(0 0 0 / 0.45)",
+          boxShadow: mini ? "0 8px 24px rgb(0 0 0 / 0.4)" : "0 24px 64px rgb(0 0 0 / 0.45)",
           fontFamily: "var(--font-display)",
           overflow: "hidden",
           outline: "none",
         }}
       >
+        {!mini && (
         <div
           style={{
             display: "flex",
@@ -270,6 +339,17 @@ export function AgentBrowserOverlay({
           <div style={{ flex: 1 }} />
           <button
             type="button"
+            data-testid="agent-browser-overlay-minimize"
+            aria-label="Minimise browser"
+            title="Minimise"
+            onClick={onMinimize}
+            className="odk-text-btn"
+            style={{ alignSelf: "center", flexShrink: 0 }}
+          >
+            [_]
+          </button>
+          <button
+            type="button"
             data-testid="agent-browser-overlay-close"
             aria-label="Close browser"
             title="Close"
@@ -280,8 +360,9 @@ export function AgentBrowserOverlay({
             [esc]
           </button>
         </div>
+        )}
 
-        {showForm && (
+        {!mini && showForm && (
           <form
             onSubmit={(event) => void submit(event)}
             style={{
@@ -319,7 +400,7 @@ export function AgentBrowserOverlay({
             </button>
           </form>
         )}
-        {error && (
+        {!mini && error && (
           <div
             role="alert"
             data-testid="agent-browser-overlay-error"
@@ -335,9 +416,16 @@ export function AgentBrowserOverlay({
           </div>
         )}
 
-        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: "flex",
+            position: "relative",
+          }}
+        >
           {selected ? (
-            <AgentBrowserPane key={selected.id} browser={selected} />
+            <AgentBrowserPane key={selected.id} browser={selected} readOnly={mini} />
           ) : (
             <div
               data-testid="agent-browser-overlay-empty"
@@ -355,7 +443,102 @@ export function AgentBrowserOverlay({
                 : "No browser tabs on this machine"}
             </div>
           )}
+          {mini && (
+            <button
+              type="button"
+              data-testid="agent-browser-mini-expand"
+              aria-label="Expand browser"
+              title="Expand"
+              onClick={onExpand}
+              style={{
+                position: "absolute",
+                inset: 0,
+                padding: 0,
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+              }}
+            />
+          )}
         </div>
+        {mini && (
+          <div
+            data-testid="agent-browser-mini-status"
+            data-tone={status?.tone ?? "none"}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              height: MINI_STATUS_HEIGHT,
+              padding: "0 6px 0 8px",
+              borderTop: `1px solid ${colors.lineSoft}`,
+              fontSize: rem(11.5),
+              flexShrink: 0,
+              minWidth: 0,
+            }}
+          >
+            <button
+              type="button"
+              data-testid="agent-browser-mini-label"
+              onClick={onExpand}
+              title={selected ? browserLabel(selected) : undefined}
+              style={{
+                ...miniTextButton,
+                maxWidth: "40%",
+                flexShrink: 1,
+                color: colors.fg0,
+              }}
+            >
+              {selected ? browserLabel(selected) : "No browser tabs"}
+            </button>
+            {status && (
+              <span
+                data-testid="agent-browser-mini-state"
+                title={status.text}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  fontWeight: status.tone === "you" ? 600 : 400,
+                  color:
+                    status.tone === "you"
+                      ? colors.accent
+                      : status.tone === "needsYou"
+                        ? colors.err
+                        : colors.fg3,
+                }}
+              >
+                {status.text}
+              </span>
+            )}
+            {!status && <span style={{ flex: 1 }} />}
+            {status?.tone === "you" && (
+              <button
+                type="button"
+                data-testid="agent-browser-mini-release"
+                disabled={handBackBusy}
+                onClick={() => void handBack()}
+                className="odk-text-btn"
+                style={{ minHeight: 22, padding: "0 4px", fontSize: rem(11.5), flexShrink: 0 }}
+              >
+                [hand back]
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="agent-browser-mini-close"
+              aria-label="Close browser"
+              title="Close"
+              onClick={onClose}
+              className="odk-text-btn"
+              style={{ minHeight: 22, padding: "0 4px", fontSize: rem(11.5), flexShrink: 0 }}
+            >
+              [x]
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

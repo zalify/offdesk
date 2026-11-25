@@ -86,11 +86,13 @@ import { reclaimNoticeText } from "@/lib/useAgentBrowserReclaimNotice";
 import {
   browserLabel,
   browserNeedsPerson,
+  browserOverlayModeForFiles,
+  type BrowserOverlayMode,
   findNewHandoffs,
   findNewReclaims,
   pickBrowserToOpen,
 } from "@/lib/agentBrowserOverlay";
-import { AgentBrowserOverlay } from "./AgentBrowserOverlay.web";
+import { AgentBrowserOverlay, MINI_BOTTOM, MINI_TOTAL_HEIGHT } from "./AgentBrowserOverlay.web";
 import { FileBrowserOverlay } from "./FileBrowserOverlay.web";
 import { FileBrowserMobileSurface } from "./FileBrowserMobileSurface.web";
 import { OpenDirectoryContext } from "./OpenDirectoryContext";
@@ -1169,7 +1171,17 @@ function TerminalCanvasInner() {
   // from the top bar or title bar. Browsers are machine-global, so the last
   // picked tab is remembered per machine (memory only) and it shows the active
   // machine's.
-  const [browserOverlayOpen, setBrowserOverlayOpen] = useState(false);
+  // Three states: hidden, a small read-only picture-in-picture window (desktop
+  // only), or the full dialog. `browserOverlayOpen` means the full dialog (and
+  // the phone surface); the mini counts as not open for banners and buttons.
+  const [browserOverlayMode, setBrowserOverlayMode] =
+    useState<BrowserOverlayMode>("closed");
+  const browserOverlayOpen = browserOverlayMode === "expanded";
+  const browserMini = browserOverlayMode === "mini" && !isCompact;
+  const setBrowserOverlayOpen = useCallback(
+    (open: boolean) => setBrowserOverlayMode(open ? "expanded" : "closed"),
+    [],
+  );
   const [rememberedBrowserIds, setRememberedBrowserIds] = useState<
     Record<string, string>
   >({});
@@ -1186,8 +1198,8 @@ function TerminalCanvasInner() {
     [overlayMachineId],
   );
   const handleToggleBrowserOverlay = useCallback(() => {
-    if (browserOverlayOpen) {
-      setBrowserOverlayOpen(false);
+    if (browserOverlayMode === "expanded") {
+      setBrowserOverlayMode("closed");
       return;
     }
     if (overlayMachineId) {
@@ -1202,7 +1214,7 @@ function TerminalCanvasInner() {
     setBrowserOverlayOpen(true);
   }, [
     overlayMachineId,
-    browserOverlayOpen,
+    browserOverlayMode,
     handleSelectOverlayBrowser,
     rememberedBrowserIds,
     scopedAgentBrowsers,
@@ -1241,7 +1253,7 @@ function TerminalCanvasInner() {
       // returns to the terminal when the overlay closes.
       const active = document.activeElement;
       if (isCompact && active instanceof HTMLElement) active.blur();
-      setBrowserOverlayOpen(false);
+      setBrowserOverlayMode(browserOverlayModeForFiles);
       setFilesState({
         machineId,
         startPath: resolveStartPath({
@@ -1311,6 +1323,8 @@ function TerminalCanvasInner() {
         `The agent needs you in ${browserLabel(first)}: ${first.handoff?.reason ?? ""}`,
         6000,
       );
+      // The mini follows whoever needs the person now.
+      if (browserMini) handleSelectOverlayBrowser(first.id);
     }
     // The agent took control from this device while its view is closed. The
     // phone surface shares `browserOverlayOpen`, so this covers it too.
@@ -1323,7 +1337,14 @@ function TerminalCanvasInner() {
         6000,
       );
     }
-  }, [overlayMachineId, browserOverlayOpen, scopedAgentBrowsers, deviceId]);
+  }, [
+    overlayMachineId,
+    browserOverlayOpen,
+    browserMini,
+    handleSelectOverlayBrowser,
+    scopedAgentBrowsers,
+    deviceId,
+  ]);
 
   // Create a tab named after the cwd directory when available (falling back
   // to the first free "tab N" slot) and select it. The group also arrives via
@@ -2839,7 +2860,17 @@ function TerminalCanvasInner() {
         {!isCompact && (
           // Tauri updater toast — floating bottom-right mount, replaces the
           // deleted StatusBar's slot. Renders nothing outside Tauri.
-          <div style={{ position: "fixed", right: 16, bottom: isTouch ? 96 : 50, zIndex: 55 }}>
+          <div style={{
+              position: "fixed",
+              right: 16,
+              // Sits above the mini browser window while that is shown.
+              bottom: browserMini
+                ? MINI_BOTTOM + MINI_TOTAL_HEIGHT + 8
+                : isTouch
+                  ? 96
+                  : 50,
+              zIndex: 55,
+            }}>
             <UpdateNotification />
           </div>
         )}
@@ -2850,7 +2881,7 @@ function TerminalCanvasInner() {
 
         {phoneOpen && <MobileAppDialog onClose={() => setPhoneOpen(false)} />}
 
-        {!isCompact && browserOverlayOpen && activeMachine && (
+        {!isCompact && browserOverlayMode !== "closed" && activeMachine && (
           <AgentBrowserOverlay
             machineId={activeMachine.id}
             machineName={activeMachine.name}
@@ -2858,7 +2889,10 @@ function TerminalCanvasInner() {
             selectedId={rememberedBrowserIds[activeMachine.id] ?? null}
             deviceId={deviceId}
             onSelect={handleSelectOverlayBrowser}
-            onClose={() => setBrowserOverlayOpen(false)}
+            onClose={() => setBrowserOverlayMode("closed")}
+            mini={browserMini}
+            onMinimize={() => setBrowserOverlayMode("mini")}
+            onExpand={() => setBrowserOverlayMode("expanded")}
           />
         )}
 

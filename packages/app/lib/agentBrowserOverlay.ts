@@ -32,6 +32,40 @@ export function browserControlledBy(
   );
 }
 
+/** How the desktop overlay shows: hidden, a small picture-in-picture window, or the full dialog. */
+export type BrowserOverlayMode = "closed" | "mini" | "expanded";
+
+/** The Browser button: anything but the full dialog opens it; the full dialog closes. */
+export function toggleBrowserOverlayMode(mode: BrowserOverlayMode): BrowserOverlayMode {
+  return mode === "expanded" ? "closed" : "expanded";
+}
+
+/** Opening the file browser drops the full dialog; a mini window stays. */
+export function browserOverlayModeForFiles(mode: BrowserOverlayMode): BrowserOverlayMode {
+  return mode === "expanded" ? "closed" : mode;
+}
+
+export type MiniBrowserStatus = {
+  text: string;
+  tone: "agent" | "needsYou" | "you" | "other";
+};
+
+/** The mini window's one-line state of a browser, from this device's point of view. */
+export function miniBrowserStatus(
+  browser: AgentBrowserInfo,
+  deviceId: string | null,
+): MiniBrowserStatus {
+  if (browserNeedsPerson(browser)) {
+    const reason = browser.handoff?.reason.trim();
+    return { text: reason ? `needs you: ${reason}` : "needs you", tone: "needsYou" };
+  }
+  if (browserControlledBy(browser, deviceId)) return { text: "you in control", tone: "you" };
+  if (browser.controller === "human") {
+    return { text: "another device in control", tone: "other" };
+  }
+  return { text: "agent in control", tone: "agent" };
+}
+
 /**
  * The tab to show: the remembered one while it still exists, else the first
  * remaining. `awaitingId` is a tab just opened whose browser event has not

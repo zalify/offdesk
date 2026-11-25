@@ -187,9 +187,16 @@ function AddressBar({
 export function AgentBrowserPane({
   browser,
   visible = true,
+  readOnly = false,
 }: {
   browser: AgentBrowserInfo;
   visible?: boolean;
+  /**
+   * The mini window: only the canvas shows (no toolbar, banners or page
+   * dialogs) and no pointer, keyboard, wheel or paste input is forwarded,
+   * even when this device holds control. The stream itself is unchanged.
+   */
+  readOnly?: boolean;
 }) {
   const browserId = browser.id;
 
@@ -201,7 +208,7 @@ export function AgentBrowserPane({
 
   const {
     deviceId,
-    mine,
+    mine: holdsControl,
     otherDevice,
     state,
     hasFrame,
@@ -218,7 +225,9 @@ export function AgentBrowserPane({
     canvasRef,
   });
 
-  const reclaimNotice = useAgentBrowserReclaimNotice(browser, deviceId, mine);
+  // `mine` gates every input path below; read-only never inputs.
+  const mine = holdsControl && !readOnly;
+  const reclaimNotice = useAgentBrowserReclaimNotice(browser, deviceId, holdsControl);
 
   // The toolbar works while this device is in control and the node can
   // navigate for a person (older nodes report no `nav`).
@@ -431,6 +440,7 @@ export function AgentBrowserPane({
         overflow: "hidden",
       }}
     >
+      {!readOnly && (
       <div
         data-testid="agent-browser-header"
         style={{
@@ -572,7 +582,8 @@ export function AgentBrowserPane({
           {STREAM_STATE_LABEL[state]}
         </span>
       </div>
-      {error && (
+      )}
+      {!readOnly && error && (
         <div
           role="alert"
           data-testid="agent-browser-error"
@@ -587,7 +598,7 @@ export function AgentBrowserPane({
           {error}
         </div>
       )}
-      {reclaimNotice && (
+      {!readOnly && reclaimNotice && (
         <div
           role="status"
           data-testid="agent-browser-reclaimed"
@@ -627,7 +638,7 @@ export function AgentBrowserPane({
           </button>
         </div>
       )}
-      {browser.handoff && (
+      {!readOnly && browser.handoff && (
         <div
           role="status"
           data-testid="agent-browser-handoff"
@@ -786,7 +797,7 @@ export function AgentBrowserPane({
           )}
         </div>
         {nav?.loading && <AgentBrowserLoadingBar testId="agent-browser-loading" />}
-        {browser.dialog && (
+        {!readOnly && browser.dialog && (
           <AgentBrowserDialogOverlay
             key={`${browser.dialog.kind}:${browser.dialog.message}`}
             dialog={browser.dialog}
