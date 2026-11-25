@@ -1,4 +1,5 @@
-import { forwardRef, lazy, Suspense } from "react";
+import { forwardRef, lazy, Suspense, useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import type { TerminalViewRef, TerminalViewProps } from "./TerminalView.types";
 import { LazyLoadingFallback } from "./LazyLoadingFallback";
 import { lazyWithReload } from "@/lib/lazyWithReload";
@@ -18,15 +19,58 @@ const LazyNativeImpl = lazy(() =>
 
 export const TERMINAL_RENDERER_STORAGE_KEY = "offdesk:terminalRenderer";
 
-export function useNativeRustTerminal(): boolean {
-  if (!isTauri()) return false;
-  try {
-    const pref = window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY);
-    // Default to xterm until user opts in or flips switch, OR default to native in Tauri:
-    return pref !== "xterm";
-  } catch {
-    return true;
+let cachedNativeProbe: boolean | null = null;
+let nativeProbePromise: Promise<boolean> | null = null;
+
+function probeNativeTerminalIpc(): Promise<boolean> {
+  if (cachedNativeProbe !== null) return Promise.resolve(cachedNativeProbe);
+  if (!isTauri()) {
+    cachedNativeProbe = false;
+    return Promise.resolve(false);
   }
+  if (!nativeProbePromise) {
+    nativeProbePromise = invoke("native_term_close", { id: "__probe__" })
+      .then(() => {
+        cachedNativeProbe = true;
+        return true;
+      })
+      .catch(() => {
+        cachedNativeProbe = false;
+        return false;
+      });
+  }
+  return nativeProbePromise;
+}
+
+export function useNativeRustTerminal(): boolean {
+  const optedOut = (() => {
+    try {
+      return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm";
+    } catch {
+      return false;
+    }
+  })();
+
+  const [available, setAvailable] = useState<boolean>(() => {
+    if (!isTauri() || optedOut) return false;
+    return cachedNativeProbe === true;
+  });
+
+  useEffect(() => {
+    if (!isTauri() || optedOut) {
+      setAvailable(false);
+      return;
+    }
+    let alive = true;
+    void probeNativeTerminalIpc().then((ok) => {
+      if (alive) setAvailable(ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [optedOut]);
+
+  return available;
 }
 
 export type { TerminalViewRef, TerminalViewProps };
