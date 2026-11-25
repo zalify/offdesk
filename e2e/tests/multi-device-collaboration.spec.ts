@@ -122,15 +122,17 @@ test("terminal can be manually fitted by whichever device currently holds contro
   await expectControlState(desktopPage, "viewing");
 
   // Becoming the controller auto-fits the terminal to the mobile dims (the
-  // old manual Fit button is gone — activation fits now).
+  // old manual Fit button is gone — activation fits now). Poll `cols` directly
+  // so live metadata changes (title/last_activity_ms) cannot satisfy the poll
+  // before the resize actually lands.
   let mobileSizedTerminal = desktopSizedTerminal;
   await expect
     .poll(async () => {
       const [terminal] = await listTerminals(mobilePage);
       mobileSizedTerminal = terminal;
-      return terminal;
+      return terminal?.cols ?? Infinity;
     })
-    .not.toEqual(desktopSizedTerminal);
+    .toBeLessThan(desktopSizedTerminal!.cols);
 
   // Desktop re-opens the overlay and sees the narrower terminal centred.
   await expandOnlyTerminal(desktopPage);
@@ -157,9 +159,9 @@ test("terminal can be manually fitted by whichever device currently holds contro
   await expect
     .poll(async () => {
       const [terminal] = await listTerminals(desktopPage);
-      return terminal;
+      return terminal?.cols ?? 0;
     })
-    .not.toEqual(mobileSizedTerminal);
+    .toBeGreaterThan(mobileSizedTerminal!.cols);
   await expect
     .poll(async () => getTerminalViewScale(mobilePage))
     .toBe(1);
