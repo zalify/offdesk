@@ -147,6 +147,7 @@ offdesk browser goto <browser> <url> [--json]
 offdesk browser snapshot <browser>                  # the page as text
 offdesk browser click <browser> <ref>
 offdesk browser click <browser> --text TEXT         # by visible text, for tabs/toggles without a ref
+offdesk browser click <browser> --xy X,Y            # at viewport coordinates (CSS pixels), e.g. --xy 640,360
 offdesk browser fill <browser> <ref> <text>
 offdesk browser upload <browser> [<ref>] --file PATH [--file PATH ...]   # put local files into a file input
 offdesk browser press <browser> <key>               # Enter, Tab, Escape, ArrowDown, a, ...
@@ -377,7 +378,7 @@ Tools (arguments in brackets are optional):
 | `browser_close` | `browser_id` | `close` |
 | `browser_goto` | `browser_id`, `url` | `goto` (returns url and title) |
 | `browser_snapshot` | `browser_id` | `snapshot` |
-| `browser_click` | `browser_id`, `ref` or `text` (exactly one) | `click` / `click --text` |
+| `browser_click` | `browser_id`, `ref`, `text` or `xy` `[x, y]` (exactly one) | `click` / `click --text` / `click --xy` |
 | `browser_fill` | `browser_id`, `ref`, `text` | `fill` |
 | `browser_upload` | `browser_id`, `[ref]`, `paths` | `upload` |
 | `browser_press` | `browser_id`, `key` | `press` |
@@ -596,9 +597,42 @@ which is handy when debugging; any other value, or none, is on.
 Many tabs and toggles are clickable `div`s with no accessibility role, so they
 get no ref. `click <browser> --text "账密登录"` (MCP: `browser_click` with
 `text`) finds the smallest visible element, in any frame, whose trimmed text
-equals the given text (else the smallest one that contains it, an exact match
-always wins) and clicks its centre. It prints what it clicked (tag and text,
-for example `clicked div "账密登录"`). Give exactly one of a ref and `--text`.
+equals the given text (else the smallest one that contains it; an exact match
+always wins) and clicks its centre. Among those, an element that is not covered
+by another one is preferred: the node asks the page what is on top at each
+candidate's centre (`elementFromPoint`, through open shadow roots), and an
+element counts as not covered when that is the element itself, something
+inside it, or something around it (a stretched link). So a dropdown option in
+a drawer wins over a same-named table cell hidden behind the drawer, even when
+the cell is smaller. Covered elements stay as a fallback (an element clipped
+inside a scroll container looks covered until it is scrolled to), and a
+candidate whose centre is off screen counts as not covered. It prints what it
+clicked (tag and text, for example `clicked div "账密登录"`). Give exactly one
+of a ref, `--text` and `--xy`.
+
+## Click at coordinates
+
+When nothing gives the target a ref or unique text, `click <browser> --xy 640,360`
+(MCP: `browser_click` with `xy: [640, 360]`) clicks a point of the top-level
+page's viewport, with the same mouse sequence as any other click (the
+human-like path when it is on). It prints what was under the point
+(`clicked div "Japan"`, best effort; an iframe shows as `iframe`). x and y are
+CSS pixels from the viewport's top-left; a negative, non-numeric or
+out-of-viewport point is refused. The point is not scrolled into view.
+
+Screenshots map 1:1 to those coordinates: the browser's viewport is
+1280x800 CSS pixels at a device scale factor of 1, and `screenshot` writes it
+as is, so a pixel `(x, y)` of a plain screenshot is `--xy x,y`. A `--full`
+screenshot is the whole page at the same scale, measured from the top of the
+page rather than the viewport: subtract the current scroll offset (`scrollX`,
+`scrollY`) from a point in it before using `--xy`, and scroll it into view
+first. An image that was resized afterwards (by a viewer or an image model)
+needs its pixels multiplied back by 1280 / its width.
+
+`snapshot` prints `value="..."` for text fields, comboboxes, sliders and
+spinbuttons (`<input type=number>` and `role=spinbutton`). Chromium reports a
+spinbutton's value as a number, so the node reads `valuetext` first, then
+`value`, then `valuenow`.
 
 ## Uploading files
 

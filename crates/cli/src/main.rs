@@ -716,17 +716,25 @@ enum BrowserAction {
         /// Browser id or unique prefix
         browser: String,
     },
-    /// Click an element from the latest snapshot, or the smallest visible
-    /// element with some text (in any iframe)
+    /// Click an element from the latest snapshot, the smallest visible
+    /// element with some text that no other element covers (in any
+    /// iframe), or a point of the viewport
     Click {
         /// Browser id or unique prefix
         browser: String,
         /// Element ref, e.g. e12
-        #[arg(required_unless_present = "text", conflicts_with = "text")]
+        #[arg(required_unless_present_any = ["text", "xy"], conflicts_with_all = ["text", "xy"])]
         element: Option<String>,
-        /// Click by visible text instead of a ref, e.g. --text "账密登录"
-        #[arg(long)]
+        /// Click by visible text instead of a ref, e.g. --text "账密登录".
+        /// Prefers an element that is not covered by another one
+        #[arg(long, conflicts_with = "xy")]
         text: Option<String>,
+        /// Click at viewport coordinates X,Y in CSS pixels, e.g. --xy 640,360.
+        /// Screenshots are 1:1 with CSS pixels (1280x800 viewport, scale 1),
+        /// so a pixel in a plain screenshot is the point; in a --full
+        /// screenshot subtract the page's scroll offset first
+        #[arg(long, value_name = "X,Y", value_parser = commands::browser::parse_xy)]
+        xy: Option<(f64, f64)>,
     },
     /// List the 1Password logins saved for the page the browser is on (no secrets)
     Logins {
@@ -1298,7 +1306,8 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 browser,
                 element,
                 text,
-            } => commands::browser::click(&hub_client, &browser, element, text).await,
+                xy,
+            } => commands::browser::click(&hub_client, &browser, element, text, xy).await,
             BrowserAction::Logins { browser, json } => {
                 commands::browser::logins(&hub_client, &browser, json).await
             }
@@ -1665,6 +1674,21 @@ mod tests {
         assert!(parse(&["browser", "click", "b1", "--text", "账密登录"]).is_ok());
         assert!(parse(&["browser", "click", "b1"]).is_err());
         assert!(parse(&["browser", "click", "b1", "e3", "--text", "x"]).is_err());
+    }
+
+    #[test]
+    fn browser_click_takes_xy_alone() {
+        let cli = parse(&["browser", "click", "b1", "--xy", "640,360"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Browser { action: BrowserAction::Click { element: None, text: None, xy: Some((x, y)), .. }, .. }
+                if x == 640.0 && y == 360.0
+        ));
+        assert!(parse(&["browser", "click", "b1", "e3", "--xy", "1,2"]).is_err());
+        assert!(parse(&["browser", "click", "b1", "--text", "x", "--xy", "1,2"]).is_err());
+        assert!(parse(&["browser", "click", "b1", "--xy", "640"]).is_err());
+        assert!(parse(&["browser", "click", "b1", "--xy", "a,b"]).is_err());
+        assert!(parse(&["browser", "click", "b1", "--xy", "-5,10"]).is_err());
     }
 
     #[test]

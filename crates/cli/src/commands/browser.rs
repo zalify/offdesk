@@ -340,33 +340,54 @@ pub async fn snapshot_text(client: &HubClient, browser: &str) -> Result<String, 
 pub enum ClickTarget {
     /// A `[ref=eN]` handle from the latest snapshot.
     Ref(String),
-    /// The smallest visible element with this text, in any frame.
+    /// The smallest visible element with this text, in any frame, that no
+    /// other element covers.
     Text(String),
+    /// A point of the viewport, in CSS pixels.
+    Xy(f64, f64),
 }
 
 impl ClickTarget {
-    /// From the CLI / MCP arguments: exactly one of ref and text.
-    pub fn from_args(element: Option<String>, text: Option<String>) -> Result<Self, CliError> {
-        match (element, text) {
-            (Some(element), None) => Ok(Self::Ref(element)),
-            (None, Some(text)) => Ok(Self::Text(text)),
+    /// From the CLI / MCP arguments: exactly one of ref, text and xy.
+    pub fn from_args(
+        element: Option<String>,
+        text: Option<String>,
+        xy: Option<(f64, f64)>,
+    ) -> Result<Self, CliError> {
+        match (element, text, xy) {
+            (Some(element), None, None) => Ok(Self::Ref(element)),
+            (None, Some(text), None) => Ok(Self::Text(text)),
+            (None, None, Some((x, y))) => Ok(Self::Xy(x, y)),
             _ => Err(CliError::Usage(
-                "click needs exactly one of a ref or --text".to_string(),
+                "click needs exactly one of a ref, --text or --xy".to_string(),
             )),
         }
     }
 }
 
-/// Click; for a text target returns what was clicked (tag and text).
+/// Parse `X,Y` (CSS pixels of the viewport, both zero or more).
+pub fn parse_xy(s: &str) -> Result<(f64, f64), String> {
+    let bad = || format!("expected X,Y in CSS pixels, like 640,360 (got {s:?})");
+    let (x, y) = s.split_once(',').ok_or_else(bad)?;
+    let x: f64 = x.trim().parse().map_err(|_| bad())?;
+    let y: f64 = y.trim().parse().map_err(|_| bad())?;
+    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+        return Err(bad());
+    }
+    Ok((x, y))
+}
+
+/// Click; for a text or point target returns what was clicked (tag and text).
 pub async fn click_element(
     client: &HubClient,
     browser: &str,
     target: ClickTarget,
 ) -> Result<Acted<Option<String>>, CliError> {
     let (machine_id, browser_id) = resolve_browser(client, browser).await?;
-    let (r#ref, text) = match target {
-        ClickTarget::Ref(element) => (Some(element), None),
-        ClickTarget::Text(text) => (None, Some(text)),
+    let (r#ref, text, xy) = match target {
+        ClickTarget::Ref(element) => (Some(element), None, None),
+        ClickTarget::Text(text) => (None, Some(text), None),
+        ClickTarget::Xy(x, y) => (None, None, Some((x, y))),
     };
     let value = call(
         client,
@@ -375,6 +396,7 @@ pub async fn click_element(
             browser_id,
             r#ref,
             text,
+            xy,
         },
     )
     .await?;
@@ -804,8 +826,9 @@ pub async fn click(
     browser: &str,
     element: Option<String>,
     text: Option<String>,
+    xy: Option<(f64, f64)>,
 ) -> Result<(), CliError> {
-    let target = ClickTarget::from_args(element, text)?;
+    let target = ClickTarget::from_args(element, text, xy)?;
     let clicked = click_element(client, browser, target).await?;
     if let Some(what) = &clicked.result {
         super::out_line(&format!("clicked {what}"));
@@ -1112,17 +1135,32 @@ mod tests {
     }
 
     #[test]
-    fn click_needs_exactly_one_of_ref_and_text() {
+    fn click_needs_exactly_one_of_ref_text_and_xy() {
         assert!(matches!(
-            ClickTarget::from_args(Some("e1".into()), None),
+            ClickTarget::from_args(Some("e1".into()), None, None),
             Ok(ClickTarget::Ref(r)) if r == "e1"
         ));
         assert!(matches!(
-            ClickTarget::from_args(None, Some("账密登录".into())),
+            ClickTarget::from_args(None, Some("账密登录".into()), None),
             Ok(ClickTarget::Text(t)) if t == "账密登录"
         ));
-        assert!(ClickTarget::from_args(None, None).is_err());
-        assert!(ClickTarget::from_args(Some("e1".into()), Some("x".into())).is_err());
+        assert!(matches!(
+            ClickTarget::from_args(None, None, Some((640.0, 360.5))),
+            Ok(ClickTarget::Xy(x, y)) if x == 640.0 && y == 360.5
+        ));
+        assert!(ClickTarget::from_args(None, None, None).is_err());
+        assert!(ClickTarget::from_args(Some("e1".into()), Some("x".into()), None).is_err());
+        assert!(ClickTarget::from_args(Some("e1".into()), None, Some((1.0, 2.0))).is_err());
+        assert!(ClickTarget::from_args(None, Some("x".into()), Some((1.0, 2.0))).is_err());
+    }
+
+    #[test]
+    fn xy_parses_two_non_negative_numbers() {
+        assert_eq!(parse_xy("640,360"), Ok((640.0, 360.0)));
+        assert_eq!(parse_xy(" 12.5 , 7 "), Ok((12.5, 7.0)));
+        for bad in ["", "640", "640,", ",360", "a,b", "1,2,3", "-1,5", "5,-1", "nan,1", "inf,1"] {
+            assert!(parse_xy(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

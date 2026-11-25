@@ -174,12 +174,13 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "browser_click",
-            "Click an element by its ref from the latest browser_snapshot, or by its visible text (give exactly one of ref and text). Text finds the smallest visible element, in any frame, whose text equals it (else contains it); use it for tabs and toggles that have no ref. Returns what was clicked when clicking by text.",
+            "Click an element by its ref from the latest browser_snapshot, by its visible text, or at viewport coordinates (give exactly one of ref, text and xy). Text finds the smallest visible element, in any frame, whose text equals it (else contains it), preferring one that is not covered by another element (so a dropdown option in a drawer wins over a same-named table cell behind it); use it for tabs and toggles that have no ref. xy is [x, y] in CSS pixels of the viewport; screenshots are 1:1 with CSS pixels (1280x800), so a point read off a plain screenshot can be used as is. Returns what was clicked when clicking by text or xy.",
             schema(
                 json!({
                     "browser_id": id(),
                     "ref": {"type": "string", "description": "Element ref, e.g. e12"},
                     "text": {"type": "string", "description": "Visible text of the element to click, e.g. 账密登录"},
+                    "xy": {"type": "array", "items": {"type": "number", "minimum": 0}, "minItems": 2, "maxItems": 2, "description": "Viewport point [x, y] in CSS pixels, e.g. [640, 360]"},
                 }),
                 &["browser_id"],
             ),
@@ -433,6 +434,7 @@ struct ClickArgs {
     browser_id: String,
     r#ref: Option<String>,
     text: Option<String>,
+    xy: Option<[f64; 2]>,
 }
 
 #[derive(Deserialize)]
@@ -726,11 +728,15 @@ impl Server {
             "browser_click" => {
                 let a = args!(ClickArgs);
                 let id = a.browser_id.clone();
-                let target = match ClickTarget::from_args(a.r#ref.clone(), a.text.clone()) {
+                let target = match ClickTarget::from_args(
+                    a.r#ref.clone(),
+                    a.text.clone(),
+                    a.xy.map(|[x, y]| (x, y)),
+                ) {
                     Ok(target) => target,
                     Err(_) => {
                         return ToolResult::error(
-                            "browser_click needs exactly one of ref or text",
+                            "browser_click needs exactly one of ref, text or xy",
                         )
                     }
                 };
