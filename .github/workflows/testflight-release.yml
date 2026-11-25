@@ -1,11 +1,31 @@
 name: TestFlight Release Distribution
 
+# Offers a release's iOS build to the external Testers group on TestFlight
+# and submits it for Beta App Review. release.yml calls this after it
+# publishes a release whose iOS build it made; dispatch it by hand for any
+# other build (preview by default, apply_distribution to change anything).
+
 on:
   pull_request:
     paths:
       - .github/workflows/testflight-release.yml
       - scripts/testflight-release.rb
       - scripts/testflight-release.test.rb
+  workflow_call:
+    inputs:
+      release_tag:
+        type: string
+        required: true
+      build_number:
+        type: string
+        required: true
+      apply_distribution:
+        type: boolean
+        default: false
+      wait_minutes:
+        description: "How long to wait for Apple to finish processing the upload"
+        type: number
+        default: 0
   workflow_dispatch:
     inputs:
       release_tag:
@@ -17,13 +37,17 @@ on:
         type: string
         required: true
       whats_new:
-        description: "Test instructions for a build without existing English notes"
+        description: "Test instructions for a build without existing English notes (default: from the release's notes doc)"
         type: string
         required: false
       apply_distribution:
         description: "Reuse encryption classification and submit to the existing Testers group"
         type: boolean
         default: false
+      wait_minutes:
+        description: "How long to wait for Apple to finish processing the upload"
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -39,10 +63,13 @@ jobs:
       - uses: actions/checkout@v6
       - run: ruby scripts/testflight-release.test.rb
   distribute:
-    if: github.event_name == 'workflow_dispatch'
+    # A call from release.yml carries the caller's event (push or
+    # workflow_dispatch); only this file's own pull requests stop here.
+    if: github.event_name != 'pull_request'
     needs: validate
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Room for release.yml's wait of up to an hour for Apple.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v6
       - name: Validate uploaded release
@@ -57,11 +84,28 @@ jobs:
           version="${version#v}"
           gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fx "offdesk-${version}.ipa"
           echo "RELEASE_VERSION=$version" >> "$GITHUB_ENV"
+
+      # The tester notes default to the release's notes doc, read from its
+      # tag; the script itself stays this checkout's.
+      - name: Find the release notes
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          git fetch --depth=1 origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          doc=$(git ls-tree --name-only "refs/tags/$RELEASE_TAG" docs/releases/ | grep -E -- "-${RELEASE_VERSION//./\\.}\.md$" | head -n 1 || true)
+          if [ -z "$doc" ]; then
+            echo "No docs/releases/*-$RELEASE_VERSION.md on $RELEASE_TAG; the default test notes apply."
+            exit 0
+          fi
+          git show "refs/tags/$RELEASE_TAG:$doc" > "$RUNNER_TEMP/release-notes.md"
+          echo "NOTES_PATH=$RUNNER_TEMP/release-notes.md" >> "$GITHUB_ENV"
+          echo "NOTES_URL=https://github.com/$GITHUB_REPOSITORY/blob/$RELEASE_TAG/$doc" >> "$GITHUB_ENV"
       - name: Check or apply TestFlight distribution
         env:
           BUILD_NUMBER: ${{ inputs.build_number }}
           WHATS_NEW: ${{ inputs.whats_new }}
           APPLY_DISTRIBUTION: ${{ inputs.apply_distribution }}
+          WAIT_MINUTES: ${{ inputs.wait_minutes }}
           REPORT_PATH: ${{ runner.temp }}/testflight-release.json
           APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}

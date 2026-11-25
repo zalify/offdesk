@@ -291,6 +291,24 @@ jobs:
     permissions:
       contents: write
 
+  # Offer the iOS build this run uploaded to the external Testers group and
+  # submit it for Beta App Review. A run that rebuilt another component
+  # made no iOS build; dispatch testflight-release.yml by hand then.
+  testflight:
+    name: Offer the iOS build to TestFlight testers
+    needs: [prepare, ios, publish]
+    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.ios.result == 'success' && needs.ios.outputs.build_number != '' }}
+    uses: ./.github/workflows/testflight-release.yml
+    with:
+      release_tag: ${{ needs.prepare.outputs.tag }}
+      build_number: ${{ needs.ios.outputs.build_number }}
+      apply_distribution: true
+      # Apple usually processes an upload in 5–30 minutes.
+      wait_minutes: 60
+    secrets: inherit
+    permissions:
+      contents: read
+
   # TRANSITIONAL — delete this job once Android installs are on an app whose
   # updater reads vX.Y.Z releases (docs/releasing.md says when). Android apps
   # up to 0.9.x only look for app-vX.Y.Z releases, so they get a copy of this

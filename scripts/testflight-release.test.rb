@@ -13,6 +13,9 @@ class TestFlightReleaseTest < Minitest::Test
     @baseline_exemption = true
     @current_exemption = nil
     @current_declaration = nil
+    @processing = ['VALID']
+    @after_attach = []
+    @sleeps = []
     @client = lambda do |method, path, payload, query|
       if method != 'get'
         if method == 'patch' && path == '/v1/builds/new'
@@ -34,7 +37,8 @@ class TestFlightReleaseTest < Minitest::Test
           [{id: 'old', attributes: {version: '0.6.4', usesNonExemptEncryption: @baseline_exemption}}]
         else
           # An earlier RC of another marketing version took the same build number.
-          builds = {'0.6.6' => {id: 'new', attributes: {processingState: 'VALID', expired: false, usesNonExemptEncryption: @current_exemption}},
+          processing = @processing.length > 1 ? @processing.shift : @processing.first
+          builds = {'0.6.6' => {id: 'new', attributes: {processingState: processing, expired: false, usesNonExemptEncryption: @current_exemption}},
                     '0.5.0' => {id: 'rc', attributes: {processingState: 'VALID', expired: false}}}
           wanted = query['filter[preReleaseVersion.version]']
           wanted ? builds.values_at(wanted).compact : builds.values
@@ -48,7 +52,11 @@ class TestFlightReleaseTest < Minitest::Test
       when '/v1/builds/new/appEncryptionDeclaration'
         @current_declaration
       when '/v1/builds/new/buildBetaDetail'
-        {id: 'detail', attributes: {externalBuildState: @state}}
+        # Apple can take a moment to move an attached build on.
+        state = @state
+        @state = @after_attach.shift if @attached && @after_attach.any?
+        @state = @pre_attach.shift if !@attached && @pre_attach&.any?
+        {id: 'detail', attributes: {externalBuildState: state}}
       when '/v1/builds/new/betaBuildLocalizations'
         @localizations
       when '/v1/betaGroups/testers/relationships/builds'
@@ -133,5 +141,66 @@ class TestFlightReleaseTest < Minitest::Test
     @state = 'BETA_REJECTED'
     assert_raises(RuntimeError) { run_release }
     assert_empty @writes
+  end
+
+  def waiting_release(**options)
+    TestFlightRelease.new(@client, '0.6.6', '26.1', apply: true, interval: 30, sleeper: ->(t) { @sleeps << t }, **options)
+  end
+
+  def test_release_run_waits_for_apple_to_process_the_upload
+    @processing = %w[PROCESSING PROCESSING VALID]
+    assert_equal 'WAITING_FOR_BETA_REVIEW', waiting_release(wait: 600).run[:externalBuildState]
+    assert_equal [30, 30], @sleeps
+  end
+
+  def test_without_wait_an_unprocessed_build_fails_at_once
+    @processing = ['PROCESSING']
+    error = assert_raises(RuntimeError) { waiting_release.run }
+    assert_match(/not processed/, error.message)
+    assert_empty @sleeps
+    assert_empty @writes
+  end
+
+  def test_waiting_gives_up_after_the_limit
+    @processing = ['PROCESSING']
+    assert_raises(RuntimeError) { waiting_release(wait: 90).run }
+    assert_equal [30, 30, 30], @sleeps
+    assert_empty @writes
+  end
+
+  def test_failed_processing_is_not_waited_for
+    @processing = ['FAILED']
+    assert_raises(RuntimeError) { waiting_release(wait: 600).run }
+    assert_empty @sleeps
+  end
+
+  def test_waits_for_the_state_after_attaching_then_submits
+    @state = 'MISSING_EXPORT_COMPLIANCE'
+    @after_attach = %w[MISSING_EXPORT_COMPLIANCE READY_FOR_BETA_SUBMISSION]
+    assert_equal 'WAITING_FOR_BETA_REVIEW', waiting_release(wait: 600).run[:externalBuildState]
+    assert_equal 1, @writes.count { |_, path, _| path == '/v1/betaAppReviewSubmissions' }
+    refute_empty @sleeps
+  end
+
+  def test_notes_with_a_subject_title
+    notes = "# 0.33.0: Built-in terminal and agent drafts\n\n- the Hub\n\n## Changes\n"
+    text = whats_new_from_notes(notes, 'https://example.test/notes.md')
+    assert_equal "Built-in terminal and agent drafts\n\nRelease notes: https://example.test/notes.md\n\n#{TestFlightRelease::TEST_PROMPT}", text
+  end
+
+  def test_notes_with_a_bare_title_use_the_first_paragraph
+    notes = "# v0.33.3\n\nA node and CLI release\nfor the agent browser.\n\n## What changed\n- x\n"
+    assert_equal "A node and CLI release for the agent browser.\n\n#{TestFlightRelease::TEST_PROMPT}", whats_new_from_notes(notes)
+  end
+
+  def test_notes_fit_testflight
+    assert_operator whats_new_from_notes("# 1.0.0: #{'x' * 5000}").length, :<=, 4000
+  end
+
+  def test_waits_while_the_beta_state_still_reads_processing
+    @state = 'PROCESSING'
+    @pre_attach = %w[READY_FOR_BETA_SUBMISSION]
+    assert_equal 'WAITING_FOR_BETA_REVIEW', waiting_release(wait: 600).run[:externalBuildState]
+    assert_equal [30], @sleeps
   end
 end
