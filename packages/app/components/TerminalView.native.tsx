@@ -447,6 +447,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
     const scrollbarDragRef = useRef(false);
     const wheelAccumPxRef = useRef(0);
+    const touchScrollRef = useRef<{ lastY: number; accumPx: number; clientX: number; clientY: number } | null>(null);
+    const paintOffsetYRef = useRef(0);
     const pendingScrollLinesRef = useRef(0);
     const scrollInFlightRef = useRef(false);
     const scrollRafRef = useRef<number | null>(null);
@@ -573,8 +575,32 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const { cellW, cellH } = measureCellMetrics();
 
         if (!frame) {
+          paintOffsetYRef.current = 0;
           ctx.restore();
           return;
+        }
+
+        // When the container is shorter than the remote PTY grid (e.g. mobile soft
+        // keyboard open while watching a desktop terminal), keep the active bottom
+        // content & cursor anchored inside the visible viewport instead of clipping.
+        let yOffset = 0;
+        const availH = rect.height - padY * 2;
+        if (frame.display_offset === 0 && availH > cellH) {
+          let lastContentRow = frame.cursor ? frame.cursor[1] : 0;
+          for (let r = frame.spans.length - 1; r > lastContentRow; r--) {
+            if (frame.spans[r] && frame.spans[r].length > 0) {
+              lastContentRow = r;
+              break;
+            }
+          }
+          const contentBottom = (lastContentRow + 1) * cellH;
+          if (contentBottom > availH) {
+            yOffset = Math.min(0, availH - contentBottom);
+          }
+        }
+        paintOffsetYRef.current = yOffset;
+        if (yOffset !== 0) {
+          ctx.translate(0, yOffset);
         }
 
         // 1. Background runs
@@ -644,7 +670,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           const ta = inputRef.current;
           if (ta) {
             ta.style.left = `${Math.round(cursorX)}px`;
-            ta.style.top = `${Math.round(cursorY)}px`;
+            ta.style.top = `${Math.round(cursorY + yOffset)}px`;
             ta.style.height = `${Math.round(cellH)}px`;
             ta.style.fontSize = `${fontSize}px`;
             ta.style.lineHeight = `${cellH}px`;
@@ -1010,14 +1036,26 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, [fontSize, fontFamily, measureCellMetrics, fitToContainer, paintFrame]);
 
     // Exact container ResizeObserver (zero setTimeout hacks!).
+    // Always repaint on container resize so canvas backing-store dimensions stay
+    // 1:1 with CSS size even while watching (e.g. mobile keyboard open/close).
     useEffect(() => {
       const el = containerRef.current;
       if (!el) return;
-      const ro = new ResizeObserver(() => fitToContainer({ skipIfUnchanged: true }));
+      const handleResize = () => {
+        fitToContainer({ skipIfUnchanged: true });
+        schedulePaint();
+      };
+      const ro = new ResizeObserver(handleResize);
       ro.observe(el);
+      const vv = window.visualViewport;
+      vv?.addEventListener("resize", handleResize);
       fitToContainer({ skipIfUnchanged: false, immediate: true });
-      return () => ro.disconnect();
-    }, [fitToContainer]);
+      schedulePaint();
+      return () => {
+        ro.disconnect();
+        vv?.removeEventListener("resize", handleResize);
+      };
+    }, [fitToContainer, schedulePaint]);
 
     // Repaint when theme or font changes.
     useEffect(() => {
@@ -1544,7 +1582,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const maxCols = frameRef.current?.cols ?? dimsRef.current.cols;
       const maxRows = frameRef.current?.rows ?? dimsRef.current.rows;
       const col = Math.max(0, Math.floor((clientX - rect.left - 8) / cellW));
-      const row = Math.max(0, Math.floor((clientY - rect.top - 6) / cellH));
+      const row = Math.max(0, Math.floor((clientY - rect.top - 6 - paintOffsetYRef.current) / cellH));
       return {
         col: Math.min(col, maxCols),
         row: Math.min(row, Math.max(0, maxRows - 1)),
@@ -1799,6 +1837,61 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
           }
         }}
+        onTouchStart={(e) => {
+          if (e.touches.length !== 1) {
+            touchScrollRef.current = null;
+            return;
+          }
+          const t = e.touches[0];
+          touchScrollRef.current = {
+            lastY: t.clientY,
+            accumPx: 0,
+            clientX: t.clientX,
+            clientY: t.clientY,
+          };
+        }}
+        onTouchMove={(e) => {
+          const state = touchScrollRef.current;
+          if (!state || e.touches.length !== 1) return;
+          const t = e.touches[0];
+          const dy = t.clientY - state.lastY;
+          state.lastY = t.clientY;
+          state.clientX = t.clientX;
+          state.clientY = t.clientY;
+          if (dy === 0) return;
+
+          const stepPx = Math.max(12, lineHeight);
+          if ((dy > 0 && state.accumPx < 0) || (dy < 0 && state.accumPx > 0)) {
+            state.accumPx = 0;
+          }
+          state.accumPx += dy;
+          // Dragging finger DOWN (dy > 0) scrolls UP into older scrollback (+lines).
+          const lines = Math.trunc(state.accumPx / stepPx);
+          if (lines === 0) return;
+          state.accumPx -= lines * stepPx;
+
+          if (frameRef.current?.wants_mouse) {
+            const btn = lines > 0 ? 64 : 65;
+            const count = Math.min(5, Math.max(1, Math.abs(lines)));
+            const cell = pointerToCell(t.clientX, t.clientY);
+            let seq = "";
+            for (let i = 0; i < count; i++) {
+              seq += `\x1b[<${btn};${cell.col + 1};${cell.row + 1}M`;
+            }
+            sendRawInput(seq);
+          } else {
+            pendingScrollLinesRef.current += lines;
+            if (!scrollInFlightRef.current && scrollRafRef.current === null) {
+              scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+            }
+          }
+        }}
+        onTouchEnd={() => {
+          touchScrollRef.current = null;
+        }}
+        onTouchCancel={() => {
+          touchScrollRef.current = null;
+        }}
         style={{
           position: "relative",
           flex: 1,
@@ -1806,6 +1899,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           height: "100%",
           minHeight: 0,
           overflow: "hidden",
+          touchAction: "none",
           cursor: hoverPointer ? "pointer" : "text",
           userSelect: "none",
           WebkitUserSelect: "none",

@@ -39,6 +39,27 @@ describe("ExtendedKeyBar", () => {
     expect(controlling).toContain('data-testid="extended-keybar-enter"');
   });
 
+  it("shows a take control button in the compose bar while watching", () => {
+    const html = renderToStaticMarkup(
+      createElement(ExtendedKeyBar, {
+        ...baseProps,
+        isController: true,
+        hasControl: false,
+        onTakeControl: () => {},
+      }),
+    );
+    expect(html).toContain('data-testid="extended-keybar-take-control"');
+    const controlling = renderToStaticMarkup(
+      createElement(ExtendedKeyBar, {
+        ...baseProps,
+        isController: true,
+        hasControl: true,
+        onTakeControl: () => {},
+      }),
+    );
+    expect(controlling).not.toContain('data-testid="extended-keybar-take-control"');
+  });
+
   it("hides the attach button when onAttachFile is not provided", () => {
     const html = renderToStaticMarkup(createElement(ExtendedKeyBar, baseProps));
     expect(html).not.toContain('data-testid="extended-keybar-attach"');
