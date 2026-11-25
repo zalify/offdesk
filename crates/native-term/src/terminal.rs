@@ -88,11 +88,16 @@ pub struct RenderFrame {
 }
 
 /// Pure-Rust terminal state backed by `alacritty_terminal` (10,000-line local scrollback).
+/// Maintains a dirty-generation `Arc<RenderFrame>` cache so idle panes in multi-pane
+/// layouts (Split / Master+Stack / Grid 2x2) do zero cell scanning per frame.
 pub struct NativeTerminal {
     term: Term<TerminalEventSink>,
     parser: ansi::Processor,
     pub cols: u16,
     pub rows: u16,
+    generation: u64,
+    cached_generation: u64,
+    cached_frame: Option<Arc<RenderFrame>>,
 }
 
 impl NativeTerminal {
@@ -114,11 +119,22 @@ impl NativeTerminal {
             parser: ansi::Processor::new(),
             cols,
             rows,
+            generation: 1,
+            cached_generation: 0,
+            cached_frame: None,
         }
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn feed(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
         self.parser.advance(&mut self.term, bytes);
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -134,6 +150,7 @@ impl NativeTerminal {
             rows: rows as usize,
         };
         self.term.resize(size);
+        self.generation = self.generation.wrapping_add(1);
     }
 
     pub fn wants_mouse(&self) -> bool {
@@ -146,16 +163,35 @@ impl NativeTerminal {
 
     /// 0ms local GPU scrollback — never waits for a WAN round-trip.
     pub fn scroll_local(&mut self, delta_lines: i32) {
+        let before = self.term.grid().display_offset();
         self.term.scroll_display(Scroll::Delta(delta_lines));
+        if self.term.grid().display_offset() != before {
+            self.generation = self.generation.wrapping_add(1);
+        }
     }
 
     pub fn snap_to_bottom(&mut self) {
         if self.term.grid().display_offset() > 0 {
             self.term.scroll_display(Scroll::Bottom);
+            self.generation = self.generation.wrapping_add(1);
         }
     }
 
-    pub fn snapshot_frame(&self) -> RenderFrame {
+    /// Return a cached `Arc<RenderFrame>` in O(1) when the terminal state has not
+    /// changed since the last frame; rebuild only when `generation` advances.
+    pub fn snapshot_frame(&mut self) -> Arc<RenderFrame> {
+        if self.cached_generation == self.generation {
+            if let Some(frame) = &self.cached_frame {
+                return Arc::clone(frame);
+            }
+        }
+        let frame = Arc::new(self.build_render_frame());
+        self.cached_generation = self.generation;
+        self.cached_frame = Some(Arc::clone(&frame));
+        frame
+    }
+
+    fn build_render_frame(&self) -> RenderFrame {
         let cols = self.cols as usize;
         let rows = self.rows as usize;
         let grid = self.term.grid();
@@ -362,5 +398,38 @@ mod tests {
 
         term.snap_to_bottom();
         assert_eq!(term.snapshot_frame().display_offset, 0);
+    }
+
+    #[test]
+    fn dirty_generation_cache_hits_in_o1_and_invalidates_on_change() {
+        let mut term = NativeTerminal::new(160, 48);
+        for i in 0..200 {
+            term.feed(
+                format!("\x1b[38;2;120;220;180m[agent-{:02}]\x1b[0m 正在执行构建任务与性能测试 #{i}\r\n", i % 4)
+                    .as_bytes(),
+            );
+        }
+        let t0 = std::time::Instant::now();
+        let f1 = term.snapshot_frame();
+        let cold_us = t0.elapsed().as_micros();
+
+        let t1 = std::time::Instant::now();
+        let mut same_ptr = true;
+        for _ in 0..1000 {
+            let f2 = term.snapshot_frame();
+            if !Arc::ptr_eq(&f1, &f2) {
+                same_ptr = false;
+            }
+        }
+        let cached_total_us = t1.elapsed().as_micros();
+        assert!(same_ptr, "unchanged terminal must return cached Arc<RenderFrame>");
+        println!(
+            "[perf] NativeTerminal 160x48 snapshot_frame: cold={cold_us}µs, 1000x cached={cached_total_us}µs"
+        );
+
+        // Mutating via feed invalidates the cache.
+        term.feed(b"delta\r\n");
+        let f3 = term.snapshot_frame();
+        assert!(!Arc::ptr_eq(&f1, &f3));
     }
 }

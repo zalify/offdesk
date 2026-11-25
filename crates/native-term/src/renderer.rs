@@ -5,7 +5,7 @@ use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
-use wgpu::util::DeviceExt;
+use std::collections::HashMap;
 
 pub const SIDEBAR_WIDTH: f32 = 240.0;
 pub const TOPBAR_HEIGHT: f32 = 34.0;
@@ -109,6 +109,89 @@ pub enum PaneHitAction {
     SwapToMaster(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SpanCacheKey {
+    font_size_tenths: u16,
+    line_height_tenths: u16,
+    weight: u16,
+    italic: bool,
+    text: String,
+}
+
+struct CachedBuffer {
+    buffer: Buffer,
+    last_used_frame: u64,
+}
+
+/// Generational cache of shaped `glyphon::Buffer` instances so unchanged terminal rows,
+/// sidebar rows, pane headers, and status labels skip HarfBuzz/cosmic-text shaping.
+struct TextBufferCache {
+    entries: HashMap<SpanCacheKey, CachedBuffer>,
+    frame_seq: u64,
+}
+
+impl TextBufferCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::with_capacity(512),
+            frame_seq: 0,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.frame_seq = self.frame_seq.wrapping_add(1);
+    }
+
+    fn ensure(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        metrics: Metrics,
+        weight: Weight,
+        italic: bool,
+    ) -> SpanCacheKey {
+        let key = SpanCacheKey {
+            font_size_tenths: (metrics.font_size * 10.0).round() as u16,
+            line_height_tenths: (metrics.line_height * 10.0).round() as u16,
+            weight: weight.0,
+            italic,
+            text: text.to_string(),
+        };
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.last_used_frame = self.frame_seq;
+        } else {
+            let buffer = make_buffer(font_system, text, metrics, weight, italic);
+            self.entries.insert(
+                key.clone(),
+                CachedBuffer {
+                    buffer,
+                    last_used_frame: self.frame_seq,
+                },
+            );
+        }
+        key
+    }
+
+    fn get(&self, key: &SpanCacheKey) -> Option<&Buffer> {
+        self.entries.get(key).map(|e| &e.buffer)
+    }
+
+    fn evict_stale(&mut self) {
+        if self.entries.len() > 512 {
+            let cutoff = self.frame_seq.saturating_sub(120);
+            self.entries.retain(|_, v| v.last_used_frame >= cutoff);
+        }
+    }
+}
+
+struct DrawTextCmd {
+    key: SpanCacheKey,
+    left: f32,
+    top: f32,
+    color: Color,
+    bounds: TextBounds,
+}
+
 /// Platform-independent GPU renderer backed by `wgpu` + `glyphon`.
 ///
 /// Works identically across:
@@ -121,6 +204,10 @@ pub struct GpuRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     quad_pipeline: wgpu::RenderPipeline,
+    quad_buffer: wgpu::Buffer,
+    quad_buffer_cap: usize,
+    quad_scratch: Vec<QuadVertex>,
+    text_cache: TextBufferCache,
     font_system: FontSystem,
     swash_cache: SwashCache,
     atlas: TextAtlas,
@@ -234,6 +321,13 @@ impl GpuRenderer {
             TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
 
         let (cell_width, cell_height) = measure_mono_cell(&mut font_system, font_size);
+        let initial_quad_cap = 4096usize;
+        let quad_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quad-vbuf"),
+            size: (initial_quad_cap * std::mem::size_of::<QuadVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Ok(Self {
             surface,
@@ -241,6 +335,10 @@ impl GpuRenderer {
             queue,
             config,
             quad_pipeline,
+            quad_buffer,
+            quad_buffer_cap: initial_quad_cap,
+            quad_scratch: Vec::with_capacity(initial_quad_cap),
+            text_cache: TextBufferCache::new(),
             font_system,
             swash_cache,
             atlas,
@@ -399,8 +497,9 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
-        let mut quads: Vec<QuadVertex> = Vec::with_capacity(512);
-        let mut buffers: Vec<(Buffer, f32, f32, Color, TextBounds)> = Vec::new();
+        self.quad_scratch.clear();
+        self.text_cache.begin_frame();
+        let mut draw_cmds: Vec<DrawTextCmd> = Vec::with_capacity(256);
         let term_metrics = Metrics::new(self.font_size, self.cell_height);
         let term_bounds = TextBounds {
             left: padding_x as i32,
@@ -414,7 +513,7 @@ impl GpuRenderer {
                 let rx = padding_x + run.col as f32 * self.cell_width;
                 let ry = padding_y + run.row as f32 * self.cell_height;
                 push_rect(
-                    &mut quads,
+                    &mut self.quad_scratch,
                     w,
                     h,
                     rx,
@@ -426,7 +525,7 @@ impl GpuRenderer {
             }
             if let Some((cx, cy)) = frame.cursor {
                 push_rect(
-                    &mut quads,
+                    &mut self.quad_scratch,
                     w,
                     h,
                     padding_x + cx as f32 * self.cell_width,
@@ -441,18 +540,25 @@ impl GpuRenderer {
                 for span in spans {
                     let x = padding_x + span.col as f32 * self.cell_width;
                     let weight = if span.bold { Weight::BOLD } else { Weight::NORMAL };
-                    buffers.push((
-                        make_buffer(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
-                        x,
-                        y,
-                        Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
-                        term_bounds,
-                    ));
+                    let key = self.text_cache.ensure(
+                        &mut self.font_system,
+                        &span.text,
+                        term_metrics,
+                        weight,
+                        span.italic,
+                    );
+                    draw_cmds.push(DrawTextCmd {
+                        key,
+                        left: x,
+                        top: y,
+                        color: Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
+                        bounds: term_bounds,
+                    });
                 }
             }
         }
 
-        self.present_pass(quads, buffers)
+        self.present_pass(&draw_cmds)
     }
 
     /// Render the full desktop workspace (sidebar, topbar + layout switcher, multi-pane stage,
@@ -460,7 +566,8 @@ impl GpuRenderer {
     pub fn render(&mut self, ui: UiSnapshot<'_>) -> Result<(), String> {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
-        let mut quads: Vec<QuadVertex> = Vec::with_capacity(3072);
+        let mut quads = std::mem::take(&mut self.quad_scratch);
+        quads.clear();
         let has_shelf = !ui.shelf_pills.is_empty();
         let shelf_y = h - STATUSBAR_HEIGHT - SHELF_HEIGHT;
 
@@ -637,13 +744,14 @@ impl GpuRenderer {
             }
         }
 
-        let mut buffers: Vec<(Buffer, f32, f32, Color, TextBounds)> = Vec::new();
+        self.text_cache.begin_frame();
+        let mut buffers: Vec<(SpanCacheKey, f32, f32, Color, TextBounds)> = Vec::with_capacity(512);
         let ui_metrics = Metrics::new(13.0, 18.0);
         let small_metrics = Metrics::new(11.5, 16.0);
         let term_metrics = Metrics::new(self.font_size, self.cell_height);
 
         buffers.push((
-            make_buffer(&mut self.font_system, "OFFDESK NATIVE", ui_metrics, Weight::BOLD, false),
+            self.text_cache.ensure(&mut self.font_system, "OFFDESK NATIVE", ui_metrics, Weight::BOLD, false),
             14.0,
             10.0,
             Color::rgb(150, 155, 165),
@@ -671,7 +779,7 @@ impl GpuRenderer {
                         Color::rgb(175, 185, 200)
                     };
                     buffers.push((
-                        make_buffer(&mut self.font_system, &text, small_metrics, Weight::BOLD, false),
+                        self.text_cache.ensure(&mut self.font_system, &text, small_metrics, Weight::BOLD, false),
                         10.0,
                         y + 1.0,
                         color,
@@ -684,7 +792,7 @@ impl GpuRenderer {
                     ));
                     // [▶] focus-group glyph
                     buffers.push((
-                        make_buffer(&mut self.font_system, "▶", small_metrics, Weight::NORMAL, false),
+                        self.text_cache.ensure(&mut self.font_system, "▶", small_metrics, Weight::NORMAL, false),
                         SIDEBAR_WIDTH - 24.0,
                         y + 1.0,
                         Color::rgb(170, 185, 210),
@@ -719,7 +827,7 @@ impl GpuRenderer {
                         Color::rgb(170, 175, 185)
                     };
                     buffers.push((
-                        make_buffer(&mut self.font_system, &text, ui_metrics, if *active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
+                        self.text_cache.ensure(&mut self.font_system, &text, ui_metrics, if *active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
                         30.0,
                         y - 1.0,
                         color,
@@ -736,7 +844,7 @@ impl GpuRenderer {
 
         // Topbar title + layout icons
         buffers.push((
-            make_buffer(&mut self.font_system, ui.header_title, ui_metrics, Weight::MEDIUM, false),
+            self.text_cache.ensure(&mut self.font_system, ui.header_title, ui_metrics, Weight::MEDIUM, false),
             SIDEBAR_WIDTH + 14.0,
             8.0,
             Color::rgb(215, 220, 230),
@@ -750,7 +858,7 @@ impl GpuRenderer {
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
             let bx = layout_start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
             buffers.push((
-                make_buffer(&mut self.font_system, layout.icon_label(), ui_metrics, Weight::MEDIUM, false),
+                self.text_cache.ensure(&mut self.font_system, layout.icon_label(), ui_metrics, Weight::MEDIUM, false),
                 bx + 8.0,
                 8.0,
                 if *layout == ui.layout { Color::rgb(255, 255, 255) } else { Color::rgb(155, 160, 170) },
@@ -770,7 +878,7 @@ impl GpuRenderer {
             let title_str = format!("{}{}", dot, pane.title);
             let action_reserve = if pane.is_master { 30.0 } else { 54.0 };
             buffers.push((
-                make_buffer(&mut self.font_system, &title_str, small_metrics, if pane.active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
+                self.text_cache.ensure(&mut self.font_system, &title_str, small_metrics, if pane.active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
                 r.x + 8.0,
                 r.y + 4.0,
                 if pane.active { Color::rgb(235, 240, 248) } else { Color::rgb(155, 160, 170) },
@@ -783,7 +891,7 @@ impl GpuRenderer {
             ));
             // [—] minimize button glyph
             buffers.push((
-                make_buffer(&mut self.font_system, "—", small_metrics, Weight::BOLD, false),
+                self.text_cache.ensure(&mut self.font_system, "—", small_metrics, Weight::BOLD, false),
                 r.x + r.w - 19.0,
                 r.y + 4.0,
                 Color::rgb(185, 190, 200),
@@ -797,7 +905,7 @@ impl GpuRenderer {
             // [↖] swap-to-master button glyph on secondary panes
             if !pane.is_master {
                 buffers.push((
-                    make_buffer(&mut self.font_system, "↖", small_metrics, Weight::BOLD, false),
+                    self.text_cache.ensure(&mut self.font_system, "↖", small_metrics, Weight::BOLD, false),
                     r.x + r.w - 43.0,
                     r.y + 4.0,
                     Color::rgb(185, 190, 200),
@@ -828,7 +936,7 @@ impl GpuRenderer {
                         let x = term_x + span.col as f32 * self.cell_width;
                         let weight = if span.bold { Weight::BOLD } else { Weight::NORMAL };
                         buffers.push((
-                            make_buffer(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
+                            self.text_cache.ensure(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
                             x,
                             y,
                             Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
@@ -847,7 +955,7 @@ impl GpuRenderer {
                     break;
                 }
                 buffers.push((
-                    make_buffer(&mut self.font_system, &pill.label, small_metrics, if pill.waiting { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
+                    self.text_cache.ensure(&mut self.font_system, &pill.label, small_metrics, if pill.waiting { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
                     px + 18.0,
                     shelf_y + 6.0,
                     if pill.waiting { Color::rgb(255, 190, 180) } else { Color::rgb(205, 212, 224) },
@@ -864,14 +972,14 @@ impl GpuRenderer {
 
         // Status bar
         buffers.push((
-            make_buffer(&mut self.font_system, ui.status_left, ui_metrics, Weight::NORMAL, false),
+            self.text_cache.ensure(&mut self.font_system, ui.status_left, ui_metrics, Weight::NORMAL, false),
             12.0,
             h - STATUSBAR_HEIGHT + 4.0,
             Color::rgb(155, 160, 170),
             TextBounds { left: 8, top: (h - STATUSBAR_HEIGHT) as i32, right: (w * 0.65) as i32, bottom: h as i32 },
         ));
         buffers.push((
-            make_buffer(&mut self.font_system, ui.status_right, ui_metrics, Weight::NORMAL, false),
+            self.text_cache.ensure(&mut self.font_system, ui.status_right, ui_metrics, Weight::NORMAL, false),
             (w - 280.0).max(SIDEBAR_WIDTH),
             h - STATUSBAR_HEIGHT + 4.0,
             Color::rgb(155, 160, 170),
@@ -888,7 +996,7 @@ impl GpuRenderer {
                 format!(": {}", pal.query)
             };
             buffers.push((
-                make_buffer(&mut self.font_system, &prompt, Metrics::new(15.0, 22.0), Weight::MEDIUM, false),
+                self.text_cache.ensure(&mut self.font_system, &prompt, Metrics::new(15.0, 22.0), Weight::MEDIUM, false),
                 px + 14.0,
                 py + 10.0,
                 Color::rgb(245, 245, 250),
@@ -902,7 +1010,7 @@ impl GpuRenderer {
                     format!("{}  ·  {}", label, meta)
                 };
                 buffers.push((
-                    make_buffer(&mut self.font_system, &line, ui_metrics, if idx == pal.selected { Weight::BOLD } else { Weight::NORMAL }, false),
+                    self.text_cache.ensure(&mut self.font_system, &line, ui_metrics, if idx == pal.selected { Weight::BOLD } else { Weight::NORMAL }, false),
                     px + 16.0,
                     ry,
                     if idx == pal.selected { Color::rgb(255, 255, 255) } else { Color::rgb(210, 215, 225) },
@@ -911,24 +1019,34 @@ impl GpuRenderer {
             }
         }
 
-        self.present_pass(quads, buffers)
+        self.quad_scratch = quads;
+        let draw_cmds: Vec<DrawTextCmd> = buffers
+            .into_iter()
+            .map(|(key, left, top, color, bounds)| DrawTextCmd {
+                key,
+                left,
+                top,
+                color,
+                bounds,
+            })
+            .collect();
+        self.present_pass(&draw_cmds)
     }
 
-    fn present_pass(
-        &mut self,
-        quads: Vec<QuadVertex>,
-        buffers: Vec<(Buffer, f32, f32, Color, TextBounds)>,
-    ) -> Result<(), String> {
-        let text_areas: Vec<TextArea<'_>> = buffers
+    fn present_pass(&mut self, draw_cmds: &[DrawTextCmd]) -> Result<(), String> {
+        let text_areas: Vec<TextArea<'_>> = draw_cmds
             .iter()
-            .map(|(buf, left, top, color, bounds)| TextArea {
-                buffer: buf,
-                left: *left,
-                top: *top,
-                scale: 1.0,
-                bounds: *bounds,
-                default_color: *color,
-                custom_glyphs: &[],
+            .filter_map(|cmd| {
+                let buf = self.text_cache.get(&cmd.key)?;
+                Some(TextArea {
+                    buffer: buf,
+                    left: cmd.left,
+                    top: cmd.top,
+                    scale: 1.0,
+                    bounds: cmd.bounds,
+                    default_color: cmd.color,
+                    custom_glyphs: &[],
+                })
             })
             .collect();
 
@@ -952,15 +1070,23 @@ impl GpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let vertex_buffer = if !quads.is_empty() {
-            Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("quad-vbuf"),
-                contents: bytemuck::cast_slice(&quads),
-                usage: wgpu::BufferUsages::VERTEX,
-            }))
-        } else {
-            None
-        };
+        let quad_count = self.quad_scratch.len();
+        if quad_count > 0 {
+            if quad_count > self.quad_buffer_cap {
+                self.quad_buffer_cap = quad_count.next_power_of_two();
+                self.quad_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("quad-vbuf"),
+                    size: (self.quad_buffer_cap * std::mem::size_of::<QuadVertex>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.queue.write_buffer(
+                &self.quad_buffer,
+                0,
+                bytemuck::cast_slice(&self.quad_scratch),
+            );
+        }
 
         let mut encoder = self
             .device
@@ -985,17 +1111,20 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            if let Some(vb) = &vertex_buffer {
+            if quad_count > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..quads.len() as u32, 0..1);
+                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                pass.draw(0..quad_count as u32, 0..1);
             }
             let _ = self.text_renderer.render(&self.atlas, &self.viewport, &mut pass);
         }
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-        self.atlas.trim();
+        self.text_cache.evict_stale();
+        if self.text_cache.frame_seq % 60 == 0 {
+            self.atlas.trim();
+        }
         Ok(())
     }
 }
@@ -1058,4 +1187,67 @@ fn measure_mono_cell(font_system: &mut FontSystem, font_size: f32) -> (f32, f32)
         .filter(|w| *w > 4.0)
         .unwrap_or(font_size * 0.6);
     (width, line_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_buffer_cache_reuses_shaped_buffers_and_evicts_stale() {
+        let mut font_system = FontSystem::new();
+        let mut cache = TextBufferCache::new();
+        let metrics = Metrics::new(14.0, 18.0);
+
+        cache.begin_frame();
+        let t0 = std::time::Instant::now();
+        let mut keys = Vec::new();
+        for i in 0..80 {
+            keys.push(cache.ensure(
+                &mut font_system,
+                &format!("agent-line-{i}: 构建完成 ✓ 耗时 12ms"),
+                metrics,
+                Weight::NORMAL,
+                false,
+            ));
+        }
+        let cold_us = t0.elapsed().as_micros();
+        assert_eq!(cache.entries.len(), 80);
+
+        // Next frame with identical spans: 100% cache hit, zero shaping!
+        cache.begin_frame();
+        let t1 = std::time::Instant::now();
+        for i in 0..80 {
+            let k = cache.ensure(
+                &mut font_system,
+                &format!("agent-line-{i}: 构建完成 ✓ 耗时 12ms"),
+                metrics,
+                Weight::NORMAL,
+                false,
+            );
+            assert!(cache.get(&k).is_some());
+        }
+        let warm_us = t1.elapsed().as_micros();
+        assert_eq!(cache.entries.len(), 80);
+        println!(
+            "[perf] TextBufferCache 80 CJK+ASCII spans: cold={cold_us}µs, warm={warm_us}µs ({:.1}x faster)",
+            cold_us as f64 / warm_us.max(1) as f64
+        );
+
+        // Advance > 120 frames with > 512 entries to verify stale eviction bounds memory.
+        for frame in 0..130 {
+            cache.begin_frame();
+            for j in 0..5 {
+                let _ = cache.ensure(
+                    &mut font_system,
+                    &format!("ephemeral-{frame}-{j}"),
+                    metrics,
+                    Weight::NORMAL,
+                    false,
+                );
+            }
+            cache.evict_stale();
+        }
+        assert!(cache.get(&keys[0]).is_none(), "stale entries older than 120 frames should be evicted");
+    }
 }
