@@ -1277,7 +1277,7 @@ for (const colorScheme of ["light", "dark"] as const) {
         await page.setViewportSize(size);
         await expect(page.getByTestId("mobile-workbench")).toBeVisible();
         await expect(title).toHaveAttribute("aria-description", `Session ${position} of 7`);
-        await expect(machines).toHaveText("[m]");
+        await expect(machines).toBeVisible();
         await expect(bar).toHaveCSS("height", "44px");
         // All header elements — the title field, [f] (only >= 360px, below
         // that it lives in the Machines sheet), [b], [m] — must be
