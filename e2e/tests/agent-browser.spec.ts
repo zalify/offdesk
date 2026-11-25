@@ -449,6 +449,38 @@ test.describe("agent browser", () => {
     await expect(page.getByTestId("agent-browser-mini")).toBeVisible();
   });
 
+  test("the mini window follows a handoff and goes away with the last tab", async ({ page }) => {
+    const first = await openAgentBrowserViaApi(page, { url: animatedPage("Mini first") });
+    const second = await openAgentBrowserViaApi(page, { url: animatedPage("Mini second") });
+    await openOverlay(page);
+    await page.getByTestId(`agent-browser-tab-${first.id}`).click();
+    await expect.poll(() => frames(page, first.id)).toBeGreaterThan(0);
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    const mini = page.getByTestId("agent-browser-mini");
+    await expect(mini).toContainText("Mini first");
+
+    // A handoff on the other tab: toast, the mini switches to it and says why.
+    await requestAgentBrowserHandoffViaApi(page, second.id, "Please log in");
+    await expect(page.getByTestId("workspace-toast")).toContainText("Please log in");
+    await expect(mini).toContainText("Mini second");
+    await expect(page.getByTestId("agent-browser-mini-state")).toHaveText(
+      "needs you: Please log in",
+    );
+    await expect(page.getByTestId("agent-browser-mini-status")).toHaveAttribute(
+      "data-tone",
+      "needsYou",
+    );
+    await expect.poll(() => frames(page, second.id)).toBeGreaterThan(0);
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-mini-handoff.png" });
+
+    // The agent closes its browsers: nothing left to show, the mini closes.
+    await closeAgentBrowserViaApi(page, second.id);
+    await expect(mini).toContainText("Mini first");
+    await closeAgentBrowserViaApi(page, first.id);
+    await expect(mini).toHaveCount(0);
+    await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+  });
+
   test("the toolbar goes back and forward, reloads, loads a typed address and has shortcuts", async ({
     page,
   }) => {

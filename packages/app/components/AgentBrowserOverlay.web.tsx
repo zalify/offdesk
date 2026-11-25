@@ -67,6 +67,7 @@ export function AgentBrowserOverlay({
   onSelect,
   onClose,
   mini = false,
+  miniBottom = MINI_BOTTOM,
   onMinimize,
   onExpand,
 }: {
@@ -80,6 +81,8 @@ export function AgentBrowserOverlay({
   onClose: () => void;
   /** Show as the small read-only window instead of the dialog. */
   mini?: boolean;
+  /** Distance of the mini window from the bottom edge. */
+  miniBottom?: number;
   onMinimize: () => void;
   onExpand: () => void;
 }) {
@@ -150,7 +153,7 @@ export function AgentBrowserOverlay({
         device_id: deviceId,
       });
     } catch {
-      // The control state in the status line stays as it was; expanding shows the error.
+      // The status line keeps saying "you in control", so the person can retry.
     } finally {
       setHandBackBusy(false);
     }
@@ -177,7 +180,7 @@ export function AgentBrowserOverlay({
       }}
       style={
         mini
-          ? { position: "fixed", right: 16, bottom: MINI_BOTTOM, zIndex: 56 }
+          ? { position: "fixed", right: 16, bottom: miniBottom, zIndex: 56 }
           : {
               position: "fixed",
               inset: 0,

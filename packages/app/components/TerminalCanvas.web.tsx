@@ -1178,6 +1178,8 @@ function TerminalCanvasInner() {
     useState<BrowserOverlayMode>("closed");
   const browserOverlayOpen = browserOverlayMode === "expanded";
   const browserMini = browserOverlayMode === "mini" && !isCompact;
+  // Touch layouts keep a taller strip at the bottom edge.
+  const browserMiniBottom = isTouch ? MINI_BOTTOM + 46 : MINI_BOTTOM;
   const setBrowserOverlayOpen = useCallback(
     (open: boolean) => setBrowserOverlayMode(open ? "expanded" : "closed"),
     [],
@@ -1219,6 +1221,12 @@ function TerminalCanvasInner() {
     rememberedBrowserIds,
     scopedAgentBrowsers,
   ]);
+  // A mini window with no tab left to show goes away (the agent closed its
+  // browser); the full dialog stays for its empty state and address field.
+  useEffect(() => {
+    if (scopedAgentBrowsers.length > 0) return;
+    setBrowserOverlayMode((mode) => (mode === "mini" ? "closed" : mode));
+  }, [scopedAgentBrowsers]);
   // The overlay is for the machine it was opened on.
   useEffect(() => {
     setBrowserOverlayOpen(false);
@@ -2865,7 +2873,7 @@ function TerminalCanvasInner() {
               right: 16,
               // Sits above the mini browser window while that is shown.
               bottom: browserMini
-                ? MINI_BOTTOM + MINI_TOTAL_HEIGHT + 8
+                ? browserMiniBottom + MINI_TOTAL_HEIGHT + 8
                 : isTouch
                   ? 96
                   : 50,
@@ -2891,6 +2899,7 @@ function TerminalCanvasInner() {
             onSelect={handleSelectOverlayBrowser}
             onClose={() => setBrowserOverlayMode("closed")}
             mini={browserMini}
+            miniBottom={browserMiniBottom}
             onMinimize={() => setBrowserOverlayMode("mini")}
             onExpand={() => setBrowserOverlayMode("expanded")}
           />
