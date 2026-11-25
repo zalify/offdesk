@@ -489,6 +489,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
         let size = window.inner_size();
+        let scale = window.scale_factor() as f32;
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(Arc::clone(&window))
@@ -498,7 +499,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
             surface,
             size.width,
             size.height,
-            self.cfg.font_size,
+            (self.cfg.font_size * scale).clamp(12.0, 36.0),
         )
         .expect("init wgpu renderer");
         self.window = Some(window);

@@ -239,7 +239,7 @@ impl GpuRenderer {
             &wgpu::DeviceDescriptor {
                 label: Some("offdesk-native-gpu"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::Performance,
             },
             None,
@@ -361,7 +361,7 @@ impl GpuRenderer {
     }
 
     pub fn set_font_size(&mut self, font_size: f32) {
-        self.font_size = font_size.clamp(10.0, 28.0);
+        self.font_size = font_size.clamp(10.0, 40.0);
         let (cw, ch) = measure_mono_cell(&mut self.font_system, self.font_size);
         self.cell_width = cw;
         self.cell_height = ch;
