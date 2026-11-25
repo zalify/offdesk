@@ -191,11 +191,11 @@ enum VaultAction {
         #[arg(long)]
         json: bool,
     },
-    /// Save an encrypted secret (reads value from --value or stdin)
+    /// Save an encrypted secret (without --value: hidden prompt on a terminal, stdin when piped)
     Set {
         /// Human-friendly name (e.g. "OpenAI Prod Key")
         name: String,
-        /// Secret value (omit to read from stdin)
+        /// Secret value (omit to be prompted with hidden input on a terminal, or to read stdin when piped)
         #[arg(long)]
         value: Option<String>,
         /// Category: api_key, account, token, ssh, other
