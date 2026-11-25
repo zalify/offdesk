@@ -350,13 +350,19 @@ pub struct ClaudeSessionFile {
     pub tmux: String,
 }
 
-/// Parse one sessions/<pid>.json; None on any missing/invalid field.
+/// Parse one sessions/<pid>.json; None on missing/invalid pid or sessionId.
+/// `tmux` is empty when Claude runs in a native `pty-daemon` terminal rather
+/// than inside tmux.
 pub fn parse_claude_session_file(content: &str) -> Option<ClaudeSessionFile> {
     let value: serde_json::Value = serde_json::from_str(content).ok()?;
     let pid = u32::try_from(value.get("pid")?.as_u64()?).ok()?;
     let session_id = value.get("sessionId")?.as_str()?.to_string();
-    let tmux = value.get("tmux")?.as_str()?.to_string();
-    (!session_id.is_empty() && !tmux.is_empty()).then_some(ClaudeSessionFile {
+    let tmux = value
+        .get("tmux")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    (!session_id.is_empty()).then_some(ClaudeSessionFile {
         pid,
         session_id,
         tmux,
@@ -455,13 +461,28 @@ pub fn match_claude_session(
     processes: &[crate::codex_title::Process],
 ) -> Option<(String, u32)> {
     let prefix = format!("{tmux_name}:");
-    let mut candidates = files.iter().filter(|file| {
-        file.tmux.starts_with(&prefix)
+    let mut tmux_candidates = files.iter().filter(|file| {
+        !file.tmux.is_empty()
+            && file.tmux.starts_with(&prefix)
             && processes.iter().any(|p| p.pid == file.pid)
             && is_descendant(processes, file.pid, pane_pid)
     });
-    let file = candidates.next()?;
-    if candidates.next().is_some() {
+    if let Some(file) = tmux_candidates.next() {
+        if tmux_candidates.next().is_some() {
+            return None;
+        }
+        return Some((file.session_id.clone(), file.pid));
+    }
+
+    // Native `pty-daemon` panes have no tmux wrapper, so `file.tmux` is empty;
+    // match uniquely by process-tree descent from `pane_pid`.
+    let mut native_candidates = files.iter().filter(|file| {
+        file.tmux.is_empty()
+            && processes.iter().any(|p| p.pid == file.pid)
+            && is_descendant(processes, file.pid, pane_pid)
+    });
+    let file = native_candidates.next()?;
+    if native_candidates.next().is_some() {
         return None;
     }
     Some((file.session_id.clone(), file.pid))
@@ -872,7 +893,15 @@ mod tests {
         );
         assert!(parse_claude_session_file(r#"{"pid":1,"tmux":"a:b"}"#).is_none());
         assert!(parse_claude_session_file(r#"{"pid":"1","sessionId":"x","tmux":"a:b"}"#).is_none());
-        assert!(parse_claude_session_file(r#"{"pid":1,"sessionId":"x","tmux":""}"#).is_none());
+        assert_eq!(
+            parse_claude_session_file(r#"{"pid":1,"sessionId":"x","tmux":""}"#),
+            Some(claude_file(1, "x", ""))
+        );
+        assert_eq!(
+            parse_claude_session_file(r#"{"pid":2,"sessionId":"y"}"#),
+            Some(claude_file(2, "y", ""))
+        );
+        assert!(parse_claude_session_file(r#"{"pid":1,"sessionId":"","tmux":""}"#).is_none());
         assert!(parse_claude_session_file("not json").is_none());
     }
 
