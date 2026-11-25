@@ -34,6 +34,7 @@ export function WorkspaceStatusLine({
   onRequestControl,
   onEngageViewOnly,
   onDisengageViewOnly,
+  onOpenCommandPalette,
   browserWaiting = null,
   rttShownElsewhere = false,
 }: {
@@ -53,6 +54,7 @@ export function WorkspaceStatusLine({
   onRequestControl: () => void;
   onEngageViewOnly: () => void;
   onDisengageViewOnly: () => void;
+  onOpenCommandPalette?: () => void;
   /** An agent browser tab that handed off to a person. */
   browserWaiting?: { label: string; reason: string; open: () => void } | null;
   /** The sessions sidebar's machine row shows the round trip. */
@@ -189,6 +191,18 @@ export function WorkspaceStatusLine({
           ↑ update {update.available}
         </button>
       ) : null}
+      {onOpenCommandPalette ? (
+        <button
+          type="button"
+          className="odk-status-btn odk-status-btn--quiet"
+          data-testid="status-command-palette"
+          onClick={onOpenCommandPalette}
+          title="Quick switcher (⌘K)"
+          aria-label="Open quick switcher"
+        >
+          ⌘K
+        </button>
+      ) : null}
       {where.length > 0 && (
         <span className="odk-status-muted" data-testid="tab-bar-rtt">{where.join(" · ")}</span>
       )}
@@ -227,7 +241,7 @@ export function WorkspaceStatusLine({
           >
             lock
           </button>
-          <StatusEnd active testId="status-in-control">in control</StatusEnd>
+          <StatusEnd testId="status-in-control">in control</StatusEnd>
         </>
       )}
     </StatusLine>

@@ -19,10 +19,10 @@ import type {
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
 } from "@offdesk/shared";
-import { Plus } from "lucide-react";
+import { Columns2, Maximize2, Minimize2, Plus, X } from "lucide-react";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { AgentMarker, Button } from "./Primitives.web";
-import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
+import { displayTerminalTitle, shortenCwd } from "@/lib/displayTerminalTitle";
 import { TerminalCard, type TerminalCardRef } from "./TerminalCard.web";
 import { colors, colorAlpha } from "@/lib/colors";
 import {
@@ -1005,15 +1005,22 @@ function TerminalWorkspaceComponent({
     Partial<Record<PrefixActionId, () => void>>
   >({});
 
+  const toggleMaximizePane = useCallback(
+    (terminalId: string) => {
+      setMaximizedTerminalId((value) =>
+        value === terminalId ? null : terminalId,
+      );
+      // Zoom no longer remounts the pane (it's a z-index overlay), so the
+      // size change needs an explicit refit — mount-time fit doesn't happen.
+      requestPaneFit(terminalId, { focusTerminalId: terminalId });
+    },
+    [requestPaneFit],
+  );
+
   const toggleMaximizeActivePane = useCallback(() => {
     if (!activeTerminal) return;
-    setMaximizedTerminalId((value) =>
-      value === activeTerminal.id ? null : activeTerminal.id,
-    );
-    // Zoom no longer remounts the pane (it's a z-index overlay), so the
-    // size change needs an explicit refit — mount-time fit doesn't happen.
-    requestPaneFit(activeTerminal.id, { focusTerminalId: activeTerminal.id });
-  }, [activeTerminal, requestPaneFit]);
+    toggleMaximizePane(activeTerminal.id);
+  }, [activeTerminal, toggleMaximizePane]);
 
   workspacePrefixActionsRef.current = {
     splitRight: () => void handleSplit("right"),
@@ -1503,6 +1510,12 @@ function TerminalWorkspaceComponent({
                       onFocus={activateTerminal}
                       onReady={markGroupPaneReady}
                       onDestroy={handleDestroy}
+                      onToggleMaximize={toggleMaximizePane}
+                      onSplitRight={
+                        isController && !activeGroupFull
+                          ? () => void handleSplit("right")
+                          : undefined
+                      }
                       onPaneContextMenu={handlePaneContextMenu}
                       onRequestControl={onRequestControl}
                       onReleaseControl={onReleaseControl}
@@ -1599,6 +1612,8 @@ function WorkspacePaneTree({
   onFocus,
   onReady,
   onDestroy,
+  onToggleMaximize,
+  onSplitRight,
   onPaneContextMenu,
   onRequestControl,
   onReleaseControl,
@@ -1620,6 +1635,8 @@ function WorkspacePaneTree({
   /** A pane's first screen is up, or its attach failed. */
   onReady?: (terminalId: string) => void;
   onDestroy: (terminal: TerminalInfo) => void;
+  onToggleMaximize?: (terminalId: string) => void;
+  onSplitRight?: () => void;
   onPaneContextMenu: (
     terminalId: string,
     event: PaneMenuEvent,
@@ -1696,6 +1713,10 @@ function WorkspacePaneTree({
               onFocus={onFocus}
               onReady={onReady}
               onDestroy={onDestroy}
+              isMaximized={isMaximized}
+              canMaximize={panes.length > 1 || isMaximized}
+              onToggleMaximize={onToggleMaximize}
+              onSplitRight={onSplitRight}
               onPaneContextMenu={onPaneContextMenu}
               onRequestControl={onRequestControl}
               onReleaseControl={onReleaseControl}
@@ -1724,6 +1745,10 @@ export function WorkspacePaneLeaf({
   onFitRequestHandled,
   onFocus,
   onDestroy,
+  isMaximized = false,
+  canMaximize = false,
+  onToggleMaximize,
+  onSplitRight,
   onPaneContextMenu,
   onRequestControl,
   onReleaseControl,
@@ -1747,6 +1772,10 @@ export function WorkspacePaneLeaf({
   onFitRequestHandled: (nonce: number, terminalId: string) => void;
   onFocus: (id: string) => void;
   onDestroy: (terminal: TerminalInfo) => void;
+  isMaximized?: boolean;
+  canMaximize?: boolean;
+  onToggleMaximize?: (terminalId: string) => void;
+  onSplitRight?: () => void;
   onPaneContextMenu?: (
     terminalId: string,
     event: PaneMenuEvent,
@@ -1865,7 +1894,21 @@ export function WorkspacePaneLeaf({
         overflow: "hidden",
       }}
     >
-      {!isCompact && <PaneHeader terminal={terminal} active={isActive && focusRing} />}
+      {!isCompact && (
+        <PaneHeader
+          terminal={terminal}
+          active={isActive && focusRing}
+          isController={isController}
+          isTouch={isTouch}
+          isMaximized={isMaximized}
+          canMaximize={canMaximize}
+          onToggleMaximize={
+            onToggleMaximize ? () => onToggleMaximize(terminal.id) : undefined
+          }
+          onSplitRight={onSplitRight}
+          onClose={() => onDestroy(terminal)}
+        />
+      )}
       <TerminalCard
         ref={cardRef}
         terminal={terminal}
@@ -1924,11 +1967,34 @@ function CompactSwitchProgress({ paused }: { paused: boolean }) {
 // robot `agent` marker. 30px under the tab bar; with the sessions sidebar
 // pinned instead it is the top row, as tall as the sidebar's (40px, set as
 // --pane-header-height by TerminalCanvas).
-function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: boolean }) {
+function PaneHeader({
+  terminal,
+  active,
+  isController,
+  isTouch,
+  isMaximized,
+  canMaximize,
+  onToggleMaximize,
+  onSplitRight,
+  onClose,
+}: {
+  terminal: TerminalInfo;
+  active: boolean;
+  isController: boolean;
+  isTouch: boolean;
+  isMaximized: boolean;
+  canMaximize: boolean;
+  onToggleMaximize?: () => void;
+  onSplitRight?: () => void;
+  onClose: () => void;
+}) {
   const opener = terminal.opened_by;
+  const title = displayTerminalTitle(terminal);
+  const shortCwd = shortenCwd(terminal.cwd);
   return (
     <div
       data-testid={`pane-header-${terminal.id}`}
+      className="odk-pane-header"
       style={{
         flexShrink: 0,
         display: "flex",
@@ -1949,20 +2015,73 @@ function PaneHeader({ terminal, active }: { terminal: TerminalInfo; active: bool
       <span aria-hidden="true" style={{ color: active ? colors.accent : colors.fg3 }}>
         {active ? "●" : "○"}
       </span>
-      <span style={{ color: colors.fg0, whiteSpace: "nowrap" }}>{displayTerminalTitle(terminal)}</span>
-      <span
-        title={terminal.cwd}
-        style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}
-      >
-        {"\u200e" + terminal.cwd}
-      </span>
-      {opener && (
-        <AgentMarker
-          label={opener.label}
-          testId={`pane-opener-${terminal.id}`}
-          style={{ marginLeft: "auto", flexShrink: 0 }}
-        />
+      <span style={{ color: colors.fg0, whiteSpace: "nowrap" }}>{title}</span>
+      {shortCwd && (
+        <span
+          title={terminal.cwd}
+          style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", direction: "rtl", textAlign: "left" }}
+        >
+          {"\u200e" + shortCwd}
+        </span>
       )}
+      <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+        {opener && (
+          <AgentMarker
+            label={opener.label}
+            testId={`pane-opener-${terminal.id}`}
+          />
+        )}
+        {!isTouch && isController && (
+          <span className="odk-pane-actions">
+            {canMaximize && onToggleMaximize && (
+              <button
+                type="button"
+                className="odk-pane-action-btn"
+                data-testid={`pane-action-maximize-${terminal.id}`}
+                aria-label={isMaximized ? "Restore pane" : "Maximize pane"}
+                title={isMaximized ? "Restore pane" : "Maximize pane"}
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleMaximize();
+                }}
+              >
+                {isMaximized ? <Minimize2 size={12} aria-hidden /> : <Maximize2 size={12} aria-hidden />}
+              </button>
+            )}
+            {onSplitRight && (
+              <button
+                type="button"
+                className="odk-pane-action-btn"
+                data-testid={`pane-action-split-${terminal.id}`}
+                aria-label="Split right"
+                title="Split right"
+                onMouseDown={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSplitRight();
+                }}
+              >
+                <Columns2 size={12} aria-hidden />
+              </button>
+            )}
+            <button
+              type="button"
+              className="odk-pane-action-btn"
+              data-testid={`pane-action-close-${terminal.id}`}
+              aria-label="Close pane"
+              title="Close pane"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
+            >
+              <X size={12} aria-hidden />
+            </button>
+          </span>
+        )}
+      </span>
     </div>
   );
 }

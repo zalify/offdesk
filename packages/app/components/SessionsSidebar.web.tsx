@@ -94,6 +94,7 @@ interface SessionsSidebarProps {
 
 type Drag = { kind: "group"; groupId: string } | { kind: "row"; terminalId: string; groupId: string };
 type DropTarget = { groupId: string; placement: SessionsDropPlacement | "into" };
+type SessionFilter = "all" | "waiting" | "working";
 
 function SessionsSidebarComponent({
   placement,
@@ -138,6 +139,49 @@ function SessionsSidebarComponent({
       else next.add(groupId);
       return next;
     });
+
+  const [filter, setFilter] = useState<SessionFilter>("all");
+
+  // Track terminals that finished working while in the background (working ->
+  // quiet/waiting) so the user can spot completed agents at a glance.
+  const prevStatesRef = useRef<Map<string, SessionState>>(new Map());
+  const [unreadIds, setUnreadIds] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    const prev = prevStatesRef.current;
+    const next = new Map<string, SessionState>();
+    const newlyDone: string[] = [];
+    for (const [id, terminal] of terminalsById) {
+      const state = sessionState(terminal, now);
+      next.set(id, state);
+      const before = prev.get(id);
+      if (
+        before === "working" &&
+        (state === "quiet" || state === "waiting") &&
+        id !== activeTerminalId
+      ) {
+        newlyDone.push(id);
+      }
+    }
+    prevStatesRef.current = next;
+    if (newlyDone.length > 0) {
+      setUnreadIds((current) => {
+        const updated = new Set(current);
+        for (const id of newlyDone) updated.add(id);
+        return updated;
+      });
+    }
+  }, [terminalsById, now, activeTerminalId]);
+
+  useEffect(() => {
+    if (!activeTerminalId) return;
+    setUnreadIds((current) => {
+      if (!current.has(activeTerminalId)) return current;
+      const updated = new Set(current);
+      updated.delete(activeTerminalId);
+      return updated;
+    });
+  }, [activeTerminalId]);
 
   // The drawer is a dialog: Escape closes it. The pinned sidebar stays out of
   // the terminal's way and takes no keys.
@@ -315,12 +359,14 @@ function SessionsSidebarComponent({
     const opener = terminalOpenerDescription(terminal);
     const age = activityAge(terminal.last_activity_ms, now);
     const current = terminal.id === activeTerminalId;
+    const unread = !current && unreadIds.has(terminal.id);
     return (
       <div
         key={terminal.id}
         data-testid={`sessions-row-${terminal.id}`}
         data-state={state}
         data-current={current ? "true" : undefined}
+        data-unread={unread ? "true" : undefined}
         className="odk-sessions-row"
         onContextMenu={(event) => openMenuAt(event, rowMenuItems(terminal, group))}
         onMouseDown={(event) =>
@@ -335,6 +381,13 @@ function SessionsSidebarComponent({
           className="odk-sessions-row-main"
         >
           <span className="odk-sessions-title">
+            {unread && (
+              <span
+                aria-label="Finished while inactive"
+                title="Finished while inactive"
+                className="odk-sessions-unread"
+              />
+            )}
             {opener && (
               <span
                 role="img"
@@ -371,9 +424,49 @@ function SessionsSidebarComponent({
     () => (order === "recent" ? sessionRows(groups, terminalsById, "recent") : []),
     [order, groups, terminalsById],
   );
-  const hasTerminals = groups.some((group) =>
-    collectPaneTerminalIds(group.root).some((id) => terminalsById.has(id)),
+  const allMachineTerminals = useMemo(() => {
+    const result: TerminalInfo[] = [];
+    for (const group of groups) {
+      for (const id of collectPaneTerminalIds(group.root)) {
+        const terminal = terminalsById.get(id);
+        if (terminal) result.push(terminal);
+      }
+    }
+    return result;
+  }, [groups, terminalsById]);
+  const hasTerminals = allMachineTerminals.length > 0;
+  const waitingTotal = useMemo(
+    () => allMachineTerminals.filter((t) => sessionState(t, now) === "waiting").length,
+    [allMachineTerminals, now],
   );
+  const workingTotal = useMemo(
+    () => allMachineTerminals.filter((t) => sessionState(t, now) === "working").length,
+    [allMachineTerminals, now],
+  );
+  const matchesFilter = useCallback(
+    (terminal: TerminalInfo) => {
+      if (filter === "all") return true;
+      return sessionState(terminal, now) === filter;
+    },
+    [filter, now],
+  );
+
+  const filteredRecentRows = useMemo(
+    () => (filter === "all" ? recentRows : recentRows.filter(({ terminal }) => matchesFilter(terminal))),
+    [filter, matchesFilter, recentRows],
+  );
+
+  const visibleGroups = useMemo(() => {
+    return groups
+      .map((group) => {
+        const all = collectPaneTerminalIds(group.root)
+          .map((id) => terminalsById.get(id))
+          .filter((terminal): terminal is TerminalInfo => Boolean(terminal));
+        const terminals = filter === "all" ? all : all.filter(matchesFilter);
+        return { group, terminals, totalCount: all.length };
+      })
+      .filter(({ terminals }) => filter === "all" || terminals.length > 0);
+  }, [filter, groups, matchesFilter, terminalsById]);
 
   const list = !hasTerminals && groups.length === 0 ? (
     <div data-testid="sessions-empty" className="odk-sessions-empty">
@@ -384,17 +477,24 @@ function SessionsSidebarComponent({
         </Button>
       )}
     </div>
+  ) : filter !== "all" &&
+    ((order === "recent" && filteredRecentRows.length === 0) ||
+      (order !== "recent" && visibleGroups.length === 0)) ? (
+    <div data-testid="sessions-filter-empty" className="odk-sessions-empty">
+      <span>No {filter} terminals right now.</span>
+      <Button kind="secondary" size="xs" onClick={() => setFilter("all")}>
+        show all
+      </Button>
+    </div>
   ) : order === "recent" ? (
     <div data-testid="sessions-recent" className="odk-sessions-section">
-      {recentRows.map(({ terminal, group }) => renderRow(terminal, group, true))}
+      {filteredRecentRows.map(({ terminal, group }) => renderRow(terminal, group, true))}
     </div>
   ) : (
-    groups.map((group) => {
-      const terminals = collectPaneTerminalIds(group.root)
-        .map((id) => terminalsById.get(id))
-        .filter((terminal): terminal is TerminalInfo => Boolean(terminal));
+    visibleGroups.map(({ group, terminals }) => {
       const waiting = groupWaitingCount(group, terminalsById);
       const isFolded = folded.has(group.id);
+      const isEmpty = terminals.length === 0;
       return (
         <section
           key={group.id}
@@ -406,7 +506,7 @@ function SessionsSidebarComponent({
           className="odk-sessions-section"
         >
           <div
-            className="odk-sessions-group"
+            className={`odk-sessions-group${isEmpty ? " odk-sessions-group--empty" : ""}`}
             onContextMenu={(event) => openMenuAt(event, groupMenuItems(group))}
             onMouseDown={(event) => armDrag({ kind: "group", groupId: group.id }, event)}
           >
@@ -528,6 +628,39 @@ function SessionsSidebarComponent({
           <span data-testid="sessions-sidebar-rtt" className="odk-sessions-rtt" title="Round trip to the hub">
             {machine.rttMs === null ? "—" : `${Math.round(machine.rttMs)}ms`}
           </span>
+        </div>
+      )}
+
+      {hasTerminals && (
+        <div
+          className="odk-sessions-filters"
+          role="tablist"
+          aria-label="Filter terminals"
+          data-testid="sessions-filter-bar"
+        >
+          {(
+            [
+              { id: "all", label: "All", count: allMachineTerminals.length },
+              { id: "waiting", label: "Waiting", count: waitingTotal },
+              { id: "working", label: "Working", count: workingTotal },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={filter === item.id}
+              data-testid={`sessions-filter-${item.id}`}
+              data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
+              className="odk-sessions-filter-pill"
+              onClick={() => setFilter(item.id)}
+            >
+              <span>{item.label}</span>
+              {item.count > 0 && item.id !== "all" && (
+                <span className="odk-sessions-filter-count">{item.count}</span>
+              )}
+            </button>
+          ))}
         </div>
       )}
 
