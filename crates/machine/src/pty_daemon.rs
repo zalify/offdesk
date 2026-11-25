@@ -118,6 +118,51 @@ mod unix_impl {
     /// forwarded to attached clients prevents duplicate replies and eliminates
     /// startup stalls in shells like `fish` and TUIs over high-RTT links or
     /// fresh split panes.
+    /// Parse SGR mouse sequences (`ESC [ < Cb ; Cx ; Cy M/m`) from client input
+    /// when the foreground app has NOT enabled mouse tracking. Returns
+    /// `(remaining_non_mouse_bytes, wheel_line_delta)` where positive delta
+    /// means scroll UP into history and negative delta means scroll DOWN toward live.
+    fn extract_sgr_mouse_for_scrollback(input: &[u8]) -> (Vec<u8>, isize) {
+        let mut passthrough = Vec::with_capacity(input.len());
+        let mut wheel_delta: isize = 0;
+        let mut i = 0;
+        while i < input.len() {
+            if i + 3 < input.len()
+                && input[i] == 0x1b
+                && input[i + 1] == b'['
+                && input[i + 2] == b'<'
+            {
+                let mut end = i + 3;
+                while end < input.len()
+                    && (input[end].is_ascii_digit() || input[end] == b';')
+                {
+                    end += 1;
+                }
+                if end < input.len() && (input[end] == b'M' || input[end] == b'm') {
+                    let params = std::str::from_utf8(&input[i + 3..end]).unwrap_or("");
+                    if let Some(btn_str) = params.split(';').next() {
+                        if let Ok(btn) = btn_str.parse::<u16>() {
+                            // Strip modifier bits (Shift=4, Meta=8, Ctrl=16); wheel is 64 (up) / 65 (down).
+                            let base = btn & !0x1c;
+                            if input[end] == b'M' {
+                                if base == 64 {
+                                    wheel_delta += 3;
+                                } else if base == 65 {
+                                    wheel_delta -= 3;
+                                }
+                            }
+                        }
+                    }
+                    i = end + 1;
+                    continue;
+                }
+            }
+            passthrough.push(input[i]);
+            i += 1;
+        }
+        (passthrough, wheel_delta)
+    }
+
     fn intercept_terminal_queries(output: &[u8], cursor: (u16, u16)) -> (Vec<u8>, Option<Vec<u8>>) {
         let mut forward = Vec::with_capacity(output.len());
         let mut reply = Vec::new();
@@ -267,11 +312,34 @@ mod unix_impl {
             }
         }
 
+        fn state_formatted_at_scrollback(&self, offset: usize) -> (Vec<u8>, usize) {
+            let Ok(mut parser) = self.parser.lock() else {
+                return (Vec::new(), 0);
+            };
+            parser.set_scrollback(offset);
+            let actual_offset = parser.screen().scrollback();
+            let mut bytes = parser.screen().state_formatted();
+            let app_wants_mouse =
+                parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None;
+            parser.set_scrollback(0);
+            // Keep SGR mouse reporting enabled on the client even when the app
+            // doesn't request it (e.g., agy, fish, bash) so wheel/touch scroll
+            // drives daemon-side scrollback — matching tmux's mouse mode.
+            if !app_wants_mouse {
+                bytes.extend_from_slice(b"\x1b[?1000h\x1b[?1006h");
+            }
+            (bytes, actual_offset)
+        }
+
         fn state_formatted(&self) -> Vec<u8> {
+            self.state_formatted_at_scrollback(0).0
+        }
+
+        fn app_wants_mouse(&self) -> bool {
             self.parser
                 .lock()
-                .map(|p| p.screen().state_formatted())
-                .unwrap_or_default()
+                .map(|p| p.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None)
+                .unwrap_or(false)
         }
 
         fn capture_contents(&self) -> String {
@@ -693,12 +761,56 @@ mod unix_impl {
                 // Spawn inbound command reader thread (Input / Resize / Refresh / Composer).
                 let session_for_in = Arc::clone(&session);
                 let ws_for_in = Arc::clone(&write_stream);
+                let scrollback_offset = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let sb_for_in = Arc::clone(&scrollback_offset);
                 let in_handle = std::thread::spawn(move || {
                     while let Ok((tag, payload)) = read_bin_frame(&mut read_stream) {
                         match tag {
                             CMD_INPUT => {
-                                if session_for_in.write_all(&payload).is_err() {
-                                    break;
+                                if session_for_in.app_wants_mouse() {
+                                    // Foreground app (e.g. Claude Code, vim) owns mouse tracking.
+                                    if sb_for_in.swap(0, Ordering::Relaxed) > 0 {
+                                        let snap = session_for_in.state_formatted();
+                                        if let Ok(mut ws) = ws_for_in.lock() {
+                                            let _ = write_bin_frame(&mut *ws, TAG_OUTPUT, &snap);
+                                        }
+                                    }
+                                    if session_for_in.write_all(&payload).is_err() {
+                                        break;
+                                    }
+                                } else {
+                                    let (passthrough, wheel_delta) =
+                                        extract_sgr_mouse_for_scrollback(&payload);
+                                    if wheel_delta != 0 {
+                                        let cur = sb_for_in.load(Ordering::Relaxed);
+                                        let target = if wheel_delta > 0 {
+                                            cur.saturating_add(wheel_delta as usize)
+                                        } else {
+                                            cur.saturating_sub(wheel_delta.unsigned_abs())
+                                        };
+                                        let (snap, actual) =
+                                            session_for_in.state_formatted_at_scrollback(target);
+                                        sb_for_in.store(actual, Ordering::Relaxed);
+                                        if let Ok(mut ws) = ws_for_in.lock() {
+                                            if write_bin_frame(&mut *ws, TAG_OUTPUT, &snap).is_err()
+                                            {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if !passthrough.is_empty() {
+                                        // Any real keystroke snaps back to live bottom before typing.
+                                        if sb_for_in.swap(0, Ordering::Relaxed) > 0 {
+                                            let snap = session_for_in.state_formatted();
+                                            if let Ok(mut ws) = ws_for_in.lock() {
+                                                let _ =
+                                                    write_bin_frame(&mut *ws, TAG_OUTPUT, &snap);
+                                            }
+                                        }
+                                        if session_for_in.write_all(&passthrough).is_err() {
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                             CMD_RESIZE if payload.len() >= 4 => {
@@ -707,7 +819,10 @@ mod unix_impl {
                                 let _ = session_for_in.resize(c, r);
                             }
                             CMD_REFRESH => {
-                                let snap = session_for_in.state_formatted();
+                                let cur = sb_for_in.load(Ordering::Relaxed);
+                                let (snap, actual) =
+                                    session_for_in.state_formatted_at_scrollback(cur);
+                                sb_for_in.store(actual, Ordering::Relaxed);
                                 if let Ok(mut ws) = ws_for_in.lock() {
                                     if write_bin_frame(&mut *ws, TAG_OUTPUT, &snap).is_err() {
                                         break;
@@ -715,6 +830,12 @@ mod unix_impl {
                                 }
                             }
                             CMD_COMPOSER => {
+                                if sb_for_in.swap(0, Ordering::Relaxed) > 0 {
+                                    let snap = session_for_in.state_formatted();
+                                    if let Ok(mut ws) = ws_for_in.lock() {
+                                        let _ = write_bin_frame(&mut *ws, TAG_OUTPUT, &snap);
+                                    }
+                                }
                                 let pasted = session_for_in.write_all(&payload).is_ok();
                                 let ok = if pasted {
                                     std::thread::sleep(Duration::from_millis(100));
@@ -740,7 +861,12 @@ mod unix_impl {
                 });
 
                 // Outbound loop: live PTY output -> binary frames.
+                // Pause live output streaming while this client is scrolled up
+                // into scrollback (just like tmux copy-mode).
                 while let Ok(chunk) = rx.recv() {
+                    if scrollback_offset.load(Ordering::Relaxed) > 0 {
+                        continue;
+                    }
                     let send_ok = write_stream
                         .lock()
                         .map(|mut ws| write_bin_frame(&mut *ws, TAG_OUTPUT, &chunk).is_ok())
@@ -1371,6 +1497,19 @@ mod unix_impl {
             let (fwd2, rep2) = intercept_terminal_queries(plain, (0, 0));
             assert_eq!(fwd2, plain);
             assert!(rep2.is_none());
+        }
+
+        #[test]
+        fn sgr_mouse_wheel_drives_daemon_scrollback_without_leaking_to_pty() {
+            let (pass, delta) =
+                extract_sgr_mouse_for_scrollback(b"\x1b[<64;10;5M\x1b[<64;10;5M");
+            assert!(pass.is_empty());
+            assert_eq!(delta, 6);
+
+            let (pass2, delta2) =
+                extract_sgr_mouse_for_scrollback(b"\x1b[<65;10;5Mabc\x1b[<0;1;1m");
+            assert_eq!(pass2, b"abc");
+            assert_eq!(delta2, -3);
         }
     }
 }
