@@ -503,6 +503,20 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (frame.display_offset > maxObservedOffsetRef.current) {
           maxObservedOffsetRef.current = frame.display_offset;
         }
+        if (frame.wants_mouse && frame.display_offset > 0) {
+          // Remote app / pty-daemon / tmux owns scrollback via SGR mouse wheel;
+          // keep local alacritty_terminal pinned to bottom so local offset never
+          // drifts out of sync with the remote viewport.
+          void enqueueTermOp(() =>
+            invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+          )
+            .then((snapped) => {
+              frameRef.current = snapped;
+              paintFrame(snapped);
+            })
+            .catch(() => {});
+          return;
+        }
         const effectiveHistory =
           typeof frame.history_size === "number"
             ? frame.history_size
@@ -1275,8 +1289,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, [scrollToTrackClientY]);
 
     const visibleRows = frameRef.current?.rows ?? dimsRef.current.rows;
+    const remoteOwnsScroll = Boolean(frameRef.current?.wants_mouse);
     const totalLines = Math.max(visibleRows, visibleRows + historySize);
-    const hasScrollback = historySize > 0 || scrollbackOffset > 0;
+    const hasScrollback = !remoteOwnsScroll && (historySize > 0 || scrollbackOffset > 0);
     const thumbHeightPct = hasScrollback
       ? Math.max(8, Math.min(100, (visibleRows / totalLines) * 100))
       : 100;
@@ -1733,7 +1748,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             />
           </div>
         )}
-        {scrollbackOffset > 0 && (
+        {!remoteOwnsScroll && scrollbackOffset > 0 && (
           <button
             type="button"
             onClick={(e) => {
