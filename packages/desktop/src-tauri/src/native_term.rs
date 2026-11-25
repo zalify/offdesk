@@ -164,6 +164,10 @@ impl TermInstance {
                     fg = next_fg;
                     bg = next_bg;
                 }
+                if cell.flags.contains(CellFlags::DIM) {
+                    let base = fg.as_deref().unwrap_or("#e4e4e7");
+                    fg = Some(dim_hex(base));
+                }
 
                 let cell_w = if cell.flags.contains(CellFlags::WIDE_CHAR) { 2 } else { 1 };
                 if let Some(bg_hex) = bg {
@@ -336,18 +340,43 @@ fn color_to_hex(color: AnsiColor) -> String {
             NamedColor::Magenta => ANSI_16[5].into(),
             NamedColor::Cyan => ANSI_16[6].into(),
             NamedColor::White => ANSI_16[7].into(),
-            NamedColor::BrightBlack | NamedColor::DimBlack => ANSI_16[8].into(),
-            NamedColor::BrightRed | NamedColor::DimRed => ANSI_16[9].into(),
-            NamedColor::BrightGreen | NamedColor::DimGreen => ANSI_16[10].into(),
-            NamedColor::BrightYellow | NamedColor::DimYellow => ANSI_16[11].into(),
-            NamedColor::BrightBlue | NamedColor::DimBlue => ANSI_16[12].into(),
-            NamedColor::BrightMagenta | NamedColor::DimMagenta => ANSI_16[13].into(),
-            NamedColor::BrightCyan | NamedColor::DimCyan => ANSI_16[14].into(),
-            NamedColor::BrightWhite | NamedColor::DimWhite => ANSI_16[15].into(),
+            NamedColor::BrightBlack => ANSI_16[8].into(),
+            NamedColor::BrightRed => ANSI_16[9].into(),
+            NamedColor::BrightGreen => ANSI_16[10].into(),
+            NamedColor::BrightYellow => ANSI_16[11].into(),
+            NamedColor::BrightBlue => ANSI_16[12].into(),
+            NamedColor::BrightMagenta => ANSI_16[13].into(),
+            NamedColor::BrightCyan => ANSI_16[14].into(),
+            NamedColor::BrightWhite => ANSI_16[15].into(),
+            NamedColor::DimBlack => dim_hex(ANSI_16[0]),
+            NamedColor::DimRed => dim_hex(ANSI_16[1]),
+            NamedColor::DimGreen => dim_hex(ANSI_16[2]),
+            NamedColor::DimYellow => dim_hex(ANSI_16[3]),
+            NamedColor::DimBlue => dim_hex(ANSI_16[4]),
+            NamedColor::DimMagenta => dim_hex(ANSI_16[5]),
+            NamedColor::DimCyan => dim_hex(ANSI_16[6]),
+            NamedColor::DimWhite => dim_hex(ANSI_16[7]),
+            NamedColor::DimForeground => dim_hex("#e4e4e7"),
             NamedColor::Background => "#131415".into(),
             _ => "#e4e4e7".into(),
         },
     }
+}
+
+fn dim_hex(hex: &str) -> String {
+    let raw = hex.strip_prefix('#').unwrap_or(hex);
+    if raw.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&raw[0..2], 16),
+            u8::from_str_radix(&raw[2..4], 16),
+            u8::from_str_radix(&raw[4..6], 16),
+        ) {
+            // Blend 55% toward dark terminal background (#131415) for ANSI SGR 2 (dim/faint).
+            let mix = |c: u8, bg: u8| -> u8 { ((c as u16 * 45 + bg as u16 * 55) / 100) as u8 };
+            return format!("#{:02x}{:02x}{:02x}", mix(r, 0x13), mix(g, 0x14), mix(b, 0x15));
+        }
+    }
+    "#737477".into()
 }
 
 #[derive(Default)]
