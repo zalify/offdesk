@@ -160,6 +160,19 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const scrollRafRef = useRef<number | null>(null);
     const paintRafRef = useRef<number | null>(null);
     const lastScrollBadgeUpdateRef = useRef(0);
+    const openPromiseRef = useRef<Promise<void>>(Promise.resolve());
+    const callbacksRef = useRef({
+      onReady,
+      onTitleChange,
+      onReconnectingChange,
+      canResizeTerminal,
+    });
+    callbacksRef.current = {
+      onReady,
+      onTitleChange,
+      onReconnectingChange,
+      canResizeTerminal,
+    };
 
     // Selection state (grid cell coordinates)
     const selectionRef = useRef<{
@@ -318,16 +331,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           lastScrollBadgeUpdateRef.current = now;
           setScrollbackOffset(frame.display_offset);
         }
-        if (frame.title && onTitleChange) {
-          onTitleChange(frame.title);
+        if (frame.title && callbacksRef.current.onTitleChange) {
+          callbacksRef.current.onTitleChange(frame.title);
         }
         schedulePaint();
         if (!readyFiredRef.current) {
           readyFiredRef.current = true;
-          onReady?.();
+          callbacksRef.current.onReady?.();
         }
       },
-      [schedulePaint, onTitleChange, onReady],
+      [schedulePaint],
     );
 
     const flushPendingScroll = useCallback(() => {
@@ -409,20 +422,26 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [fontSize, fontFamily, lineHeight, terminalId, canResizeTerminal, applyFrame],
     );
 
-    // Open Rust alacritty_terminal instance on mount.
+    // Open Rust alacritty_terminal instance on mount; keep a promise so
+    // initial WebSocket snapshot frames never race ahead of native_term_open.
     useEffect(() => {
       readyFiredRef.current = false;
-      void invoke<NativeTermFrame>("native_term_open", {
+      let cancelled = false;
+      const openPromise = invoke<NativeTermFrame>("native_term_open", {
         id: terminalId,
         cols: dimsRef.current.cols,
         rows: dimsRef.current.rows,
       })
-        .then(applyFrame)
+        .then((frame) => {
+          if (!cancelled) applyFrame(frame);
+        })
         .catch(() => {});
+      openPromiseRef.current = openPromise;
       return () => {
+        cancelled = true;
         void invoke("native_term_close", { id: terminalId }).catch(() => {});
       };
-    }, [terminalId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [terminalId, applyFrame]);
 
     // Exact container ResizeObserver (zero setTimeout hacks!).
     useEffect(() => {
@@ -460,12 +479,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const batch = concatChunks(pendingChunks);
         pendingChunks = [];
         inFlight = true;
-        void invoke<NativeTermFrame>("native_term_feed", {
-          id: terminalId,
-          dataB64: bytesToBase64(batch),
-        })
+        void openPromiseRef.current
+          .then(() => {
+            if (disposed) return null;
+            return invoke<NativeTermFrame>("native_term_feed", {
+              id: terminalId,
+              dataB64: bytesToBase64(batch),
+            });
+          })
           .then((frame) => {
-            if (!disposed) applyFrame(frame);
+            if (frame && !disposed) applyFrame(frame);
           })
           .catch(() => {})
           .finally(() => {
@@ -498,8 +521,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       ws.onopen = () => {
         if (disposed) return;
         reconnect.handleSocketOpen();
-        onReconnectingChange?.(false);
-        if (canResizeTerminal) {
+        callbacksRef.current.onReconnectingChange?.(false);
+        if (callbacksRef.current.canResizeTerminal) {
           const { cols, rows } = dimsRef.current;
           ws.send(JSON.stringify({ type: "resize", cols, rows }));
         }
@@ -522,12 +545,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
       ws.onclose = () => {
         if (disposed) return;
-        onReconnectingChange?.(true);
+        callbacksRef.current.onReconnectingChange?.(true);
         reconnect.scheduleReconnect();
       };
       ws.onerror = () => {
         if (disposed) return;
-        onReconnectingChange?.(true);
+        callbacksRef.current.onReconnectingChange?.(true);
       };
 
       return () => {
@@ -538,7 +561,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ws.close();
         if (wsRef.current === ws) wsRef.current = null;
       };
-    }, [wsUrl, terminalId, sessionGen, canResizeTerminal, applyFrame, onReconnectingChange]);
+    }, [wsUrl, terminalId, sessionGen, applyFrame]);
 
     const copyToClipboard = useCallback(async (text: string) => {
       if (!text) return;
