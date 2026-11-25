@@ -2594,7 +2594,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-cli"
-version = "0.30.1"
+version = "0.31.0"
 dependencies = [
  "base64",
  "clap",
@@ -2620,7 +2620,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-hub"
-version = "0.30.1"
+version = "0.31.0"
 dependencies = [
  "axum",
  "base64",
@@ -2667,7 +2667,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-machine"
-version = "0.30.1"
+version = "0.31.0"
 dependencies = [
  "base64",
  "bytes",
@@ -2702,7 +2702,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-native"
-version = "0.30.1"
+version = "0.31.0"
 dependencies = [
  "alacritty_terminal",
  "arboard",
@@ -2730,7 +2730,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-protocol"
-version = "0.30.1"
+version = "0.31.0"
 dependencies = [
  "bytes",
  "dirs",
@@ -2742,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "offdesk-secure"
-version = "0.30.1"
+version = "0.31.0"
 dependencies = [
  "base64",
  "futures",
