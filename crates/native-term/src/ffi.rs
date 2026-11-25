@@ -3,11 +3,11 @@
 //! shells.
 
 use crate::config::ClientConfig;
-use crate::hub::{spawn_hub_worker, HubCommand, HubEvent};
+use crate::hub::{spawn_hub_worker, HubCommand, HubEvent, MachineEntry, TerminalEntry};
 use crate::renderer::GpuRenderer;
 use crate::terminal::NativeTerminal;
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -19,6 +19,8 @@ pub struct OffdeskTermHandle {
     hub_tx: mpsc::UnboundedSender<HubCommand>,
     event_rx: mpsc::UnboundedReceiver<HubEvent>,
     renderer: Option<GpuRenderer>,
+    machines: Vec<MachineEntry>,
+    inventory: Vec<TerminalEntry>,
     terminals: HashMap<String, NativeTerminal>,
     active_terminal_id: Option<String>,
     padding_x: f32,
@@ -57,6 +59,8 @@ impl OffdeskTermHandle {
             hub_tx,
             event_rx,
             renderer: None,
+            machines: Vec::new(),
+            inventory: Vec::new(),
             terminals: HashMap::new(),
             active_terminal_id: None,
             padding_x: 8.0,
@@ -88,9 +92,19 @@ impl OffdeskTermHandle {
                         term.resize(cols, rows);
                     }
                 }
-                HubEvent::Inventory { .. }
-                | HubEvent::TerminalCreated(_)
-                | HubEvent::Error(_) => {}
+                HubEvent::Inventory {
+                    machines,
+                    terminals,
+                } => {
+                    self.machines = machines;
+                    self.inventory = terminals;
+                }
+                HubEvent::TerminalCreated(term) => {
+                    if !self.inventory.iter().any(|t| t.id == term.id) {
+                        self.inventory.insert(0, term);
+                    }
+                }
+                HubEvent::Error(_) => {}
             }
         }
     }
@@ -156,6 +170,26 @@ impl OffdeskTermHandle {
                 });
             }
         }
+    }
+
+    fn inventory_json(&mut self) -> String {
+        self.drain_events();
+        let payload = serde_json::json!({
+            "active_terminal_id": self.active_terminal_id,
+            "machines": self.machines,
+            "terminals": self.inventory.iter().map(|t| {
+                serde_json::json!({
+                    "id": t.id,
+                    "machine_id": t.machine_id,
+                    "title": t.display_name(),
+                    "cwd": t.cwd,
+                    "reachable": t.reachable,
+                    "waiting": t.is_waiting(),
+                    "last_activity_ms": t.last_activity_ms,
+                })
+            }).collect::<Vec<_>>(),
+        });
+        payload.to_string()
     }
 
     fn render(&mut self) -> Result<(), String> {
@@ -353,6 +387,29 @@ pub unsafe extern "C" fn offdesk_term_render(handle: *mut OffdeskTermHandle) -> 
     }
 }
 
+/// Return a newly allocated UTF-8 JSON snapshot of machines & terminals.
+/// Caller must free with `offdesk_term_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn offdesk_term_get_inventory_json(
+    handle: *mut OffdeskTermHandle,
+) -> *mut c_char {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    let json = (*handle).inventory_json();
+    CString::new(json)
+        .map(CString::into_raw)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Free a string previously returned by `offdesk_term_get_inventory_json`.
+#[no_mangle]
+pub unsafe extern "C" fn offdesk_term_free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        drop(CString::from_raw(ptr));
+    }
+}
+
 /// Destroy the handle and release all GPU + network resources.
 #[no_mangle]
 pub unsafe extern "C" fn offdesk_term_destroy(handle: *mut OffdeskTermHandle) {
@@ -485,6 +542,20 @@ mod android_jni {
             return -1;
         }
         offdesk_term_render(handle as *mut OffdeskTermHandle)
+    }
+
+    #[no_mangle]
+    pub unsafe extern "system" fn Java_dev_offdesk_native_NativeTerminalBridge_nativeGetInventoryJson<'local>(
+        env: JNIEnv<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+    ) -> JString<'local> {
+        let json = if handle == 0 {
+            "{}".to_string()
+        } else {
+            (*(handle as *mut OffdeskTermHandle)).inventory_json()
+        };
+        env.new_string(json).unwrap_or_else(|_| JObject::null().into())
     }
 
     #[no_mangle]

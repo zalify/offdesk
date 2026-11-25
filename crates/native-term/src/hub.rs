@@ -1,14 +1,14 @@
 use crate::config::ClientConfig;
 use futures::{SinkExt, StreamExt};
 use offdesk_protocol::compression::AttachInflater;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 use tokio_tungstenite::tungstenite::Message;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MachineEntry {
     pub id: String,
     pub name: String,
@@ -18,7 +18,7 @@ pub struct MachineEntry {
     pub home_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TerminalEntry {
     pub id: String,
     pub machine_id: String,
@@ -52,6 +52,31 @@ impl TerminalEntry {
     pub fn display_name(&self) -> String {
         let t = self.title.trim();
         if !t.is_empty() {
+            // Strip noisy CLI flags (e.g. "agy --dangerously-sk ~/p/webmux" -> "agy · webmux").
+            let mut parts = t.split_whitespace();
+            if let Some(cmd) = parts.next() {
+                let rest: Vec<&str> = parts.collect();
+                let is_known_cli = matches!(
+                    cmd.to_ascii_lowercase().as_str(),
+                    "agy" | "claude" | "codex" | "gemini" | "aider" | "opencode" | "goose"
+                        | "fish" | "zsh" | "bash" | "sh" | "nvim" | "vim" | "hx"
+                );
+                if is_known_cli && rest.iter().any(|tok| tok.starts_with('-')) {
+                    let path_hint = rest
+                        .iter()
+                        .rev()
+                        .find(|tok| !tok.starts_with('-') && (tok.contains('/') || **tok == "~"))
+                        .copied();
+                    let dir = path_hint
+                        .or(if self.cwd.is_empty() { None } else { Some(self.cwd.as_str()) })
+                        .and_then(|p| p.trim_end_matches('/').rsplit('/').next())
+                        .filter(|s| !s.is_empty());
+                    return match dir {
+                        Some(d) => format!("{cmd} · {d}"),
+                        None => cmd.to_string(),
+                    };
+                }
+            }
             return t.to_string();
         }
         let cleaned = self.cwd.trim_end_matches('/');
