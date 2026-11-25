@@ -1821,7 +1821,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           if (lines === 0) return;
           wheelAccumPxRef.current += lines * stepPx;
 
-          if (frameRef.current?.wants_mouse) {
+          const frame = frameRef.current;
+          const sendRemoteWheel =
+            Boolean(frame?.wants_mouse) ||
+            ((frame?.history_size ?? 0) === 0 && (frame?.display_offset ?? 0) === 0);
+          if (sendRemoteWheel) {
             const btn = lines > 0 ? 64 : 65;
             const count = Math.min(5, Math.max(1, Math.abs(lines)));
             const cell = pointerToCell(e.clientX, e.clientY);
