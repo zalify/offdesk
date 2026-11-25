@@ -3,7 +3,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags as CellFlags;
 use alacritty_terminal::term::{Config as TermConfig, Term, TermMode};
-use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, CursorShape, NamedColor, Rgb};
 use base64::Engine;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -17,14 +17,23 @@ const ANSI_16: [&str; 16] = [
 #[derive(Clone, Default)]
 struct TitleSink {
     title: Arc<Mutex<Option<String>>>,
+    clipboard: Arc<Mutex<Option<String>>>,
 }
 
 impl EventListener for TitleSink {
     fn send_event(&self, event: TermEvent) {
-        if let TermEvent::Title(t) = event {
-            if let Ok(mut guard) = self.title.lock() {
-                *guard = Some(t);
+        match event {
+            TermEvent::Title(t) => {
+                if let Ok(mut guard) = self.title.lock() {
+                    *guard = Some(t);
+                }
             }
+            TermEvent::ClipboardStore(_, text) => {
+                if let Ok(mut guard) = self.clipboard.lock() {
+                    *guard = Some(text);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -56,6 +65,12 @@ pub struct NativeSpan {
     pub b: bool,
     #[serde(skip_serializing_if = "is_false")]
     pub i: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub u: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub s: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub h: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,12 +88,18 @@ pub struct NativeTermFrame {
     pub spans: Vec<Vec<NativeSpan>>,
     pub bgs: Vec<NativeBgRun>,
     pub cursor: Option<(usize, usize)>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_shape: Option<&'static str>,
     pub display_offset: usize,
     pub history_size: usize,
     pub wants_mouse: bool,
     pub bracketed_paste: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    pub app_cursor: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clipboard_write: Option<String>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -205,9 +226,17 @@ impl TermInstance {
                 }
                 let bold = cell.flags.contains(CellFlags::BOLD);
                 let italic = cell.flags.contains(CellFlags::ITALIC);
-                let can_merge = cur_span
-                    .as_ref()
-                    .is_some_and(|s| s.f == fg && s.b == bold && s.i == italic);
+                let underline = cell.flags.intersects(CellFlags::ALL_UNDERLINES);
+                let strikeout = cell.flags.contains(CellFlags::STRIKEOUT);
+                let hyperlink = cell.hyperlink().map(|hl| hl.uri().to_string());
+                let can_merge = cur_span.as_ref().is_some_and(|sp| {
+                    sp.f == fg
+                        && sp.b == bold
+                        && sp.i == italic
+                        && sp.u == underline
+                        && sp.s == strikeout
+                        && sp.h == hyperlink
+                });
                 if can_merge {
                     if let Some(sp) = &mut cur_span {
                         sp.t.push(ch);
@@ -234,6 +263,9 @@ impl TermInstance {
                         f: fg,
                         b: bold,
                         i: italic,
+                        u: underline,
+                        s: strikeout,
+                        h: hyperlink,
                     });
                 }
             }
@@ -252,7 +284,11 @@ impl TermInstance {
         }
 
         let mode = self.term.mode();
-        let cursor = if display_offset == 0 && mode.contains(TermMode::SHOW_CURSOR) {
+        let cursor_shape_raw = self.term.cursor_style().shape;
+        let cursor = if display_offset == 0
+            && mode.contains(TermMode::SHOW_CURSOR)
+            && !matches!(cursor_shape_raw, CursorShape::Hidden)
+        {
             let pt = grid.cursor.point;
             if pt.line.0 >= 0 && (pt.line.0 as usize) < rows {
                 Some((pt.column.0, pt.line.0 as usize))
@@ -262,7 +298,14 @@ impl TermInstance {
         } else {
             None
         };
+        let cursor_shape = Some(match cursor_shape_raw {
+            CursorShape::Beam => "beam",
+            CursorShape::Underline => "underline",
+            CursorShape::HollowBlock => "hollow",
+            _ => "block",
+        });
         let title = self.sink.title.lock().ok().and_then(|mut g| g.take());
+        let clipboard_write = self.sink.clipboard.lock().ok().and_then(|mut g| g.take());
 
         let history_size = grid.history_size();
 
@@ -272,11 +315,14 @@ impl TermInstance {
             spans: spans_by_row,
             bgs,
             cursor,
+            cursor_shape,
             display_offset,
             history_size,
             wants_mouse: mode.intersects(TermMode::MOUSE_MODE),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
+            app_cursor: mode.contains(TermMode::APP_CURSOR),
             title,
+            clipboard_write,
         }
     }
 

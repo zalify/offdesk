@@ -67,6 +67,9 @@ interface NativeSpan {
   f?: string;
   b?: boolean;
   i?: boolean;
+  u?: boolean;
+  s?: boolean;
+  h?: string;
 }
 
 interface NativeBgRun {
@@ -82,11 +85,132 @@ interface NativeTermFrame {
   spans: NativeSpan[][];
   bgs: NativeBgRun[];
   cursor: [number, number] | null;
+  cursor_shape?: "block" | "beam" | "underline" | "hollow";
   display_offset: number;
   history_size?: number;
   wants_mouse: boolean;
   bracketed_paste: boolean;
+  app_cursor?: boolean;
   title?: string;
+  clipboard_write?: string;
+}
+
+/**
+ * Ghostty-style pixel-exact geometric rendering for Unicode Box Drawing &
+ * Block Elements (U+2500..U+259F). Returns true if drawn geometrically so
+ * font-metric line-height gaps never split borders or dividers.
+ */
+function drawBoxChar(
+  ctx: CanvasRenderingContext2D,
+  cp: number,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): boolean {
+  if (cp < 0x2500 || cp > 0x259f) return false;
+  const rx = Math.floor(x);
+  const ry = Math.floor(y);
+  const rw = Math.ceil(x + w) - rx;
+  const rh = Math.ceil(y + h) - ry;
+  const cx = rx + Math.floor(rw / 2);
+  const cy = ry + Math.floor(rh / 2);
+  const t = Math.max(1, Math.round(w / 8));
+  const heavy = Math.max(2, t * 2);
+
+  switch (cp) {
+    // Horizontal & vertical lines
+    case 0x2500: // ─
+      ctx.fillRect(rx, cy, rw, t);
+      return true;
+    case 0x2501: // ━
+      ctx.fillRect(rx, cy - Math.floor((heavy - t) / 2), rw, heavy);
+      return true;
+    case 0x2502: // │
+      ctx.fillRect(cx, ry, t, rh);
+      return true;
+    case 0x2503: // ┃
+      ctx.fillRect(cx - Math.floor((heavy - t) / 2), ry, heavy, rh);
+      return true;
+    // Double lines
+    case 0x2550: // ═
+      ctx.fillRect(rx, cy - t, rw, t);
+      ctx.fillRect(rx, cy + t, rw, t);
+      return true;
+    case 0x2551: // ║
+      ctx.fillRect(cx - t, ry, t, rh);
+      ctx.fillRect(cx + t, ry, t, rh);
+      return true;
+    // Corners (light & rounded)
+    case 0x250c: // ┌
+    case 0x256d: // ╭
+      ctx.fillRect(cx, cy, rx + rw - cx, t);
+      ctx.fillRect(cx, cy, t, ry + rh - cy);
+      return true;
+    case 0x2510: // ┐
+    case 0x256e: // ╮
+      ctx.fillRect(rx, cy, cx - rx + t, t);
+      ctx.fillRect(cx, cy, t, ry + rh - cy);
+      return true;
+    case 0x2514: // └
+    case 0x2570: // ╰
+      ctx.fillRect(cx, cy, rx + rw - cx, t);
+      ctx.fillRect(cx, ry, t, cy - ry + t);
+      return true;
+    case 0x2518: // ┘
+    case 0x256f: // ╯
+      ctx.fillRect(rx, cy, cx - rx + t, t);
+      ctx.fillRect(cx, ry, t, cy - ry + t);
+      return true;
+    // Tees & cross
+    case 0x251c: // ├
+      ctx.fillRect(cx, ry, t, rh);
+      ctx.fillRect(cx, cy, rx + rw - cx, t);
+      return true;
+    case 0x2524: // ┤
+      ctx.fillRect(cx, ry, t, rh);
+      ctx.fillRect(rx, cy, cx - rx + t, t);
+      return true;
+    case 0x252c: // ┬
+      ctx.fillRect(rx, cy, rw, t);
+      ctx.fillRect(cx, cy, t, ry + rh - cy);
+      return true;
+    case 0x2534: // ┴
+      ctx.fillRect(rx, cy, rw, t);
+      ctx.fillRect(cx, ry, t, cy - ry + t);
+      return true;
+    case 0x253c: // ┼
+      ctx.fillRect(rx, cy, rw, t);
+      ctx.fillRect(cx, ry, t, rh);
+      return true;
+    // Block elements
+    case 0x2580: // ▀
+      ctx.fillRect(rx, ry, rw, Math.ceil(rh / 2));
+      return true;
+    case 0x2584: // ▄
+      ctx.fillRect(rx, ry + Math.floor(rh / 2), rw, Math.ceil(rh / 2));
+      return true;
+    case 0x2588: // █
+      ctx.fillRect(rx, ry, rw, rh);
+      return true;
+    case 0x258c: // ▌
+      ctx.fillRect(rx, ry, Math.ceil(rw / 2), rh);
+      return true;
+    case 0x2590: // ▐
+      ctx.fillRect(rx + Math.floor(rw / 2), ry, Math.ceil(rw / 2), rh);
+      return true;
+    case 0x2591: // ░
+    case 0x2592: // ▒
+    case 0x2593: { // ▓
+      const prevAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = cp === 0x2591 ? 0.25 : cp === 0x2592 ? 0.5 : 0.75;
+      ctx.fillRect(rx, ry, rw, rh);
+      ctx.globalAlpha = prevAlpha;
+      return true;
+    }
+    default:
+      return false;
+  }
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -111,9 +235,19 @@ function concatChunks(chunks: Uint8Array[]): Uint8Array {
   return out;
 }
 
-function keyEventToBytes(e: React.KeyboardEvent<HTMLTextAreaElement>): string | null {
+function keyEventToBytes(
+  e: React.KeyboardEvent<HTMLTextAreaElement>,
+  appCursor = false,
+): string | null {
   if (e.nativeEvent.isComposing || e.key === "Process") return null;
-  if (e.metaKey && !e.ctrlKey && !e.altKey) return null; // let macOS Cmd+C/V/K work
+
+  // macOS native terminal line-editing shortcuts (Cmd+Backspace, Cmd+Left/Right)
+  if (e.metaKey && !e.ctrlKey && !e.altKey) {
+    if (e.key === "Backspace") return "\x15"; // Ctrl+U: kill to start of line
+    if (e.key === "ArrowLeft") return "\x01"; // Ctrl+A: beginning of line
+    if (e.key === "ArrowRight") return "\x05"; // Ctrl+E: end of line
+    return null; // let macOS Cmd+C/V/F/K/W work
+  }
 
   if (e.ctrlKey && !e.altKey && e.key.length === 1) {
     const code = e.key.toUpperCase().charCodeAt(0);
@@ -122,33 +256,71 @@ function keyEventToBytes(e: React.KeyboardEvent<HTMLTextAreaElement>): string | 
     }
   }
 
+  const csiMod =
+    1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0);
+
   switch (e.key) {
     case "Enter":
-      return "\r";
+      // Shift+Enter inserts a newline in Claude Code / agy / fish / zsh without submitting.
+      return e.shiftKey ? "\x1b\r" : "\r";
     case "Backspace":
-      return "\x7f";
+      return e.altKey ? "\x1b\x7f" : "\x7f";
     case "Tab":
       return e.shiftKey ? "\x1b[Z" : "\t";
     case "Escape":
       return "\x1b";
     case "ArrowUp":
-      return "\x1b[A";
+      if (csiMod > 1) return `\x1b[1;${csiMod}A`;
+      return appCursor ? "\x1bOA" : "\x1b[A";
     case "ArrowDown":
-      return "\x1b[B";
+      if (csiMod > 1) return `\x1b[1;${csiMod}B`;
+      return appCursor ? "\x1bOB" : "\x1b[B";
     case "ArrowRight":
-      return "\x1b[C";
+      if (e.altKey && !e.ctrlKey && !e.shiftKey) return "\x1bf"; // macOS word-right
+      if (csiMod > 1) return `\x1b[1;${csiMod}C`;
+      return appCursor ? "\x1bOC" : "\x1b[C";
     case "ArrowLeft":
-      return "\x1b[D";
+      if (e.altKey && !e.ctrlKey && !e.shiftKey) return "\x1bb"; // macOS word-left
+      if (csiMod > 1) return `\x1b[1;${csiMod}D`;
+      return appCursor ? "\x1bOD" : "\x1b[D";
     case "Home":
-      return "\x1b[H";
+      if (csiMod > 1) return `\x1b[1;${csiMod}H`;
+      return appCursor ? "\x1bOH" : "\x1b[H";
     case "End":
-      return "\x1b[F";
+      if (csiMod > 1) return `\x1b[1;${csiMod}F`;
+      return appCursor ? "\x1bOF" : "\x1b[F";
     case "PageUp":
-      return "\x1b[5~";
+      return csiMod > 1 ? `\x1b[5;${csiMod}~` : "\x1b[5~";
     case "PageDown":
-      return "\x1b[6~";
+      return csiMod > 1 ? `\x1b[6;${csiMod}~` : "\x1b[6~";
     case "Delete":
-      return "\x1b[3~";
+      return csiMod > 1 ? `\x1b[3;${csiMod}~` : "\x1b[3~";
+    case "Insert":
+      return csiMod > 1 ? `\x1b[2;${csiMod}~` : "\x1b[2~";
+    case "F1":
+      return "\x1bOP";
+    case "F2":
+      return "\x1bOQ";
+    case "F3":
+      return "\x1bOR";
+    case "F4":
+      return "\x1bOS";
+    case "F5":
+      return "\x1b[15~";
+    case "F6":
+      return "\x1b[17~";
+    case "F7":
+      return "\x1b[18~";
+    case "F8":
+      return "\x1b[19~";
+    case "F9":
+      return "\x1b[20~";
+    case "F10":
+      return "\x1b[21~";
+    case "F11":
+      return "\x1b[23~";
+    case "F12":
+      return "\x1b[24~";
     default:
       if (e.altKey && e.key.length === 1) {
         return `\x1b${e.key}`;
@@ -332,8 +504,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const selectionRef = useRef<{
       start: { col: number; row: number };
       end: { col: number; row: number };
+      rectangular?: boolean;
     } | null>(null);
     const draggingRef = useRef(false);
+    const focusedRef = useRef(false);
+    const hoverLinkRef = useRef<{ row: number; startCol: number; endCol: number } | null>(null);
+    const [hoverPointer, setHoverPointer] = useState(false);
 
     useEffect(() => subscribeFontPreferences(() => setFontPrefs(readTerminalFontPreferences())), []);
 
@@ -412,32 +588,58 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           );
         }
 
-        // 2. Selection highlight
+        // 2. Selection highlight (supports normal stream & Option+Drag rectangular block)
         const sel = selectionRef.current;
         if (sel) {
-          const [a, b] =
-            sel.start.row < sel.end.row ||
-            (sel.start.row === sel.end.row && sel.start.col <= sel.end.col)
-              ? [sel.start, sel.end]
-              : [sel.end, sel.start];
           ctx.fillStyle = "rgba(96, 165, 250, 0.32)";
-          for (let r = a.row; r <= b.row; r++) {
-            const c0 = r === a.row ? a.col : 0;
-            const c1 = r === b.row ? b.col : frame.cols;
+          if (sel.rectangular) {
+            const r0 = Math.min(sel.start.row, sel.end.row);
+            const r1 = Math.max(sel.start.row, sel.end.row);
+            const c0 = Math.min(sel.start.col, sel.end.col);
+            const c1 = Math.max(sel.start.col, sel.end.col);
             if (c1 > c0) {
-              ctx.fillRect(padX + c0 * cellW, padY + r * cellH, (c1 - c0) * cellW, cellH);
+              for (let r = r0; r <= r1; r++) {
+                ctx.fillRect(padX + c0 * cellW, padY + r * cellH, (c1 - c0) * cellW, cellH);
+              }
+            }
+          } else {
+            const [a, b] =
+              sel.start.row < sel.end.row ||
+              (sel.start.row === sel.end.row && sel.start.col <= sel.end.col)
+                ? [sel.start, sel.end]
+                : [sel.end, sel.start];
+            for (let r = a.row; r <= b.row; r++) {
+              const c0 = r === a.row ? a.col : 0;
+              const c1 = r === b.row ? b.col : frame.cols;
+              if (c1 > c0) {
+                ctx.fillRect(padX + c0 * cellW, padY + r * cellH, (c1 - c0) * cellW, cellH);
+              }
             }
           }
         }
 
-        // 3. Cursor (+ anchor hidden IME textarea directly at cursor position)
+        // 3. Cursor (dynamic DECSCUSR shape + unfocused hollow outline + IME anchor)
         if (frame.cursor) {
           const [cx, cy] = frame.cursor;
           const cursorX = padX + cx * cellW;
           const cursorY = padY + cy * cellH;
+          const shape = !focusedRef.current ? "hollow" : (frame.cursor_shape ?? "block");
           ctx.fillStyle = cursorCol;
-          ctx.globalAlpha = 0.85;
-          ctx.fillRect(cursorX, cursorY, cellW, cellH);
+          ctx.strokeStyle = cursorCol;
+          if (shape === "beam") {
+            ctx.globalAlpha = 0.92;
+            ctx.fillRect(Math.round(cursorX), cursorY, 2, cellH);
+          } else if (shape === "underline") {
+            ctx.globalAlpha = 0.92;
+            ctx.fillRect(cursorX, cursorY + cellH - 2, cellW, 2);
+          } else if (shape === "hollow") {
+            ctx.globalAlpha = 0.7;
+            ctx.lineWidth = 1.25;
+            ctx.strokeRect(cursorX + 0.75, cursorY + 0.75, cellW - 1.5, cellH - 1.5);
+          } else {
+            ctx.globalAlpha = 0.85;
+            ctx.fillRect(cursorX, cursorY, cellW, cellH);
+          }
           ctx.globalAlpha = 1;
           const ta = inputRef.current;
           if (ta) {
@@ -449,14 +651,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }
 
-        // 4. Text spans (cache ctx.font & ctx.fillStyle; align CJK/wide chars to exact cell grid)
+        // 4. Text spans (cached font/fill, geometric box-drawing, CJK grid align, underline/strikeout)
         ctx.textBaseline = "top";
         let lastFont = `${fontSize}px ${fontFamily}`;
         ctx.font = lastFont;
         let lastFill = "";
         for (let r = 0; r < frame.spans.length; r++) {
           const spans = frame.spans[r];
-          const y = padY + r * cellH + Math.floor((cellH - fontSize) * 0.5);
+          const rowY = padY + r * cellH;
+          const y = rowY + Math.floor((cellH - fontSize) * 0.5);
           for (const sp of spans) {
             const nextFont =
               sp.i || sp.b
@@ -471,18 +674,46 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               ctx.fillStyle = nextFill;
               lastFill = nextFill;
             }
+            let spanCols = 0;
             if (/^[\x20-\x7e]*$/.test(sp.t)) {
               ctx.fillText(sp.t, padX + sp.c * cellW, y);
+              spanCols = sp.t.length;
             } else {
               let col = sp.c;
               for (const ch of sp.t) {
                 const cp = ch.codePointAt(0) ?? 0;
                 const w = isWideChar(cp) ? 2 : 1;
-                ctx.fillText(ch, padX + col * cellW, y);
+                if (!drawBoxChar(ctx, cp, padX + col * cellW, rowY, cellW * w, cellH)) {
+                  ctx.fillText(ch, padX + col * cellW, y);
+                }
                 col += w;
               }
+              spanCols = col - sp.c;
+            }
+            if (sp.u && spanCols > 0) {
+              ctx.fillRect(padX + sp.c * cellW, rowY + cellH - 2, spanCols * cellW, 1);
+            }
+            if (sp.s && spanCols > 0) {
+              ctx.fillRect(
+                padX + sp.c * cellW,
+                rowY + Math.floor(cellH * 0.5),
+                spanCols * cellW,
+                1,
+              );
             }
           }
+        }
+
+        // 5. Cmd/Ctrl-hover link underline highlight
+        const hl = hoverLinkRef.current;
+        if (hl && hl.endCol > hl.startCol) {
+          ctx.fillStyle = "rgba(96, 165, 250, 0.9)";
+          ctx.fillRect(
+            padX + hl.startCol * cellW,
+            padY + hl.row * cellH + cellH - 2,
+            (hl.endCol - hl.startCol) * cellW,
+            1.5,
+          );
         }
 
         ctx.restore();
@@ -573,6 +804,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
         if (frame.title && callbacksRef.current.onTitleChange) {
           callbacksRef.current.onTitleChange(frame.title);
+        }
+        if (frame.clipboard_write) {
+          void copyToClipboardRef.current?.(frame.clipboard_write);
         }
         if (opts?.sync) {
           paintFrame(frame);
@@ -941,6 +1175,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [copiedToast, setCopiedToast] = useState(false);
     const copiedToastTimerRef = useRef<number | null>(null);
 
+    const copyToClipboardRef = useRef<((text: string) => Promise<void>) | null>(null);
     const copyToClipboard = useCallback(async (text: string) => {
       if (!text) return;
       const showCopied = () => {
@@ -992,6 +1227,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         /* ignore */
       }
     }, []);
+    copyToClipboardRef.current = copyToClipboard;
 
     const getSelectionText = useCallback((): string => {
       const sel = selectionRef.current;
@@ -1003,6 +1239,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           ? [sel.start, sel.end]
           : [sel.end, sel.start];
       if (a.row === b.row && a.col === b.col) return "";
+      const rectC0 = Math.min(sel.start.col, sel.end.col);
+      const rectC1 = Math.max(sel.start.col, sel.end.col);
       const lines: string[] = [];
       for (let r = a.row; r <= b.row; r++) {
         const rowSpans = frame.spans[r] ?? [];
@@ -1017,8 +1255,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             col += w;
           }
         }
-        const c0 = r === a.row ? a.col : 0;
-        const c1 = r === b.row ? b.col : frame.cols;
+        const c0 = sel.rectangular ? rectC0 : r === a.row ? a.col : 0;
+        const c1 = sel.rectangular ? rectC1 : r === b.row ? b.col : frame.cols;
         lines.push(chars.slice(c0, c1).join("").trimEnd());
       }
       return lines.join("\n").trimEnd();
@@ -1418,17 +1656,65 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             if (lineText) void copyToClipboard(lineText);
             return;
           }
-          selectionRef.current = { start: cell, end: cell };
+          selectionRef.current = { start: cell, end: cell, rectangular: e.altKey };
           draggingRef.current = true;
           paintFrame(frameRef.current);
         }}
+        onMouseLeave={() => {
+          if (hoverLinkRef.current) {
+            hoverLinkRef.current = null;
+            setHoverPointer(false);
+            paintFrame(frameRef.current);
+          }
+        }}
         onMouseMove={(e) => {
-          if (!draggingRef.current || !selectionRef.current) return;
-          selectionRef.current = {
-            ...selectionRef.current,
-            end: pointerToCell(e.clientX, e.clientY),
-          };
-          paintFrame(frameRef.current);
+          if (draggingRef.current && selectionRef.current) {
+            selectionRef.current = {
+              ...selectionRef.current,
+              end: pointerToCell(e.clientX, e.clientY),
+            };
+            paintFrame(frameRef.current);
+            return;
+          }
+          if (e.metaKey || e.ctrlKey) {
+            const cell = pointerToCell(e.clientX, e.clientY);
+            const rowSpans = frameRef.current?.spans[cell.row] ?? [];
+            let nextLink: { row: number; startCol: number; endCol: number } | null = null;
+            for (const sp of rowSpans) {
+              if (!sp.h) continue;
+              let spanEnd = sp.c;
+              for (const ch of sp.t) spanEnd += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
+              if (cell.col >= sp.c && cell.col < spanEnd) {
+                nextLink = { row: cell.row, startCol: sp.c, endCol: spanEnd };
+                break;
+              }
+            }
+            if (!nextLink) {
+              const tok = tokenAtCell(cell.col, cell.row);
+              if (
+                tok &&
+                (/^https?:\/\//i.test(tok.token) ||
+                  tok.token.includes("/") ||
+                  /\.[a-z0-9]{1,8}$/i.test(tok.token.replace(/:\d+(?::\d+)?$/, "")))
+              ) {
+                nextLink = { row: cell.row, startCol: tok.startCol, endCol: tok.endCol };
+              }
+            }
+            const prev = hoverLinkRef.current;
+            const changed =
+              prev?.row !== nextLink?.row ||
+              prev?.startCol !== nextLink?.startCol ||
+              prev?.endCol !== nextLink?.endCol;
+            if (changed) {
+              hoverLinkRef.current = nextLink;
+              setHoverPointer(Boolean(nextLink));
+              paintFrame(frameRef.current);
+            }
+          } else if (hoverLinkRef.current) {
+            hoverLinkRef.current = null;
+            setHoverPointer(false);
+            paintFrame(frameRef.current);
+          }
         }}
         onMouseUp={(e) => {
           if (!draggingRef.current) return;
@@ -1440,6 +1726,22 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
           if (e.metaKey || e.ctrlKey) {
             const cell = pointerToCell(e.clientX, e.clientY);
+            const rowSpans = frameRef.current?.spans[cell.row] ?? [];
+            for (const sp of rowSpans) {
+              if (!sp.h) continue;
+              let spanEnd = sp.c;
+              for (const ch of sp.t) spanEnd += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
+              if (cell.col >= sp.c && cell.col < spanEnd) {
+                if (/^https?:\/\//i.test(sp.h)) {
+                  openExternalUrl(sp.h);
+                } else if (onOpenDirectory && machineId) {
+                  const cleaned = sp.h.replace(/^file:\/\/[^/]*/i, "").replace(/:\d+(?::\d+)?$/, "");
+                  const resolved = resolveRemotePath(cleaned, cwd) ?? cleaned;
+                  onOpenDirectory(machineId, resolved);
+                }
+                return;
+              }
+            }
             const tok = tokenAtCell(cell.col, cell.row);
             if (tok) {
               if (/^https?:\/\//i.test(tok.token)) {
@@ -1504,7 +1806,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           height: "100%",
           minHeight: 0,
           overflow: "hidden",
-          cursor: "text",
+          cursor: hoverPointer ? "pointer" : "text",
           userSelect: "none",
           WebkitUserSelect: "none",
           background: theme.background ?? "#131415",
@@ -1526,6 +1828,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
+          onFocus={() => {
+            focusedRef.current = true;
+            paintFrame(frameRef.current);
+          }}
+          onBlur={() => {
+            focusedRef.current = false;
+            paintFrame(frameRef.current);
+          }}
           onCompositionStart={() => {
             composingRef.current = true;
           }}
@@ -1557,7 +1867,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
                 return;
               }
             }
-            const seq = keyEventToBytes(e);
+            const seq = keyEventToBytes(e, Boolean(frameRef.current?.app_cursor));
             if (seq !== null) {
               e.preventDefault();
               sendRawInput(seq);
