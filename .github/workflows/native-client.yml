@@ -90,6 +90,11 @@ jobs:
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - uses: android-actions/setup-android@v4
         with:
           packages: "ndk;27.1.12297006"

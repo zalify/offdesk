@@ -9,5 +9,6 @@
 pub mod config;
 pub mod ffi;
 pub mod hub;
+pub mod layout;
 pub mod renderer;
 pub mod terminal;
