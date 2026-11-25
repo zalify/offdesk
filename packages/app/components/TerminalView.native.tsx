@@ -368,13 +368,23 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }
 
-        // 3. Cursor
+        // 3. Cursor (+ anchor hidden IME textarea directly at cursor position)
         if (frame.cursor) {
           const [cx, cy] = frame.cursor;
+          const cursorX = padX + cx * cellW;
+          const cursorY = padY + cy * cellH;
           ctx.fillStyle = cursorCol;
           ctx.globalAlpha = 0.85;
-          ctx.fillRect(padX + cx * cellW, padY + cy * cellH, cellW, cellH);
+          ctx.fillRect(cursorX, cursorY, cellW, cellH);
           ctx.globalAlpha = 1;
+          const ta = inputRef.current;
+          if (ta) {
+            ta.style.left = `${Math.round(cursorX)}px`;
+            ta.style.top = `${Math.round(cursorY)}px`;
+            ta.style.height = `${Math.round(cellH)}px`;
+            ta.style.fontSize = `${fontSize}px`;
+            ta.style.lineHeight = `${cellH}px`;
+          }
         }
 
         // 4. Text spans (cache ctx.font & ctx.fillStyle; align CJK/wide chars to exact cell grid)
@@ -557,7 +567,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (rect.width < 40 || rect.height < 40) return;
 
         const { cellW, cellH } = measureCellMetrics();
-        const cols = Math.max(20, Math.floor((rect.width - 16) / cellW));
+        const cols = Math.max(20, Math.floor((rect.width - 20) / cellW));
         const rows = Math.max(6, Math.floor((rect.height - 12) / cellH));
         const unchanged = dimsRef.current.cols === cols && dimsRef.current.rows === rows;
         dimsRef.current = { cols, rows };
