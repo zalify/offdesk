@@ -17,6 +17,10 @@ export interface ExtendedKeyBarProps {
   selectMode?: boolean;
   keyboardVisible: boolean;
   isController: boolean;
+  /** True when this device currently holds the machine control lease (false while watching). */
+  hasControl?: boolean;
+  /** Claim control of the active machine from watching mode. */
+  onTakeControl?: () => void;
   /** Given while view only can be turned off: the bar shows that state in place of the keys. */
   onUnlockViewOnly?: () => void;
   ctrlArmed?: boolean;
@@ -49,6 +53,7 @@ function writeKeybarCollapsed(collapsed: boolean): void {
 
 export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
+  hasControl = true, onTakeControl,
   onUnlockViewOnly, ctrlArmed = false, onToggleCtrl, shiftArmed = false, onToggleShift, onShiftPress, onShiftRelease }: ExtendedKeyBarProps) {
   const savedLayout = useKeyBarLayout();
   const layout = layoutOverride ?? savedLayout;
@@ -253,6 +258,27 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
             }
           }}
         />
+        {isController && !hasControl && onTakeControl && (
+          <button
+            type="button"
+            className="odk-btn odk-btn--primary"
+            data-testid="extended-keybar-take-control"
+            aria-label="Take control"
+            title="Take control"
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={onTakeControl}
+            style={{
+              height: 30,
+              padding: "0 10px",
+              fontSize: 12,
+              fontWeight: 600,
+              flexShrink: 0,
+              whiteSpace: "nowrap",
+            }}
+          >
+            take control
+          </button>
+        )}
         <button
           type="button"
           className="offdesk-compose-btn"

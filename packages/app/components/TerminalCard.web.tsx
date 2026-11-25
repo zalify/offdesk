@@ -658,6 +658,8 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
               }} onAttachFile={handleAttachFile}
               onEnterSelectMode={handleEnterSelectMode} onExitSelectMode={handleExitSelectMode} onCopySelection={handleCopySelection}
               selectMode={selectMode} keyboardVisible={keyboardVisible} isController={canType}
+              hasControl={isController}
+              onTakeControl={onRequestControl ? () => onRequestControl(terminal.machine_id) : undefined}
               onUnlockViewOnly={unlockViewOnly ?? undefined}
               ctrlArmed={modifiers.ctrlArmed} onToggleCtrl={modifiers.toggleCtrl}
               shiftArmed={modifiers.shiftArmed} onToggleShift={modifiers.toggleShift}
