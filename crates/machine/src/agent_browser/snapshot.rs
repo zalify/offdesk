@@ -92,6 +92,31 @@ fn str_of<'a>(node: &'a Value, field: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// The value a user sees in a value role. Chromium reports the AX `value` of
+/// a number input or a `role=spinbutton` as a JSON number, and may carry the
+/// text only as a `valuetext` / `valuenow` property; strings (text fields)
+/// come as strings. Prefer valuetext, then value, then valuenow.
+fn value_of(node: &Value) -> String {
+    let scalar = |v: &Value| match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => match n.as_f64() {
+            Some(f) if n.is_f64() && f.fract() == 0.0 && f.abs() < 1e15 => format!("{}", f as i64),
+            _ => n.to_string(),
+        },
+        _ => String::new(),
+    };
+    let from_value = node
+        .get("value")
+        .and_then(|v| v.get("value"))
+        .map(scalar)
+        .unwrap_or_default();
+    let from_prop = |name: &str| prop(node, name).map(scalar).unwrap_or_default();
+    [from_prop("valuetext"), from_value, from_prop("valuenow")]
+        .into_iter()
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
+}
+
 fn role_of(node: &Value) -> &str {
     str_of(node, "role")
 }
@@ -301,7 +326,7 @@ impl<'a> Ctx<'a> {
             line.push_str(" [pressed]");
         }
         if VALUE_ROLES.contains(&role.as_str()) {
-            let value = str_of(node, "value");
+            let value = value_of(node);
             if !value.is_empty() {
                 line.push_str(&format!(" value=\"{}\"", value.replace('"', "\\\"")));
             }
@@ -460,6 +485,45 @@ mod tests {
         assert_eq!(res.text, expected);
         let refs: Vec<(&str, i64)> = res.refs.iter().map(|r| (r.name.as_str(), r.backend)).collect();
         assert_eq!(refs, vec![("e1", 17), ("e2", 20), ("e3", 21), ("e4", 23)]);
+    }
+
+    #[test]
+    fn spinbutton_values_come_from_numbers_valuetext_or_valuenow() {
+        let spin = |name: &str, value: Option<Value>, props: Value| {
+            let mut n = node("2", Some("1"), "spinbutton", name, &[], 2);
+            if let Some(v) = value {
+                n["value"] = v;
+            }
+            n["properties"] = props;
+            vec![node("1", None, "RootWebArea", "", &["2"], 1), n]
+        };
+        // What Chromium returns for <input type=number value=42>.
+        let n = spin(
+            "Amount",
+            Some(val("number", json!(42))),
+            json!([{"name": "valuetext", "value": val("string", json!("42"))}]),
+        );
+        assert_eq!(
+            ax_tree_to_text(&n).text,
+            "- spinbutton \"Amount\" [ref=e1] value=\"42\""
+        );
+        // A bare number, a float, and a whole float.
+        for (v, want) in [(json!(3.5), "3.5"), (json!(7.0), "7"), (json!(-2), "-2")] {
+            let n = spin("Qty", Some(val("number", v)), json!([]));
+            assert!(ax_tree_to_text(&n).text.ends_with(&format!("value=\"{want}\"")));
+        }
+        // valuetext wins over value; valuenow is the last resort.
+        let n = spin(
+            "Qty",
+            Some(val("number", json!(7))),
+            json!([{"name": "valuetext", "value": val("string", json!("7 items"))}]),
+        );
+        assert!(ax_tree_to_text(&n).text.ends_with("value=\"7 items\""));
+        let n = spin("Qty", None, json!([{"name": "valuenow", "value": val("number", json!(9))}]));
+        assert!(ax_tree_to_text(&n).text.ends_with("value=\"9\""));
+        // No value at all prints none.
+        let n = spin("Qty", None, json!([]));
+        assert!(!ax_tree_to_text(&n).text.contains("value="));
     }
 
     #[test]

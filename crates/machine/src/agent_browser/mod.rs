@@ -357,18 +357,23 @@ impl AgentBrowserManager {
                 browser_id,
                 r#ref,
                 text,
+                xy,
             } => {
                 let tab = self.page_tab(&browser_id).await?;
-                match (r#ref, text) {
-                    (Some(r), None) => {
+                match (r#ref, text, xy) {
+                    (Some(r), None, None) => {
                         tab.act(async { tab.click(&r).await.map(|_| json!({})) })
                             .await
                     }
-                    (None, Some(text)) => {
+                    (None, Some(text), None) => {
                         tab.act(async { Ok(json!({"clicked": tab.click_text(&text).await?})) })
                             .await
                     }
-                    _ => Err("click needs exactly one of ref or text".to_string()),
+                    (None, None, Some((x, y))) => {
+                        tab.act(async { Ok(json!({"clicked": tab.click_xy(x, y).await?})) })
+                            .await
+                    }
+                    _ => Err("click needs exactly one of ref, text or xy".to_string()),
                 }
             }
             C::Login {
@@ -2174,6 +2179,7 @@ mod tests {
             browser_id: id.clone(),
             r#ref: Some(button),
             text: None,
+            xy: None,
         })
         .await
         .unwrap();
@@ -2237,6 +2243,7 @@ mod tests {
                 browser_id: id.clone(),
                 r#ref: Some("e999".into()),
                 text: None,
+                xy: None,
             })
             .await
             .unwrap_err();
@@ -2261,6 +2268,7 @@ mod tests {
                 browser_id: id.clone(),
                 r#ref: Some("e2".into()),
                 text: None,
+                xy: None,
             })
             .await
             .unwrap_err();
@@ -2883,6 +2891,7 @@ mod tests {
                 browser_id: id.clone(),
                 r#ref: None,
                 text: Some("Delete".into()),
+                xy: None,
             })
             .await
             .unwrap();
@@ -3197,6 +3206,7 @@ mod tests {
             browser_id: id.clone(),
             r#ref: Some(button.clone()),
             text: None,
+            xy: None,
         })
         .await
         .unwrap();
@@ -3224,6 +3234,7 @@ mod tests {
             browser_id: id.clone(),
             r#ref: Some(input.clone()),
             text: None,
+            xy: None,
         })
         .await
         .unwrap();

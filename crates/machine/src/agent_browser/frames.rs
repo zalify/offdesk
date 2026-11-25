@@ -53,6 +53,9 @@ struct Found {
     frame: FrameMeta,
     object_id: String,
     exact: bool,
+    /// Nothing else is on top of the element's centre (or it is off screen,
+    /// where that is unknown).
+    clear: bool,
     area: f64,
     tag: String,
     text: String,
@@ -70,6 +73,28 @@ const CLICK_TEXT_JS: &str = r#"(function (wanted) {
   if (innerWidth < 2 || innerHeight < 2) return null;
   let best = null;
   const skip = /^(SCRIPT|STYLE|NOSCRIPT|HEAD|META|LINK|TITLE|HTML|BODY|IFRAME|FRAME)$/;
+  // The topmost element at a point, looking into open shadow roots.
+  const hitAt = (x, y) => {
+    let hit = document.elementFromPoint(x, y);
+    while (hit && hit.shadowRoot) {
+      const inner = hit.shadowRoot.elementFromPoint(x, y);
+      if (!inner || inner === hit) break;
+      hit = inner;
+    }
+    return hit;
+  };
+  // Not covered: the centre is off screen (unknown, it gets scrolled into
+  // view), or what is on top there is the element, inside it, or around it
+  // (a stretched link).
+  const isClear = (el, r) => {
+    const x = r.left + r.width / 2, y = r.top + r.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return true;
+    const hit = hitAt(x, y);
+    if (!hit) return false;
+    for (let n = hit; n; n = n.parentNode || n.host) if (n === el) return true;
+    for (let n = el; n; n = n.parentNode || n.host) if (n === hit) return true;
+    return false;
+  };
   const visit = root => {
     for (const el of root.querySelectorAll('*')) {
       if (el.shadowRoot) visit(el.shadowRoot);
@@ -84,13 +109,35 @@ const CLICK_TEXT_JS: &str = r#"(function (wanted) {
       const exact = t === want;
       if (!exact && !t.includes(want)) continue;
       const area = r.width * r.height;
-      if (!best || (exact && !best.exact) || (exact === best.exact && area < best.area)) {
-        best = { el, exact, area, tag: el.tagName.toLowerCase(), text: t };
+      // Exact text first, then not covered, then smallest.
+      if (best && best.exact && !exact) continue;
+      const clear = isClear(el, r);
+      if (!best
+        || (exact && !best.exact)
+        || (exact === best.exact && clear && !best.clear)
+        || (exact === best.exact && clear === best.clear && area < best.area)) {
+        best = { el, exact, clear, area, tag: el.tagName.toLowerCase(), text: t };
       }
     }
   };
   visit(document);
   return best;
+})"#;
+
+/// Describes what is at a viewport point, for the reply of a click by
+/// coordinates; null when nothing is there.
+const POINT_INFO_JS: &str = r#"(function (x, y) {
+  let hit = document.elementFromPoint(x, y);
+  while (hit && hit.shadowRoot) {
+    const inner = hit.shadowRoot.elementFromPoint(x, y);
+    if (!inner || inner === hit) break;
+    hit = inner;
+  }
+  if (!hit) return null;
+  const isBtn = hit.tagName === 'INPUT' && /^(button|submit|reset)$/i.test(hit.type);
+  const text = ((isBtn ? hit.value : hit.innerText) || hit.getAttribute('aria-label') || '')
+    .replace(/\s+/g, ' ').trim();
+  return { tag: hit.tagName.toLowerCase(), text };
 })"#;
 
 const LOGIN_FIELDS_JS: &str = r#"(function () {
@@ -544,7 +591,14 @@ impl Tab {
             x += ox;
             y += oy;
         }
-        match jitter {
+        self.dispatch_click(jitter, (x, y)).await
+    }
+
+    /// The mouse sequence of a click at page point `(x, y)`: human-like when
+    /// `rng` is given, else a move, a press and a release.
+    async fn dispatch_click(&self, rng: Option<human::Rng>, at: (f64, f64)) -> Result<(), String> {
+        let (x, y) = at;
+        match rng {
             Some(mut rng) => self.human_click(&mut rng, (x, y)).await,
             None => {
                 self.call(
@@ -562,6 +616,41 @@ impl Tab {
                 Ok(())
             }
         }
+    }
+
+    /// Click the viewport point `(x, y)` (CSS pixels of the top-level page).
+    /// Returns what was under it, best effort.
+    pub(super) async fn click_xy(&self, x: f64, y: f64) -> Result<String, String> {
+        if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
+            return Err(format!(
+                "the point ({x}, {y}) is not valid; x and y must be zero or more"
+            ));
+        }
+        let size = self.evaluate("[innerWidth, innerHeight]").await?;
+        let (w, h) = (
+            size[0].as_f64().unwrap_or(0.0),
+            size[1].as_f64().unwrap_or(0.0),
+        );
+        if x >= w || y >= h {
+            return Err(format!(
+                "the point ({x}, {y}) is outside the viewport ({w} x {h} CSS pixels)"
+            ));
+        }
+        let hit = self
+            .evaluate(&format!("{POINT_INFO_JS}({}, {})", json!(x), json!(y)))
+            .await
+            .ok()
+            .filter(|v| v.is_object());
+        let rng = human::enabled().then(human::Rng::from_entropy);
+        self.dispatch_click(rng, (x, y)).await?;
+        Ok(match hit {
+            Some(h) => format!(
+                "{} \"{}\"",
+                h["tag"].as_str().unwrap_or("element"),
+                short(h["text"].as_str().unwrap_or(""))
+            ),
+            None => format!("point ({x}, {y})"),
+        })
     }
 
     /// Move the mouse from where it was to `to` along a curved path, pause,
@@ -694,7 +783,8 @@ impl Tab {
     // -- click by text ------------------------------------------------------
 
     /// Click the smallest visible element, in any frame, whose text is
-    /// `text` (else contains it). Returns a description of the element.
+    /// `text` (else contains it), preferring one that is not covered by
+    /// another element. Returns a description of the element.
     pub(super) async fn click_text(&self, text: &str) -> Result<String, String> {
         let frames = self.enumerate_frames().await?;
         let map: FrameMap = frames.iter().map(|m| (m.id.clone(), m.clone())).collect();
@@ -711,13 +801,19 @@ impl Tab {
                 frame: frame.clone(),
                 object_id,
                 exact: props["exact"].1.as_bool().unwrap_or(false),
+                clear: props["clear"].1.as_bool().unwrap_or(true),
                 area: props["area"].1.as_f64().unwrap_or(f64::MAX),
                 tag: props["tag"].1.as_str().unwrap_or("element").to_string(),
                 text: props["text"].1.as_str().unwrap_or("").to_string(),
             };
             let better = match &best {
                 None => true,
-                Some(b) => (found.exact && !b.exact) || (found.exact == b.exact && found.area < b.area),
+                // Exact text first, then not covered, then smallest.
+                Some(b) => {
+                    (found.exact, found.clear, -found.area)
+                        .partial_cmp(&(b.exact, b.clear, -b.area))
+                        == Some(std::cmp::Ordering::Greater)
+                }
             };
             if better {
                 best = Some(found);
@@ -1381,6 +1477,7 @@ u.addEventListener('input', () => { document.getElementById('echo').textContent 
                 browser_id: id.clone(),
                 r#ref: Some(btn.clone()),
                 text: None,
+                xy: None,
             })
             .await
             .unwrap();
@@ -1393,6 +1490,7 @@ u.addEventListener('input', () => { document.getElementById('echo').textContent 
                 browser_id: id.clone(),
                 r#ref: None,
                 text: Some("账密登录".into()),
+                xy: None,
             })
             .await
             .unwrap();
@@ -1402,16 +1500,16 @@ u.addEventListener('input', () => { document.getElementById('echo').textContent 
         mgr.execute(C::Fill { browser_id: id.clone(), r#ref: cross_user.clone(), text: "x".into() })
             .await
             .unwrap();
-        mgr.execute(C::Click { browser_id: id.clone(), r#ref: None, text: Some("Plain".into()) })
+        mgr.execute(C::Click { browser_id: id.clone(), r#ref: None, text: Some("Plain".into()), xy: None })
             .await
             .unwrap();
         let err = mgr
-            .execute(C::Click { browser_id: id.clone(), r#ref: None, text: Some("no such text".into()) })
+            .execute(C::Click { browser_id: id.clone(), r#ref: None, text: Some("no such text".into()), xy: None })
             .await
             .unwrap_err();
         assert!(err.contains("no visible element"), "{err}");
         assert!(mgr
-            .execute(C::Click { browser_id: id.clone(), r#ref: None, text: None })
+            .execute(C::Click { browser_id: id.clone(), r#ref: None, text: None, xy: None })
             .await
             .is_err());
 
@@ -1457,6 +1555,86 @@ u.addEventListener('input', () => { document.getElementById('echo').textContent 
             tab.evaluate("document.querySelector('input[type=password]').value").await.unwrap(),
             ""
         );
+
+        mgr.shutdown().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A drawer over a table: the cell behind it reads "Japan" in small
+    /// type, the drawer's own option (a plain div) in large type.
+    const DRAWER: &str = r#"<html><body style="margin:0">
+<table style="margin-left:900px;margin-top:100px;font-size:12px"><tr><td id=cell
+  onclick="document.getElementById('out').textContent='cell'">Japan</td></tr></table>
+<div style="position:fixed;top:0;right:0;width:600px;height:100vh;background:#fff;z-index:10">
+  <div id=opt style="font-size:28px;padding:20px 40px;cursor:pointer"
+    onclick="document.getElementById('out').textContent='option'">Japan</div>
+  <input id=n type=number value=42 aria-label=Amount>
+  <div role=spinbutton tabindex=0 aria-label=Qty aria-valuenow=7 aria-valuetext="7 items">7 items</div>
+  <p id=out>idle</p>
+</div></body></html>"#;
+
+    #[tokio::test]
+    #[ignore]
+    async fn click_text_skips_covered_elements_and_xy_clicks_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let port = serve(Arc::new(|_| DRAWER.to_string())).await;
+        let dir = std::env::temp_dir().join(format!("offdesk-frames-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let info = mgr
+            .execute(C::Open { url: Some(format!("http://127.0.0.1:{port}/")), opener_terminal_id: None })
+            .await
+            .unwrap();
+        let id = info["id"].as_str().unwrap().to_string();
+        let tab = mgr.tabs.get(&id).unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let out = || tab.evaluate("document.getElementById('out').textContent");
+        let click = |text: Option<&str>, xy: Option<(f64, f64)>| {
+            mgr.execute(C::Click {
+                browser_id: id.clone(),
+                r#ref: None,
+                text: text.map(str::to_string),
+                xy,
+            })
+        };
+
+        // Number inputs and spinbuttons show their value in the snapshot
+        // (Chromium's AX `value` is a JSON number for both).
+        let snap = mgr.execute(C::Snapshot { browser_id: id.clone() }).await.unwrap()["snapshot"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        eprintln!("{snap}");
+        assert!(snap.contains("spinbutton \"Amount\"") && snap.contains("value=\"42\""), "{snap}");
+        assert!(snap.contains("spinbutton \"Qty\"") && snap.contains("value=\"7\""), "{snap}");
+
+        // The smaller cell is behind the drawer: the option wins.
+        let r = click(Some("Japan"), None).await.unwrap();
+        assert_eq!(r["clicked"], "div \"Japan\"", "{r}");
+        assert_eq!(out().await.unwrap(), "option");
+
+        // Click by point: the cell's page position is under the drawer, so
+        // that point hits the drawer; a point on the option hits the option.
+        tab.evaluate("document.getElementById('out').textContent = 'idle'").await.unwrap();
+        let opt = tab
+            .evaluate("(r => [r.left + 5, r.top + 5])(document.getElementById('opt').getBoundingClientRect())")
+            .await
+            .unwrap();
+        let (x, y) = (opt[0].as_f64().unwrap(), opt[1].as_f64().unwrap());
+        let r = click(None, Some((x, y))).await.unwrap();
+        assert_eq!(r["clicked"], "div \"Japan\"", "{r}");
+        assert_eq!(out().await.unwrap(), "option");
+
+        // Points outside the viewport, negative or not numbers are refused.
+        for bad in [(5000.0, 10.0), (10.0, 5000.0), (-1.0, 10.0), (f64::NAN, 1.0)] {
+            let err = click(None, Some(bad)).await.unwrap_err();
+            assert!(err.contains("viewport") || err.contains("not valid"), "{bad:?}: {err}");
+        }
+        // Exactly one of ref, text and xy.
+        assert!(click(None, None).await.is_err());
+        assert!(click(Some("Japan"), Some((1.0, 1.0))).await.is_err());
 
         mgr.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);

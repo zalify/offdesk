@@ -1766,15 +1766,20 @@ pub enum AgentBrowserCommand {
     Snapshot {
         browser_id: String,
     },
-    /// Click by `ref` (from a snapshot) or by visible `text`; exactly one of
-    /// the two. Replies `{}` for a ref, `{"clicked": "<tag> \"<text>\""}` for
-    /// text.
+    /// Click by `ref` (from a snapshot), by visible `text` (the smallest
+    /// element that is not covered by another one, in any frame), or at a
+    /// viewport point `xy` (`[x, y]` in CSS pixels of the top-level page);
+    /// exactly one of the three. Replies `{}` for a ref,
+    /// `{"clicked": "<tag> \"<text>\""}` for text and for a point (what was
+    /// under it, best effort).
     Click {
         browser_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         r#ref: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        xy: Option<(f64, f64)>,
     },
     /// Fill a saved login into the page's username / password fields, in any
     /// frame whose registrable domain is in `allowed_domains`. Replies
@@ -3960,14 +3965,24 @@ mod login_command_tests {
                 .unwrap();
         assert_eq!(
             click,
-            AgentBrowserCommand::Click { browser_id: "b".into(), r#ref: Some("e3".into()), text: None }
+            AgentBrowserCommand::Click { browser_id: "b".into(), r#ref: Some("e3".into()), text: None, xy: None }
         );
         let by_text = serde_json::to_value(AgentBrowserCommand::Click {
             browser_id: "b".into(),
             r#ref: None,
             text: Some("账密登录".into()),
+            xy: None,
         })
         .unwrap();
         assert_eq!(by_text, serde_json::json!({"type": "click", "browser_id": "b", "text": "账密登录"}));
+        let by_xy = AgentBrowserCommand::Click {
+            browser_id: "b".into(),
+            r#ref: None,
+            text: None,
+            xy: Some((640.0, 360.5)),
+        };
+        let wire = serde_json::to_value(&by_xy).unwrap();
+        assert_eq!(wire, serde_json::json!({"type": "click", "browser_id": "b", "xy": [640.0, 360.5]}));
+        assert_eq!(serde_json::from_value::<AgentBrowserCommand>(wire).unwrap(), by_xy);
     }
 }
