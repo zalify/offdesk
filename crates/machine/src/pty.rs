@@ -988,7 +988,7 @@ impl PtyManager {
                                 id,
                                 line
                             );
-                            send_keys_line(&tmux_session_name(id), &line);
+                            send_keys_line(id, &line);
                         }
                         None => tracing::warn!(
                             "Not resuming terminal {}: resume argv contains an unquotable token",
@@ -1423,7 +1423,18 @@ fn sessions_on_socket(socket: &str) -> Vec<String> {
 
 /// Type one command line into a tmux session and press Enter. Literal
 /// send-keys (-l) so the text is never interpreted as key names.
-fn send_keys_line(tmux_name: &str, line: &str) {
+fn send_keys_line(id: &str, line: &str) {
+    #[cfg(unix)]
+    if use_native_pty_backend() {
+        let mut payload = Vec::with_capacity(line.len() + 1);
+        payload.extend_from_slice(line.as_bytes());
+        payload.push(b'\r');
+        if let Err(err) = crate::pty_daemon::write_input(id, &payload) {
+            tracing::warn!("Failed to write resume command to native terminal {}: {}", id, err);
+        }
+        return;
+    }
+    let tmux_name = tmux_session_name(id);
     let _ = tmux_cmd()
         .args([
             "-L",
@@ -1431,12 +1442,12 @@ fn send_keys_line(tmux_name: &str, line: &str) {
             "send-keys",
             "-l",
             "-t",
-            tmux_name,
+            &tmux_name,
             line,
         ])
         .status();
     let _ = tmux_cmd()
-        .args(["-L", tmux_socket(), "send-keys", "-t", tmux_name, "Enter"])
+        .args(["-L", tmux_socket(), "send-keys", "-t", &tmux_name, "Enter"])
         .status();
 }
 

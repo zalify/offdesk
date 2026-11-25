@@ -540,6 +540,60 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     }, [wsUrl, terminalId, sessionGen, canResizeTerminal, applyFrame, onReconnectingChange]);
 
+    const copyToClipboard = useCallback(async (text: string) => {
+      if (!text) return;
+      try {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__?: {
+              invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        if (typeof internals?.invoke === "function") {
+          await internals.invoke("plugin:clipboard-manager|write_text", { text });
+          return;
+        }
+      } catch {
+        // Fall through to web clipboard API.
+      }
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+      } catch {
+        // Fall through to execCommand fallback.
+      }
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {
+        /* ignore */
+      }
+    }, []);
+
+    const isWideChar = (cp: number): boolean =>
+      cp >= 0x1100 &&
+      (cp <= 0x115f ||
+        cp === 0x2329 ||
+        cp === 0x232a ||
+        (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+        (cp >= 0xac00 && cp <= 0xd7a3) ||
+        (cp >= 0xf900 && cp <= 0xfaff) ||
+        (cp >= 0xfe10 && cp <= 0xfe19) ||
+        (cp >= 0xfe30 && cp <= 0xfe6f) ||
+        (cp >= 0xff00 && cp <= 0xff60) ||
+        (cp >= 0xffe0 && cp <= 0xffe6) ||
+        (cp >= 0x1f300 && cp <= 0x1faff) ||
+        (cp >= 0x20000 && cp <= 0x3fffd));
+
     const getSelectionText = useCallback((): string => {
       const sel = selectionRef.current;
       const frame = frameRef.current;
@@ -549,6 +603,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         (sel.start.row === sel.end.row && sel.start.col <= sel.end.col)
           ? [sel.start, sel.end]
           : [sel.end, sel.start];
+      if (a.row === b.row && a.col === b.col) return "";
       const lines: string[] = [];
       for (let r = a.row; r <= b.row; r++) {
         const rowSpans = frame.spans[r] ?? [];
@@ -556,8 +611,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         for (const sp of rowSpans) {
           let col = sp.c;
           for (const ch of sp.t) {
+            const cp = ch.codePointAt(0) ?? 0;
+            const w = isWideChar(cp) ? 2 : 1;
             if (col < frame.cols) chars[col] = ch;
-            col += 1;
+            if (w === 2 && col + 1 < frame.cols) chars[col + 1] = "";
+            col += w;
           }
         }
         const c0 = r === a.row ? a.col : 0;
@@ -566,6 +624,19 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       }
       return lines.join("\n").trimEnd();
     }, []);
+
+    useEffect(() => {
+      const onWinMouseUp = () => {
+        if (!draggingRef.current) return;
+        draggingRef.current = false;
+        const text = getSelectionText();
+        if (text) {
+          void copyToClipboard(text);
+        }
+      };
+      window.addEventListener("mouseup", onWinMouseUp);
+      return () => window.removeEventListener("mouseup", onWinMouseUp);
+    }, [getSelectionText, copyToClipboard]);
 
     useImperativeHandle(
       ref,
@@ -664,7 +735,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           draggingRef.current = false;
           const text = getSelectionText();
           if (text) {
-            void navigator.clipboard.writeText(text).catch(() => {});
+            void copyToClipboard(text);
           }
         }}
         onWheel={(e) => {
@@ -755,7 +826,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               const sel = getSelectionText();
               if (sel) {
                 e.preventDefault();
-                void navigator.clipboard.writeText(sel).catch(() => {});
+                void copyToClipboard(sel);
                 return;
               }
             }
