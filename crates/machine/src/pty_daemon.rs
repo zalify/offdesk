@@ -318,16 +318,32 @@ mod unix_impl {
             };
             parser.set_scrollback(offset);
             let actual_offset = parser.screen().scrollback();
-            let mut bytes = parser.screen().state_formatted();
+            let formatted = parser.screen().state_formatted();
             let app_wants_mouse =
                 parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None;
             parser.set_scrollback(0);
+
+            // Wrap full-screen repaints in DEC 2026 synchronized output and
+            // explicitly reset attributes, scroll region (DECSTBM), and clear
+            // the viewport before painting. `vt100::Screen::state_formatted()`
+            // assumes a clean screen and does not erase leftover cells or
+            // app-configured scroll regions (e.g., agy's pinned bottom prompt),
+            // which otherwise causes ghost characters and frozen bottom rows
+            // while scrolling.
+            let mut bytes = Vec::with_capacity(formatted.len() + 64);
+            bytes.extend_from_slice(b"\x1b[?2026h\x1b[0m\x1b[r\x1b[2J\x1b[H");
+            bytes.extend_from_slice(&formatted);
+            if actual_offset > 0 {
+                // Hide the live cursor while viewing scrollback history.
+                bytes.extend_from_slice(b"\x1b[?25l");
+            }
             // Keep SGR mouse reporting enabled on the client even when the app
             // doesn't request it (e.g., agy, fish, bash) so wheel/touch scroll
             // drives daemon-side scrollback — matching tmux's mouse mode.
             if !app_wants_mouse {
                 bytes.extend_from_slice(b"\x1b[?1000h\x1b[?1006h");
             }
+            bytes.extend_from_slice(b"\x1b[?2026l");
             (bytes, actual_offset)
         }
 
