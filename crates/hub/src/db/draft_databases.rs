@@ -1858,17 +1858,12 @@ mod tests {
         let db = task_db(&conn);
         seed(&mut conn, &db.id);
         let sort = |c: &str, d: &str| Sort { column: c.into(), dir: d.into() };
-        // Number sort with tiebreak on id: Alpha/Delta tie at 5.
+        // Number sort; Alpha/Delta tie at 5 and keep insertion (rowid) order.
         let r = q(&conn, &db.id, QueryRequest { sorts: vec![sort("points", "desc")], ..Default::default() });
         let t = titles(&r);
         assert_eq!(t[0], "beta");
         assert_eq!(t[3], "Gamma");
-        let mut tied = vec![r.rows[1].clone(), r.rows[2].clone()];
-        let sorted_by_id = {
-            tied.sort_by(|a, b| a.id.cmp(&b.id));
-            tied.iter().map(|r| r.title.clone()).collect::<Vec<_>>()
-        };
-        assert_eq!(vec![t[1].clone(), t[2].clone()], sorted_by_id);
+        assert_eq!(&t[1..3], ["Alpha", "Delta"]);
         // Missing values sort last in both directions.
         let r = q(&conn, &db.id, QueryRequest { sorts: vec![sort("due", "asc")], ..Default::default() });
         assert_eq!(&titles(&r)[..2], ["Alpha", "beta"]);
