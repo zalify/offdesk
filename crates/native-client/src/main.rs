@@ -1,17 +1,13 @@
-mod config;
-mod hub;
 mod input;
-mod renderer;
-mod terminal;
 
 use clap::Parser;
-use config::ClientConfig;
-use hub::{HubCommand, HubEvent, MachineEntry, TerminalEntry};
 use input::{key_event_to_terminal_bytes, match_shortcut, AppShortcut};
-use renderer::{GpuRenderer, PaletteOverlay, SidebarRow, UiSnapshot, SIDEBAR_WIDTH};
+use offdesk_term::config::ClientConfig;
+use offdesk_term::hub::{self, HubCommand, HubEvent, MachineEntry, TerminalEntry};
+use offdesk_term::renderer::{GpuRenderer, PaletteOverlay, SidebarRow, UiSnapshot, SIDEBAR_WIDTH};
+use offdesk_term::terminal::NativeTerminal;
 use std::collections::HashMap;
 use std::sync::Arc;
-use terminal::NativeTerminal;
 use tokio::sync::mpsc;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -306,8 +302,19 @@ impl ApplicationHandler<HubEvent> for NativeApp {
             .with_inner_size(LogicalSize::new(1280.0, 820.0));
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
-        let renderer = GpuRenderer::new(Arc::clone(&window), self.cfg.font_size)
-            .expect("init wgpu renderer");
+        let size = window.inner_size();
+        let instance = wgpu::Instance::default();
+        let surface = instance
+            .create_surface(Arc::clone(&window))
+            .expect("create wgpu surface");
+        let renderer = GpuRenderer::from_surface(
+            instance,
+            surface,
+            size.width,
+            size.height,
+            self.cfg.font_size,
+        )
+        .expect("init wgpu renderer");
         self.window = Some(window);
         self.renderer = Some(renderer);
         self.request_redraw();
