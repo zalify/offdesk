@@ -1322,15 +1322,31 @@ function TerminalCanvasInner() {
     }
   }, [overlayMachineId, browserOverlayOpen, scopedAgentBrowsers, deviceId]);
 
-  // Create a tab named after the first free "tab N" slot and select it. The
-  // group also arrives via workspace_group_created; selecting by the response
-  // id is safe either way (selection is id-based).
+  // Create a tab named after the cwd directory when available (falling back
+  // to the first free "tab N" slot) and select it. The group also arrives via
+  // workspace_group_created; selecting by the response id is safe either way.
   const createTab = useCallback(
-    async (machineId: string) => {
+    async (machineId: string, preferredCwd?: string | null) => {
       const taken = new Set(tabGroups.map((group) => group.label));
-      let n = tabGroups.length + 1;
-      while (taken.has(`tab ${n}`)) n += 1;
-      const created = await createWorkspaceGroup(machineId, `tab ${n}`);
+      const trimmedCwd = preferredCwd?.trim().replace(/\/+$/, "") ?? "";
+      const base =
+        trimmedCwd && trimmedCwd !== "/" && trimmedCwd !== "~"
+          ? trimmedCwd.slice(trimmedCwd.lastIndexOf("/") + 1)
+          : "";
+      let label: string;
+      if (base) {
+        label = base;
+        let suffix = 2;
+        while (taken.has(label)) {
+          label = `${base} ${suffix}`;
+          suffix += 1;
+        }
+      } else {
+        let n = tabGroups.length + 1;
+        while (taken.has(`tab ${n}`)) n += 1;
+        label = `tab ${n}`;
+      }
+      const created = await createWorkspaceGroup(machineId, label);
       workspaceCommandsRef.current.selectGroup?.(created.id);
       return created;
     },
@@ -1347,7 +1363,7 @@ function TerminalCanvasInner() {
     async (machineId: string, cwd: string, tabId: string | null) => {
       const placement = planNewTerminalPlacement(tabGroups, { tabId, cwd });
       if (!placement.needsNewTab) return placement.workspaceGroupId;
-      const created = await createTab(machineId);
+      const created = await createTab(machineId, cwd);
       return created.id;
     },
     [createTab, tabGroups],
@@ -2519,6 +2535,9 @@ function TerminalCanvasInner() {
                   if (activeMachine) handleEngageViewOnly(activeMachine.id);
                 }}
                 onDisengageViewOnly={handleDisengageViewOnly}
+                onOpenCommandPalette={() =>
+                  setPaletteState({ open: true, filter: "all" })
+                }
                 browserWaiting={(() => {
                   const browser = scopedAgentBrowsers.find(browserNeedsPerson);
                   return browser && !browserOverlayOpen
