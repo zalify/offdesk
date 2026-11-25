@@ -59,7 +59,7 @@ test("keys form an even grid, fit their labels, and the arrows stay put through 
     // has settled --key-width for the new viewport width.
     await expect.poll(async () => {
       return bar.evaluate((el, targetWidth) => {
-        if (Math.abs(el.getBoundingClientRect().width - targetWidth) > 1) return false;
+        if (Math.abs(window.innerWidth - targetWidth) > 1) return false;
         const keys = Array.from(el.querySelectorAll<HTMLElement>(".offdesk-terminal-key"));
         if (keys.length === 0) return false;
         const firstWidth = keys[0].getBoundingClientRect().width;
