@@ -1615,11 +1615,16 @@ function TerminalCanvasInner() {
     });
     // Fit the newly created desktop terminal to its actual pane container once
     // mounted (initial dimensions are a rough full-window estimate before
-    // sidebar/chrome and user font metrics are measured).
+    // sidebar/chrome and user font metrics are measured). Retry at 450ms as
+    // well to cover 0 -> 1 transitions where TerminalWorkspace mounts after
+    // the terminal_created event arrives over WAN.
     if (!isCompact) {
       window.setTimeout(() => {
         workspaceCommandsRef.current.fitVisiblePanes?.();
       }, 150);
+      window.setTimeout(() => {
+        workspaceCommandsRef.current.fitVisiblePanes?.();
+      }, 450);
     }
   }, [
     activeMachine,

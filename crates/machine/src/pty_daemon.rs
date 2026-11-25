@@ -1812,6 +1812,42 @@ mod unix_impl {
             assert_eq!(pass2, b"abc");
             assert_eq!(delta2, -3);
         }
+
+        #[test]
+        fn alacritty_scrollback_up_and_down_reaches_exact_bottom_with_decstbm_and_cjk() {
+            let mut term = DaemonTerm::new(10, 60, 1000);
+            // Simulate an app like agy that sets a top-anchored scroll region
+            // (rows 1..8) while keeping a pinned prompt on rows 9..10.
+            term.process(b"\x1b[1;8r\x1b[1;1H");
+            for i in 0..40 {
+                term.process(format!("LINE_{i:02} 中文测试行\r\n").as_bytes());
+            }
+            // Pin prompt at bottom.
+            term.process(b"\x1b[r\x1b[10;1H> prompt");
+
+            // Live view (offset 0) must show the pinned bottom prompt.
+            let (live_bytes, live_off) = term.render_ansi_at_scrollback(0);
+            assert_eq!(live_off, 0);
+            let live_str = String::from_utf8_lossy(&live_bytes);
+            assert!(live_str.contains("> prompt"), "live view missing bottom prompt");
+            assert!(live_str.contains("LINE_39"), "live view missing latest line");
+
+            // Scroll up 20 lines: must show older history and hide live cursor.
+            let (up_bytes, up_off) = term.render_ansi_at_scrollback(20);
+            assert_eq!(up_off, 20);
+            let up_str = String::from_utf8_lossy(&up_bytes);
+            assert!(up_str.contains("LINE_15"), "scrolled up view missing older history: {up_str}");
+            assert!(!up_str.contains("> prompt"), "scrolled up view leaked bottom prompt");
+            assert!(up_str.contains("\x1b[?25l"), "scrolled up view should hide cursor");
+
+            // Scroll back down to 0: must restore exact live bottom with prompt & cursor.
+            let (down_bytes, down_off) = term.render_ansi_at_scrollback(0);
+            assert_eq!(down_off, 0);
+            let down_str = String::from_utf8_lossy(&down_bytes);
+            assert!(down_str.contains("> prompt"), "scrolled back to bottom missing prompt");
+            assert!(down_str.contains("LINE_39"), "scrolled back to bottom missing latest line");
+            assert!(down_str.contains("\x1b[?25h"), "scrolled back to bottom should restore cursor");
+        }
     }
 }
 
