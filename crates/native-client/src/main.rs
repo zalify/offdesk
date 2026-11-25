@@ -12,11 +12,12 @@ use offdesk_term::renderer::{
 use offdesk_term::terminal::{NativeTerminal, RenderFrame};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, Ime, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
@@ -59,7 +60,13 @@ struct NativeApp {
     palette_query: String,
     palette_selected: usize,
     status_error: Option<String>,
+    /// 120Hz frame coalescing state: prevents bursty WS output from triggering redundant GPU frames.
+    redraw_dirty: bool,
+    last_redraw: Instant,
 }
+
+/// Target 120Hz frame budget (8.33ms) for coalescing high-frequency terminal output bursts.
+const FRAME_INTERVAL: Duration = Duration::from_micros(8_333);
 
 impl NativeApp {
     fn new(cfg: ClientConfig, hub_tx: mpsc::UnboundedSender<HubCommand>) -> Self {
@@ -81,12 +88,26 @@ impl NativeApp {
             palette_query: String::new(),
             palette_selected: 0,
             status_error: None,
+            redraw_dirty: false,
+            last_redraw: Instant::now() - FRAME_INTERVAL,
         }
     }
 
-    fn request_redraw(&self) {
+    /// Immediate redraw for direct user interaction (clicks, typing, scroll, resize).
+    fn request_redraw(&mut self) {
+        self.redraw_dirty = false;
+        self.last_redraw = Instant::now();
         if let Some(w) = &self.window {
             w.request_redraw();
+        }
+    }
+
+    /// Coalesced redraw for streaming terminal output (caps GPU submits at 120Hz).
+    fn mark_stream_dirty(&mut self) {
+        if self.last_redraw.elapsed() >= FRAME_INTERVAL {
+            self.request_redraw();
+        } else {
+            self.redraw_dirty = true;
         }
     }
 
@@ -468,18 +489,20 @@ impl ApplicationHandler<HubEvent> for NativeApp {
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
         let size = window.inner_size();
+        let scale = window.scale_factor() as f32;
         let instance = wgpu::Instance::default();
         let surface = instance
             .create_surface(Arc::clone(&window))
             .expect("create wgpu surface");
-        let renderer = GpuRenderer::from_surface(
+        let mut renderer = GpuRenderer::from_surface(
             instance,
             surface,
             size.width,
             size.height,
-            self.cfg.font_size,
+            (self.cfg.font_size * scale).clamp(12.0, 36.0),
         )
         .expect("init wgpu renderer");
+        renderer.set_scale_factor(scale);
         self.window = Some(window);
         self.renderer = Some(renderer);
         self.request_redraw();
@@ -515,7 +538,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
                     .or_insert_with(|| NativeTerminal::new(120, 40));
                 term.feed(&bytes);
                 if self.stage.stage_ids.iter().any(|id| id == &terminal_id) {
-                    self.request_redraw();
+                    self.mark_stream_dirty();
                 }
             }
             HubEvent::TerminalResized {
@@ -749,7 +772,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
                 let shelf_pills = self.build_shelf_pills();
                 let pane_rects = self.current_pane_rects();
 
-                let pane_data: Vec<(String, String, LayoutRect, bool, bool, Option<RenderFrame>)> =
+                let pane_data: Vec<(String, String, LayoutRect, bool, bool, Option<Arc<RenderFrame>>)> =
                     pane_rects
                         .into_iter()
                         .map(|(id, rect, is_master)| {
@@ -766,7 +789,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
                                 })
                                 .unwrap_or_else(|| id.chars().take(8).collect());
                             let active = self.stage.active_id.as_deref() == Some(id.as_str());
-                            let frame = self.live_terms.get(&id).map(|t| t.snapshot_frame());
+                            let frame = self.live_terms.get_mut(&id).map(|t| t.snapshot_frame());
                             (id, title, rect, active, is_master, frame)
                         })
                         .collect();
@@ -779,7 +802,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
                         rect: *rect,
                         active: *active,
                         is_master: *is_master,
-                        frame: frame.as_ref(),
+                        frame: frame.as_deref(),
                     })
                     .collect();
 
@@ -851,6 +874,20 @@ impl ApplicationHandler<HubEvent> for NativeApp {
                 }
             }
             _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.redraw_dirty {
+            let elapsed = self.last_redraw.elapsed();
+            if elapsed >= FRAME_INTERVAL {
+                self.request_redraw();
+                event_loop.set_control_flow(ControlFlow::Wait);
+            } else {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(self.last_redraw + FRAME_INTERVAL));
+            }
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 }

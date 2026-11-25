@@ -198,10 +198,10 @@ impl OffdeskTermHandle {
         let frame = self
             .active_terminal_id
             .as_ref()
-            .and_then(|id| self.terminals.get(id))
+            .and_then(|id| self.terminals.get_mut(id))
             .map(|t| t.snapshot_frame());
         if let Some(renderer) = &mut self.renderer {
-            renderer.render_terminal_only(frame.as_ref(), self.padding_x, self.padding_y)?;
+            renderer.render_terminal_only(frame.as_deref(), self.padding_x, self.padding_y)?;
         }
         Ok(())
     }

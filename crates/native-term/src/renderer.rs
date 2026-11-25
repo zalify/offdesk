@@ -5,7 +5,7 @@ use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
-use wgpu::util::DeviceExt;
+use std::collections::HashMap;
 
 pub const SIDEBAR_WIDTH: f32 = 240.0;
 pub const TOPBAR_HEIGHT: f32 = 34.0;
@@ -109,6 +109,89 @@ pub enum PaneHitAction {
     SwapToMaster(String),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SpanCacheKey {
+    font_size_tenths: u16,
+    line_height_tenths: u16,
+    weight: u16,
+    italic: bool,
+    text: String,
+}
+
+struct CachedBuffer {
+    buffer: Buffer,
+    last_used_frame: u64,
+}
+
+/// Generational cache of shaped `glyphon::Buffer` instances so unchanged terminal rows,
+/// sidebar rows, pane headers, and status labels skip HarfBuzz/cosmic-text shaping.
+struct TextBufferCache {
+    entries: HashMap<SpanCacheKey, CachedBuffer>,
+    frame_seq: u64,
+}
+
+impl TextBufferCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::with_capacity(512),
+            frame_seq: 0,
+        }
+    }
+
+    fn begin_frame(&mut self) {
+        self.frame_seq = self.frame_seq.wrapping_add(1);
+    }
+
+    fn ensure(
+        &mut self,
+        font_system: &mut FontSystem,
+        text: &str,
+        metrics: Metrics,
+        weight: Weight,
+        italic: bool,
+    ) -> SpanCacheKey {
+        let key = SpanCacheKey {
+            font_size_tenths: (metrics.font_size * 10.0).round() as u16,
+            line_height_tenths: (metrics.line_height * 10.0).round() as u16,
+            weight: weight.0,
+            italic,
+            text: text.to_string(),
+        };
+        if let Some(entry) = self.entries.get_mut(&key) {
+            entry.last_used_frame = self.frame_seq;
+        } else {
+            let buffer = make_buffer(font_system, text, metrics, weight, italic);
+            self.entries.insert(
+                key.clone(),
+                CachedBuffer {
+                    buffer,
+                    last_used_frame: self.frame_seq,
+                },
+            );
+        }
+        key
+    }
+
+    fn get(&self, key: &SpanCacheKey) -> Option<&Buffer> {
+        self.entries.get(key).map(|e| &e.buffer)
+    }
+
+    fn evict_stale(&mut self) {
+        if self.entries.len() > 512 {
+            let cutoff = self.frame_seq.saturating_sub(120);
+            self.entries.retain(|_, v| v.last_used_frame >= cutoff);
+        }
+    }
+}
+
+struct DrawTextCmd {
+    key: SpanCacheKey,
+    left: f32,
+    top: f32,
+    color: Color,
+    bounds: TextBounds,
+}
+
 /// Platform-independent GPU renderer backed by `wgpu` + `glyphon`.
 ///
 /// Works identically across:
@@ -121,12 +204,17 @@ pub struct GpuRenderer {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     quad_pipeline: wgpu::RenderPipeline,
+    quad_buffer: wgpu::Buffer,
+    quad_buffer_cap: usize,
+    quad_scratch: Vec<QuadVertex>,
+    text_cache: TextBufferCache,
     font_system: FontSystem,
     swash_cache: SwashCache,
     atlas: TextAtlas,
     viewport: Viewport,
     text_renderer: TextRenderer,
     pub font_size: f32,
+    pub scale: f32,
     pub cell_width: f32,
     pub cell_height: f32,
 }
@@ -152,7 +240,7 @@ impl GpuRenderer {
             &wgpu::DeviceDescriptor {
                 label: Some("offdesk-native-gpu"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::Performance,
             },
             None,
@@ -234,6 +322,13 @@ impl GpuRenderer {
             TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
 
         let (cell_width, cell_height) = measure_mono_cell(&mut font_system, font_size);
+        let initial_quad_cap = 4096usize;
+        let quad_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quad-vbuf"),
+            size: (initial_quad_cap * std::mem::size_of::<QuadVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
 
         Ok(Self {
             surface,
@@ -241,15 +336,24 @@ impl GpuRenderer {
             queue,
             config,
             quad_pipeline,
+            quad_buffer,
+            quad_buffer_cap: initial_quad_cap,
+            quad_scratch: Vec::with_capacity(initial_quad_cap),
+            text_cache: TextBufferCache::new(),
             font_system,
             swash_cache,
             atlas,
             viewport,
             text_renderer,
             font_size,
+            scale: 1.0,
             cell_width,
             cell_height,
         })
+    }
+
+    pub fn set_scale_factor(&mut self, scale: f32) {
+        self.scale = scale.clamp(1.0, 3.0);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -263,7 +367,7 @@ impl GpuRenderer {
     }
 
     pub fn set_font_size(&mut self, font_size: f32) {
-        self.font_size = font_size.clamp(10.0, 28.0);
+        self.font_size = font_size.clamp(10.0, 40.0);
         let (cw, ch) = measure_mono_cell(&mut self.font_system, self.font_size);
         self.cell_width = cw;
         self.cell_height = ch;
@@ -271,20 +375,24 @@ impl GpuRenderer {
 
     /// Compute the stage rectangle available for foreground panes.
     pub fn stage_rect(&self, has_shelf: bool) -> LayoutRect {
-        let shelf_h = if has_shelf { SHELF_HEIGHT } else { 0.0 };
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        let top_h = TOPBAR_HEIGHT * s;
+        let st_h = STATUSBAR_HEIGHT * s;
+        let shelf_h = if has_shelf { SHELF_HEIGHT * s } else { 0.0 };
         LayoutRect {
-            x: SIDEBAR_WIDTH + 1.0,
-            y: TOPBAR_HEIGHT + 1.0,
-            w: (self.config.width as f32 - SIDEBAR_WIDTH - 1.0).max(160.0),
-            h: (self.config.height as f32 - TOPBAR_HEIGHT - STATUSBAR_HEIGHT - shelf_h - 2.0)
-                .max(100.0),
+            x: sb_w + s,
+            y: top_h + s,
+            w: (self.config.width as f32 - sb_w - s).max(160.0),
+            h: (self.config.height as f32 - top_h - st_h - shelf_h - 2.0 * s).max(100.0),
         }
     }
 
     /// Compute exact terminal (cols, rows) for a given pane rectangle.
     pub fn pane_grid_size(&self, pane: LayoutRect) -> (u16, u16) {
-        let term_w = (pane.w - 14.0).max(80.0);
-        let term_h = (pane.h - PANE_HEADER_HEIGHT - 10.0).max(60.0);
+        let s = self.scale;
+        let term_w = (pane.w - 14.0 * s).max(80.0);
+        let term_h = (pane.h - PANE_HEADER_HEIGHT * s - 10.0 * s).max(60.0);
         let cols = (term_w / self.cell_width).floor().max(20.0) as u16;
         let rows = (term_h / self.cell_height).floor().max(6.0) as u16;
         (cols, rows)
@@ -297,16 +405,20 @@ impl GpuRenderer {
 
     /// Hit-test the 4 clickable layout switcher icons in the top-right of the topbar.
     pub fn hit_test_layout_button(&self, px: f32, py: f32) -> Option<StageLayout> {
-        if py > TOPBAR_HEIGHT {
+        let s = self.scale;
+        let top_h = TOPBAR_HEIGHT * s;
+        if py > top_h {
             return None;
         }
         let w = self.config.width as f32;
-        let total_w = StageLayout::ALL.len() as f32 * LAYOUT_BTN_W
-            + (StageLayout::ALL.len() as f32 - 1.0) * LAYOUT_BTN_GAP;
-        let start_x = w - 10.0 - total_w;
+        let btn_w = LAYOUT_BTN_W * s;
+        let btn_gap = LAYOUT_BTN_GAP * s;
+        let total_w = StageLayout::ALL.len() as f32 * btn_w
+            + (StageLayout::ALL.len() as f32 - 1.0) * btn_gap;
+        let start_x = w - 10.0 * s - total_w;
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
-            let bx = start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
-            if px >= bx && px <= bx + LAYOUT_BTN_W && py >= 4.0 && py <= TOPBAR_HEIGHT - 4.0 {
+            let bx = start_x + i as f32 * (btn_w + btn_gap);
+            if px >= bx && px <= bx + btn_w && py >= 4.0 * s && py <= top_h - 4.0 * s {
                 return Some(*layout);
             }
         }
@@ -318,30 +430,38 @@ impl GpuRenderer {
         if pills.is_empty() {
             return None;
         }
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        let st_h = STATUSBAR_HEIGHT * s;
+        let sh_h = SHELF_HEIGHT * s;
+        let pill_w = SHELF_PILL_W * s;
+        let pill_gap = SHELF_PILL_GAP * s;
         let h = self.config.height as f32;
-        let shelf_y = h - STATUSBAR_HEIGHT - SHELF_HEIGHT;
-        if py < shelf_y || py > h - STATUSBAR_HEIGHT || px < SIDEBAR_WIDTH {
+        let shelf_y = h - st_h - sh_h;
+        if py < shelf_y || py > h - st_h || px < sb_w {
             return None;
         }
-        let mut x = SIDEBAR_WIDTH + 8.0;
+        let mut x = sb_w + 8.0 * s;
         for pill in pills {
-            if px >= x && px <= x + SHELF_PILL_W {
+            if px >= x && px <= x + pill_w {
                 return Some(pill.terminal_id.clone());
             }
-            x += SHELF_PILL_W + SHELF_PILL_GAP;
+            x += pill_w + pill_gap;
         }
         None
     }
 
     /// Hit-test sidebar rows (project group toggle, `[▶]` focus-group, or terminal selection).
     pub fn hit_test_sidebar(&self, px: f32, py: f32, rows: &[SidebarItem]) -> Option<SidebarHitAction> {
-        if px >= SIDEBAR_WIDTH || py < 38.0 {
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        if px >= sb_w || py < 38.0 * s {
             return None;
         }
-        let idx = ((py - 38.0) / 28.0).floor() as usize;
+        let idx = ((py - 38.0 * s) / (28.0 * s)).floor() as usize;
         match rows.get(idx)? {
             SidebarItem::GroupHeader { group, .. } => {
-                if px >= SIDEBAR_WIDTH - 34.0 {
+                if px >= sb_w - 34.0 * s {
                     Some(SidebarHitAction::FocusGroup(group.clone()))
                 } else {
                     Some(SidebarHitAction::ToggleGroup(group.clone()))
@@ -358,17 +478,18 @@ impl GpuRenderer {
         py: f32,
         panes: &[(String, LayoutRect, bool)],
     ) -> Option<PaneHitAction> {
+        let s = self.scale;
         for (id, rect, is_master) in panes {
             if !rect.contains(px, py) {
                 continue;
             }
-            if py <= rect.y + PANE_HEADER_HEIGHT {
-                let min_x = rect.x + rect.w - 26.0;
+            if py <= rect.y + PANE_HEADER_HEIGHT * s {
+                let min_x = rect.x + rect.w - 26.0 * s;
                 if px >= min_x {
                     return Some(PaneHitAction::Minimize(id.clone()));
                 }
                 if !*is_master {
-                    let swap_x = rect.x + rect.w - 50.0;
+                    let swap_x = rect.x + rect.w - 50.0 * s;
                     if px >= swap_x && px < min_x {
                         return Some(PaneHitAction::SwapToMaster(id.clone()));
                     }
@@ -399,8 +520,9 @@ impl GpuRenderer {
     ) -> Result<(), String> {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
-        let mut quads: Vec<QuadVertex> = Vec::with_capacity(512);
-        let mut buffers: Vec<(Buffer, f32, f32, Color, TextBounds)> = Vec::new();
+        self.quad_scratch.clear();
+        self.text_cache.begin_frame();
+        let mut draw_cmds: Vec<DrawTextCmd> = Vec::with_capacity(256);
         let term_metrics = Metrics::new(self.font_size, self.cell_height);
         let term_bounds = TextBounds {
             left: padding_x as i32,
@@ -414,7 +536,7 @@ impl GpuRenderer {
                 let rx = padding_x + run.col as f32 * self.cell_width;
                 let ry = padding_y + run.row as f32 * self.cell_height;
                 push_rect(
-                    &mut quads,
+                    &mut self.quad_scratch,
                     w,
                     h,
                     rx,
@@ -426,7 +548,7 @@ impl GpuRenderer {
             }
             if let Some((cx, cy)) = frame.cursor {
                 push_rect(
-                    &mut quads,
+                    &mut self.quad_scratch,
                     w,
                     h,
                     padding_x + cx as f32 * self.cell_width,
@@ -441,18 +563,25 @@ impl GpuRenderer {
                 for span in spans {
                     let x = padding_x + span.col as f32 * self.cell_width;
                     let weight = if span.bold { Weight::BOLD } else { Weight::NORMAL };
-                    buffers.push((
-                        make_buffer(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
-                        x,
-                        y,
-                        Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
-                        term_bounds,
-                    ));
+                    let key = self.text_cache.ensure(
+                        &mut self.font_system,
+                        &span.text,
+                        term_metrics,
+                        weight,
+                        span.italic,
+                    );
+                    draw_cmds.push(DrawTextCmd {
+                        key,
+                        left: x,
+                        top: y,
+                        color: Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
+                        bounds: term_bounds,
+                    });
                 }
             }
         }
 
-        self.present_pass(quads, buffers)
+        self.present_pass(&draw_cmds)
     }
 
     /// Render the full desktop workspace (sidebar, topbar + layout switcher, multi-pane stage,
@@ -460,36 +589,47 @@ impl GpuRenderer {
     pub fn render(&mut self, ui: UiSnapshot<'_>) -> Result<(), String> {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
-        let mut quads: Vec<QuadVertex> = Vec::with_capacity(3072);
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        let top_h = TOPBAR_HEIGHT * s;
+        let hdr_h = PANE_HEADER_HEIGHT * s;
+        let sh_h = SHELF_HEIGHT * s;
+        let st_h = STATUSBAR_HEIGHT * s;
+        let btn_w = LAYOUT_BTN_W * s;
+        let btn_gap = LAYOUT_BTN_GAP * s;
+        let pill_w = SHELF_PILL_W * s;
+        let pill_gap = SHELF_PILL_GAP * s;
+        let mut quads = std::mem::take(&mut self.quad_scratch);
+        quads.clear();
         let has_shelf = !ui.shelf_pills.is_empty();
-        let shelf_y = h - STATUSBAR_HEIGHT - SHELF_HEIGHT;
+        let shelf_y = h - st_h - sh_h;
 
         // Sidebar, topbar, statusbar chrome backgrounds.
-        push_rect(&mut quads, w, h, 0.0, 0.0, SIDEBAR_WIDTH, h - STATUSBAR_HEIGHT, [0.095, 0.098, 0.105, 1.0]);
-        push_rect(&mut quads, w, h, SIDEBAR_WIDTH, 0.0, 1.0, h - STATUSBAR_HEIGHT, [0.18, 0.19, 0.21, 1.0]);
-        push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, 0.0, w - SIDEBAR_WIDTH, TOPBAR_HEIGHT, [0.09, 0.093, 0.10, 1.0]);
-        push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, TOPBAR_HEIGHT, w - SIDEBAR_WIDTH, 1.0, [0.18, 0.19, 0.21, 1.0]);
-        push_rect(&mut quads, w, h, 0.0, h - STATUSBAR_HEIGHT, w, STATUSBAR_HEIGHT, [0.085, 0.088, 0.095, 1.0]);
-        push_rect(&mut quads, w, h, 0.0, h - STATUSBAR_HEIGHT, w, 1.0, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, 0.0, sb_w, h - st_h, [0.095, 0.098, 0.105, 1.0]);
+        push_rect(&mut quads, w, h, sb_w, 0.0, s, h - st_h, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, sb_w + s, 0.0, w - sb_w, top_h, [0.09, 0.093, 0.10, 1.0]);
+        push_rect(&mut quads, w, h, sb_w + s, top_h, w - sb_w, s, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, h - st_h, w, st_h, [0.085, 0.088, 0.095, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, h - st_h, w, s, [0.18, 0.19, 0.21, 1.0]);
 
         // Topbar clickable layout switcher buttons ([▢] [◫] [◧] [⊞]).
-        let total_layout_w = StageLayout::ALL.len() as f32 * LAYOUT_BTN_W
-            + (StageLayout::ALL.len() as f32 - 1.0) * LAYOUT_BTN_GAP;
-        let layout_start_x = w - 10.0 - total_layout_w;
+        let total_layout_w = StageLayout::ALL.len() as f32 * btn_w
+            + (StageLayout::ALL.len() as f32 - 1.0) * btn_gap;
+        let layout_start_x = w - 10.0 * s - total_layout_w;
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
-            let bx = layout_start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
+            let bx = layout_start_x + i as f32 * (btn_w + btn_gap);
             let bg = if *layout == ui.layout {
                 [0.24, 0.34, 0.52, 1.0]
             } else {
                 [0.14, 0.15, 0.17, 1.0]
             };
-            push_rect(&mut quads, w, h, bx, 5.0, LAYOUT_BTN_W, TOPBAR_HEIGHT - 10.0, bg);
+            push_rect(&mut quads, w, h, bx, 5.0 * s, btn_w, top_h - 10.0 * s, bg);
         }
 
         // Sidebar items background + status dots (grouped by project).
         for (idx, row) in ui.sidebar_rows.iter().enumerate() {
-            let y = 38.0 + idx as f32 * 28.0;
-            if y + 26.0 > h - STATUSBAR_HEIGHT {
+            let y = 38.0 * s + idx as f32 * (28.0 * s);
+            if y + 26.0 * s > h - st_h {
                 break;
             }
             match row {
@@ -503,11 +643,11 @@ impl GpuRenderer {
                     } else {
                         [0.115, 0.12, 0.132, 1.0]
                     };
-                    push_rect(&mut quads, w, h, 4.0, y + 1.0, SIDEBAR_WIDTH - 8.0, 24.0, hdr_bg);
+                    push_rect(&mut quads, w, h, 4.0 * s, y + s, sb_w - 8.0 * s, 24.0 * s, hdr_bg);
                     // Clickable [▶] focus-group button on right
-                    push_rect(&mut quads, w, h, SIDEBAR_WIDTH - 30.0, y + 4.0, 22.0, 18.0, [0.18, 0.20, 0.24, 1.0]);
+                    push_rect(&mut quads, w, h, sb_w - 30.0 * s, y + 4.0 * s, 22.0 * s, 18.0 * s, [0.18, 0.20, 0.24, 1.0]);
                     if *waiting_count > 0 {
-                        push_rect(&mut quads, w, h, SIDEBAR_WIDTH - 44.0, y + 9.0, 7.0, 7.0, [0.95, 0.40, 0.35, 1.0]);
+                        push_rect(&mut quads, w, h, sb_w - 44.0 * s, y + 9.0 * s, 7.0 * s, 7.0 * s, [0.95, 0.40, 0.35, 1.0]);
                     }
                 }
                 SidebarItem::Terminal {
@@ -517,14 +657,14 @@ impl GpuRenderer {
                     ..
                 } => {
                     if *active {
-                        push_rect(&mut quads, w, h, 10.0, y, SIDEBAR_WIDTH - 16.0, 24.0, [0.18, 0.20, 0.24, 1.0]);
+                        push_rect(&mut quads, w, h, 10.0 * s, y, sb_w - 16.0 * s, 24.0 * s, [0.18, 0.20, 0.24, 1.0]);
                     }
                     if *waiting {
-                        push_rect(&mut quads, w, h, 16.0, y + 8.0, 7.0, 7.0, [0.95, 0.42, 0.35, 1.0]);
+                        push_rect(&mut quads, w, h, 16.0 * s, y + 8.0 * s, 7.0 * s, 7.0 * s, [0.95, 0.42, 0.35, 1.0]);
                     } else if *active {
-                        push_rect(&mut quads, w, h, 16.0, y + 8.0, 7.0, 7.0, [0.30, 0.82, 0.45, 1.0]);
+                        push_rect(&mut quads, w, h, 16.0 * s, y + 8.0 * s, 7.0 * s, 7.0 * s, [0.30, 0.82, 0.45, 1.0]);
                     } else if *minimized {
-                        push_rect(&mut quads, w, h, 16.0, y + 10.0, 7.0, 3.0, [0.45, 0.65, 0.95, 1.0]);
+                        push_rect(&mut quads, w, h, 16.0 * s, y + 10.0 * s, 7.0 * s, 3.0 * s, [0.45, 0.65, 0.95, 1.0]);
                     }
                 }
             }
@@ -539,19 +679,19 @@ impl GpuRenderer {
             } else {
                 [0.088, 0.092, 0.10, 1.0]
             };
-            push_rect(&mut quads, w, h, r.x, r.y, r.w, PANE_HEADER_HEIGHT, hdr_bg);
-            push_rect(&mut quads, w, h, r.x, r.y + PANE_HEADER_HEIGHT, r.w, 1.0, [0.16, 0.17, 0.19, 1.0]);
+            push_rect(&mut quads, w, h, r.x, r.y, r.w, hdr_h, hdr_bg);
+            push_rect(&mut quads, w, h, r.x, r.y + hdr_h, r.w, s, [0.16, 0.17, 0.19, 1.0]);
             if pane.active && ui.panes.len() > 1 {
-                push_rect(&mut quads, w, h, r.x, r.y, r.w, 2.0, [0.45, 0.72, 0.98, 1.0]);
+                push_rect(&mut quads, w, h, r.x, r.y, r.w, 2.0 * s, [0.45, 0.72, 0.98, 1.0]);
             }
             // Pane action button backgrounds: [↖] (secondary) and [—] (minimize)
-            push_rect(&mut quads, w, h, r.x + r.w - 24.0, r.y + 3.0, 20.0, PANE_HEADER_HEIGHT - 6.0, [0.15, 0.16, 0.18, 1.0]);
+            push_rect(&mut quads, w, h, r.x + r.w - 24.0 * s, r.y + 3.0 * s, 20.0 * s, hdr_h - 6.0 * s, [0.15, 0.16, 0.18, 1.0]);
             if !pane.is_master {
-                push_rect(&mut quads, w, h, r.x + r.w - 48.0, r.y + 3.0, 20.0, PANE_HEADER_HEIGHT - 6.0, [0.15, 0.16, 0.18, 1.0]);
+                push_rect(&mut quads, w, h, r.x + r.w - 48.0 * s, r.y + 3.0 * s, 20.0 * s, hdr_h - 6.0 * s, [0.15, 0.16, 0.18, 1.0]);
             }
 
-            let term_x = r.x + 7.0;
-            let term_y = r.y + PANE_HEADER_HEIGHT + 4.0;
+            let term_x = r.x + 7.0 * s;
+            let term_y = r.y + hdr_h + 4.0 * s;
             if let Some(frame) = pane.frame {
                 for run in &frame.bg_runs {
                     let rx = term_x + run.col as f32 * self.cell_width;
@@ -590,11 +730,11 @@ impl GpuRenderer {
 
         // Background Shelf bar (auto-hidden when empty).
         if has_shelf {
-            push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, shelf_y, w - SIDEBAR_WIDTH - 1.0, SHELF_HEIGHT, [0.095, 0.10, 0.115, 1.0]);
-            push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, shelf_y, w - SIDEBAR_WIDTH - 1.0, 1.0, [0.18, 0.19, 0.22, 1.0]);
-            let mut px = SIDEBAR_WIDTH + 8.0;
+            push_rect(&mut quads, w, h, sb_w + s, shelf_y, w - sb_w - s, sh_h, [0.095, 0.10, 0.115, 1.0]);
+            push_rect(&mut quads, w, h, sb_w + s, shelf_y, w - sb_w - s, s, [0.18, 0.19, 0.22, 1.0]);
+            let mut px = sb_w + 8.0 * s;
             for pill in ui.shelf_pills {
-                if px + SHELF_PILL_W > w - 8.0 {
+                if px + pill_w > w - 8.0 * s {
                     break;
                 }
                 let bg = if pill.waiting {
@@ -602,7 +742,7 @@ impl GpuRenderer {
                 } else {
                     [0.15, 0.165, 0.195, 1.0]
                 };
-                push_rect(&mut quads, w, h, px, shelf_y + 4.0, SHELF_PILL_W, SHELF_HEIGHT - 8.0, bg);
+                push_rect(&mut quads, w, h, px, shelf_y + 4.0 * s, pill_w, sh_h - 8.0 * s, bg);
                 let dot_color = if pill.waiting {
                     [0.95, 0.35, 0.35, 1.0]
                 } else if pill.working {
@@ -610,8 +750,8 @@ impl GpuRenderer {
                 } else {
                     [0.50, 0.54, 0.62, 1.0]
                 };
-                push_rect(&mut quads, w, h, px + 7.0, shelf_y + 11.0, 6.0, 6.0, dot_color);
-                px += SHELF_PILL_W + SHELF_PILL_GAP;
+                push_rect(&mut quads, w, h, px + 7.0 * s, shelf_y + 11.0 * s, 6.0 * s, 6.0 * s, dot_color);
+                px += pill_w + pill_gap;
             }
         }
 
@@ -637,22 +777,23 @@ impl GpuRenderer {
             }
         }
 
-        let mut buffers: Vec<(Buffer, f32, f32, Color, TextBounds)> = Vec::new();
-        let ui_metrics = Metrics::new(13.0, 18.0);
-        let small_metrics = Metrics::new(11.5, 16.0);
+        self.text_cache.begin_frame();
+        let mut buffers: Vec<(SpanCacheKey, f32, f32, Color, TextBounds)> = Vec::with_capacity(512);
+        let ui_metrics = Metrics::new(13.0 * s, 18.0 * s);
+        let small_metrics = Metrics::new(11.5 * s, 16.0 * s);
         let term_metrics = Metrics::new(self.font_size, self.cell_height);
 
         buffers.push((
-            make_buffer(&mut self.font_system, "OFFDESK NATIVE", ui_metrics, Weight::BOLD, false),
-            14.0,
-            10.0,
+            self.text_cache.ensure(&mut self.font_system, "OFFDESK NATIVE", ui_metrics, Weight::BOLD, false),
+            14.0 * s,
+            10.0 * s,
             Color::rgb(150, 155, 165),
-            TextBounds { left: 0, top: 0, right: SIDEBAR_WIDTH as i32, bottom: 34 },
+            TextBounds { left: 0, top: 0, right: sb_w as i32, bottom: top_h as i32 },
         ));
 
         for (idx, row) in ui.sidebar_rows.iter().enumerate() {
-            let y = 41.0 + idx as f32 * 28.0;
-            if y + 20.0 > h - STATUSBAR_HEIGHT {
+            let y = 41.0 * s + idx as f32 * (28.0 * s);
+            if y + 20.0 * s > h - st_h {
                 break;
             }
             match row {
@@ -671,28 +812,28 @@ impl GpuRenderer {
                         Color::rgb(175, 185, 200)
                     };
                     buffers.push((
-                        make_buffer(&mut self.font_system, &text, small_metrics, Weight::BOLD, false),
-                        10.0,
-                        y + 1.0,
+                        self.text_cache.ensure(&mut self.font_system, &text, small_metrics, Weight::BOLD, false),
+                        10.0 * s,
+                        y + s,
                         color,
                         TextBounds {
-                            left: 8,
+                            left: (8.0 * s) as i32,
                             top: y as i32,
-                            right: (SIDEBAR_WIDTH - 48.0) as i32,
-                            bottom: (y + 20.0) as i32,
+                            right: (sb_w - 48.0 * s) as i32,
+                            bottom: (y + 20.0 * s) as i32,
                         },
                     ));
                     // [▶] focus-group glyph
                     buffers.push((
-                        make_buffer(&mut self.font_system, "▶", small_metrics, Weight::NORMAL, false),
-                        SIDEBAR_WIDTH - 24.0,
-                        y + 1.0,
+                        self.text_cache.ensure(&mut self.font_system, "▶", small_metrics, Weight::NORMAL, false),
+                        sb_w - 24.0 * s,
+                        y + s,
                         Color::rgb(170, 185, 210),
                         TextBounds {
-                            left: (SIDEBAR_WIDTH - 30.0) as i32,
+                            left: (sb_w - 30.0 * s) as i32,
                             top: y as i32,
-                            right: (SIDEBAR_WIDTH - 8.0) as i32,
-                            bottom: (y + 20.0) as i32,
+                            right: (sb_w - 8.0 * s) as i32,
+                            bottom: (y + 20.0 * s) as i32,
                         },
                     ));
                 }
@@ -719,15 +860,15 @@ impl GpuRenderer {
                         Color::rgb(170, 175, 185)
                     };
                     buffers.push((
-                        make_buffer(&mut self.font_system, &text, ui_metrics, if *active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
-                        30.0,
-                        y - 1.0,
+                        self.text_cache.ensure(&mut self.font_system, &text, ui_metrics, if *active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
+                        30.0 * s,
+                        y - s,
                         color,
                         TextBounds {
-                            left: 28,
+                            left: (28.0 * s) as i32,
                             top: y as i32,
-                            right: (SIDEBAR_WIDTH - 10.0) as i32,
-                            bottom: (y + 20.0) as i32,
+                            right: (sb_w - 10.0 * s) as i32,
+                            bottom: (y + 20.0 * s) as i32,
                         },
                     ));
                 }
@@ -736,29 +877,29 @@ impl GpuRenderer {
 
         // Topbar title + layout icons
         buffers.push((
-            make_buffer(&mut self.font_system, ui.header_title, ui_metrics, Weight::MEDIUM, false),
-            SIDEBAR_WIDTH + 14.0,
-            8.0,
+            self.text_cache.ensure(&mut self.font_system, ui.header_title, ui_metrics, Weight::MEDIUM, false),
+            sb_w + 14.0 * s,
+            8.0 * s,
             Color::rgb(215, 220, 230),
             TextBounds {
-                left: SIDEBAR_WIDTH as i32,
+                left: sb_w as i32,
                 top: 0,
-                right: (layout_start_x - 10.0).max(SIDEBAR_WIDTH) as i32,
-                bottom: TOPBAR_HEIGHT as i32,
+                right: (layout_start_x - 10.0 * s).max(sb_w) as i32,
+                bottom: top_h as i32,
             },
         ));
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
-            let bx = layout_start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
+            let bx = layout_start_x + i as f32 * (btn_w + btn_gap);
             buffers.push((
-                make_buffer(&mut self.font_system, layout.icon_label(), ui_metrics, Weight::MEDIUM, false),
-                bx + 8.0,
-                8.0,
+                self.text_cache.ensure(&mut self.font_system, layout.icon_label(), ui_metrics, Weight::MEDIUM, false),
+                bx + 8.0 * s,
+                8.0 * s,
                 if *layout == ui.layout { Color::rgb(255, 255, 255) } else { Color::rgb(155, 160, 170) },
                 TextBounds {
                     left: bx as i32,
                     top: 0,
-                    right: (bx + LAYOUT_BTN_W) as i32,
-                    bottom: TOPBAR_HEIGHT as i32,
+                    right: (bx + btn_w) as i32,
+                    bottom: top_h as i32,
                 },
             ));
         }
@@ -768,55 +909,55 @@ impl GpuRenderer {
             let r = pane.rect;
             let dot = if pane.active { "● " } else { "○ " };
             let title_str = format!("{}{}", dot, pane.title);
-            let action_reserve = if pane.is_master { 30.0 } else { 54.0 };
+            let action_reserve = if pane.is_master { 30.0 * s } else { 54.0 * s };
             buffers.push((
-                make_buffer(&mut self.font_system, &title_str, small_metrics, if pane.active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
-                r.x + 8.0,
-                r.y + 4.0,
+                self.text_cache.ensure(&mut self.font_system, &title_str, small_metrics, if pane.active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
+                r.x + 8.0 * s,
+                r.y + 4.0 * s,
                 if pane.active { Color::rgb(235, 240, 248) } else { Color::rgb(155, 160, 170) },
                 TextBounds {
                     left: r.x as i32,
                     top: r.y as i32,
                     right: (r.x + r.w - action_reserve).max(r.x) as i32,
-                    bottom: (r.y + PANE_HEADER_HEIGHT) as i32,
+                    bottom: (r.y + hdr_h) as i32,
                 },
             ));
             // [—] minimize button glyph
             buffers.push((
-                make_buffer(&mut self.font_system, "—", small_metrics, Weight::BOLD, false),
-                r.x + r.w - 19.0,
-                r.y + 4.0,
+                self.text_cache.ensure(&mut self.font_system, "—", small_metrics, Weight::BOLD, false),
+                r.x + r.w - 19.0 * s,
+                r.y + 4.0 * s,
                 Color::rgb(185, 190, 200),
                 TextBounds {
-                    left: (r.x + r.w - 24.0) as i32,
+                    left: (r.x + r.w - 24.0 * s) as i32,
                     top: r.y as i32,
-                    right: (r.x + r.w - 4.0) as i32,
-                    bottom: (r.y + PANE_HEADER_HEIGHT) as i32,
+                    right: (r.x + r.w - 4.0 * s) as i32,
+                    bottom: (r.y + hdr_h) as i32,
                 },
             ));
             // [↖] swap-to-master button glyph on secondary panes
             if !pane.is_master {
                 buffers.push((
-                    make_buffer(&mut self.font_system, "↖", small_metrics, Weight::BOLD, false),
-                    r.x + r.w - 43.0,
-                    r.y + 4.0,
+                    self.text_cache.ensure(&mut self.font_system, "↖", small_metrics, Weight::BOLD, false),
+                    r.x + r.w - 43.0 * s,
+                    r.y + 4.0 * s,
                     Color::rgb(185, 190, 200),
                     TextBounds {
-                        left: (r.x + r.w - 48.0) as i32,
+                        left: (r.x + r.w - 48.0 * s) as i32,
                         top: r.y as i32,
-                        right: (r.x + r.w - 28.0) as i32,
-                        bottom: (r.y + PANE_HEADER_HEIGHT) as i32,
+                        right: (r.x + r.w - 28.0 * s) as i32,
+                        bottom: (r.y + hdr_h) as i32,
                     },
                 ));
             }
 
-            let term_x = r.x + 7.0;
-            let term_y = r.y + PANE_HEADER_HEIGHT + 4.0;
+            let term_x = r.x + 7.0 * s;
+            let term_y = r.y + hdr_h + 4.0 * s;
             let term_bounds = TextBounds {
                 left: r.x as i32,
-                top: (r.y + PANE_HEADER_HEIGHT) as i32,
-                right: (r.x + r.w - 2.0) as i32,
-                bottom: (r.y + r.h - 2.0) as i32,
+                top: (r.y + hdr_h) as i32,
+                right: (r.x + r.w - 2.0 * s) as i32,
+                bottom: (r.y + r.h - 2.0 * s) as i32,
             };
             if let Some(frame) = pane.frame {
                 for (row_idx, spans) in frame.spans_by_row.iter().enumerate() {
@@ -828,7 +969,7 @@ impl GpuRenderer {
                         let x = term_x + span.col as f32 * self.cell_width;
                         let weight = if span.bold { Weight::BOLD } else { Weight::NORMAL };
                         buffers.push((
-                            make_buffer(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
+                            self.text_cache.ensure(&mut self.font_system, &span.text, term_metrics, weight, span.italic),
                             x,
                             y,
                             Color::rgb(span.fg[0], span.fg[1], span.fg[2]),
@@ -841,41 +982,41 @@ impl GpuRenderer {
 
         // Background Shelf pill labels
         if has_shelf {
-            let mut px = SIDEBAR_WIDTH + 8.0;
+            let mut px = sb_w + 8.0 * s;
             for pill in ui.shelf_pills {
-                if px + SHELF_PILL_W > w - 8.0 {
+                if px + pill_w > w - 8.0 * s {
                     break;
                 }
                 buffers.push((
-                    make_buffer(&mut self.font_system, &pill.label, small_metrics, if pill.waiting { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
-                    px + 18.0,
-                    shelf_y + 6.0,
+                    self.text_cache.ensure(&mut self.font_system, &pill.label, small_metrics, if pill.waiting { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
+                    px + 18.0 * s,
+                    shelf_y + 6.0 * s,
                     if pill.waiting { Color::rgb(255, 190, 180) } else { Color::rgb(205, 212, 224) },
                     TextBounds {
-                        left: (px + 16.0) as i32,
+                        left: (px + 16.0 * s) as i32,
                         top: shelf_y as i32,
-                        right: (px + SHELF_PILL_W - 6.0) as i32,
-                        bottom: (shelf_y + SHELF_HEIGHT) as i32,
+                        right: (px + pill_w - 6.0 * s) as i32,
+                        bottom: (shelf_y + sh_h) as i32,
                     },
                 ));
-                px += SHELF_PILL_W + SHELF_PILL_GAP;
+                px += pill_w + pill_gap;
             }
         }
 
         // Status bar
         buffers.push((
-            make_buffer(&mut self.font_system, ui.status_left, ui_metrics, Weight::NORMAL, false),
-            12.0,
-            h - STATUSBAR_HEIGHT + 4.0,
+            self.text_cache.ensure(&mut self.font_system, ui.status_left, ui_metrics, Weight::NORMAL, false),
+            12.0 * s,
+            h - st_h + 4.0 * s,
             Color::rgb(155, 160, 170),
-            TextBounds { left: 8, top: (h - STATUSBAR_HEIGHT) as i32, right: (w * 0.65) as i32, bottom: h as i32 },
+            TextBounds { left: (8.0 * s) as i32, top: (h - st_h) as i32, right: (w * 0.65) as i32, bottom: h as i32 },
         ));
         buffers.push((
-            make_buffer(&mut self.font_system, ui.status_right, ui_metrics, Weight::NORMAL, false),
-            (w - 280.0).max(SIDEBAR_WIDTH),
-            h - STATUSBAR_HEIGHT + 4.0,
+            self.text_cache.ensure(&mut self.font_system, ui.status_right, ui_metrics, Weight::NORMAL, false),
+            (w - 310.0 * s).max(sb_w),
+            h - st_h + 4.0 * s,
             Color::rgb(155, 160, 170),
-            TextBounds { left: (w - 290.0).max(SIDEBAR_WIDTH) as i32, top: (h - STATUSBAR_HEIGHT) as i32, right: w as i32 - 8, bottom: h as i32 },
+            TextBounds { left: (w - 320.0 * s).max(sb_w) as i32, top: (h - st_h) as i32, right: w as i32 - (8.0 * s) as i32, bottom: h as i32 },
         ));
 
         if let Some(pal) = &ui.palette {
@@ -888,7 +1029,7 @@ impl GpuRenderer {
                 format!(": {}", pal.query)
             };
             buffers.push((
-                make_buffer(&mut self.font_system, &prompt, Metrics::new(15.0, 22.0), Weight::MEDIUM, false),
+                self.text_cache.ensure(&mut self.font_system, &prompt, Metrics::new(15.0, 22.0), Weight::MEDIUM, false),
                 px + 14.0,
                 py + 10.0,
                 Color::rgb(245, 245, 250),
@@ -902,7 +1043,7 @@ impl GpuRenderer {
                     format!("{}  ·  {}", label, meta)
                 };
                 buffers.push((
-                    make_buffer(&mut self.font_system, &line, ui_metrics, if idx == pal.selected { Weight::BOLD } else { Weight::NORMAL }, false),
+                    self.text_cache.ensure(&mut self.font_system, &line, ui_metrics, if idx == pal.selected { Weight::BOLD } else { Weight::NORMAL }, false),
                     px + 16.0,
                     ry,
                     if idx == pal.selected { Color::rgb(255, 255, 255) } else { Color::rgb(210, 215, 225) },
@@ -911,24 +1052,34 @@ impl GpuRenderer {
             }
         }
 
-        self.present_pass(quads, buffers)
+        self.quad_scratch = quads;
+        let draw_cmds: Vec<DrawTextCmd> = buffers
+            .into_iter()
+            .map(|(key, left, top, color, bounds)| DrawTextCmd {
+                key,
+                left,
+                top,
+                color,
+                bounds,
+            })
+            .collect();
+        self.present_pass(&draw_cmds)
     }
 
-    fn present_pass(
-        &mut self,
-        quads: Vec<QuadVertex>,
-        buffers: Vec<(Buffer, f32, f32, Color, TextBounds)>,
-    ) -> Result<(), String> {
-        let text_areas: Vec<TextArea<'_>> = buffers
+    fn present_pass(&mut self, draw_cmds: &[DrawTextCmd]) -> Result<(), String> {
+        let text_areas: Vec<TextArea<'_>> = draw_cmds
             .iter()
-            .map(|(buf, left, top, color, bounds)| TextArea {
-                buffer: buf,
-                left: *left,
-                top: *top,
-                scale: 1.0,
-                bounds: *bounds,
-                default_color: *color,
-                custom_glyphs: &[],
+            .filter_map(|cmd| {
+                let buf = self.text_cache.get(&cmd.key)?;
+                Some(TextArea {
+                    buffer: buf,
+                    left: cmd.left,
+                    top: cmd.top,
+                    scale: 1.0,
+                    bounds: cmd.bounds,
+                    default_color: cmd.color,
+                    custom_glyphs: &[],
+                })
             })
             .collect();
 
@@ -952,15 +1103,23 @@ impl GpuRenderer {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let vertex_buffer = if !quads.is_empty() {
-            Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("quad-vbuf"),
-                contents: bytemuck::cast_slice(&quads),
-                usage: wgpu::BufferUsages::VERTEX,
-            }))
-        } else {
-            None
-        };
+        let quad_count = self.quad_scratch.len();
+        if quad_count > 0 {
+            if quad_count > self.quad_buffer_cap {
+                self.quad_buffer_cap = quad_count.next_power_of_two();
+                self.quad_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("quad-vbuf"),
+                    size: (self.quad_buffer_cap * std::mem::size_of::<QuadVertex>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+            }
+            self.queue.write_buffer(
+                &self.quad_buffer,
+                0,
+                bytemuck::cast_slice(&self.quad_scratch),
+            );
+        }
 
         let mut encoder = self
             .device
@@ -985,17 +1144,20 @@ impl GpuRenderer {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            if let Some(vb) = &vertex_buffer {
+            if quad_count > 0 {
                 pass.set_pipeline(&self.quad_pipeline);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..quads.len() as u32, 0..1);
+                pass.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                pass.draw(0..quad_count as u32, 0..1);
             }
             let _ = self.text_renderer.render(&self.atlas, &self.viewport, &mut pass);
         }
 
         self.queue.submit(Some(encoder.finish()));
         frame.present();
-        self.atlas.trim();
+        self.text_cache.evict_stale();
+        if self.text_cache.frame_seq % 60 == 0 {
+            self.atlas.trim();
+        }
         Ok(())
     }
 }
@@ -1058,4 +1220,67 @@ fn measure_mono_cell(font_system: &mut FontSystem, font_size: f32) -> (f32, f32)
         .filter(|w| *w > 4.0)
         .unwrap_or(font_size * 0.6);
     (width, line_height)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_buffer_cache_reuses_shaped_buffers_and_evicts_stale() {
+        let mut font_system = FontSystem::new();
+        let mut cache = TextBufferCache::new();
+        let metrics = Metrics::new(14.0, 18.0);
+
+        cache.begin_frame();
+        let t0 = std::time::Instant::now();
+        let mut keys = Vec::new();
+        for i in 0..80 {
+            keys.push(cache.ensure(
+                &mut font_system,
+                &format!("agent-line-{i}: 构建完成 ✓ 耗时 12ms"),
+                metrics,
+                Weight::NORMAL,
+                false,
+            ));
+        }
+        let cold_us = t0.elapsed().as_micros();
+        assert_eq!(cache.entries.len(), 80);
+
+        // Next frame with identical spans: 100% cache hit, zero shaping!
+        cache.begin_frame();
+        let t1 = std::time::Instant::now();
+        for i in 0..80 {
+            let k = cache.ensure(
+                &mut font_system,
+                &format!("agent-line-{i}: 构建完成 ✓ 耗时 12ms"),
+                metrics,
+                Weight::NORMAL,
+                false,
+            );
+            assert!(cache.get(&k).is_some());
+        }
+        let warm_us = t1.elapsed().as_micros();
+        assert_eq!(cache.entries.len(), 80);
+        println!(
+            "[perf] TextBufferCache 80 CJK+ASCII spans: cold={cold_us}µs, warm={warm_us}µs ({:.1}x faster)",
+            cold_us as f64 / warm_us.max(1) as f64
+        );
+
+        // Advance > 120 frames with > 512 entries to verify stale eviction bounds memory.
+        for frame in 0..130 {
+            cache.begin_frame();
+            for j in 0..5 {
+                let _ = cache.ensure(
+                    &mut font_system,
+                    &format!("ephemeral-{frame}-{j}"),
+                    metrics,
+                    Weight::NORMAL,
+                    false,
+                );
+            }
+            cache.evict_stale();
+        }
+        assert!(cache.get(&keys[0]).is_none(), "stale entries older than 120 frames should be evicted");
+    }
 }
