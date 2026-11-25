@@ -55,21 +55,32 @@ test("keys form an even grid, fit their labels, and the arrows stay put through 
     await expect(bar).toBeVisible();
     await expect(page.getByTestId("terminal-input-settings")).toHaveCount(0);
     // Every key is one grid column: the same width, 44px tall hit areas, at
-    // least 36px wide, and no label is ever clipped.
+    // least 36px wide, and no label is ever clipped. Wait until ResizeObserver
+    // has settled --key-width for the new viewport width.
     await expect.poll(async () => {
-      return bar.evaluate(el => {
+      return bar.evaluate((el, targetWidth) => {
+        if (Math.abs(window.innerWidth - targetWidth) > 1) return false;
         const keys = Array.from(el.querySelectorAll<HTMLElement>(".offdesk-terminal-key"));
-        const width = keys[0].getBoundingClientRect().width;
+        if (keys.length === 0) return false;
+        const firstWidth = keys[0].getBoundingClientRect().width;
         return keys.every(key => {
           const box = key.getBoundingClientRect();
-          return Math.abs(box.width - width) < 0.5 && box.width >= 36 && box.height === 44 && key.scrollWidth <= key.clientWidth;
+          return Math.abs(box.width - firstWidth) < 0.5 && box.width >= 36 && box.height === 44 && key.scrollWidth <= key.clientWidth;
         });
-      });
+      }, width);
     }).toBe(true);
     // The two rows line up: ↑ above ↓, enter above →, ^C above kb.
+    // Measure both keys atomically inside a single DOM frame so a mid-check
+    // ResizeObserver tick cannot skew the two x coordinates.
     const column = async (top: string, bottom: string) => {
-      const [a, b] = [await bar.getByTestId(top).boundingBox(), await bar.getByTestId(bottom).boundingBox()];
-      expect(Math.abs(a!.x - b!.x)).toBeLessThan(0.5);
+      await expect.poll(() =>
+        bar.evaluate((el, [topId, bottomId]) => {
+          const a = el.querySelector<HTMLElement>(`[data-testid="${topId}"]`)?.getBoundingClientRect();
+          const b = el.querySelector<HTMLElement>(`[data-testid="${bottomId}"]`)?.getBoundingClientRect();
+          if (!a || !b) return Infinity;
+          return Math.abs(a.x - b.x);
+        }, [top, bottom] as const),
+      ).toBeLessThan(0.5);
     };
     await column("extended-keybar-up", "extended-keybar-down");
     await column("extended-keybar-enter", "extended-keybar-right");
