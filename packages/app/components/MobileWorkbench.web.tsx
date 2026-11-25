@@ -747,7 +747,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           </button>
         )}
 
-        {onOpenDrafts && (
+        {onOpenDrafts && wideTitleBar && (
           <span
             onClick={(event) => event.stopPropagation()}
             onTouchStart={(event) => event.stopPropagation()}
@@ -1336,6 +1336,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 {updateCopy === "copied" ? "copied" : "copy update command"}
               </Button>
             </div>
+          )}
+          {onOpenDrafts && (
+            <MenuRow
+              icon={<FileText size={17} />}
+              label={draftsCount > 0 ? `Drafts (${draftsCount})` : "Drafts"}
+              testid="mobile-menu-drafts"
+              onClick={() => {
+                setHostSheetOpen(false);
+                onOpenDrafts();
+              }}
+            />
           )}
           {filesButton && onToggleFiles && (
             <MenuRow
