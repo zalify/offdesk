@@ -20,7 +20,26 @@ import {
   safeFilename,
   waitForWsOpen,
 } from "@/lib/terminalImagePaste";
+import { UploadError, uploadFallsBackToLegacy, uploadFileChunked } from "@/lib/terminalUpload";
 import type { SelectionSnapshot, TerminalViewProps, TerminalViewRef } from "./TerminalView.types";
+
+function isWideChar(cp: number): boolean {
+  return (
+    cp >= 0x1100 &&
+    (cp <= 0x115f ||
+      cp === 0x2329 ||
+      cp === 0x232a ||
+      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe10 && cp <= 0xfe19) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x1f300 && cp <= 0x1faff) ||
+      (cp >= 0x20000 && cp <= 0x3fffd))
+  );
+}
 
 interface NativeSpan {
   c: number;
@@ -154,6 +173,44 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
+    const wheelAccumPxRef = useRef(0);
+    const pendingScrollLinesRef = useRef(0);
+    const scrollInFlightRef = useRef(false);
+    const scrollRafRef = useRef<number | null>(null);
+    const paintRafRef = useRef<number | null>(null);
+    const lastScrollBadgeUpdateRef = useRef(0);
+    const openPromiseRef = useRef<Promise<void>>(Promise.resolve());
+    const controlListenersRef = useRef(new Set<(text: string) => void>());
+    const subscribeControl = useCallback((listener: (text: string) => void) => {
+      controlListenersRef.current.add(listener);
+      return () => {
+        controlListenersRef.current.delete(listener);
+      };
+    }, []);
+    const [uploadStatus, setUploadStatus] = useState<{
+      text: string;
+      sent?: number;
+      total?: number;
+      error?: boolean;
+    } | null>(null);
+    useEffect(() => {
+      if (!uploadStatus || uploadStatus.total !== undefined) return;
+      const t = window.setTimeout(() => setUploadStatus(null), uploadStatus.error ? 6000 : 2500);
+      return () => window.clearTimeout(t);
+    }, [uploadStatus]);
+    const uploadLockRef = useRef(false);
+    const callbacksRef = useRef({
+      onReady,
+      onTitleChange,
+      onReconnectingChange,
+      canResizeTerminal,
+    });
+    callbacksRef.current = {
+      onReady,
+      onTitleChange,
+      onReconnectingChange,
+      canResizeTerminal,
+    };
 
     // Selection state (grid cell coordinates)
     const selectionRef = useRef<{
@@ -247,16 +304,39 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           ctx.globalAlpha = 1;
         }
 
-        // 4. Text spans
+        // 4. Text spans (cache ctx.font & ctx.fillStyle; align CJK/wide chars to exact cell grid)
         ctx.textBaseline = "top";
+        let lastFont = `${fontSize}px ${fontFamily}`;
+        ctx.font = lastFont;
+        let lastFill = "";
         for (let r = 0; r < frame.spans.length; r++) {
           const spans = frame.spans[r];
           const y = padY + r * cellH + Math.floor((cellH - fontSize) * 0.5);
           for (const sp of spans) {
-            const stylePrefix = `${sp.i ? "italic " : ""}${sp.b ? "700 " : ""}`;
-            ctx.font = `${stylePrefix}${fontSize}px ${fontFamily}`;
-            ctx.fillStyle = sp.f ?? fg;
-            ctx.fillText(sp.t, padX + sp.c * cellW, y);
+            const nextFont =
+              sp.i || sp.b
+                ? `${sp.i ? "italic " : ""}${sp.b ? "700 " : ""}${fontSize}px ${fontFamily}`
+                : `${fontSize}px ${fontFamily}`;
+            if (nextFont !== lastFont) {
+              ctx.font = nextFont;
+              lastFont = nextFont;
+            }
+            const nextFill = sp.f ?? fg;
+            if (nextFill !== lastFill) {
+              ctx.fillStyle = nextFill;
+              lastFill = nextFill;
+            }
+            if (/^[\x20-\x7e]*$/.test(sp.t)) {
+              ctx.fillText(sp.t, padX + sp.c * cellW, y);
+            } else {
+              let col = sp.c;
+              for (const ch of sp.t) {
+                const cp = ch.codePointAt(0) ?? 0;
+                const w = isWideChar(cp) ? 2 : 1;
+                ctx.fillText(ch, padX + col * cellW, y);
+                col += w;
+              }
+            }
           }
         }
 
@@ -265,21 +345,74 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [theme, fontSize, fontFamily, lineHeight],
     );
 
-    const applyFrame = useCallback(
-      (frame: NativeTermFrame) => {
-        frameRef.current = frame;
-        setScrollbackOffset(frame.display_offset);
-        if (frame.title && onTitleChange) {
-          onTitleChange(frame.title);
+    const schedulePaint = useCallback(() => {
+      if (paintRafRef.current !== null) return;
+      paintRafRef.current = window.requestAnimationFrame(() => {
+        paintRafRef.current = null;
+        paintFrame(frameRef.current);
+      });
+    }, [paintFrame]);
+
+    useEffect(
+      () => () => {
+        if (paintRafRef.current !== null) {
+          window.cancelAnimationFrame(paintRafRef.current);
+          paintRafRef.current = null;
         }
-        paintFrame(frame);
-        if (!readyFiredRef.current) {
-          readyFiredRef.current = true;
-          onReady?.();
+        if (scrollRafRef.current !== null) {
+          window.cancelAnimationFrame(scrollRafRef.current);
+          scrollRafRef.current = null;
         }
       },
-      [paintFrame, onTitleChange, onReady],
+      [],
     );
+
+    const applyFrame = useCallback(
+      (frame: NativeTermFrame) => {
+        const prevOffset = frameRef.current?.display_offset ?? 0;
+        frameRef.current = frame;
+        const now = performance.now();
+        if (
+          (frame.display_offset === 0) !== (prevOffset === 0) ||
+          now - lastScrollBadgeUpdateRef.current > 80
+        ) {
+          lastScrollBadgeUpdateRef.current = now;
+          setScrollbackOffset(frame.display_offset);
+        }
+        if (frame.title && callbacksRef.current.onTitleChange) {
+          callbacksRef.current.onTitleChange(frame.title);
+        }
+        schedulePaint();
+        if (!readyFiredRef.current) {
+          readyFiredRef.current = true;
+          callbacksRef.current.onReady?.();
+        }
+      },
+      [schedulePaint],
+    );
+
+    const flushPendingScroll = useCallback(() => {
+      scrollRafRef.current = null;
+      if (scrollInFlightRef.current) return;
+      const deltaLines = pendingScrollLinesRef.current;
+      if (deltaLines === 0) return;
+      pendingScrollLinesRef.current = 0;
+      scrollInFlightRef.current = true;
+      void invoke<NativeTermFrame>("native_term_scroll", {
+        id: terminalId,
+        deltaLines,
+      })
+        .then((frame) => {
+          applyFrame(frame);
+        })
+        .catch(() => {})
+        .finally(() => {
+          scrollInFlightRef.current = false;
+          if (pendingScrollLinesRef.current !== 0 && scrollRafRef.current === null) {
+            scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+          }
+        });
+    }, [terminalId, applyFrame]);
 
     const sendRawInput = useCallback(
       (data: string) => {
@@ -323,7 +456,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const unchanged = dimsRef.current.cols === cols && dimsRef.current.rows === rows;
         dimsRef.current = { cols, rows };
 
-        void invoke<NativeTermFrame>("native_term_resize", { id: terminalId, cols, rows })
+        void openPromiseRef.current
+          .then(() => invoke<NativeTermFrame>("native_term_resize", { id: terminalId, cols, rows }))
           .then(applyFrame)
           .catch(() => {});
 
@@ -337,20 +471,26 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [fontSize, fontFamily, lineHeight, terminalId, canResizeTerminal, applyFrame],
     );
 
-    // Open Rust alacritty_terminal instance on mount.
+    // Open Rust alacritty_terminal instance on mount; keep a promise so
+    // initial WebSocket snapshot frames never race ahead of native_term_open.
     useEffect(() => {
       readyFiredRef.current = false;
-      void invoke<NativeTermFrame>("native_term_open", {
+      let cancelled = false;
+      const openPromise = invoke<NativeTermFrame>("native_term_open", {
         id: terminalId,
         cols: dimsRef.current.cols,
         rows: dimsRef.current.rows,
       })
-        .then(applyFrame)
+        .then((frame) => {
+          if (!cancelled) applyFrame(frame);
+        })
         .catch(() => {});
+      openPromiseRef.current = openPromise;
       return () => {
+        cancelled = true;
         void invoke("native_term_close", { id: terminalId }).catch(() => {});
       };
-    }, [terminalId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [terminalId, applyFrame]);
 
     // Exact container ResizeObserver (zero setTimeout hacks!).
     useEffect(() => {
@@ -388,12 +528,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const batch = concatChunks(pendingChunks);
         pendingChunks = [];
         inFlight = true;
-        void invoke<NativeTermFrame>("native_term_feed", {
-          id: terminalId,
-          dataB64: bytesToBase64(batch),
-        })
+        void openPromiseRef.current
+          .then(() => {
+            if (disposed) return null;
+            return invoke<NativeTermFrame>("native_term_feed", {
+              id: terminalId,
+              dataB64: bytesToBase64(batch),
+            });
+          })
           .then((frame) => {
-            if (!disposed) applyFrame(frame);
+            if (frame && !disposed) applyFrame(frame);
           })
           .catch(() => {})
           .finally(() => {
@@ -426,8 +570,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       ws.onopen = () => {
         if (disposed) return;
         reconnect.handleSocketOpen();
-        onReconnectingChange?.(false);
-        if (canResizeTerminal) {
+        callbacksRef.current.onReconnectingChange?.(false);
+        if (callbacksRef.current.canResizeTerminal) {
           const { cols, rows } = dimsRef.current;
           ws.send(JSON.stringify({ type: "resize", cols, rows }));
         }
@@ -437,6 +581,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (disposed) return;
         if (typeof event.data === "string") {
           compression.handleText(event.data);
+          for (const listener of Array.from(controlListenersRef.current)) {
+            listener(event.data);
+          }
           return;
         }
         const buf = event.data as ArrayBuffer;
@@ -450,12 +597,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
       ws.onclose = () => {
         if (disposed) return;
-        onReconnectingChange?.(true);
+        callbacksRef.current.onReconnectingChange?.(true);
         reconnect.scheduleReconnect();
       };
       ws.onerror = () => {
         if (disposed) return;
-        onReconnectingChange?.(true);
+        callbacksRef.current.onReconnectingChange?.(true);
       };
 
       return () => {
@@ -466,7 +613,46 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ws.close();
         if (wsRef.current === ws) wsRef.current = null;
       };
-    }, [wsUrl, terminalId, sessionGen, canResizeTerminal, applyFrame, onReconnectingChange]);
+    }, [wsUrl, terminalId, sessionGen, applyFrame]);
+
+    const copyToClipboard = useCallback(async (text: string) => {
+      if (!text) return;
+      try {
+        const internals = (
+          window as unknown as {
+            __TAURI_INTERNALS__?: {
+              invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+            };
+          }
+        ).__TAURI_INTERNALS__;
+        if (typeof internals?.invoke === "function") {
+          await internals.invoke("plugin:clipboard-manager|write_text", { text });
+          return;
+        }
+      } catch {
+        // Fall through to web clipboard API.
+      }
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+      } catch {
+        // Fall through to execCommand fallback.
+      }
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      } catch {
+        /* ignore */
+      }
+    }, []);
 
     const getSelectionText = useCallback((): string => {
       const sel = selectionRef.current;
@@ -477,6 +663,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         (sel.start.row === sel.end.row && sel.start.col <= sel.end.col)
           ? [sel.start, sel.end]
           : [sel.end, sel.start];
+      if (a.row === b.row && a.col === b.col) return "";
       const lines: string[] = [];
       for (let r = a.row; r <= b.row; r++) {
         const rowSpans = frame.spans[r] ?? [];
@@ -484,8 +671,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         for (const sp of rowSpans) {
           let col = sp.c;
           for (const ch of sp.t) {
+            const cp = ch.codePointAt(0) ?? 0;
+            const w = isWideChar(cp) ? 2 : 1;
             if (col < frame.cols) chars[col] = ch;
-            col += 1;
+            if (w === 2 && col + 1 < frame.cols) chars[col + 1] = "";
+            col += w;
           }
         }
         const c0 = r === a.row ? a.col : 0;
@@ -494,6 +684,19 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       }
       return lines.join("\n").trimEnd();
     }, []);
+
+    useEffect(() => {
+      const onWinMouseUp = () => {
+        if (!draggingRef.current) return;
+        draggingRef.current = false;
+        const text = getSelectionText();
+        if (text) {
+          void copyToClipboard(text);
+        }
+      };
+      window.addEventListener("mouseup", onWinMouseUp);
+      return () => window.removeEventListener("mouseup", onWinMouseUp);
+    }, [getSelectionText, copyToClipboard]);
 
     useImperativeHandle(
       ref,
@@ -519,19 +722,37 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         },
         focus: () => inputRef.current?.focus(),
         blur: () => inputRef.current?.blur(),
-        sendImageFile: async (file) => {
+        sendImageFile: async (file, onProgress) => {
           const ws = await waitForWsOpen(() => wsRef.current, 5000);
           if (!ws) throw new Error("Terminal socket is not open");
-          if (file.size > MAX_IMAGE_PASTE_BYTES) {
-            throw new Error("File exceeds maximum paste size");
+          try {
+            await uploadFileChunked({
+              file,
+              onProgress,
+              subscribe: subscribeControl,
+              send: (text) => {
+                if (ws.readyState !== WebSocket.OPEN) {
+                  throw new UploadError("disconnected", "Connection lost during upload.");
+                }
+                ws.send(text);
+              },
+            });
+          } catch (error) {
+            if (uploadFallsBackToLegacy(error, file.size)) {
+              if (file.size > MAX_IMAGE_PASTE_BYTES) {
+                throw new Error("File exceeds maximum paste size");
+              }
+              const { base64, mime } = await readFileAsBase64(file);
+              const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : ".png";
+              ws.send(
+                JSON.stringify(
+                  buildImagePasteMessage(base64, mime, safeFilename(file.name ?? "", ext)),
+                ),
+              );
+              return;
+            }
+            throw error;
           }
-          const { base64, mime } = await readFileAsBase64(file);
-          const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : ".png";
-          ws.send(
-            JSON.stringify(
-              buildImagePasteMessage(base64, mime, safeFilename(file.name ?? "", ext)),
-            ),
-          );
         },
         setMouseTrackingEnabled: () => {},
         getSelection: getSelectionText,
@@ -555,6 +776,58 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [sendRawInput, fitToContainer, terminalId, applyFrame, getSelectionText, fontFamily, fontSize],
     );
 
+    const uploadFiles = useCallback(
+      async (files: File[]) => {
+        if (!canType || files.length === 0 || uploadLockRef.current) return;
+        uploadLockRef.current = true;
+        try {
+          for (const file of files) {
+            const name = file.name || "pasted-file";
+            setUploadStatus({ text: `Uploading ${name}`, sent: 0, total: file.size });
+            try {
+              const ws = await waitForWsOpen(() => wsRef.current, 5000);
+              if (!ws) throw new Error("Terminal socket is not open");
+              try {
+                await uploadFileChunked({
+                  file,
+                  onProgress: (sent, total) => setUploadStatus({ text: `Uploading ${name}`, sent, total }),
+                  subscribe: subscribeControl,
+                  send: (text) => {
+                    if (ws.readyState !== WebSocket.OPEN) {
+                      throw new UploadError("disconnected", "Connection lost during upload.");
+                    }
+                    ws.send(text);
+                  },
+                });
+              } catch (err) {
+                if (uploadFallsBackToLegacy(err, file.size)) {
+                  const { base64, mime } = await readFileAsBase64(file);
+                  const ext = mime.includes("/") ? `.${mime.split("/")[1]}` : "";
+                  ws.send(
+                    JSON.stringify(
+                      buildImagePasteMessage(base64, mime, safeFilename(file.name ?? "", ext)),
+                    ),
+                  );
+                } else {
+                  throw err;
+                }
+              }
+              setUploadStatus({ text: `Uploaded ${name}` });
+            } catch (err) {
+              setUploadStatus({
+                text: `${name}: ${err instanceof Error ? err.message : "Upload failed"}`,
+                error: true,
+              });
+              break;
+            }
+          }
+        } finally {
+          uploadLockRef.current = false;
+        }
+      },
+      [canType, subscribeControl],
+    );
+
     const pointerToCell = (clientX: number, clientY: number) => {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return { col: 0, row: 0 };
@@ -571,6 +844,18 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       <div
         ref={containerRef}
         data-testid="native-terminal-view"
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types.includes("Files")) {
+            e.preventDefault();
+          }
+        }}
+        onDrop={(e) => {
+          const files = Array.from(e.dataTransfer?.files ?? []);
+          if (files.length > 0) {
+            e.preventDefault();
+            void uploadFiles(files);
+          }
+        }}
         onMouseDown={(e) => {
           inputRef.current?.focus();
           if (e.button !== 0) return;
@@ -592,13 +877,32 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           draggingRef.current = false;
           const text = getSelectionText();
           if (text) {
-            void navigator.clipboard.writeText(text).catch(() => {});
+            void copyToClipboard(text);
           }
         }}
         onWheel={(e) => {
           e.preventDefault();
-          const lines = Math.round((-e.deltaY / Math.max(12, lineHeight)) * 3);
+          const stepPx = Math.max(12, lineHeight);
+          const deltaPx =
+            e.deltaMode === 1
+              ? e.deltaY * stepPx * 3
+              : e.deltaMode === 2
+                ? e.deltaY * (frameRef.current?.rows ?? 24) * stepPx
+                : e.deltaY;
+          if (deltaPx === 0) return;
+
+          // Clear residual accumulation if scroll direction reverses so reversing feels instant.
+          if (
+            (deltaPx > 0 && wheelAccumPxRef.current < 0) ||
+            (deltaPx < 0 && wheelAccumPxRef.current > 0)
+          ) {
+            wheelAccumPxRef.current = 0;
+          }
+          wheelAccumPxRef.current += deltaPx;
+          const lines = Math.trunc(-wheelAccumPxRef.current / stepPx);
           if (lines === 0) return;
+          wheelAccumPxRef.current += lines * stepPx;
+
           if (frameRef.current?.wants_mouse) {
             const btn = lines > 0 ? 64 : 65;
             const count = Math.min(5, Math.max(1, Math.abs(lines)));
@@ -609,12 +913,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
             sendRawInput(seq);
           } else {
-            void invoke<NativeTermFrame>("native_term_scroll", {
-              id: terminalId,
-              deltaLines: lines,
-            })
-              .then(applyFrame)
-              .catch(() => {});
+            pendingScrollLinesRef.current += lines;
+            if (!scrollInFlightRef.current && scrollRafRef.current === null) {
+              scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+            }
           }
         }}
         style={{
@@ -666,7 +968,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               const sel = getSelectionText();
               if (sel) {
                 e.preventDefault();
-                void navigator.clipboard.writeText(sel).catch(() => {});
+                void copyToClipboard(sel);
                 return;
               }
             }
@@ -677,6 +979,22 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
           }}
           onPaste={(e) => {
+            const pastedFiles: File[] = [];
+            if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+              pastedFiles.push(...Array.from(e.clipboardData.files));
+            } else if (e.clipboardData.items) {
+              for (const item of Array.from(e.clipboardData.items)) {
+                if (item.kind === "file") {
+                  const f = item.getAsFile();
+                  if (f) pastedFiles.push(f);
+                }
+              }
+            }
+            if (pastedFiles.length > 0) {
+              e.preventDefault();
+              void uploadFiles(pastedFiles);
+              return;
+            }
             const text = e.clipboardData.getData("text");
             if (text) {
               e.preventDefault();
@@ -696,6 +1014,26 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             pointerEvents: "none",
           }}
         />
+        {uploadStatus && (
+          <div
+            style={{
+              position: "absolute",
+              left: 12,
+              bottom: 10,
+              padding: "4px 10px",
+              borderRadius: 999,
+              border: `1px solid ${uploadStatus.error ? "rgba(239,68,68,0.5)" : "rgba(255,255,255,0.18)"}`,
+              background: "rgba(24,25,29,0.92)",
+              color: uploadStatus.error ? "#fca5a5" : "#e4e4e7",
+              fontSize: 11,
+            }}
+          >
+            {uploadStatus.text}
+            {uploadStatus.total && uploadStatus.total > 0 && uploadStatus.sent !== undefined
+              ? ` (${Math.min(100, Math.round((uploadStatus.sent / uploadStatus.total) * 100))}%)`
+              : ""}
+          </div>
+        )}
         {scrollbackOffset > 0 && (
           <button
             type="button"

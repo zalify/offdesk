@@ -353,9 +353,16 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       if (remote) {
         const currentCwd = cwdRef.current;
         const resolve = (path: string) => resolveRemotePath(path, currentCwd) ?? path;
+        const resolvedPath = resolve(remote.path);
+        // In the desktop/mobile Tauri app, preview clicked remote files in-app
+        // (via FileBrowser -> FilePreview) instead of immediately saving to ~/Downloads.
+        if (isTauri() && onOpenDirectoryRef.current) {
+          onOpenDirectoryRef.current(machineId, resolvedPath);
+          return;
+        }
         void fetchRemoteFile({
           machineId,
-          path: resolve(remote.path),
+          path: resolvedPath,
           fallbackPath: remote.fallback && resolve(remote.fallback),
           cwd: currentCwd,
           onDirectory: (dir) => {
