@@ -10,6 +10,8 @@ import {
 } from "@/lib/api";
 import type { DraftDatabase, DraftDbColumnInput, DraftDbView, DraftDbViewInput } from "@/lib/api";
 import {
+  boardGroupColumn,
+  columnsWithStatus,
   hasIncompleteFilters,
   hubErrorMessage,
   sanitizeViewsForSave,
@@ -19,7 +21,9 @@ import {
 } from "@/lib/draftDatabases";
 import { colors, colorAlpha } from "@/lib/colors";
 import { rem } from "@/lib/rem";
-import { DatabaseTable, REFRESH_MS } from "./DatabaseTable.web";
+import { DatabaseBoard } from "./DatabaseBoard.web";
+import { DatabaseTable } from "./DatabaseTable.web";
+import { REFRESH_MS } from "./usePoll";
 import { RowPage } from "./RowPage.web";
 import { MONO, Popover, fieldStyle, smallBtn } from "./ui.web";
 
@@ -28,10 +32,13 @@ const VIEW_SAVE_DEBOUNCE_MS = 500;
 export function DatabaseView({
   dbId,
   compact,
+  initialViewId,
   onBack,
   onChanged,
 }: {
   dbId: string;
+  /** Opens on this view instead of the first one (from a database embed). */
+  initialViewId?: string;
   compact: boolean;
   onBack: () => void;
   /** The database list is stale (renamed, row count changed). */
@@ -40,7 +47,8 @@ export function DatabaseView({
   const [db, setDb] = useState<DraftDatabase | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [viewId, setViewId] = useState<string | null>(null);
+  const [viewId, setViewId] = useState<string | null>(initialViewId ?? null);
+  const [addAnchor, setAddAnchor] = useState<HTMLElement | null>(null);
   const [rowId, setRowId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -68,9 +76,11 @@ export function DatabaseView({
 
   useEffect(() => {
     setDb(null);
-    setViewId(null);
+    setViewId(initialViewId ?? null);
     setRowId(null);
     void refreshDb();
+    // initialViewId only seeds the first view when a database is opened
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dbId, refreshDb]);
 
   const activeView: DraftDbView | null = db ? (db.views.find((v) => v.id === viewId) ?? db.views[0] ?? null) : null;
@@ -156,11 +166,23 @@ export function DatabaseView({
     }
   };
 
-  const addView = () =>
+  const addView = (type: "table" | "board") =>
     guarded(async () => {
       const local = dbRef.current;
       if (!local) return;
-      const resp = await saveDb({ views: viewsWithAdded(local.views, `View ${local.views.length + 1}`) });
+      let columns = local.columns;
+      let group = boardGroupColumn(columns, {});
+      if (type === "board" && !group) {
+        // Nothing to group by yet: create the Status column first so the view can point at it.
+        const withStatus = await saveDb({ columns: columnsWithStatus(columns) });
+        columns = withStatus?.columns ?? columns;
+        group = columns.find((c) => c.name === "Status") ?? null;
+      }
+      const latest = dbRef.current ?? local;
+      const label = type === "board" ? "Board" : "Table";
+      const taken = latest.views.filter((v) => v.name.toLowerCase().startsWith(label.toLowerCase())).length;
+      const name = taken === 0 ? label : `${label} ${taken + 1}`;
+      const resp = await saveDb({ views: viewsWithAdded(latest.views, name, type, group?.id) });
       const created = resp?.views[resp.views.length - 1];
       if (created) setViewId(created.id);
     });
@@ -272,7 +294,7 @@ export function DatabaseView({
             </button>
           );
         })}
-        <button type="button" data-testid="draftdb-add-view" aria-label="Add table view" onClick={() => void addView()} style={smallBtn({ compact })}>
+        <button type="button" data-testid="draftdb-add-view" aria-label="Add view" onClick={(e) => setAddAnchor(e.currentTarget)} style={smallBtn({ compact })}>
           <Plus size={13} />
         </button>
       </div>
@@ -283,18 +305,33 @@ export function DatabaseView({
         </div>
       )}
 
-      <DatabaseTable
-        db={db}
-        view={activeView}
-        compact={compact}
-        active={rowId === null}
-        onViewChange={onViewChange}
-        onSchemaChange={async (patch) => {
-          await saveDb(patch);
-        }}
-        onRefreshDb={refreshDbQuiet}
-        onOpenRow={setRowId}
-      />
+      {activeView.type === "board" ? (
+        <DatabaseBoard
+          key={activeView.id}
+          db={db}
+          view={activeView}
+          compact={compact}
+          active={rowId === null}
+          onViewChange={onViewChange}
+          onSchemaChange={saveDb}
+          onRefreshDb={refreshDbQuiet}
+          onOpenRow={setRowId}
+        />
+      ) : (
+        <DatabaseTable
+          key={activeView.id}
+          db={db}
+          view={activeView}
+          compact={compact}
+          active={rowId === null}
+          onViewChange={onViewChange}
+          onSchemaChange={async (patch) => {
+            await saveDb(patch);
+          }}
+          onRefreshDb={refreshDbQuiet}
+          onOpenRow={setRowId}
+        />
+      )}
 
       {rowId && (
         <div style={{ position: "absolute", inset: 0, zIndex: 10, background: colors.bg1, display: "flex", flexDirection: "column" }}>
@@ -309,6 +346,25 @@ export function DatabaseView({
             }}
           />
         </div>
+      )}
+
+      {addAnchor && (
+        <Popover anchor={addAnchor} onClose={() => setAddAnchor(null)} width={220} testId="draftdb-add-view-menu">
+          {(["table", "board"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              data-testid={`draftdb-add-view-${t}`}
+              onClick={() => {
+                setAddAnchor(null);
+                void addView(t);
+              }}
+              style={{ display: "flex", width: "100%", minHeight: compact ? 40 : 28, alignItems: "center", padding: "0 8px", border: "none", borderRadius: 4, background: "transparent", color: colors.fg0, fontFamily: MONO, fontSize: rem(12.5), textAlign: "left", cursor: "pointer" }}
+            >
+              {t === "table" ? "table view" : "board view"}
+            </button>
+          ))}
+        </Popover>
       )}
 
       {tabMenu && tabMenuView && (

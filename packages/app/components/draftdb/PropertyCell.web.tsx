@@ -5,6 +5,7 @@ import type { DraftDbColumn, DraftDbRow, DraftDbValue } from "@/lib/api";
 import { matchingOptions, parseCellInput, toggleInList } from "@/lib/draftDatabases";
 import { colors, colorAlpha } from "@/lib/colors";
 import { rem } from "@/lib/rem";
+import { OptionChip, optionColor } from "./chips.web";
 import { MONO, Popover, fieldStyle, isLinkable, openExternalLink, smallBtn } from "./ui.web";
 
 interface PropertyCellProps {
@@ -27,23 +28,6 @@ function asList(v: DraftDbValue | undefined): string[] {
   if (Array.isArray(v)) return v;
   if (typeof v === "string" && v) return [v];
   return [];
-}
-
-function Chip({ children }: { children: string }) {
-  return (
-    <span
-      style={{
-        padding: "1px 7px",
-        borderRadius: 3,
-        background: colors.bg3,
-        color: colors.fg1,
-        fontSize: rem(11.5),
-        whiteSpace: "nowrap",
-      }}
-    >
-      {children}
-    </span>
-  );
 }
 
 export function PropertyCell(props: PropertyCellProps) {
@@ -76,13 +60,13 @@ export function PropertyCell(props: PropertyCellProps) {
   if (type === "checkbox") {
     const checked = value === true;
     return (
-      <div ref={wrapRef} data-testid={testId} style={wrapStyle}>
+      // The whole cell toggles; the box inside is the keyboard / screen-reader stop.
+      <div ref={wrapRef} data-testid={testId} onClick={() => onCommit(!checked)} style={{ ...wrapStyle, cursor: "pointer" }}>
         <button
           type="button"
           role="checkbox"
           aria-checked={checked}
           aria-label={column?.name}
-          onClick={() => onCommit(!checked)}
           style={{
             width: compact ? 36 : 22,
             height: compact ? 36 : 22,
@@ -127,7 +111,7 @@ export function PropertyCell(props: PropertyCellProps) {
           style={{ ...wrapStyle, outline: editing ? `1px solid ${colors.accent}` : wrapStyle.outline, outlineOffset: -1 }}
         >
           {list.map((o) => (
-            <Chip key={o}>{o}</Chip>
+            <OptionChip key={o} name={o} color={optionColor(column, o)} />
           ))}
         </div>
         {editing && column && (

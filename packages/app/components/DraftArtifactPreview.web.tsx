@@ -3,7 +3,9 @@ import { Check, Code2, Copy, Eye, X } from "lucide-react";
 import { listMachines, readFile as apiReadFile } from "@/lib/api";
 import { colors, colorAlpha } from "@/lib/colors";
 import { rem } from "@/lib/rem";
+import { parseArtifactSegments } from "@/lib/artifactSegments";
 import { useOpenDirectory } from "./OpenDirectoryContext";
+import { DatabaseEmbed } from "./draftdb/DatabaseEmbed.web";
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i;
 const remoteImageCache = new Map<string, string>();
@@ -72,48 +74,8 @@ async function loadRemoteImageDataUrl(host: string, path: string): Promise<strin
   }
 }
 
-export type ArtifactSegment =
-  | { kind: "markdown"; text: string }
-  | { kind: "mermaid"; code: string }
-  | { kind: "svg"; code: string }
-  | { kind: "html"; code: string };
-
-/**
- * Split a draft into interleaved Markdown and rich Artifact blocks
- * (`mermaid`, `svg`, `html`), or treat a standalone HTML/SVG document as one artifact.
- */
-export function parseArtifactSegments(source: string): ArtifactSegment[] {
-  const trimmed = source.trim();
-  if (!trimmed) return [];
-  if (/^<!doctype\s+html|^<html[\s>]/i.test(trimmed)) {
-    return [{ kind: "html", code: trimmed }];
-  }
-  if (/^<svg[\s>]/i.test(trimmed) && trimmed.endsWith("</svg>")) {
-    return [{ kind: "svg", code: trimmed }];
-  }
-
-  const segments: ArtifactSegment[] = [];
-  const fenceRe = /```(mermaid|svg|html)\s*\n([\s\S]*?)```/gi;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = fenceRe.exec(source)) !== null) {
-    if (match.index > lastIndex) {
-      const md = source.slice(lastIndex, match.index).trim();
-      if (md) segments.push({ kind: "markdown", text: md });
-    }
-    const lang = match[1].toLowerCase() as "mermaid" | "svg" | "html";
-    const code = match[2].trim();
-    if (code) {
-      segments.push({ kind: lang, code });
-    }
-    lastIndex = fenceRe.lastIndex;
-  }
-  if (lastIndex < source.length) {
-    const tail = source.slice(lastIndex).trim();
-    if (tail) segments.push({ kind: "markdown", text: tail });
-  }
-  return segments;
-}
+export { parseArtifactSegments } from "@/lib/artifactSegments";
+export type { ArtifactSegment } from "@/lib/artifactSegments";
 
 const MARKDOWN_CSS = `
 .odk-md { color: var(--odk-fg0); font-size: 13.5px; line-height: 1.65; word-break: break-word; }
@@ -592,7 +554,17 @@ function SandboxedArtifactCard({
   );
 }
 
-export function DraftArtifactPreview({ content }: { content: string }) {
+export function DraftArtifactPreview({
+  content,
+  projectGroup,
+  onOpenDatabase,
+}: {
+  content: string;
+  /** The draft's project group: database names resolve here first. */
+  projectGroup?: string;
+  /** Opens a database (and optionally a view) in the drafts drawer. */
+  onOpenDatabase?: (databaseId: string, viewId?: string) => void;
+}) {
   const segments = useMemo(() => parseArtifactSegments(content), [content]);
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
 
@@ -632,6 +604,16 @@ export function DraftArtifactPreview({ content }: { content: string }) {
             return <SandboxedArtifactCard key={idx} kind="svg" code={seg.code} />;
           case "html":
             return <SandboxedArtifactCard key={idx} kind="html" code={seg.code} />;
+          case "database":
+            return (
+              <DatabaseEmbed
+                key={idx}
+                database={seg.database}
+                view={seg.view}
+                projectGroup={projectGroup}
+                onOpenDatabase={onOpenDatabase}
+              />
+            );
         }
       })}
       {zoomed && (

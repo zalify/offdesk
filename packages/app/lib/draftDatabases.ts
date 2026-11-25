@@ -292,8 +292,15 @@ export function viewsWithUpdated(
   return views.map((v) => (v.id === viewId ? { ...v, ...patch } : v));
 }
 
-export function viewsWithAdded(views: DraftDbView[], name: string): DraftDbViewInput[] {
-  return [...views, { name, type: "table", filters: [], sorts: [] }];
+export function viewsWithAdded(
+  views: DraftDbView[],
+  name: string,
+  type: DraftDbView["type"] = "table",
+  groupBy?: string,
+): DraftDbViewInput[] {
+  const view: DraftDbViewInput = { name, type, filters: [], sorts: [] };
+  if (type === "board" && groupBy) view.group_by = groupBy;
+  return [...views, view];
 }
 
 /** Removing the last remaining view is refused (returns the input unchanged). */
@@ -375,4 +382,266 @@ export function relativeTime(ms: number, now = Date.now()): string {
   const hrs = Math.floor(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;
   return `${Math.floor(hrs / 24)}d ago`;
+}
+
+// ------------------------------------------------------------------ board
+
+export const NONE_KEY = "__none__";
+
+export type GroupValue = string | boolean | null;
+
+export interface GroupCount {
+  value: GroupValue;
+  count: number;
+}
+
+export interface BoardColumn {
+  /** `__none__`, an option name, or "true" / "false" for checkboxes. */
+  key: string;
+  label: string;
+  value: GroupValue;
+  count: number;
+}
+
+export const BOARD_PAGE_SIZE = 30;
+const BOARD_RELOAD_CHUNK = 500;
+
+export function groupKey(value: GroupValue): string {
+  return value === null ? NONE_KEY : String(value);
+}
+
+export function groupableColumns(columns: DraftDbColumn[]): DraftDbColumn[] {
+  return columns.filter((c) => c.type === "select" || c.type === "checkbox");
+}
+
+/** The column a board groups by: its saved group_by, else the first groupable column. */
+export function boardGroupColumn(
+  columns: DraftDbColumn[],
+  view: Pick<DraftDbView, "group_by">,
+): DraftDbColumn | null {
+  const groupable = groupableColumns(columns);
+  return groupable.find((c) => c.id === view.group_by) ?? groupable[0] ?? null;
+}
+
+/**
+ * Board columns for a group-by column and the hub's per-value counts.
+ * select: a leading "no value" column (only when it has cards, or when there
+ * are no options at all), then one per option in option order, then any value
+ * that is in use but not an option (an option deleted under the cards).
+ * checkbox: unchecked (false or unset) and checked.
+ */
+export function boardColumns(column: DraftDbColumn, groups: GroupCount[] | null): BoardColumn[] {
+  if (column.type === "checkbox") {
+    let checked = 0;
+    let unchecked = 0;
+    for (const g of groups ?? []) {
+      if (g.value === true) checked += g.count;
+      else unchecked += g.count;
+    }
+    return [
+      { key: "false", label: "unchecked", value: false, count: unchecked },
+      { key: "true", label: "checked", value: true, count: checked },
+    ];
+  }
+  const counts = new Map<string, number>();
+  for (const g of groups ?? []) {
+    const key = groupKey(g.value);
+    counts.set(key, (counts.get(key) ?? 0) + g.count);
+  }
+  const options = (column.options ?? []).map((o) => o.name);
+  const out: BoardColumn[] = [];
+  const noneCount = counts.get(NONE_KEY) ?? 0;
+  if (noneCount > 0 || (options.length === 0 && groups !== null)) {
+    out.push({ key: NONE_KEY, label: "no value", value: null, count: noneCount });
+  }
+  for (const name of options) out.push({ key: name, label: name, value: name, count: counts.get(name) ?? 0 });
+  for (const [key, count] of counts) {
+    if (key === NONE_KEY || options.includes(key) || count <= 0) continue;
+    out.push({ key, label: key, value: key, count });
+  }
+  return out;
+}
+
+/** rows/query body for one board column: the view's query plus the column's value. */
+export function boardColumnQuery(
+  view: Pick<DraftDbView, "filters" | "sorts">,
+  search: string,
+  groupColumnId: string,
+  col: Pick<BoardColumn, "value">,
+  page: { limit?: number; offset?: number } = {},
+): DraftDbQueryBody {
+  const body = buildQueryBody(view, search, { limit: BOARD_PAGE_SIZE, ...page });
+  const f: DraftDbFilter =
+    col.value === null
+      ? { column: groupColumnId, op: "is_empty" }
+      : { column: groupColumnId, op: "eq", value: col.value };
+  body.filters = [...(body.filters ?? []), f];
+  return body;
+}
+
+/** rows/groups body for a board: the view's filters and the search, no paging. */
+export function boardGroupsBody(
+  view: Pick<DraftDbView, "filters">,
+  search: string,
+  groupColumnId: string,
+): { group_by: string; filters?: DraftDbFilter[]; search?: string } {
+  const body: { group_by: string; filters?: DraftDbFilter[]; search?: string } = { group_by: groupColumnId };
+  const filters = completeFilters(view.filters);
+  if (filters.length > 0) body.filters = filters;
+  const q = search.trim();
+  if (q) body.search = q;
+  return body;
+}
+
+/** How many rows a refresh of a column must re-fetch, in request-sized chunks. */
+export function reloadChunks(loaded: number): Array<{ offset: number; limit: number }> {
+  const want = Math.max(BOARD_PAGE_SIZE, loaded);
+  const out: Array<{ offset: number; limit: number }> = [];
+  for (let offset = 0; offset < want; offset += BOARD_RELOAD_CHUNK) {
+    out.push({ offset, limit: Math.min(BOARD_RELOAD_CHUNK, want - offset) });
+  }
+  return out;
+}
+
+export interface BoardState {
+  counts: Record<string, number>;
+  rows: Record<string, DraftDbRow[]>;
+}
+
+export function findInBoard(
+  state: BoardState,
+  rowId: string,
+): { key: string; index: number; row: DraftDbRow } | null {
+  for (const [key, rows] of Object.entries(state.rows)) {
+    const index = rows.findIndex((r) => r.id === rowId);
+    if (index >= 0) return { key, index, row: rows[index] };
+  }
+  return null;
+}
+
+/**
+ * Optimistic card move: the row leaves `fromKey`, lands at `index` of `toKey`
+ * with the group property set to `toValue`, and both counts follow. Moving
+ * back with the original value and index is the revert.
+ */
+export function applyBoardMove(
+  state: BoardState,
+  rowId: string,
+  fromKey: string,
+  toKey: string,
+  groupColumnId: string,
+  toValue: DraftDbValue,
+  index = 0,
+): BoardState {
+  const fromRows = state.rows[fromKey];
+  const at = fromRows ? fromRows.findIndex((r) => r.id === rowId) : -1;
+  if (at < 0 || fromKey === toKey) return state;
+  const moved = applyRowPatch(fromRows[at], { properties: { [groupColumnId]: toValue } });
+  const nextFrom = fromRows.filter((r) => r.id !== rowId);
+  const toRows = state.rows[toKey] ?? [];
+  const nextTo = toRows.slice();
+  nextTo.splice(Math.max(0, Math.min(index, nextTo.length)), 0, moved);
+  return {
+    counts: {
+      ...state.counts,
+      [fromKey]: Math.max(0, (state.counts[fromKey] ?? 0) - 1),
+      [toKey]: (state.counts[toKey] ?? 0) + 1,
+    },
+    rows: { ...state.rows, [fromKey]: nextFrom, [toKey]: nextTo },
+  };
+}
+
+export interface CardProperty {
+  column: DraftDbColumn;
+  /** Option names for select / multi_select, otherwise one display string. */
+  values: string[];
+}
+
+/** Up to `max` non-empty visible properties for a card, skipping the group column. */
+export function cardProperties(
+  columns: DraftDbColumn[],
+  view: Pick<DraftDbView, "hidden_columns">,
+  row: Pick<DraftDbRow, "properties">,
+  groupColumnId: string | null,
+  max = 3,
+): CardProperty[] {
+  const out: CardProperty[] = [];
+  for (const column of visibleColumns(columns, view)) {
+    if (out.length >= max) break;
+    if (column.id === groupColumnId) continue;
+    const v = row.properties[column.id];
+    if (isEmptyValue(v) || v === false) continue;
+    if (Array.isArray(v)) out.push({ column, values: v });
+    else if (column.type === "checkbox") out.push({ column, values: [column.name] });
+    else out.push({ column, values: [String(v)] });
+  }
+  return out;
+}
+
+// ------------------------------------------------------------- embeds
+
+export interface DatabaseFence {
+  database: string;
+  view?: string;
+}
+
+/** Body of a ```database fence: first line names the database, optional `view:` line. */
+export function parseDatabaseFence(body: string): DatabaseFence | null {
+  const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
+  let view: string | undefined;
+  let database: string | undefined;
+  for (const line of lines) {
+    const m = /^view\s*:\s*(.*)$/i.exec(line);
+    if (m) {
+      if (view === undefined && m[1].trim()) view = m[1].trim();
+    } else if (database === undefined) {
+      database = line;
+    }
+  }
+  if (!database) return null;
+  return view ? { database, view } : { database };
+}
+
+/** Finds a database by id or name; names resolve in `projectGroup` first, then anywhere. */
+export function resolveDatabaseRef<T extends { id: string; name: string; project_group: string }>(
+  databases: T[],
+  ref: string,
+  projectGroup?: string,
+): T | null {
+  const byId = databases.find((d) => d.id === ref);
+  if (byId) return byId;
+  const name = ref.trim().toLowerCase();
+  const named = databases.filter((d) => d.name.toLowerCase() === name);
+  return named.find((d) => projectGroup && d.project_group === projectGroup) ?? named[0] ?? null;
+}
+
+/** Finds a view by id or name; no ref means the first view. */
+export function resolveViewRef(views: DraftDbView[], ref?: string): DraftDbView | null {
+  if (!ref) return views[0] ?? null;
+  const name = ref.trim().toLowerCase();
+  return views.find((v) => v.id === ref) ?? views.find((v) => v.name.toLowerCase() === name) ?? null;
+}
+
+// ----------------------------------------------------------- option tints
+
+/** Option colours that map onto a semantic theme token; everything else stays neutral. */
+export function optionTintToken(color: string | undefined): "err" | "warn" | null {
+  switch ((color ?? "").toLowerCase()) {
+    case "red":
+      return "err";
+    case "orange":
+    case "yellow":
+    case "brown":
+      return "warn";
+    default:
+      return null;
+  }
+}
+
+/** Column list with a `Status` select (todo / doing / done) appended, for boards on a database with nothing to group by. */
+export function columnsWithStatus(columns: DraftDbColumn[]): DraftDbColumnInput[] {
+  return [
+    ...columns,
+    { name: "Status", type: "select", options: [{ name: "todo" }, { name: "doing" }, { name: "done" }] },
+  ];
 }

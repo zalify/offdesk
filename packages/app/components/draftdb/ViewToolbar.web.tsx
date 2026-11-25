@@ -27,9 +27,11 @@ interface ViewToolbarProps {
   selectedCount: number;
   onBulkDelete: () => void;
   bulkBusy: boolean;
+  /** Extra control placed after the filter button (the board's group-by). */
+  extra?: React.ReactNode;
 }
 
-export function ViewToolbar({ db, view, compact, onSearch, onChangeView, selectedCount, onBulkDelete, bulkBusy }: ViewToolbarProps) {
+export function ViewToolbar({ db, view, compact, onSearch, onChangeView, selectedCount, onBulkDelete, bulkBusy, extra }: ViewToolbarProps) {
   const [text, setText] = useState("");
   const [open, setOpen] = useState(false);
   const [confirmBulk, setConfirmBulk] = useState(false);
@@ -68,6 +70,7 @@ export function ViewToolbar({ db, view, compact, onSearch, onChangeView, selecte
           {compact ? "filter / sort" : "filter · sort"}
           {active > 0 ? ` (${active})` : ""}
         </button>
+        {!compact && extra}
         {selectedCount > 0 &&
           (confirmBulk ? (
             <button
@@ -94,6 +97,7 @@ export function ViewToolbar({ db, view, compact, onSearch, onChangeView, selecte
             </button>
           ))}
       </div>
+      {compact && extra && <div style={{ padding: "0 12px 8px", display: "flex" }}>{extra}</div>}
       {open &&
         (compact ? (
           <Sheet title="filter / sort" onClose={() => setOpen(false)} testId="draftdb-filter-sheet">

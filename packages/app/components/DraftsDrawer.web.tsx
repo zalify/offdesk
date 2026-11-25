@@ -67,6 +67,7 @@ export function DraftsDrawer({
   const [wide, setWide] = useState(false);
   const [section, setSection] = useState<"drafts" | "databases">("drafts");
   const [dbOpen, setDbOpen] = useState(false);
+  const [dbOpenRequest, setDbOpenRequest] = useState<{ id: string; viewId?: string; nonce: number } | null>(null);
   const [customWidth, setCustomWidth] = useState<number | null>(() => {
     try {
       const raw = Number(localStorage.getItem("offdesk:drafts-drawer-width"));
@@ -553,6 +554,7 @@ export function DraftsDrawer({
             defaultProject={projectFilter !== "all" ? projectFilter : defaultProjectGroup || "~"}
             compact={isCompact}
             onRefresh={dbs.refresh}
+            openRequest={dbOpenRequest}
             onOpenChange={setDbOpen}
           />
         ) : inDetail ? (
@@ -731,7 +733,14 @@ export function DraftsDrawer({
                 >
                   {editTitle || "(untitled)"}
                 </div>
-                <DraftArtifactPreview content={editContent} />
+                <DraftArtifactPreview
+                  content={editContent}
+                  projectGroup={editProject.trim() || undefined}
+                  onOpenDatabase={(id, viewId) => {
+                    setDbOpenRequest({ id, viewId, nonce: Date.now() });
+                    setSection("databases");
+                  }}
+                />
               </div>
             ) : (
               <>

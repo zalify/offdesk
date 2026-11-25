@@ -1,8 +1,24 @@
 import { describe, expect, test } from "vitest";
 
+import { parseArtifactSegments } from "./artifactSegments";
+
 import type { DraftDbColumn, DraftDbRow, DraftDbView } from "./api";
 import {
+  NONE_KEY,
   PAGE_SIZE,
+  applyBoardMove,
+  boardColumnQuery,
+  boardColumns,
+  boardGroupColumn,
+  boardGroupsBody,
+  cardProperties,
+  findInBoard,
+  optionTintToken,
+  parseDatabaseFence,
+  reloadChunks,
+  resolveDatabaseRef,
+  resolveViewRef,
+  viewsWithAdded,
   applyRowPatch,
   buildQueryBody,
   columnsWithAdded,
@@ -244,5 +260,234 @@ describe("view and column patch builders", () => {
     const out = sanitizeViewsForSave(v);
     expect(out[0].id).toBe("default");
     expect(out[0].filters).toEqual([{ column: "n", op: "gt", value: 2 }]);
+  });
+});
+
+describe("board columns", () => {
+  const status: DraftDbColumn = {
+    id: "status",
+    name: "Status",
+    type: "select",
+    options: [{ name: "todo" }, { name: "doing" }, { name: "done" }],
+  };
+  const done: DraftDbColumn = { id: "done", name: "Done", type: "checkbox" };
+
+  test("select: options in order, no-value column only when it has cards", () => {
+    const cols = boardColumns(status, [
+      { value: "doing", count: 2 },
+      { value: "todo", count: 5 },
+    ]);
+    expect(cols.map((c) => [c.key, c.count])).toEqual([
+      ["todo", 5],
+      ["doing", 2],
+      ["done", 0],
+    ]);
+    const withNone = boardColumns(status, [{ value: null, count: 3 }, { value: "todo", count: 1 }]);
+    expect(withNone[0]).toEqual({ key: NONE_KEY, label: "no value", value: null, count: 3 });
+    expect(withNone).toHaveLength(4);
+  });
+
+  test("select: unknown values in use get their own column, loading groups show none", () => {
+    const cols = boardColumns(status, [{ value: "legacy", count: 4 }]);
+    expect(cols.map((c) => c.key)).toEqual(["todo", "doing", "done", "legacy"]);
+    expect(boardColumns(status, null).map((c) => c.key)).toEqual(["todo", "doing", "done"]);
+  });
+
+  test("select without options keeps the no-value column so cards have somewhere to live", () => {
+    const bare: DraftDbColumn = { id: "s", name: "S", type: "select" };
+    expect(boardColumns(bare, []).map((c) => c.key)).toEqual([NONE_KEY]);
+  });
+
+  test("checkbox: unchecked folds false and unset together", () => {
+    const cols = boardColumns(done, [
+      { value: null, count: 2 },
+      { value: false, count: 3 },
+      { value: true, count: 4 },
+    ]);
+    expect(cols).toEqual([
+      { key: "false", label: "unchecked", value: false, count: 5 },
+      { key: "true", label: "checked", value: true, count: 4 },
+    ]);
+  });
+
+  test("group column prefers the saved group_by, then the first groupable column", () => {
+    const cols: DraftDbColumn[] = [{ id: "n", name: "N", type: "number" }, done, status];
+    expect(boardGroupColumn(cols, { group_by: "status" })?.id).toBe("status");
+    expect(boardGroupColumn(cols, {})?.id).toBe("done");
+    expect(boardGroupColumn(cols, { group_by: "gone" })?.id).toBe("done");
+    expect(boardGroupColumn([{ id: "n", name: "N", type: "number" }], {})).toBeNull();
+  });
+
+  test("per-column query ANDs the group value onto the view filters", () => {
+    const v: DraftDbView = { ...view, filters: [{ column: "n", op: "gt", value: 1 }], sorts: [{ column: "due", dir: "asc" }] };
+    expect(boardColumnQuery(v, " x ", "status", { value: "todo" })).toEqual({
+      limit: 30,
+      offset: 0,
+      filters: [
+        { column: "n", op: "gt", value: 1 },
+        { column: "status", op: "eq", value: "todo" },
+      ],
+      sorts: [{ column: "due", dir: "asc" }],
+      search: "x",
+    });
+    expect(boardColumnQuery(view, "", "status", { value: null }, { offset: 30 }).filters).toEqual([
+      { column: "status", op: "is_empty" },
+    ]);
+    expect(boardColumnQuery(view, "", "done", { value: false }).filters).toEqual([
+      { column: "done", op: "eq", value: false },
+    ]);
+  });
+
+  test("groups body carries filters and search but no paging or sorts", () => {
+    const v: DraftDbView = { ...view, filters: [{ column: "n", op: "gt", value: 1 }, { column: "n", op: "eq" }], sorts: [{ column: "n", dir: "asc" }] };
+    expect(boardGroupsBody(v, " q ", "status")).toEqual({
+      group_by: "status",
+      filters: [{ column: "n", op: "gt", value: 1 }],
+      search: "q",
+    });
+    expect(boardGroupsBody(view, "", "status")).toEqual({ group_by: "status" });
+  });
+
+  test("a refresh re-fetches what is loaded in request-sized chunks", () => {
+    expect(reloadChunks(0)).toEqual([{ offset: 0, limit: 30 }]);
+    expect(reloadChunks(60)).toEqual([{ offset: 0, limit: 60 }]);
+    expect(reloadChunks(1200)).toEqual([
+      { offset: 0, limit: 500 },
+      { offset: 500, limit: 500 },
+      { offset: 1000, limit: 200 },
+    ]);
+  });
+
+  test("new board views carry group_by, table views do not", () => {
+    expect(viewsWithAdded([], "Board", "board", "status")[0]).toMatchObject({ type: "board", group_by: "status" });
+    expect(viewsWithAdded([], "T")[0]).toEqual({ name: "T", type: "table", filters: [], sorts: [] });
+  });
+});
+
+describe("optimistic board move", () => {
+  const a = row("a", { status: "todo" });
+  const b = row("b", { status: "todo" });
+  const c = row("c", { status: "done" });
+  const state = {
+    counts: { todo: 2, doing: 0, done: 1 },
+    rows: { todo: [a, b], doing: [], done: [c] },
+  };
+
+  test("moves the card, rewrites the group property and adjusts both counts", () => {
+    const next = applyBoardMove(state, "a", "todo", "doing", "status", "doing");
+    expect(next.rows.todo.map((r) => r.id)).toEqual(["b"]);
+    expect(next.rows.doing.map((r) => r.id)).toEqual(["a"]);
+    expect(next.rows.doing[0].properties.status).toBe("doing");
+    expect(next.counts).toEqual({ todo: 1, doing: 1, done: 1 });
+    // input untouched
+    expect(state.rows.todo).toHaveLength(2);
+  });
+
+  test("moving to no value removes the property", () => {
+    const next = applyBoardMove(state, "c", "done", NONE_KEY, "status", null);
+    expect(next.rows[NONE_KEY][0].properties).toEqual({});
+    expect(next.counts[NONE_KEY]).toBe(1);
+  });
+
+  test("moving back with the original value and index is an exact revert", () => {
+    const at = findInBoard(state, "b")!;
+    expect(at).toMatchObject({ key: "todo", index: 1 });
+    const moved = applyBoardMove(state, "b", "todo", "done", "status", "done");
+    const back = applyBoardMove(moved, "b", "done", "todo", "status", "todo", at.index);
+    expect(back.rows.todo.map((r) => r.id)).toEqual(["a", "b"]);
+    expect(back.rows.todo[1].properties.status).toBe("todo");
+    expect(back.rows.done.map((r) => r.id)).toEqual(["c"]);
+    expect(back.counts).toEqual(state.counts);
+  });
+
+  test("unknown rows and same-column drops are no-ops", () => {
+    expect(applyBoardMove(state, "zzz", "todo", "done", "status", "done")).toBe(state);
+    expect(applyBoardMove(state, "a", "todo", "todo", "status", "todo")).toBe(state);
+  });
+});
+
+describe("card properties", () => {
+  const cols: DraftDbColumn[] = [
+    { id: "status", name: "Status", type: "select", options: [] },
+    { id: "owner", name: "Owner", type: "text" },
+    { id: "due", name: "Due", type: "date" },
+    { id: "tags", name: "Tags", type: "multi_select", options: [] },
+    { id: "done", name: "Done", type: "checkbox" },
+    { id: "n", name: "N", type: "number" },
+  ];
+  test("skips the group column, empties and unchecked boxes; caps at 3", () => {
+    const r = row("r", { status: "todo", owner: "me", due: "", tags: ["a", "b"], done: true, n: 3 });
+    const props = cardProperties(cols, { hidden_columns: [] }, r, "status");
+    expect(props.map((p) => p.column.id)).toEqual(["owner", "tags", "done"]);
+    expect(props[1].values).toEqual(["a", "b"]);
+    expect(cardProperties(cols, {}, row("e", { done: false }), "status")).toEqual([]);
+  });
+  test("respects hidden columns", () => {
+    const r = row("r", { owner: "me", n: 3 });
+    expect(cardProperties(cols, { hidden_columns: ["owner"] }, r, null).map((p) => p.column.id)).toEqual(["n"]);
+  });
+});
+
+describe("database fence", () => {
+  test("first line is the database, view: is optional and case-insensitive", () => {
+    expect(parseDatabaseFence("tasks\nview: Board")).toEqual({ database: "tasks", view: "Board" });
+    expect(parseDatabaseFence("\n  tasks  \n\n View : By status \n")).toEqual({ database: "tasks", view: "By status" });
+    expect(parseDatabaseFence("tasks")).toEqual({ database: "tasks" });
+    expect(parseDatabaseFence("view: Board")).toBeNull();
+    expect(parseDatabaseFence("   \n ")).toBeNull();
+  });
+
+  test("databases resolve by id, then by name inside the draft's project first", () => {
+    const dbs = [
+      { id: "1", name: "Tasks", project_group: "a" },
+      { id: "2", name: "tasks", project_group: "b" },
+    ];
+    expect(resolveDatabaseRef(dbs, "2", "a")?.id).toBe("2");
+    expect(resolveDatabaseRef(dbs, "tasks", "b")?.id).toBe("2");
+    expect(resolveDatabaseRef(dbs, "TASKS", "a")?.id).toBe("1");
+    expect(resolveDatabaseRef(dbs, "tasks")?.id).toBe("1");
+    expect(resolveDatabaseRef(dbs, "nope", "a")).toBeNull();
+  });
+
+  test("views resolve by id or name, default to the first", () => {
+    const views: DraftDbView[] = [view, { ...view, id: "v2", name: "Board", type: "board" }];
+    expect(resolveViewRef(views)?.id).toBe("default");
+    expect(resolveViewRef(views, "board")?.id).toBe("v2");
+    expect(resolveViewRef(views, "v2")?.id).toBe("v2");
+    expect(resolveViewRef(views, "missing")).toBeNull();
+  });
+});
+
+describe("parseArtifactSegments", () => {
+  test("splits markdown around mermaid, svg, html and database fences", () => {
+    const src = "intro\n\n```database\ntasks\nview: Board\n```\n\nmiddle\n\n```mermaid\ngraph TD; A-->B\n```\n";
+    expect(parseArtifactSegments(src)).toEqual([
+      { kind: "markdown", text: "intro" },
+      { kind: "database", database: "tasks", view: "Board" },
+      { kind: "markdown", text: "middle" },
+      { kind: "mermaid", code: "graph TD; A-->B" },
+    ]);
+  });
+
+  test("an empty or nameless database fence is dropped, not rendered", () => {
+    expect(parseArtifactSegments("a\n```database\n```\nb")).toEqual([
+      { kind: "markdown", text: "a" },
+      { kind: "markdown", text: "b" },
+    ]);
+    expect(parseArtifactSegments("```database\nview: x\n```")).toEqual([]);
+  });
+
+  test("standalone html and svg documents stay one artifact", () => {
+    expect(parseArtifactSegments("<!doctype html><p>x</p>")).toEqual([{ kind: "html", code: "<!doctype html><p>x</p>" }]);
+    expect(parseArtifactSegments("   ")).toEqual([]);
+  });
+});
+
+describe("option tints", () => {
+  test("only red / orange / yellow map to a tint; the rest stay neutral", () => {
+    expect(optionTintToken("red")).toBe("err");
+    expect(optionTintToken("Orange")).toBe("warn");
+    expect(optionTintToken("green")).toBeNull();
+    expect(optionTintToken(undefined)).toBeNull();
   });
 });

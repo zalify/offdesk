@@ -41,8 +41,9 @@ import { PropertyCell } from "./PropertyCell.web";
 import { ViewToolbar } from "./ViewToolbar.web";
 import { MONO, smallBtn } from "./ui.web";
 import { useDatabaseRows } from "./useDatabaseRows";
+import { useRefreshPoll } from "./usePoll";
 
-export const REFRESH_MS = 5000;
+export { REFRESH_MS } from "./usePoll";
 
 function columnWidth(type: DraftDbColumnType): number {
   switch (type) {
@@ -69,7 +70,7 @@ interface DatabaseTableProps {
   /** False while a row page covers the table or the document is hidden: no polling. */
   active: boolean;
   onViewChange: (patch: Partial<Omit<DraftDbView, "id">>) => void;
-  onSchemaChange: (patch: { columns?: DraftDbColumnInput[]; views?: DraftDbViewInput[] }) => Promise<void>;
+  onSchemaChange: (patch: { columns?: DraftDbColumnInput[]; views?: DraftDbViewInput[] }) => Promise<unknown>;
   onRefreshDb: () => void;
   onOpenRow: (rowId: string) => void;
 }
@@ -164,17 +165,11 @@ export function DatabaseTable({ db, view, compact, active, onViewChange, onSchem
   }, [active, reload, onRefreshDb]);
 
   // Agents write through the CLI: poll while visible, never mid-edit.
-  useEffect(() => {
-    if (!active) return;
-    const tick = () => {
-      if (document.visibilityState !== "visible") return;
-      if (editingRef.current || writesRef.current > 0) return;
-      void reload();
-      onRefreshDb();
-    };
-    const timer = window.setInterval(tick, REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, [active, reload, onRefreshDb]);
+  useRefreshPoll(active, () => {
+    if (editingRef.current || writesRef.current > 0) return;
+    void reload();
+    onRefreshDb();
+  });
 
   const commit = async (rowId: string, column: DraftDbColumn | null, value: DraftDbValue) => {
     const patch = column ? { properties: { [column.id]: value } } : { title: String(value) };
@@ -292,7 +287,7 @@ export function DatabaseTable({ db, view, compact, active, onViewChange, onSchem
         </div>
       )}
 
-      <div ref={scrollerRef} onScroll={onScroll} style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative", background: colors.bg1 }}>
+      <div ref={scrollerRef} data-testid="draftdb-scroller" onScroll={onScroll} style={{ flex: 1, minHeight: 0, overflow: "auto", position: "relative", background: colors.bg1 }}>
         <div style={{ width: totalWidth, minWidth: "100%" }}>
           <div
             style={{
@@ -455,7 +450,7 @@ export function DatabaseTable({ db, view, compact, active, onViewChange, onSchem
         <input
           data-testid="draftdb-new-row"
           value={newTitle}
-          placeholder="+ new row — type a title, press enter"
+          placeholder={compact ? "+ new row" : "+ new row — type a title, press enter"}
           enterKeyHint="done"
           onChange={(e) => setNewTitle(e.target.value)}
           onKeyDown={(e) => {
