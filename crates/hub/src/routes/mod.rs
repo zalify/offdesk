@@ -6,6 +6,7 @@ mod auth;
 mod bookmarks;
 mod bootstrap;
 mod draft_databases;
+mod draft_shares;
 mod drafts;
 mod focus;
 mod integrations;
@@ -14,6 +15,7 @@ mod mode;
 pub(crate) mod onboarding;
 mod registration;
 mod settings;
+pub(crate) mod share_public;
 mod terminals;
 mod vault;
 mod version;
@@ -37,6 +39,7 @@ pub fn router() -> Router<AppState> {
         .merge(bookmarks::router())
         .merge(draft_databases::router())
         .merge(drafts::router())
+        .merge(draft_shares::router())
         .merge(messages::router())
         .merge(api_tokens::router())
         .merge(mode::router())

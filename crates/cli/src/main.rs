@@ -265,10 +265,13 @@ enum DraftAction {
         #[arg(long)]
         json: bool,
     },
-    /// Print a draft's content
+    /// Print a draft's content (or an older version with --version)
     Read {
-        /// Draft id or unique prefix
+        /// Draft id or unique prefix (database rows need their full id)
         draft: String,
+        /// Print this saved version instead (version id or unique prefix; see `draft history`)
+        #[arg(long)]
+        version: Option<String>,
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -285,6 +288,51 @@ enum DraftAction {
     Rm {
         /// Draft id or unique prefix
         draft: String,
+    },
+    /// Create a PUBLIC read-only link to a draft (anyone with the URL can view it)
+    Share {
+        /// Draft id or unique prefix (database rows need their full id)
+        draft: String,
+        /// Always show the current content instead of a frozen copy
+        #[arg(long)]
+        live: bool,
+        /// Link lifetime: 7d, 30d or a bare number of days (default: never expires)
+        #[arg(long)]
+        expires: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List active share links (of one draft, or all drafts)
+    Shares {
+        /// Draft id or unique prefix (database rows need their full id)
+        draft: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke a share link by share id, or all links of a draft
+    Unshare {
+        /// Share id / unique prefix, or a draft id / unique prefix (revokes all its links)
+        target: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List a draft's saved versions (newest first)
+    History {
+        /// Draft id or unique prefix (database rows need their full id)
+        draft: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore a draft to a saved version (the current state is saved as a version first)
+    Restore {
+        /// Draft id or unique prefix (database rows need their full id)
+        draft: String,
+        /// Version id or unique prefix (see `draft history`)
+        version: String,
     },
 }
 
@@ -467,6 +515,36 @@ enum DbAction {
         /// Write to a file instead of stdout
         #[arg(short, long)]
         output: Option<std::path::PathBuf>,
+    },
+    /// Create a PUBLIC read-only live link to a database view (anyone with the URL can view it)
+    Share {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// View to share: name or id (default: the first view)
+        #[arg(long)]
+        view: Option<String>,
+        /// Link lifetime: 7d, 30d or a bare number of days (default: never expires)
+        #[arg(long)]
+        expires: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List active share links of a database
+    Shares {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Revoke a share link by share id, or all links of a database
+    Unshare {
+        /// Share id / unique prefix, or a database name / id (revokes all its links)
+        target: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -1836,8 +1914,23 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             DraftAction::List { project, all, json } => {
                 commands::draft::list(&hub_client, project, all, json).await
             }
-            DraftAction::Read { draft, json } => {
-                commands::draft::read(&hub_client, &draft, json).await
+            DraftAction::Read { draft, version, json } => {
+                commands::draft::read(&hub_client, &draft, version.as_deref(), json).await
+            }
+            DraftAction::Share { draft, live, expires, json } => {
+                commands::draft::share(&hub_client, &draft, live, expires.as_deref(), json).await
+            }
+            DraftAction::Shares { draft, json } => {
+                commands::draft::shares(&hub_client, draft.as_deref(), json).await
+            }
+            DraftAction::Unshare { target, json } => {
+                commands::draft::unshare(&hub_client, &target, json).await
+            }
+            DraftAction::History { draft, json } => {
+                commands::draft::history(&hub_client, &draft, json).await
+            }
+            DraftAction::Restore { draft, version } => {
+                commands::draft::restore(&hub_client, &draft, &version).await
             }
             DraftAction::Archive { draft, restore } => {
                 commands::draft::archive(&hub_client, &draft, restore).await
@@ -1872,6 +1965,11 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             DbAction::Export { db, where_, sort, format, output } => {
                 commands::db::export(&hub_client, &db, &where_, &sort, &format, output).await
             }
+            DbAction::Share { db, view, expires, json } => {
+                commands::db::share(&hub_client, &db, view.as_deref(), expires.as_deref(), json).await
+            }
+            DbAction::Shares { db, json } => commands::db::shares(&hub_client, &db, json).await,
+            DbAction::Unshare { target, json } => commands::db::unshare(&hub_client, &target, json).await,
         },
         Commands::Version => unreachable!("version returns early"),
         Commands::Update => commands::version::update(&hub_client).await,

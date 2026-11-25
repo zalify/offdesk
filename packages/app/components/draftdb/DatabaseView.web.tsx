@@ -25,6 +25,7 @@ import { DatabaseBoard } from "./DatabaseBoard.web";
 import { DatabaseTable } from "./DatabaseTable.web";
 import { REFRESH_MS } from "./usePoll";
 import { RowPage } from "./RowPage.web";
+import { ShareControl } from "./ShareControl.web";
 import { MONO, Popover, fieldStyle, smallBtn } from "./ui.web";
 
 const VIEW_SAVE_DEBOUNCE_MS = 500;
@@ -271,6 +272,7 @@ export function DatabaseView({
             {db.name}
           </button>
         )}
+        <ShareControl kind="database" targetId={db.id} viewId={activeView.id} compact={compact} />
         <span style={{ fontSize: rem(11.5), color: colors.fg2, whiteSpace: "nowrap" }}>
           {db.project_group} · {db.row_count.toLocaleString()} {db.row_count === 1 ? "row" : "rows"}
         </span>

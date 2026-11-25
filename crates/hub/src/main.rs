@@ -502,6 +502,10 @@ async fn main() {
         .route("/api", any(api_not_found))
         .route("/api/{*path}", any(api_not_found))
         .layer(CorsLayer::permissive())
+        // The public share surface sets its own headers (and answers its own
+        // preflights), so it joins after the permissive CORS layer. It is not
+        // part of `inner`, so the encrypted transport can never reach it.
+        .merge(routes::share_public::router(state.clone()))
         .fallback_service(ui_service(args.static_dir.as_deref()))
         .layer(tower_http::compression::CompressionLayer::new());
 

@@ -111,6 +111,82 @@ export const updateDraft = (
 export const deleteDraft = (draftId: string) =>
   request<void>("DELETE", `/api/drafts/${encodeURIComponent(draftId)}`);
 
+// Draft public sharing + version history
+export interface DraftShareAsset {
+  source: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface DraftShare {
+  id: string;
+  url: string;
+  kind: "draft" | "database";
+  target_id: string;
+  target_title: string;
+  mode: "snapshot" | "live";
+  view_id: string | null;
+  expires_at: number | null;
+  created_at: number;
+  assets: DraftShareAsset[];
+}
+
+export interface DraftVersionInfo {
+  id: string;
+  title: string;
+  size: number;
+  created_at: number;
+}
+
+export interface DraftVersion {
+  id: string;
+  draft_id: string;
+  title: string;
+  content: string;
+  created_at: number;
+}
+
+/** Resolves to null when the hub predates sharing (404): hide all sharing UI. */
+export async function listDraftShares(targetId?: string): Promise<DraftShare[] | null> {
+  const suffix = targetId ? `?target_id=${encodeURIComponent(targetId)}` : "";
+  try {
+    return await request<DraftShare[]>("GET", `/api/draft-shares${suffix}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export const createDraftShare = (payload: {
+  kind: "draft" | "database";
+  target_id: string;
+  mode?: "snapshot" | "live";
+  view_id?: string;
+  expires_in_days?: number;
+}) => request<DraftShare>("POST", "/api/draft-shares", payload);
+
+export const revokeDraftShare = (shareId: string) =>
+  request<void>("DELETE", `/api/draft-shares/${encodeURIComponent(shareId)}`);
+
+const draftVersionsPath = (draftId: string) =>
+  `/api/drafts/${encodeURIComponent(draftId)}/versions`;
+
+/** Resolves to null on 404 (older hub): hide the history UI. */
+export async function listDraftVersions(draftId: string): Promise<DraftVersionInfo[] | null> {
+  try {
+    return await request<DraftVersionInfo[]>("GET", draftVersionsPath(draftId));
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export const getDraftVersion = (draftId: string, versionId: string) =>
+  request<DraftVersion>("GET", `${draftVersionsPath(draftId)}/${encodeURIComponent(versionId)}`);
+
+export const restoreDraftVersion = (draftId: string, versionId: string) =>
+  request<DraftInfo>("POST", `${draftVersionsPath(draftId)}/${encodeURIComponent(versionId)}/restore`);
+
 // Draft databases (Notion-style tables whose rows are drafts)
 export type DraftDbColumnType =
   | "text"

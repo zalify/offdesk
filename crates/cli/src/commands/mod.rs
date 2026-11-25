@@ -14,6 +14,7 @@ pub mod open;
 pub mod read;
 pub mod read_all;
 pub mod runs;
+pub mod share;
 pub mod send;
 pub mod tokens;
 pub mod vault;

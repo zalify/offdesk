@@ -336,7 +336,10 @@ impl HeadlessActor {
                          For structured or tabular data (task boards, comparison tables, bug lists, test matrices — \
                          not logs) use `offdesk db`: `db create <name> --col Status:select=todo,done`, \
                          `db add <db> <title> --set Status=todo`, `db query <db> --where Status=todo`, \
-                         `db update`, `db import`; run `offdesk db --help` for details.",
+                         `db update`, `db import`; run `offdesk db --help` for details. \
+                         `offdesk draft share <draft>` / `offdesk db share <db>` return a public read-only URL \
+                         for showing results to people outside Offdesk — only use it when the user asked for \
+                         a shareable/public link.",
                     );
                     if !self.env_vars.is_empty() {
                         let mut keys: Vec<&str> =

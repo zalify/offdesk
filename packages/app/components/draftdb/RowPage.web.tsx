@@ -4,13 +4,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, Eye, Pencil } from "lucide-react";
 
 import { getDraftDbRow, patchDraftDbRow } from "@/lib/api";
-import type { DraftDatabase, DraftDbRowFull, DraftDbValue } from "@/lib/api";
+import type { DraftDatabase, DraftDbRowFull, DraftDbValue, DraftVersion } from "@/lib/api";
 import { applyRowPatch, hubErrorMessage, revertRow } from "@/lib/draftDatabases";
 import { colors, colorAlpha } from "@/lib/colors";
 import { rem } from "@/lib/rem";
 import { DraftArtifactPreview } from "../DraftArtifactPreview.web";
 import { PropertyCell } from "./PropertyCell.web";
 import { MONO, smallBtn } from "./ui.web";
+import { ShareControl } from "./ShareControl.web";
+import { HistoryButton, VersionBanner } from "./VersionHistory.web";
 
 const REFRESH_MS = 5000;
 
@@ -36,6 +38,7 @@ export function RowPage({
   const [savedContent, setSavedContent] = useState("");
   const [savingBody, setSavingBody] = useState(false);
   const [bodyError, setBodyError] = useState<string | null>(null);
+  const [viewing, setViewing] = useState<DraftVersion | null>(null);
   const writes = useRef(0);
   const focused = useRef(false);
   const rowRef = useRef(row);
@@ -60,6 +63,7 @@ export function RowPage({
 
   useEffect(() => {
     setRow(null);
+    setViewing(null);
     void load();
   }, [load]);
 
@@ -127,12 +131,20 @@ export function RowPage({
       }}
       style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", fontFamily: MONO, color: colors.fg0 }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: `1px solid ${colors.lineSoft}`, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 12px", borderBottom: `1px solid ${colors.lineSoft}`, flexShrink: 0 }}>
         <button type="button" data-testid="draftdb-row-back" onClick={goBack} style={smallBtn({ compact })}>
           <ChevronLeft size={13} />
           {db.name}
         </button>
         <div style={{ flex: 1 }} />
+        <ShareControl kind="draft" targetId={rowId} compact={compact} />
+        <HistoryButton
+          draftId={rowId}
+          currentTitle={row?.title ?? ""}
+          compact={compact}
+          refreshKey={`${row?.updated_at ?? ""}`}
+          onView={setViewing}
+        />
         <div style={{ display: "inline-flex", borderRadius: 4, border: `1px solid ${colors.line}`, overflow: "hidden" }}>
           {(["preview", "edit"] as const).map((m) => (
             <button
@@ -211,13 +223,32 @@ export function RowPage({
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: 8, minHeight: 200 }}>
-            {mode === "preview" ? (
+            {viewing && (
+              <VersionBanner
+                draftId={rowId}
+                version={viewing}
+                currentTitle={row.title}
+                compact={compact}
+                onBack={() => setViewing(null)}
+                onRestored={() => {
+                  setViewing(null);
+                  // Restored content replaces the body, even over unsaved text.
+                  void getDraftDbRow(db.id, rowId).then((fresh) => {
+                    setRow(fresh);
+                    setContent(fresh.content);
+                    setSavedContent(fresh.content);
+                    onDbChanged();
+                  });
+                }}
+              />
+            )}
+            {mode === "preview" || viewing ? (
               <div
                 data-testid="draftdb-row-body-preview"
                 style={{ padding: "12px 14px", borderRadius: 8, border: `1px solid ${colors.lineSoft}`, background: colors.bg0, fontFamily: "var(--font-sans)" }}
               >
-                {content.trim() ? (
-                  <DraftArtifactPreview content={content} />
+                {(viewing ? viewing.content : content).trim() ? (
+                  <DraftArtifactPreview content={viewing ? viewing.content : content} />
                 ) : (
                   <div style={{ ...label, fontFamily: MONO }}>No body yet. Switch to edit to write markdown.</div>
                 )}

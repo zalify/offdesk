@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use super::now_ms;
@@ -110,6 +110,10 @@ pub fn upsert_draft(
     pinned: bool,
     force_new: bool,
 ) -> rusqlite::Result<DraftRow> {
+    // IMMEDIATE: take the write lock up front so busy_timeout applies; the
+    // version snapshot and the overwrite must be one atomic step.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let conn: &Connection = &tx;
     let now = now_ms();
     let title = title.trim();
     let project_group = if project_group.trim().is_empty() {
@@ -119,17 +123,21 @@ pub fn upsert_draft(
     };
 
     if !force_new {
-        let existing_id: Option<String> = conn
+        let existing: Option<(String, String)> = conn
             .query_row(
-                "SELECT id FROM drafts
+                "SELECT id, content FROM drafts
                  WHERE user_id = ?1 AND project_group = ?2 AND title = ?3 AND archived = 0
                    AND database_id IS NULL
                  ORDER BY updated_at DESC LIMIT 1",
                 params![user_id, project_group, title],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
-        if let Some(id) = existing_id {
+        if let Some((id, old_content)) = existing {
+            // The title matched exactly, so only the content can change.
+            if old_content != content {
+                super::draft_shares::record_version(conn, user_id, &id, title, &old_content)?;
+            }
             conn.execute(
                 "UPDATE drafts
                  SET content = ?1,
@@ -140,8 +148,10 @@ pub fn upsert_draft(
                  WHERE id = ?5 AND user_id = ?6",
                 params![content, source_terminal_id, i64::from(pinned), now, id, user_id],
             )?;
-            return get_draft(conn, user_id, &id)?
-                .ok_or(rusqlite::Error::QueryReturnedNoRows);
+            let out = get_draft(conn, user_id, &id)?
+                .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+            tx.commit()?;
+            return Ok(out);
         }
     }
 
@@ -163,6 +173,7 @@ pub fn upsert_draft(
             now
         ],
     )?;
+    tx.commit()?;
     Ok(DraftRow {
         id,
         user_id: user_id.to_string(),
@@ -191,6 +202,9 @@ pub fn update_draft(
     draft_id: &str,
     patch: DraftPatch<'_>,
 ) -> rusqlite::Result<Option<DraftRow>> {
+    // IMMEDIATE: the version snapshot and the overwrite are one atomic step.
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let conn: &Connection = &tx;
     let Some(existing) = get_draft(conn, user_id, draft_id)? else {
         return Ok(None);
     };
@@ -209,6 +223,16 @@ pub fn update_draft(
     let next_archived = patch.archived.unwrap_or(existing.archived);
     let now = now_ms();
 
+    if next_title != existing.title || next_content != existing.content {
+        super::draft_shares::record_version(
+            conn,
+            user_id,
+            draft_id,
+            &existing.title,
+            &existing.content,
+        )?;
+    }
+
     conn.execute(
         "UPDATE drafts
          SET title = ?1, content = ?2, project_group = ?3,
@@ -225,7 +249,9 @@ pub fn update_draft(
             user_id
         ],
     )?;
-    get_draft(conn, user_id, draft_id)
+    let out = get_draft(conn, user_id, draft_id)?;
+    tx.commit()?;
+    Ok(out)
 }
 
 pub fn delete_draft(
@@ -233,10 +259,18 @@ pub fn delete_draft(
     user_id: &str,
     draft_id: &str,
 ) -> rusqlite::Result<bool> {
-    let affected = conn.execute(
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let affected = tx.execute(
         "DELETE FROM drafts WHERE id = ?1 AND user_id = ?2",
         params![draft_id, user_id],
     )?;
+    if affected > 0 {
+        tx.execute(
+            "DELETE FROM draft_versions WHERE draft_id = ?1 AND user_id = ?2",
+            params![draft_id, user_id],
+        )?;
+    }
+    tx.commit()?;
     Ok(affected > 0)
 }
 

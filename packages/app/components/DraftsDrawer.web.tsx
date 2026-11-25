@@ -18,12 +18,15 @@ import {
 import { DraftArtifactPreview } from "./DraftArtifactPreview.web";
 import { DatabasesPane } from "./draftdb/DatabasesPane.web";
 import { useDraftDatabases } from "./draftdb/useDraftDatabases";
+import { ShareControl } from "./draftdb/ShareControl.web";
+import { HistoryButton, VersionBanner } from "./draftdb/VersionHistory.web";
 import {
   deleteDraft,
   listDrafts,
   updateDraft,
   upsertDraft,
   type DraftInfo,
+  type DraftVersion,
 } from "@/lib/api";
 import { colors, colorAlpha } from "@/lib/colors";
 import { rem } from "@/lib/rem";
@@ -117,6 +120,12 @@ export function DraftsDrawer({
   const [editProject, setEditProject] = useState(defaultProjectGroup);
   const [saving, setSaving] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // An earlier version being viewed read-only in the preview.
+  const [viewing, setViewing] = useState<DraftVersion | null>(null);
+
+  useEffect(() => {
+    setViewing(null);
+  }, [selectedId]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -568,7 +577,7 @@ export function DraftsDrawer({
               overflow: "hidden",
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
                 onClick={() => {
@@ -656,6 +665,19 @@ export function DraftsDrawer({
               )}
               {selected && (
                 <>
+                  <ShareControl
+                    kind="draft"
+                    targetId={selected.id}
+                    compact={isCompact}
+                    onCreated={() => void refresh()}
+                  />
+                  <HistoryButton
+                    draftId={selected.id}
+                    currentTitle={selected.title}
+                    compact={isCompact}
+                    refreshKey={selected.updated_at}
+                    onView={setViewing}
+                  />
                   <button
                     type="button"
                     title="Copy content"
@@ -709,7 +731,22 @@ export function DraftsDrawer({
               )}
             </div>
 
-            {mode === "preview" && !creating ? (
+            {selected && viewing && !creating && (
+              <VersionBanner
+                draftId={selected.id}
+                version={viewing}
+                currentTitle={selected.title}
+                compact={isCompact}
+                onBack={() => setViewing(null)}
+                onRestored={(d) => {
+                  setViewing(null);
+                  openEditorFor(d);
+                  void refresh();
+                }}
+              />
+            )}
+
+            {(mode === "preview" || viewing) && !creating ? (
               <div
                 data-testid="draft-artifact-preview"
                 style={{
@@ -731,10 +768,10 @@ export function DraftsDrawer({
                     borderBottom: `1px solid ${colors.lineSoft}`,
                   }}
                 >
-                  {editTitle || "(untitled)"}
+                  {(viewing ? viewing.title : editTitle) || "(untitled)"}
                 </div>
                 <DraftArtifactPreview
-                  content={editContent}
+                  content={viewing ? viewing.content : editContent}
                   projectGroup={editProject.trim() || undefined}
                   onOpenDatabase={(id, viewId) => {
                     setDbOpenRequest({ id, viewId, nonce: Date.now() });

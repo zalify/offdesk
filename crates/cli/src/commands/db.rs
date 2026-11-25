@@ -10,7 +10,7 @@ use serde_json::{json, Map, Value};
 
 use crate::client::HubClient;
 use crate::commands::draft::infer_project_group;
-use crate::commands::{json_pretty, out_line};
+use crate::commands::{json_pretty, out_line, share as share_cmd};
 use crate::resolve::short_id;
 use crate::CliError;
 
@@ -285,7 +285,7 @@ pub fn find_db<'a>(dbs: &'a [Value], query: &str, group: &str) -> Result<Option<
     }
 }
 
-async fn resolve_db(client: &HubClient, query: &str, project: Option<&str>) -> Result<Value, CliError> {
+pub(crate) async fn resolve_db(client: &HubClient, query: &str, project: Option<&str>) -> Result<Value, CliError> {
     let dbs = client.db_list(None).await?;
     let dbs = dbs.as_array().cloned().unwrap_or_default();
     let group = project.map(str::to_string).unwrap_or_else(infer_project_group);
@@ -459,6 +459,40 @@ fn describe_columns(columns: &[Value]) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // CSV helpers
 // ---------------------------------------------------------------------------
+
+/// Column type for a header created by `import --create`, from every value in
+/// that CSV column. Empty cells are ignored; no values at all means text.
+pub fn infer_column_type(values: &[&str]) -> &'static str {
+    let cells: Vec<&str> = values.iter().map(|v| v.trim()).filter(|v| !v.is_empty()).collect();
+    if cells.is_empty() {
+        return "text";
+    }
+    if cells.iter().all(|c| c.parse::<f64>().map(f64::is_finite).unwrap_or(false)) {
+        return "number";
+    }
+    if cells.iter().all(|c| c.eq_ignore_ascii_case("true") || c.eq_ignore_ascii_case("false")) {
+        return "checkbox";
+    }
+    if cells.iter().all(|c| is_iso_date(c)) {
+        return "date";
+    }
+    "text"
+}
+
+/// Strict `YYYY-MM-DD` (month 1-12, day 1-31).
+fn is_iso_date(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    let digits = |range: std::ops::Range<usize>| bytes[range].iter().all(u8::is_ascii_digit);
+    if !(digits(0..4) && digits(5..7) && digits(8..10)) {
+        return false;
+    }
+    let month: u32 = text[5..7].parse().unwrap_or(0);
+    let day: u32 = text[8..10].parse().unwrap_or(0);
+    (1..=12).contains(&month) && (1..=31).contains(&day)
+}
 
 /// Where each CSV header goes when importing.
 #[derive(Debug, PartialEq)]
@@ -958,9 +992,16 @@ pub async fn import(
         }
         None if create => {
             let columns: Vec<Value> = plan
-                .unknown
+                .mapped
                 .iter()
-                .map(|name| json!({ "name": name, "type": "text" }))
+                .filter(|(_, name)| plan.unknown.contains(name))
+                .map(|(idx, name)| {
+                    let values: Vec<&str> = records
+                        .iter()
+                        .filter_map(|r| r.get(*idx).map(String::as_str))
+                        .collect();
+                    json!({ "name": name, "type": infer_column_type(&values) })
+                })
                 .collect();
             let body = json!({ "name": db, "project_group": group, "columns": columns, "if_not_exists": true });
             client.db_create(&body).await?
@@ -1005,6 +1046,33 @@ pub async fn import(
         if skipped > 0 { format!(", {skipped} skipped") } else { String::new() }
     ));
     Ok(())
+}
+
+pub async fn share(
+    client: &HubClient,
+    db: &str,
+    view: Option<&str>,
+    expires: Option<&str>,
+    json: bool,
+) -> Result<(), CliError> {
+    let days = expires.map(share_cmd::parse_expires).transpose()?;
+    let database = resolve_db(client, db, None).await?;
+    let view_id = view.map(|v| share_cmd::resolve_view(&database, v)).transpose()?;
+    let body = share_cmd::build_create_body("database", str_field(&database, "id"), "live", view_id.as_deref(), days);
+    share_cmd::create(client, &body, json).await
+}
+
+pub async fn shares(client: &HubClient, db: &str, json: bool) -> Result<(), CliError> {
+    let database = resolve_db(client, db, None).await?;
+    share_cmd::list(client, "database", Some(str_field(&database, "id")), json).await
+}
+
+pub async fn unshare(client: &HubClient, query: &str, json: bool) -> Result<(), CliError> {
+    share_cmd::unshare(client, "database", query, json, || async {
+        let database = resolve_db(client, query, None).await?;
+        Ok((str_field(&database, "id").to_string(), str_field(&database, "name").to_string()))
+    })
+    .await
 }
 
 pub async fn export(
@@ -1208,5 +1276,20 @@ mod tests {
         assert_eq!(str_field(find_db(&dbs, "bugs", "p1").unwrap().unwrap(), "id"), "cccc3333");
         assert_eq!(str_field(find_db(&dbs, "cccc", "p1").unwrap().unwrap(), "name"), "Bugs");
         assert!(find_db(&dbs, "zzz", "p1").unwrap().is_none());
+    }
+
+    #[test]
+    fn column_type_inference() {
+        assert_eq!(infer_column_type(&["1", "2.5", " -3 ", "", "1e3"]), "number");
+        assert_eq!(infer_column_type(&["1", "abc"]), "text");
+        assert_eq!(infer_column_type(&["NaN", "1"]), "text");
+        assert_eq!(infer_column_type(&["inf"]), "text");
+        assert_eq!(infer_column_type(&["true", "FALSE", "False"]), "checkbox");
+        assert_eq!(infer_column_type(&["true", "yes"]), "text");
+        assert_eq!(infer_column_type(&["2026-01-31", "", "2025-12-01"]), "date");
+        assert_eq!(infer_column_type(&["2026-13-01"]), "text");
+        assert_eq!(infer_column_type(&["2026-1-1"]), "text");
+        assert_eq!(infer_column_type(&["", " "]), "text");
+        assert_eq!(infer_column_type(&[]), "text");
     }
 }
