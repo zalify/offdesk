@@ -30,6 +30,7 @@ tauri-plugin-clipboard-manager = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+alacritty_terminal = "0.25"
 offdesk-secure = { path = "../../../crates/secure" }
 tokio = { version = "1", features = ["full"] }
 base64 = "0.22"

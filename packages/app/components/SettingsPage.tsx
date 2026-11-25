@@ -1,3 +1,4 @@
+import { TERMINAL_RENDERER_STORAGE_KEY } from "./TerminalView.web";
 import { UiUpdateNotification } from "./UiUpdateNotification";
 import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
@@ -864,6 +865,47 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               px
             </label>
           </SettingRow>
+
+          {isTauri() && (
+            <SettingRow
+              label="Terminal engine"
+              description="Native Rust (Alacritty) runs the terminal emulator in Rust with 10,000-line scrollback and zero xterm.js / WebGL limits. Switch anytime and reload."
+            >
+              <select
+                aria-label="Terminal Engine"
+                defaultValue={
+                  (() => {
+                    try {
+                      return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm"
+                        ? "xterm"
+                        : "native";
+                    } catch {
+                      return "native";
+                    }
+                  })()
+                }
+                onChange={(e) => {
+                  try {
+                    window.localStorage.setItem(TERMINAL_RENDERER_STORAGE_KEY, e.target.value);
+                  } catch {
+                    /* ignore */
+                  }
+                  window.location.reload();
+                }}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: `1px solid ${colors.line}`,
+                  background: colors.bg0,
+                  color: colors.fg0,
+                  fontSize: rem(12.5),
+                }}
+              >
+                <option value="native">Native Rust (Alacritty)</option>
+                <option value="xterm">Legacy (xterm.js)</option>
+              </select>
+            </SettingRow>
+          )}
 
         </section>
 

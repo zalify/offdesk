@@ -11,6 +11,7 @@ mod hub_url;
 mod bundle_name;
 mod downloads;
 mod file_preview;
+mod native_term;
 // Asked by the phone's setup screen before it opens a hub.
 #[cfg(any(mobile, test))]
 #[cfg_attr(not(mobile), allow(dead_code))]
@@ -51,6 +52,7 @@ pub fn run() {
         .plugin(ui_updates::plugin(updates))
         .manage(secure::SecureState::default())
         .manage(file_preview::FilePreviewState::default())
+        .manage(native_term::NativeTermState::default())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
@@ -99,7 +101,14 @@ pub fn run() {
             downloads::save_download,
             downloads::open_download,
             file_preview::file_preview_open,
-            file_preview::file_preview_respond
+            file_preview::file_preview_respond,
+            native_term::native_term_open,
+            native_term::native_term_feed,
+            native_term::native_term_resize,
+            native_term::native_term_scroll,
+            native_term::native_term_snap_bottom,
+            native_term::native_term_plain_lines,
+            native_term::native_term_close
         ]);
 
     builder
@@ -161,7 +170,14 @@ fn configure_desktop<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Bu
             downloads::save_download,
             downloads::open_download,
             file_preview::file_preview_open,
-            file_preview::file_preview_respond
+            file_preview::file_preview_respond,
+            native_term::native_term_open,
+            native_term::native_term_feed,
+            native_term::native_term_resize,
+            native_term::native_term_scroll,
+            native_term::native_term_snap_bottom,
+            native_term::native_term_plain_lines,
+            native_term::native_term_close
         ])
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
