@@ -157,6 +157,43 @@ function keyEventToBytes(e: React.KeyboardEvent<HTMLTextAreaElement>): string | 
   }
 }
 
+// DEC Mode 2026 Synchronized Output markers:
+// BSU: ESC [ ? 2 0 2 6 h   |   ESU: ESC [ ? 2 0 2 6 l
+const SYNC_MARKER_PREFIX = [0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36] as const;
+
+function scanSyncUpdateMarkers(
+  tail: Uint8Array,
+  chunk: Uint8Array,
+  inSync: boolean,
+): { inSync: boolean; nextTail: Uint8Array } {
+  const combined = tail.length > 0 ? concatChunks([tail, chunk]) : chunk;
+  let state = inSync;
+  const limit = combined.length - 8;
+  for (let i = 0; i <= limit; i++) {
+    if (
+      combined[i] === SYNC_MARKER_PREFIX[0] &&
+      combined[i + 1] === SYNC_MARKER_PREFIX[1] &&
+      combined[i + 2] === SYNC_MARKER_PREFIX[2] &&
+      combined[i + 3] === SYNC_MARKER_PREFIX[3] &&
+      combined[i + 4] === SYNC_MARKER_PREFIX[4] &&
+      combined[i + 5] === SYNC_MARKER_PREFIX[5] &&
+      combined[i + 6] === SYNC_MARKER_PREFIX[6]
+    ) {
+      const code = combined[i + 7];
+      if (code === 0x68 /* 'h' */) {
+        state = true;
+        i += 7;
+      } else if (code === 0x6c /* 'l' */) {
+        state = false;
+        i += 7;
+      }
+    }
+  }
+  const keep = Math.min(7, combined.length);
+  const nextTail = keep > 0 ? combined.slice(combined.length - keep) : new Uint8Array(0);
+  return { inSync: state, nextTail };
+}
+
 // Keep the last non-empty frame per terminal in memory so remounting a pane
 // paints its previous screen synchronously at 0ms while the WebSocket reconnects.
 const LAST_FRAME_CACHE_LIMIT = 64;
@@ -767,10 +804,21 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       let pendingChunks: Uint8Array[] = [];
       let rafId: number | null = null;
       let inFlight = false;
+      let inSyncUpdate = false;
+      let syncTail: Uint8Array = new Uint8Array(0);
+      let syncGuardTimer: number | null = null;
+
+      const clearSyncGuard = () => {
+        if (syncGuardTimer !== null) {
+          window.clearTimeout(syncGuardTimer);
+          syncGuardTimer = null;
+        }
+      };
 
       const flushToRust = () => {
         rafId = null;
         if (disposed || inFlight || pendingChunks.length === 0) return;
+        if (inSyncUpdate) return;
         const batch = concatChunks(pendingChunks);
         pendingChunks = [];
         inFlight = true;
@@ -791,7 +839,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           .catch(() => {})
           .finally(() => {
             inFlight = false;
-            if (!disposed && pendingChunks.length > 0 && rafId === null) {
+            if (!disposed && !inSyncUpdate && pendingChunks.length > 0 && rafId === null) {
               rafId = requestAnimationFrame(flushToRust);
             }
           });
@@ -800,6 +848,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const enqueueBytes = (bytes: Uint8Array) => {
         if (bytes.length === 0 || disposed) return;
         pendingChunks.push(bytes);
+        const scanned = scanSyncUpdateMarkers(syncTail, bytes, inSyncUpdate);
+        syncTail = scanned.nextTail;
+        inSyncUpdate = scanned.inSync;
+        if (inSyncUpdate) {
+          // Hold partial TUI redraw frames until ESU (\x1b[?2026l) arrives,
+          // with a 120ms safety timeout so a crashed app can never stall painting.
+          if (syncGuardTimer === null) {
+            syncGuardTimer = window.setTimeout(() => {
+              syncGuardTimer = null;
+              inSyncUpdate = false;
+              if (!disposed && !inFlight && pendingChunks.length > 0 && rafId === null) {
+                rafId = requestAnimationFrame(flushToRust);
+              }
+            }, 120);
+          }
+          return;
+        }
+        clearSyncGuard();
         // First live snapshot bypasses rAF so initial screen paints immediately (~32ms faster).
         if (!hasLiveDataRef.current && !inFlight) {
           if (rafId !== null) {
@@ -863,6 +929,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
       return () => {
         disposed = true;
+        clearSyncGuard();
         if (rafId !== null) cancelAnimationFrame(rafId);
         reconnect.cancelReconnect();
         ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
