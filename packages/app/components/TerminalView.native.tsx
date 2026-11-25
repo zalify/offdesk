@@ -154,6 +154,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
+    const wheelAccumPxRef = useRef(0);
+    const pendingScrollLinesRef = useRef(0);
+    const scrollInFlightRef = useRef(false);
+    const scrollRafRef = useRef<number | null>(null);
+    const paintRafRef = useRef<number | null>(null);
+    const lastScrollBadgeUpdateRef = useRef(0);
 
     // Selection state (grid cell coordinates)
     const selectionRef = useRef<{
@@ -247,15 +253,28 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           ctx.globalAlpha = 1;
         }
 
-        // 4. Text spans
+        // 4. Text spans (cache ctx.font & ctx.fillStyle to avoid WKWebView font re-parse jank)
         ctx.textBaseline = "top";
+        let lastFont = `${fontSize}px ${fontFamily}`;
+        ctx.font = lastFont;
+        let lastFill = "";
         for (let r = 0; r < frame.spans.length; r++) {
           const spans = frame.spans[r];
           const y = padY + r * cellH + Math.floor((cellH - fontSize) * 0.5);
           for (const sp of spans) {
-            const stylePrefix = `${sp.i ? "italic " : ""}${sp.b ? "700 " : ""}`;
-            ctx.font = `${stylePrefix}${fontSize}px ${fontFamily}`;
-            ctx.fillStyle = sp.f ?? fg;
+            const nextFont =
+              sp.i || sp.b
+                ? `${sp.i ? "italic " : ""}${sp.b ? "700 " : ""}${fontSize}px ${fontFamily}`
+                : `${fontSize}px ${fontFamily}`;
+            if (nextFont !== lastFont) {
+              ctx.font = nextFont;
+              lastFont = nextFont;
+            }
+            const nextFill = sp.f ?? fg;
+            if (nextFill !== lastFill) {
+              ctx.fillStyle = nextFill;
+              lastFill = nextFill;
+            }
             ctx.fillText(sp.t, padX + sp.c * cellW, y);
           }
         }
@@ -265,21 +284,74 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [theme, fontSize, fontFamily, lineHeight],
     );
 
+    const schedulePaint = useCallback(() => {
+      if (paintRafRef.current !== null) return;
+      paintRafRef.current = window.requestAnimationFrame(() => {
+        paintRafRef.current = null;
+        paintFrame(frameRef.current);
+      });
+    }, [paintFrame]);
+
+    useEffect(
+      () => () => {
+        if (paintRafRef.current !== null) {
+          window.cancelAnimationFrame(paintRafRef.current);
+          paintRafRef.current = null;
+        }
+        if (scrollRafRef.current !== null) {
+          window.cancelAnimationFrame(scrollRafRef.current);
+          scrollRafRef.current = null;
+        }
+      },
+      [],
+    );
+
     const applyFrame = useCallback(
       (frame: NativeTermFrame) => {
+        const prevOffset = frameRef.current?.display_offset ?? 0;
         frameRef.current = frame;
-        setScrollbackOffset(frame.display_offset);
+        const now = performance.now();
+        if (
+          (frame.display_offset === 0) !== (prevOffset === 0) ||
+          now - lastScrollBadgeUpdateRef.current > 80
+        ) {
+          lastScrollBadgeUpdateRef.current = now;
+          setScrollbackOffset(frame.display_offset);
+        }
         if (frame.title && onTitleChange) {
           onTitleChange(frame.title);
         }
-        paintFrame(frame);
+        schedulePaint();
         if (!readyFiredRef.current) {
           readyFiredRef.current = true;
           onReady?.();
         }
       },
-      [paintFrame, onTitleChange, onReady],
+      [schedulePaint, onTitleChange, onReady],
     );
+
+    const flushPendingScroll = useCallback(() => {
+      scrollRafRef.current = null;
+      if (scrollInFlightRef.current) return;
+      const deltaLines = pendingScrollLinesRef.current;
+      if (deltaLines === 0) return;
+      pendingScrollLinesRef.current = 0;
+      scrollInFlightRef.current = true;
+      void invoke<NativeTermFrame>("native_term_scroll", {
+        id: terminalId,
+        deltaLines,
+      })
+        .then((frame) => {
+          applyFrame(frame);
+        })
+        .catch(() => {})
+        .finally(() => {
+          scrollInFlightRef.current = false;
+          if (pendingScrollLinesRef.current !== 0 && scrollRafRef.current === null) {
+            scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+          }
+        });
+    }, [terminalId, applyFrame]);
 
     const sendRawInput = useCallback(
       (data: string) => {
@@ -597,8 +669,27 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }}
         onWheel={(e) => {
           e.preventDefault();
-          const lines = Math.round((-e.deltaY / Math.max(12, lineHeight)) * 3);
+          const stepPx = Math.max(12, lineHeight);
+          const deltaPx =
+            e.deltaMode === 1
+              ? e.deltaY * stepPx * 3
+              : e.deltaMode === 2
+                ? e.deltaY * (frameRef.current?.rows ?? 24) * stepPx
+                : e.deltaY;
+          if (deltaPx === 0) return;
+
+          // Clear residual accumulation if scroll direction reverses so reversing feels instant.
+          if (
+            (deltaPx > 0 && wheelAccumPxRef.current < 0) ||
+            (deltaPx < 0 && wheelAccumPxRef.current > 0)
+          ) {
+            wheelAccumPxRef.current = 0;
+          }
+          wheelAccumPxRef.current += deltaPx;
+          const lines = Math.trunc(-wheelAccumPxRef.current / stepPx);
           if (lines === 0) return;
+          wheelAccumPxRef.current += lines * stepPx;
+
           if (frameRef.current?.wants_mouse) {
             const btn = lines > 0 ? 64 : 65;
             const count = Math.min(5, Math.max(1, Math.abs(lines)));
@@ -609,12 +700,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
             sendRawInput(seq);
           } else {
-            void invoke<NativeTermFrame>("native_term_scroll", {
-              id: terminalId,
-              deltaLines: lines,
-            })
-              .then(applyFrame)
-              .catch(() => {});
+            pendingScrollLinesRef.current += lines;
+            if (!scrollInFlightRef.current && scrollRafRef.current === null) {
+              scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+            }
           }
         }}
         style={{
