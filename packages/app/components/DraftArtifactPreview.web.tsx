@@ -1,7 +1,76 @@
-import { useEffect, useId, useMemo, useState } from "react";
-import { Check, Code2, Copy, Eye } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Check, Code2, Copy, Eye, X } from "lucide-react";
+import { listMachines, readFile as apiReadFile } from "@/lib/api";
 import { colors, colorAlpha } from "@/lib/colors";
 import { rem } from "@/lib/rem";
+import { useOpenDirectory } from "./OpenDirectoryContext";
+
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|bmp|avif|svg)$/i;
+const remoteImageCache = new Map<string, string>();
+let machineLookupPromise: Promise<Map<string, string>> | null = null;
+
+function parseRemoteFileHref(href: string): { host: string; path: string } | null {
+  if (!/^file:\/\//i.test(href)) return null;
+  const rest = href.slice("file://".length);
+  const slashIdx = rest.indexOf("/");
+  if (slashIdx <= 0) return null;
+  const host = decodeURIComponent(rest.slice(0, slashIdx));
+  const rawPath = rest.slice(slashIdx);
+  let path = rawPath;
+  try {
+    path = decodeURIComponent(rawPath);
+  } catch {
+    path = rawPath;
+  }
+  return { host, path };
+}
+
+async function resolveMachineId(host: string): Promise<string | null> {
+  if (!machineLookupPromise) {
+    machineLookupPromise = listMachines()
+      .then((machines) => {
+        const map = new Map<string, string>();
+        for (const m of machines) {
+          map.set(m.id.toLowerCase(), m.id);
+          map.set(m.id.slice(0, 8).toLowerCase(), m.id);
+          if (m.name) map.set(m.name.toLowerCase(), m.id);
+        }
+        return map;
+      })
+      .catch(() => {
+        machineLookupPromise = null;
+        return new Map<string, string>();
+      });
+  }
+  const map = await machineLookupPromise;
+  const key = host.toLowerCase();
+  if (map.has(key)) return map.get(key)!;
+  for (const [k, id] of map.entries()) {
+    if (k.startsWith(key)) return id;
+  }
+  return null;
+}
+
+async function loadRemoteImageDataUrl(host: string, path: string): Promise<string | null> {
+  const cacheKey = `${host}:${path}`;
+  const cached = remoteImageCache.get(cacheKey);
+  if (cached) return cached;
+  const machineId = await resolveMachineId(host);
+  if (!machineId) return null;
+  try {
+    const file = await apiReadFile(machineId, path);
+    const mime = file.mime || "image/png";
+    const dataUrl = `data:${mime};base64,${file.data_base64}`;
+    if (remoteImageCache.size >= 48) {
+      const oldest = remoteImageCache.keys().next().value;
+      if (oldest !== undefined) remoteImageCache.delete(oldest);
+    }
+    remoteImageCache.set(cacheKey, dataUrl);
+    return dataUrl;
+  } catch {
+    return null;
+  }
+}
 
 export type ArtifactSegment =
   | { kind: "markdown"; text: string }
@@ -83,12 +152,31 @@ const MARKDOWN_CSS = `
 .odk-md tr:last-child td { border-bottom: none; }
 .odk-md th { background: var(--odk-bg2); font-weight: 600; color: var(--odk-fg0); white-space: nowrap; }
 .odk-md tr:nth-child(even) td { background: rgba(255, 255, 255, 0.02); }
-.odk-md a { color: var(--odk-accent); text-decoration: underline; }
+.odk-md a { color: var(--odk-accent); text-decoration: underline; cursor: pointer; }
+.odk-md img {
+  display: block; max-width: 100%; max-height: 420px; width: auto; height: auto;
+  margin: 8px 0; border-radius: 8px; border: 1px solid var(--odk-line);
+  background: repeating-conic-gradient(#1f2127 0% 25%, #2a2d36 0% 50%) 50% / 16px 16px;
+  cursor: zoom-in;
+}
+.odk-md .odk-inline-img-wrap { margin: 6px 0 10px; }
+.odk-md .odk-inline-img-loading {
+  display: inline-block; font-size: 11.5px; color: var(--odk-fg2);
+  padding: 4px 8px; border-radius: 6px; border: 1px dashed var(--odk-line);
+}
 .odk-md hr { border: none; border-top: 1px solid var(--odk-line); margin: 1em 0; }
 `;
 
-function MarkdownSegmentView({ text }: { text: string }) {
+function MarkdownSegmentView({
+  text,
+  onZoomImage,
+}: {
+  text: string;
+  onZoomImage?: (src: string, alt: string) => void;
+}) {
   const [html, setHtml] = useState<string>("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const openDirectory = useOpenDirectory();
 
   useEffect(() => {
     let cancelled = false;
@@ -106,9 +194,93 @@ function MarkdownSegmentView({ text }: { text: string }) {
     };
   }, [text]);
 
+  // Hydrate `file://<machine>/path` <img> tags AND auto-preview `file://` image links inline.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !html) return;
+    let cancelled = false;
+
+    const hydrateImg = async (img: HTMLImageElement, host: string, path: string) => {
+      const dataUrl = await loadRemoteImageDataUrl(host, path);
+      if (cancelled || !dataUrl) return;
+      img.src = dataUrl;
+    };
+
+    // 1. Direct Markdown images: ![alt](file://machine/path)
+    const imgs = Array.from(root.querySelectorAll<HTMLImageElement>("img"));
+    for (const img of imgs) {
+      const rawSrc = img.getAttribute("src") ?? "";
+      const parsed = parseRemoteFileHref(rawSrc);
+      if (parsed) {
+        img.removeAttribute("src");
+        void hydrateImg(img, parsed.host, parsed.path);
+      }
+    }
+
+    // 2. Markdown links pointing to remote image files: [name.png](file://machine/path)
+    const links = Array.from(root.querySelectorAll<HTMLAnchorElement>("a[href]"));
+    for (const link of links) {
+      const href = link.getAttribute("href") ?? "";
+      const parsed = parseRemoteFileHref(href);
+      if (!parsed || !IMAGE_EXT_RE.test(parsed.path)) continue;
+      if (link.dataset.odkPreviewAttached) continue;
+      link.dataset.odkPreviewAttached = "1";
+
+      const wrap = document.createElement("div");
+      wrap.className = "odk-inline-img-wrap";
+      const status = document.createElement("span");
+      status.className = "odk-inline-img-loading";
+      status.textContent = "Loading preview…";
+      wrap.appendChild(status);
+      link.insertAdjacentElement("afterend", wrap);
+
+      void loadRemoteImageDataUrl(parsed.host, parsed.path).then((dataUrl) => {
+        if (cancelled) return;
+        if (!dataUrl) {
+          wrap.remove();
+          return;
+        }
+        const img = document.createElement("img");
+        img.src = dataUrl;
+        img.alt = link.textContent || parsed.path;
+        wrap.innerHTML = "";
+        wrap.appendChild(img);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [html]);
+
   return (
     <div
+      ref={containerRef}
       className="odk-md"
+      onClick={(e) => {
+        const target = e.target as HTMLElement | null;
+        if (!target) return;
+        const img = target.closest("img") as HTMLImageElement | null;
+        if (img && img.src && onZoomImage) {
+          e.preventDefault();
+          e.stopPropagation();
+          onZoomImage(img.src, img.alt || "image");
+          return;
+        }
+        const link = target.closest("a") as HTMLAnchorElement | null;
+        if (!link) return;
+        const href = link.getAttribute("href") ?? "";
+        const parsed = parseRemoteFileHref(href);
+        if (parsed) {
+          e.preventDefault();
+          e.stopPropagation();
+          if (openDirectory) {
+            void resolveMachineId(parsed.host).then((machineId) => {
+              if (machineId) openDirectory(machineId, parsed.path);
+            });
+          }
+        }
+      }}
       style={
         {
           "--odk-fg0": colors.fg0,
@@ -422,6 +594,16 @@ function SandboxedArtifactCard({
 
 export function DraftArtifactPreview({ content }: { content: string }) {
   const segments = useMemo(() => parseArtifactSegments(content), [content]);
+  const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
+
+  useEffect(() => {
+    if (!zoomed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setZoomed(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomed]);
 
   if (segments.length === 0) {
     return (
@@ -437,7 +619,13 @@ export function DraftArtifactPreview({ content }: { content: string }) {
       {segments.map((seg, idx) => {
         switch (seg.kind) {
           case "markdown":
-            return <MarkdownSegmentView key={idx} text={seg.text} />;
+            return (
+              <MarkdownSegmentView
+                key={idx}
+                text={seg.text}
+                onZoomImage={(src, alt) => setZoomed({ src, alt })}
+              />
+            );
           case "mermaid":
             return <MermaidArtifactCard key={idx} code={seg.code} />;
           case "svg":
@@ -446,6 +634,64 @@ export function DraftArtifactPreview({ content }: { content: string }) {
             return <SandboxedArtifactCard key={idx} kind="html" code={seg.code} />;
         }
       })}
+      {zoomed && (
+        <div
+          onClick={() => setZoomed(null)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 200,
+            background: "rgba(0,0,0,0.82)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 24,
+            cursor: "zoom-out",
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Close image preview"
+            onClick={() => setZoomed(null)}
+            style={{
+              position: "fixed",
+              top: 16,
+              right: 16,
+              width: 32,
+              height: 32,
+              borderRadius: 999,
+              border: `1px solid ${colors.line}`,
+              background: colors.bg1,
+              color: colors.fg0,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+            }}
+          >
+            <X size={16} />
+          </button>
+          <img
+            src={zoomed.src}
+            alt={zoomed.alt}
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              maxWidth: "94vw",
+              maxHeight: "88vh",
+              objectFit: "contain",
+              borderRadius: 8,
+              border: `1px solid ${colors.line}`,
+              background:
+                "repeating-conic-gradient(#1f2127 0% 25%, #2a2d36 0% 50%) 50% / 20px 20px",
+              cursor: "default",
+            }}
+          />
+          <div style={{ marginTop: 10, fontSize: rem(12), color: colors.fg2 }}>
+            {zoomed.alt}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
