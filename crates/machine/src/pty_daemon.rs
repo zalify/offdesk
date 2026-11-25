@@ -19,6 +19,12 @@
 
 #[cfg(unix)]
 mod unix_impl {
+    use alacritty_terminal::event::{Event as AlacEvent, EventListener};
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::cell::Flags as CellFlags;
+    use alacritty_terminal::term::{Config as AlacConfig, Term, TermMode};
+    use alacritty_terminal::vte::ansi::{self, Color as AnsiColor, NamedColor, Rgb};
     use base64::Engine as _;
     use bytes::Bytes;
     use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -273,6 +279,313 @@ mod unix_impl {
         Ok((tag, buf))
     }
 
+    #[derive(Clone, Default)]
+    struct DaemonEventSink {
+        title: Arc<Mutex<String>>,
+    }
+
+    impl EventListener for DaemonEventSink {
+        fn send_event(&self, event: AlacEvent) {
+            match event {
+                AlacEvent::Title(t) => {
+                    if let Ok(mut guard) = self.title.lock() {
+                        *guard = t;
+                    }
+                }
+                AlacEvent::ResetTitle => {
+                    if let Ok(mut guard) = self.title.lock() {
+                        guard.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    struct DaemonDimensions {
+        cols: usize,
+        rows: usize,
+    }
+
+    impl Dimensions for DaemonDimensions {
+        fn total_lines(&self) -> usize {
+            self.rows
+        }
+        fn screen_lines(&self) -> usize {
+            self.rows
+        }
+        fn columns(&self) -> usize {
+            self.cols
+        }
+    }
+
+    /// Production VT100/xterm emulator backed by `alacritty_terminal` (10,000-line
+    /// scrollback that properly preserves lines scrolled out under DECSTBM scroll
+    /// regions and accurately tracks CJK wide characters and 24-bit color).
+    struct DaemonTerm {
+        term: Term<DaemonEventSink>,
+        processor: ansi::Processor,
+        sink: DaemonEventSink,
+        cols: u16,
+        rows: u16,
+    }
+
+    impl DaemonTerm {
+        fn new(rows: u16, cols: u16, scrollback_len: usize) -> Self {
+            let cols = cols.max(2);
+            let rows = rows.max(2);
+            let sink = DaemonEventSink::default();
+            let config = AlacConfig {
+                scrolling_history: scrollback_len,
+                ..AlacConfig::default()
+            };
+            let dims = DaemonDimensions {
+                cols: cols as usize,
+                rows: rows as usize,
+            };
+            let term = Term::new(config, &dims, sink.clone());
+            Self {
+                term,
+                processor: ansi::Processor::new(),
+                sink,
+                cols,
+                rows,
+            }
+        }
+
+        fn process(&mut self, bytes: &[u8]) {
+            self.processor.advance(&mut self.term, bytes);
+        }
+
+        fn set_size(&mut self, rows: u16, cols: u16) {
+            let cols = cols.max(2);
+            let rows = rows.max(2);
+            if self.cols == cols && self.rows == rows {
+                return;
+            }
+            self.cols = cols;
+            self.rows = rows;
+            self.term.resize(DaemonDimensions {
+                cols: cols as usize,
+                rows: rows as usize,
+            });
+        }
+
+        fn title(&self) -> String {
+            self.sink
+                .title
+                .lock()
+                .map(|g| g.clone())
+                .unwrap_or_default()
+        }
+
+        fn cursor_position(&self) -> (u16, u16) {
+            let pt = self.term.grid().cursor.point;
+            let row = pt.line.0.clamp(0, self.rows.saturating_sub(1) as i32) as u16;
+            let col = pt.column.0.min(self.cols.saturating_sub(1) as usize) as u16;
+            (row, col)
+        }
+
+        fn app_wants_mouse(&self) -> bool {
+            self.term.mode().intersects(TermMode::MOUSE_MODE)
+        }
+
+        fn capture_contents(&self) -> String {
+            let grid = self.term.grid();
+            let mut out = String::new();
+            for row in 0..self.rows as usize {
+                let mut line_str = String::new();
+                for col in 0..self.cols as usize {
+                    let cell = &grid[Line(row as i32)][Column(col)];
+                    if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                        continue;
+                    }
+                    line_str.push(cell.c);
+                }
+                let trimmed = line_str.trim_end();
+                if row > 0 {
+                    out.push('\n');
+                }
+                out.push_str(trimmed);
+            }
+            out
+        }
+
+        fn render_ansi_at_scrollback(&self, requested_offset: usize) -> (Vec<u8>, usize) {
+            use std::fmt::Write as _;
+
+            let grid = self.term.grid();
+            let history_size = grid.history_size();
+            let actual_offset = requested_offset.min(history_size);
+            let mode = *self.term.mode();
+            let app_wants_mouse = mode.intersects(TermMode::MOUSE_MODE);
+
+            let mut out = String::with_capacity(self.rows as usize * self.cols as usize * 2);
+            // Begin DEC 2026 synchronized output + full SGR/DECSTBM/viewport reset.
+            out.push_str("\x1b[?2026h\x1b[0m\x1b[r\x1b[2J\x1b[H");
+
+            let mut cur_fg = AnsiColor::Named(NamedColor::Foreground);
+            let mut cur_bg = AnsiColor::Named(NamedColor::Background);
+            let mut cur_flags = CellFlags::empty();
+
+            for vis_row in 0..self.rows as usize {
+                let line = Line(vis_row as i32 - actual_offset as i32);
+                // Find the last non-default cell on this row to avoid emitting
+                // hundreds of trailing blank cells.
+                let mut last_used: Option<usize> = None;
+                for col in (0..self.cols as usize).rev() {
+                    let cell = &grid[line][Column(col)];
+                    let has_bg = cell.bg != AnsiColor::Named(NamedColor::Background);
+                    let has_inv = cell.flags.contains(CellFlags::INVERSE);
+                    let has_char = cell.c != ' ' && cell.c != '\0';
+                    if has_char || has_bg || has_inv {
+                        last_used = Some(col);
+                        break;
+                    }
+                }
+                let Some(end_col) = last_used else {
+                    continue;
+                };
+
+                // Explicitly position cursor at column 1 of this row so full-width
+                // CJK rows can never wrap-drift into the next row.
+                let _ = write!(out, "\x1b[{};1H", vis_row + 1);
+
+                for col in 0..=end_col {
+                    let cell = &grid[line][Column(col)];
+                    if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                        continue;
+                    }
+                    let style_flags = cell.flags
+                        & (CellFlags::BOLD
+                            | CellFlags::DIM
+                            | CellFlags::ITALIC
+                            | CellFlags::UNDERLINE
+                            | CellFlags::INVERSE
+                            | CellFlags::STRIKEOUT);
+                    if cell.fg != cur_fg || cell.bg != cur_bg || style_flags != cur_flags {
+                        write_sgr(&mut out, cell.fg, cell.bg, style_flags);
+                        cur_fg = cell.fg;
+                        cur_bg = cell.bg;
+                        cur_flags = style_flags;
+                    }
+                    out.push(if cell.c == '\0' { ' ' } else { cell.c });
+                    if let Some(zw) = cell.zerowidth() {
+                        for &z in zw {
+                            out.push(z);
+                        }
+                    }
+                }
+            }
+
+            out.push_str("\x1b[0m");
+
+            if actual_offset > 0 {
+                // Hide live cursor while viewing scrollback history.
+                out.push_str("\x1b[?25l");
+            } else {
+                let (crow, ccol) = self.cursor_position();
+                let _ = write!(out, "\x1b[{};{}H", crow + 1, ccol + 1);
+                if mode.contains(TermMode::SHOW_CURSOR) {
+                    out.push_str("\x1b[?25h");
+                } else {
+                    out.push_str("\x1b[?25l");
+                }
+                if mode.contains(TermMode::BRACKETED_PASTE) {
+                    out.push_str("\x1b[?2004h");
+                }
+                if mode.contains(TermMode::APP_CURSOR) {
+                    out.push_str("\x1b[?1h");
+                }
+            }
+
+            // Keep SGR mouse reporting enabled on the client even when the app
+            // doesn't request it (e.g., agy, fish, bash) so wheel/touch scroll
+            // drives daemon-side scrollback — matching tmux's mouse mode.
+            if !app_wants_mouse {
+                out.push_str("\x1b[?1000h\x1b[?1006h");
+            }
+            out.push_str("\x1b[?2026l");
+
+            (out.into_bytes(), actual_offset)
+        }
+    }
+
+    fn write_sgr(out: &mut String, fg: AnsiColor, bg: AnsiColor, flags: CellFlags) {
+        use std::fmt::Write as _;
+        out.push_str("\x1b[0");
+        if flags.contains(CellFlags::BOLD) {
+            out.push_str(";1");
+        }
+        if flags.contains(CellFlags::DIM) {
+            out.push_str(";2");
+        }
+        if flags.contains(CellFlags::ITALIC) {
+            out.push_str(";3");
+        }
+        if flags.contains(CellFlags::UNDERLINE) {
+            out.push_str(";4");
+        }
+        if flags.contains(CellFlags::INVERSE) {
+            out.push_str(";7");
+        }
+        if flags.contains(CellFlags::STRIKEOUT) {
+            out.push_str(";9");
+        }
+        match fg {
+            AnsiColor::Named(NamedColor::Foreground | NamedColor::BrightForeground) => {}
+            AnsiColor::Named(n) => {
+                if let Some(code) = named_color_sgr(n, false) {
+                    let _ = write!(out, ";{code}");
+                }
+            }
+            AnsiColor::Indexed(idx) => {
+                let _ = write!(out, ";38;5;{idx}");
+            }
+            AnsiColor::Spec(Rgb { r, g, b }) => {
+                let _ = write!(out, ";38;2;{r};{g};{b}");
+            }
+        }
+        match bg {
+            AnsiColor::Named(NamedColor::Background) => {}
+            AnsiColor::Named(n) => {
+                if let Some(code) = named_color_sgr(n, true) {
+                    let _ = write!(out, ";{code}");
+                }
+            }
+            AnsiColor::Indexed(idx) => {
+                let _ = write!(out, ";48;5;{idx}");
+            }
+            AnsiColor::Spec(Rgb { r, g, b }) => {
+                let _ = write!(out, ";48;2;{r};{g};{b}");
+            }
+        }
+        out.push('m');
+    }
+
+    fn named_color_sgr(c: NamedColor, is_bg: bool) -> Option<u8> {
+        let base = match c {
+            NamedColor::Black => 30,
+            NamedColor::Red => 31,
+            NamedColor::Green => 32,
+            NamedColor::Yellow => 33,
+            NamedColor::Blue => 34,
+            NamedColor::Magenta => 35,
+            NamedColor::Cyan => 36,
+            NamedColor::White => 37,
+            NamedColor::BrightBlack | NamedColor::DimBlack => 90,
+            NamedColor::BrightRed | NamedColor::DimRed => 91,
+            NamedColor::BrightGreen | NamedColor::DimGreen => 92,
+            NamedColor::BrightYellow | NamedColor::DimYellow => 93,
+            NamedColor::BrightBlue | NamedColor::DimBlue => 94,
+            NamedColor::BrightMagenta | NamedColor::DimMagenta => 95,
+            NamedColor::BrightCyan | NamedColor::DimCyan => 96,
+            NamedColor::BrightWhite | NamedColor::DimWhite => 97,
+            _ => return None,
+        };
+        Some(if is_bg { base + 10 } else { base })
+    }
+
     struct LiveSession {
         id: String,
         initial_cwd: String,
@@ -280,7 +593,7 @@ mod unix_impl {
         master: Mutex<Box<dyn MasterPty + Send>>,
         writer: Mutex<Box<dyn Write + Send>>,
         child: Mutex<Box<dyn Child + Send + Sync>>,
-        parser: Mutex<vt100::Parser>,
+        parser: Mutex<DaemonTerm>,
         cols: AtomicU16,
         rows: AtomicU16,
         activity_ms: AtomicI64,
@@ -293,7 +606,7 @@ mod unix_impl {
             let title = self
                 .parser
                 .lock()
-                .map(|p| p.screen().title().to_string())
+                .map(|p| p.title())
                 .unwrap_or_default();
             let cwd = self
                 .pid
@@ -313,38 +626,10 @@ mod unix_impl {
         }
 
         fn state_formatted_at_scrollback(&self, offset: usize) -> (Vec<u8>, usize) {
-            let Ok(mut parser) = self.parser.lock() else {
+            let Ok(parser) = self.parser.lock() else {
                 return (Vec::new(), 0);
             };
-            parser.set_scrollback(offset);
-            let actual_offset = parser.screen().scrollback();
-            let formatted = parser.screen().state_formatted();
-            let app_wants_mouse =
-                parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None;
-            parser.set_scrollback(0);
-
-            // Wrap full-screen repaints in DEC 2026 synchronized output and
-            // explicitly reset attributes, scroll region (DECSTBM), and clear
-            // the viewport before painting. `vt100::Screen::state_formatted()`
-            // assumes a clean screen and does not erase leftover cells or
-            // app-configured scroll regions (e.g., agy's pinned bottom prompt),
-            // which otherwise causes ghost characters and frozen bottom rows
-            // while scrolling.
-            let mut bytes = Vec::with_capacity(formatted.len() + 64);
-            bytes.extend_from_slice(b"\x1b[?2026h\x1b[0m\x1b[r\x1b[2J\x1b[H");
-            bytes.extend_from_slice(&formatted);
-            if actual_offset > 0 {
-                // Hide the live cursor while viewing scrollback history.
-                bytes.extend_from_slice(b"\x1b[?25l");
-            }
-            // Keep SGR mouse reporting enabled on the client even when the app
-            // doesn't request it (e.g., agy, fish, bash) so wheel/touch scroll
-            // drives daemon-side scrollback — matching tmux's mouse mode.
-            if !app_wants_mouse {
-                bytes.extend_from_slice(b"\x1b[?1000h\x1b[?1006h");
-            }
-            bytes.extend_from_slice(b"\x1b[?2026l");
-            (bytes, actual_offset)
+            parser.render_ansi_at_scrollback(offset)
         }
 
         fn state_formatted(&self) -> Vec<u8> {
@@ -354,14 +639,14 @@ mod unix_impl {
         fn app_wants_mouse(&self) -> bool {
             self.parser
                 .lock()
-                .map(|p| p.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None)
+                .map(|p| p.app_wants_mouse())
                 .unwrap_or(false)
         }
 
         fn capture_contents(&self) -> String {
             self.parser
                 .lock()
-                .map(|p| p.screen().contents())
+                .map(|p| p.capture_contents())
                 .unwrap_or_default()
         }
 
@@ -509,7 +794,7 @@ mod unix_impl {
                 master: Mutex::new(pair.master),
                 writer: Mutex::new(writer),
                 child: Mutex::new(child),
-                parser: Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK_LEN)),
+                parser: Mutex::new(DaemonTerm::new(rows, cols, SCROLLBACK_LEN)),
                 cols: AtomicU16::new(cols),
                 rows: AtomicU16::new(rows),
                 activity_ms: AtomicI64::new(now_ms()),
@@ -541,7 +826,7 @@ mod unix_impl {
                             let slice = &buf[..n];
                             let cursor_pos = if let Ok(mut parser) = session_ref.parser.lock() {
                                 parser.process(slice);
-                                Some(parser.screen().cursor_position())
+                                Some(parser.cursor_position())
                             } else {
                                 None
                             };

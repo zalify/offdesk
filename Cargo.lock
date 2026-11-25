@@ -2691,6 +2691,7 @@ dependencies = [
 name = "offdesk-machine"
 version = "0.31.0"
 dependencies = [
+ "alacritty_terminal",
  "base64",
  "bytes",
  "chrono",
