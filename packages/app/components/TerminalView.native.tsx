@@ -22,6 +22,24 @@ import {
 } from "@/lib/terminalImagePaste";
 import type { SelectionSnapshot, TerminalViewProps, TerminalViewRef } from "./TerminalView.types";
 
+function isWideChar(cp: number): boolean {
+  return (
+    cp >= 0x1100 &&
+    (cp <= 0x115f ||
+      cp === 0x2329 ||
+      cp === 0x232a ||
+      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
+      (cp >= 0xac00 && cp <= 0xd7a3) ||
+      (cp >= 0xf900 && cp <= 0xfaff) ||
+      (cp >= 0xfe10 && cp <= 0xfe19) ||
+      (cp >= 0xfe30 && cp <= 0xfe6f) ||
+      (cp >= 0xff00 && cp <= 0xff60) ||
+      (cp >= 0xffe0 && cp <= 0xffe6) ||
+      (cp >= 0x1f300 && cp <= 0x1faff) ||
+      (cp >= 0x20000 && cp <= 0x3fffd))
+  );
+}
+
 interface NativeSpan {
   c: number;
   t: string;
@@ -266,7 +284,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           ctx.globalAlpha = 1;
         }
 
-        // 4. Text spans (cache ctx.font & ctx.fillStyle to avoid WKWebView font re-parse jank)
+        // 4. Text spans (cache ctx.font & ctx.fillStyle; align CJK/wide chars to exact cell grid)
         ctx.textBaseline = "top";
         let lastFont = `${fontSize}px ${fontFamily}`;
         ctx.font = lastFont;
@@ -288,7 +306,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               ctx.fillStyle = nextFill;
               lastFill = nextFill;
             }
-            ctx.fillText(sp.t, padX + sp.c * cellW, y);
+            if (/^[\x20-\x7e]*$/.test(sp.t)) {
+              ctx.fillText(sp.t, padX + sp.c * cellW, y);
+            } else {
+              let col = sp.c;
+              for (const ch of sp.t) {
+                const cp = ch.codePointAt(0) ?? 0;
+                const w = isWideChar(cp) ? 2 : 1;
+                ctx.fillText(ch, padX + col * cellW, y);
+                col += w;
+              }
+            }
           }
         }
 
@@ -408,7 +436,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const unchanged = dimsRef.current.cols === cols && dimsRef.current.rows === rows;
         dimsRef.current = { cols, rows };
 
-        void invoke<NativeTermFrame>("native_term_resize", { id: terminalId, cols, rows })
+        void openPromiseRef.current
+          .then(() => invoke<NativeTermFrame>("native_term_resize", { id: terminalId, cols, rows }))
           .then(applyFrame)
           .catch(() => {});
 
@@ -601,21 +630,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         /* ignore */
       }
     }, []);
-
-    const isWideChar = (cp: number): boolean =>
-      cp >= 0x1100 &&
-      (cp <= 0x115f ||
-        cp === 0x2329 ||
-        cp === 0x232a ||
-        (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
-        (cp >= 0xac00 && cp <= 0xd7a3) ||
-        (cp >= 0xf900 && cp <= 0xfaff) ||
-        (cp >= 0xfe10 && cp <= 0xfe19) ||
-        (cp >= 0xfe30 && cp <= 0xfe6f) ||
-        (cp >= 0xff00 && cp <= 0xff60) ||
-        (cp >= 0xffe0 && cp <= 0xffe6) ||
-        (cp >= 0x1f300 && cp <= 0x1faff) ||
-        (cp >= 0x20000 && cp <= 0x3fffd));
 
     const getSelectionText = useCallback((): string => {
       const sel = selectionRef.current;
