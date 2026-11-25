@@ -39,7 +39,7 @@ describe("ExtendedKeyBar", () => {
     expect(controlling).toContain('data-testid="extended-keybar-enter"');
   });
 
-  it("shows a take control button in the compose bar while watching", () => {
+  it("shows a take control strip above the keybar while watching and hides the duplicate compose box", () => {
     const html = renderToStaticMarkup(
       createElement(ExtendedKeyBar, {
         ...baseProps,
@@ -48,7 +48,9 @@ describe("ExtendedKeyBar", () => {
         onTakeControl: () => {},
       }),
     );
+    expect(html).toContain('data-testid="extended-keybar-watching"');
     expect(html).toContain('data-testid="extended-keybar-take-control"');
+    expect(html).not.toContain('data-testid="mobile-compose-bar"');
     const controlling = renderToStaticMarkup(
       createElement(ExtendedKeyBar, {
         ...baseProps,
@@ -58,6 +60,7 @@ describe("ExtendedKeyBar", () => {
       }),
     );
     expect(controlling).not.toContain('data-testid="extended-keybar-take-control"');
+    expect(controlling).not.toContain('data-testid="mobile-compose-bar"');
   });
 
   it("hides the attach button when onAttachFile is not provided", () => {
