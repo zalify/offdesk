@@ -1034,7 +1034,9 @@ pub fn patch_database(
     id: &str,
     patch: DatabasePatch,
 ) -> R<Database> {
-    let tx = conn.transaction()?;
+    // IMMEDIATE: take the write lock up front so busy_timeout applies (a deferred
+    // read-then-write upgrade fails at once with "database is locked").
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let db = get_database(&tx, user_id, id)?;
     let mut name = db.name.clone();
     if let Some(n) = patch.name.as_deref() {
@@ -1101,7 +1103,9 @@ pub fn patch_database(
 }
 
 pub fn delete_database(conn: &mut Connection, user_id: &str, id: &str) -> R<()> {
-    let tx = conn.transaction()?;
+    // IMMEDIATE: take the write lock up front so busy_timeout applies (a deferred
+    // read-then-write upgrade fails at once with "database is locked").
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     get_database(&tx, user_id, id)?;
     tx.execute("DELETE FROM drafts WHERE database_id = ?1", params![id])?;
     tx.execute(
@@ -1154,7 +1158,8 @@ pub fn query_rows(
     if order.is_empty() {
         order.push("created_at ASC".to_string());
     }
-    order.push("id ASC".to_string());
+    // rowid is insertion order: a stable tiebreak that keeps one batch in input order.
+    order.push("rowid ASC".to_string());
     let sql = format!(
         "SELECT {ROW_SELECT} FROM drafts WHERE {wh} ORDER BY {} LIMIT {limit} OFFSET {offset}",
         order.join(", ")
@@ -1253,7 +1258,9 @@ pub fn upsert_rows(
     if rows.len() > MAX_BATCH {
         return bad(format!("at most {MAX_BATCH} rows per request"));
     }
-    let tx = conn.transaction()?;
+    // IMMEDIATE: take the write lock up front so busy_timeout applies (a deferred
+    // read-then-write upgrade fails at once with "database is locked").
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let mut db = get_database(&tx, user_id, db_id)?;
     let mut cols_changed = false;
     let now = now_ms();
@@ -1270,9 +1277,12 @@ pub fn upsert_rows(
         };
         let existing: Option<(String, String, i64, bool)> = if mode == ConflictMode::Update {
             let mut stmt = tx.prepare_cached(
-                "SELECT id, properties, created_at, length(content) > 0 FROM drafts
+                // INDEXED BY: with the ORDER BY the planner otherwise walks
+                // idx_drafts_database_created and filters titles — a full scan per row.
+                "SELECT id, properties, created_at, length(content) > 0
+                 FROM drafts INDEXED BY idx_drafts_database_title
                  WHERE database_id = ?1 AND title = ?2 AND user_id = ?3
-                 ORDER BY created_at, id LIMIT 1",
+                 ORDER BY created_at, rowid LIMIT 1",
             )?;
             stmt.query_row(params![db_id, title, user_id], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
@@ -1310,8 +1320,7 @@ pub fn upsert_rows(
                 let mut props = Map::new();
                 apply_sets(&mut props, sets);
                 let id = uuid::Uuid::new_v4().to_string();
-                // Keep batch insertion order stable under the (created_at, id) ordering.
-                let created_at = now + created as i64;
+                let created_at = now;
                 let content = input.content.unwrap_or_default();
                 tx.prepare_cached(
                     "INSERT INTO drafts (id, user_id, title, content, project_group, source_terminal_id,
@@ -1373,7 +1382,9 @@ pub fn patch_row(
     properties: Option<&Map<String, Value>>,
     content: Option<&str>,
 ) -> R<DbRowFull> {
-    let tx = conn.transaction()?;
+    // IMMEDIATE: take the write lock up front so busy_timeout applies (a deferred
+    // read-then-write upgrade fails at once with "database is locked").
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let mut db = get_database(&tx, user_id, db_id)?;
     let existing = get_row(&tx, user_id, db_id, row_id)?;
     // Re-read raw properties so orphaned values are not lost (none are kept after
@@ -1423,7 +1434,9 @@ pub fn delete_rows(conn: &mut Connection, user_id: &str, db_id: &str, ids: &[Str
     if ids.len() > MAX_BATCH {
         return bad(format!("at most {MAX_BATCH} ids per request"));
     }
-    let tx = conn.transaction()?;
+    // IMMEDIATE: take the write lock up front so busy_timeout applies (a deferred
+    // read-then-write upgrade fails at once with "database is locked").
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     get_database(&tx, user_id, db_id)?;
     let mut deleted = 0;
     {
@@ -1990,7 +2003,7 @@ mod tests {
                     )
                 })
                 .collect();
-            upsert_rows(&mut conn, "u1", &db.id, rows, ConflictMode::Create).unwrap();
+            upsert_rows(&mut conn, "u1", &db.id, rows, ConflictMode::Update).unwrap();
         }
         eprintln!("PERF insert 100k rows: {} ms", t.elapsed().as_millis());
 

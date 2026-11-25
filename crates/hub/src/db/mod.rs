@@ -509,7 +509,7 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "
         CREATE INDEX IF NOT EXISTS idx_drafts_database_title ON drafts(database_id, title);
-        CREATE INDEX IF NOT EXISTS idx_drafts_database_created ON drafts(database_id, created_at, id);
+        CREATE INDEX IF NOT EXISTS idx_drafts_database_created ON drafts(database_id, created_at);
         ",
     )?;
 

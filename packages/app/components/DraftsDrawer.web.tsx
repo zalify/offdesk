@@ -16,6 +16,8 @@ import {
   X,
 } from "lucide-react";
 import { DraftArtifactPreview } from "./DraftArtifactPreview.web";
+import { DatabasesPane } from "./draftdb/DatabasesPane.web";
+import { useDraftDatabases } from "./draftdb/useDraftDatabases";
 import {
   deleteDraft,
   listDrafts,
@@ -63,6 +65,8 @@ export function DraftsDrawer({
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState<"preview" | "edit">("preview");
   const [wide, setWide] = useState(false);
+  const [section, setSection] = useState<"drafts" | "databases">("drafts");
+  const [dbOpen, setDbOpen] = useState(false);
   const [customWidth, setCustomWidth] = useState<number | null>(() => {
     try {
       const raw = Number(localStorage.getItem("offdesk:drafts-drawer-width"));
@@ -150,13 +154,20 @@ export function DraftsDrawer({
     };
   }, [onCountChange]);
 
+  const dbs = useDraftDatabases(open, projectFilter !== "all" ? projectFilter : undefined);
+  const dbAvailable = dbs.available !== false;
+  const inDatabases = section === "databases" && dbAvailable;
+
   const projects = useMemo(() => {
     const set = new Set<string>();
     for (const d of drafts) {
       if (d.project_group) set.add(d.project_group);
     }
+    for (const d of dbs.databases) {
+      if (d.project_group) set.add(d.project_group);
+    }
     return Array.from(set).sort();
-  }, [drafts]);
+  }, [drafts, dbs.databases]);
 
   const visibleDrafts = useMemo(
     () =>
@@ -247,7 +258,7 @@ export function DraftsDrawer({
 
   if (!open) return null;
 
-  const inDetail = creating || selected !== null;
+  const inDetail = !inDatabases && (creating || selected !== null);
 
   return (
     <div
@@ -272,7 +283,7 @@ export function DraftsDrawer({
             ? "100%"
             : customWidth !== null
               ? `min(${customWidth}px, 95vw)`
-              : wide
+              : wide || (inDatabases && dbOpen)
                 ? "min(920px, 94vw)"
                 : "min(540px, 92vw)",
           height: isCompact ? "86vh" : "100%",
@@ -363,6 +374,7 @@ export function DraftsDrawer({
               {wide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
             </button>
           )}
+          {!inDatabases && (
           <button
             type="button"
             data-testid="drafts-new-btn"
@@ -384,6 +396,7 @@ export function DraftsDrawer({
             <Plus size={13} />
             New
           </button>
+          )}
           <button
             type="button"
             aria-label="Close drafts"
@@ -406,7 +419,7 @@ export function DraftsDrawer({
         </div>
 
         {/* Filter bar */}
-        {!inDetail && (
+        {!inDetail && !(inDatabases && dbOpen) && (
           <div
             style={{
               display: "flex",
@@ -418,6 +431,42 @@ export function DraftsDrawer({
               flexShrink: 0,
             }}
           >
+            {dbAvailable && (
+              <div
+                style={{
+                  display: "inline-flex",
+                  borderRadius: 4,
+                  border: `1px solid ${colors.line}`,
+                  overflow: "hidden",
+                  flexShrink: 0,
+                  marginRight: 4,
+                }}
+              >
+                {(["drafts", "databases"] as const).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    data-testid={`drafts-mode-${s}`}
+                    onClick={() => setSection(s)}
+                    style={{
+                      minHeight: isCompact ? 36 : undefined,
+                      padding: isCompact ? "0 12px" : "3px 10px",
+                      border: "none",
+                      borderLeft: s === "databases" ? `1px solid ${colors.line}` : "none",
+                      background: section === s ? colorAlpha.accentSoft : colors.bg2,
+                      color: section === s ? colors.accent : colors.fg2,
+                      fontFamily: "var(--font-display)",
+                      fontSize: rem(11.5),
+                      cursor: "pointer",
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!inDatabases && (
+            <>
             <button
               type="button"
               onClick={() => setShowArchived(false)}
@@ -450,7 +499,9 @@ export function DraftsDrawer({
             >
               Archived
             </button>
-            {projects.length > 0 && (
+            </>
+            )}
+            {!inDatabases && projects.length > 0 && (
               <span style={{ color: colors.line, margin: "0 2px" }}>|</span>
             )}
             {projects.length > 0 && (
@@ -493,8 +544,18 @@ export function DraftsDrawer({
           </div>
         )}
 
-        {/* Body: List or Editor */}
-        {inDetail ? (
+        {/* Body: Databases, or drafts List / Editor */}
+        {inDatabases ? (
+          <DatabasesPane
+            databases={dbs.databases}
+            loading={dbs.loading}
+            error={dbs.error}
+            defaultProject={projectFilter !== "all" ? projectFilter : defaultProjectGroup || "~"}
+            compact={isCompact}
+            onRefresh={dbs.refresh}
+            onOpenChange={setDbOpen}
+          />
+        ) : inDetail ? (
           <div
             style={{
               flex: 1,

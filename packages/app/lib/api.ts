@@ -110,6 +110,192 @@ export const updateDraft = (
 
 export const deleteDraft = (draftId: string) =>
   request<void>("DELETE", `/api/drafts/${encodeURIComponent(draftId)}`);
+
+// Draft databases (Notion-style tables whose rows are drafts)
+export type DraftDbColumnType =
+  | "text"
+  | "number"
+  | "select"
+  | "multi_select"
+  | "date"
+  | "checkbox"
+  | "url";
+
+export interface DraftDbOption {
+  name: string;
+  color?: string;
+}
+
+export interface DraftDbColumn {
+  id: string;
+  name: string;
+  type: DraftDbColumnType;
+  options?: DraftDbOption[];
+}
+
+/** Column as sent in a PATCH: no id means a new column. */
+export type DraftDbColumnInput = Omit<DraftDbColumn, "id"> & { id?: string };
+
+export type DraftDbFilterOp =
+  | "eq"
+  | "neq"
+  | "contains"
+  | "not_contains"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte"
+  | "is_empty"
+  | "is_not_empty";
+
+export interface DraftDbFilter {
+  column: string;
+  op: DraftDbFilterOp;
+  value?: unknown;
+}
+
+export interface DraftDbSort {
+  column: string;
+  dir: "asc" | "desc";
+}
+
+export interface DraftDbView {
+  id: string;
+  name: string;
+  type: "table" | "board";
+  filters: DraftDbFilter[];
+  sorts: DraftDbSort[];
+  group_by?: string;
+  hidden_columns?: string[];
+}
+
+/** View as sent in a PATCH: no id means a new view. */
+export type DraftDbViewInput = Omit<DraftDbView, "id"> & { id?: string };
+
+export interface DraftDatabase {
+  id: string;
+  name: string;
+  project_group: string;
+  columns: DraftDbColumn[];
+  views: DraftDbView[];
+  row_count: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export type DraftDbValue = string | number | boolean | string[] | null;
+
+export interface DraftDbRow {
+  id: string;
+  database_id: string;
+  title: string;
+  properties: Record<string, DraftDbValue>;
+  has_content: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DraftDbRowFull extends DraftDbRow {
+  content: string;
+}
+
+export interface DraftDbQueryBody {
+  filters?: DraftDbFilter[];
+  sorts?: DraftDbSort[];
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface DraftDbQueryResult {
+  rows: DraftDbRow[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export interface DraftDbRowPatch {
+  title?: string;
+  properties?: Record<string, DraftDbValue>;
+  content?: string;
+}
+
+const dbPath = (id: string) => `/api/draft-databases/${encodeURIComponent(id)}`;
+
+/** Resolves to null when the hub predates draft databases (404). */
+export async function listDraftDatabases(
+  project?: string,
+): Promise<DraftDatabase[] | null> {
+  const suffix = project ? `?project=${encodeURIComponent(project)}` : "";
+  try {
+    return await request<DraftDatabase[]>("GET", `/api/draft-databases${suffix}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export const createDraftDatabase = (payload: {
+  name: string;
+  project_group?: string;
+  columns?: DraftDbColumnInput[];
+  if_not_exists?: boolean;
+}) => request<DraftDatabase>("POST", "/api/draft-databases", payload);
+
+export const getDraftDatabase = (id: string) =>
+  request<DraftDatabase>("GET", dbPath(id));
+
+export const updateDraftDatabase = (
+  id: string,
+  patch: { name?: string; columns?: DraftDbColumnInput[]; views?: DraftDbViewInput[] },
+) => request<DraftDatabase>("PATCH", dbPath(id), patch);
+
+export const deleteDraftDatabase = (id: string) =>
+  request<void>("DELETE", dbPath(id));
+
+export const queryDraftDbRows = (
+  id: string,
+  body: DraftDbQueryBody,
+  signal?: AbortSignal,
+) => request<DraftDbQueryResult>("POST", `${dbPath(id)}/rows/query`, body, signal);
+
+export const groupDraftDbRows = (
+  id: string,
+  body: { group_by: string; filters?: DraftDbFilter[]; search?: string },
+) =>
+  request<{ groups: Array<{ value: string | boolean | null; count: number }> }>(
+    "POST",
+    `${dbPath(id)}/rows/groups`,
+    body,
+  );
+
+export const createDraftDbRows = (
+  id: string,
+  rows: Array<{ title: string; properties?: Record<string, DraftDbValue>; content?: string }>,
+  onConflict: "update" | "create" = "update",
+) =>
+  request<{ rows: DraftDbRow[]; created: number; updated: number }>(
+    "POST",
+    `${dbPath(id)}/rows`,
+    { rows, on_conflict: onConflict },
+  );
+
+export const getDraftDbRow = (id: string, rowId: string) =>
+  request<DraftDbRowFull>("GET", `${dbPath(id)}/rows/${encodeURIComponent(rowId)}`);
+
+export const patchDraftDbRow = (id: string, rowId: string, patch: DraftDbRowPatch) =>
+  request<DraftDbRowFull>(
+    "PATCH",
+    `${dbPath(id)}/rows/${encodeURIComponent(rowId)}`,
+    patch,
+  );
+
+export const deleteDraftDbRow = (id: string, rowId: string) =>
+  request<void>("DELETE", `${dbPath(id)}/rows/${encodeURIComponent(rowId)}`);
+
+export const deleteDraftDbRows = (id: string, ids: string[]) =>
+  request<{ deleted: number }>("POST", `${dbPath(id)}/rows/delete`, { ids });
+
 export const devLogin = () =>
   request<{ token: string }>("GET", "/api/auth/dev");
 
