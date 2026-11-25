@@ -111,6 +111,59 @@ mod unix_impl {
             .unwrap_or_default()
     }
 
+    /// Intercept standard terminal queries (DSR `ESC[6n`/`ESC[5n`, DA1
+    /// `ESC[c`/`ESC[0c`, DA2 `ESC[>c`/`ESC[>0c`) and answer them locally in
+    /// sub-millisecond time using the daemon's authoritative `vt100` cursor
+    /// state — just like `tmux` does. Stripping the queries from the bytes
+    /// forwarded to attached clients prevents duplicate replies and eliminates
+    /// startup stalls in shells like `fish` and TUIs over high-RTT links or
+    /// fresh split panes.
+    fn intercept_terminal_queries(output: &[u8], cursor: (u16, u16)) -> (Vec<u8>, Option<Vec<u8>>) {
+        let mut forward = Vec::with_capacity(output.len());
+        let mut reply = Vec::new();
+        let mut i = 0;
+        while i < output.len() {
+            if i + 2 < output.len() && output[i] == 0x1b && output[i + 1] == b'[' {
+                let rest = &output[i + 2..];
+                if rest.starts_with(b"6n") {
+                    let row = cursor.0.saturating_add(1);
+                    let col = cursor.1.saturating_add(1);
+                    reply.extend_from_slice(format!("\x1b[{row};{col}R").as_bytes());
+                    i += 4;
+                    continue;
+                }
+                if rest.starts_with(b"5n") {
+                    reply.extend_from_slice(b"\x1b[0n");
+                    i += 4;
+                    continue;
+                }
+                if rest.starts_with(b"c") {
+                    reply.extend_from_slice(b"\x1b[?62;22c");
+                    i += 3;
+                    continue;
+                }
+                if rest.starts_with(b"0c") {
+                    reply.extend_from_slice(b"\x1b[?62;22c");
+                    i += 4;
+                    continue;
+                }
+                if rest.starts_with(b">c") {
+                    reply.extend_from_slice(b"\x1b[>0;276;0c");
+                    i += 4;
+                    continue;
+                }
+                if rest.starts_with(b">0c") {
+                    reply.extend_from_slice(b"\x1b[>0;276;0c");
+                    i += 5;
+                    continue;
+                }
+            }
+            forward.push(output[i]);
+            i += 1;
+        }
+        (forward, (!reply.is_empty()).then_some(reply))
+    }
+
     pub fn default_socket_path() -> PathBuf {
         if let Ok(path) = std::env::var("OFFDESK_PTY_DAEMON_SOCK") {
             if !path.trim().is_empty() {
@@ -402,26 +455,36 @@ mod unix_impl {
                         Ok(0) => break,
                         Ok(n) => {
                             let slice = &buf[..n];
-                            if let Ok(mut parser) = session_ref.parser.lock() {
+                            let cursor_pos = if let Ok(mut parser) = session_ref.parser.lock() {
                                 parser.process(slice);
-                            }
+                                Some(parser.screen().cursor_position())
+                            } else {
+                                None
+                            };
                             session_ref.activity_ms.store(now_ms(), Ordering::Relaxed);
-                            let chunk = Bytes::copy_from_slice(slice);
-                            if let Ok(mut subs) = session_ref.subscribers.lock() {
-                                let mut dead = Vec::new();
-                                for (&sub_id, tx) in subs.iter() {
-                                    match tx.try_send(chunk.clone()) {
-                                        Ok(()) => {}
-                                        Err(std_mpsc::TrySendError::Full(_)) => {
-                                            // Drop chunk for lagging subscriber rather than stalling PTY.
-                                        }
-                                        Err(std_mpsc::TrySendError::Disconnected(_)) => {
-                                            dead.push(sub_id);
+                            let (forward_bytes, query_reply) =
+                                intercept_terminal_queries(slice, cursor_pos.unwrap_or((0, 0)));
+                            if let Some(reply) = query_reply {
+                                let _ = session_ref.write_all(&reply);
+                            }
+                            if !forward_bytes.is_empty() {
+                                let chunk = Bytes::from(forward_bytes);
+                                if let Ok(mut subs) = session_ref.subscribers.lock() {
+                                    let mut dead = Vec::new();
+                                    for (&sub_id, tx) in subs.iter() {
+                                        match tx.try_send(chunk.clone()) {
+                                            Ok(()) => {}
+                                            Err(std_mpsc::TrySendError::Full(_)) => {
+                                                // Drop chunk for lagging subscriber rather than stalling PTY.
+                                            }
+                                            Err(std_mpsc::TrySendError::Disconnected(_)) => {
+                                                dead.push(sub_id);
+                                            }
                                         }
                                     }
-                                }
-                                for sub_id in dead {
-                                    subs.remove(&sub_id);
+                                    for sub_id in dead {
+                                        subs.remove(&sub_id);
+                                    }
                                 }
                             }
                         }
@@ -1292,6 +1355,22 @@ mod unix_impl {
             }
             assert!(reaped, "exited session was not reaped");
             let _ = std::fs::remove_file(&sock);
+        }
+
+        #[test]
+        fn intercept_terminal_queries_answers_dsr_and_da_and_strips_queries() {
+            let input = b"hello\x1b[6nworld\x1b[c!\x1b[>0c";
+            let (forward, reply) = intercept_terminal_queries(input, (4, 9));
+            assert_eq!(forward, b"helloworld!");
+            assert_eq!(
+                reply.as_deref(),
+                Some(&b"\x1b[5;10R\x1b[?62;22c\x1b[>0;276;0c"[..])
+            );
+
+            let plain = b"plain text\r\n";
+            let (fwd2, rep2) = intercept_terminal_queries(plain, (0, 0));
+            assert_eq!(fwd2, plain);
+            assert!(rep2.is_none());
         }
     }
 }

@@ -1597,9 +1597,18 @@ function TerminalCanvasInner() {
     await handleCreateTerminal(activeMachine.id, cwd, undefined, {
       workspaceGroupId,
     });
+    // Fit the newly created desktop terminal to its actual pane container once
+    // mounted (initial dimensions are a rough full-window estimate before
+    // sidebar/chrome and user font metrics are measured).
+    if (!isCompact) {
+      window.setTimeout(() => {
+        workspaceCommandsRef.current.fitVisiblePanes?.();
+      }, 150);
+    }
   }, [
     activeMachine,
     deviceId,
+    isCompact,
     isMachineController,
     handleCreateTerminal,
     layout.selectedWorkpathId,
