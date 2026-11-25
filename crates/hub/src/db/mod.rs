@@ -11,6 +11,7 @@ pub mod integrations;
 pub mod agent_sessions;
 pub mod bookmarks;
 pub mod draft_databases;
+pub mod draft_shares;
 pub mod drafts;
 pub mod hub_state;
 pub mod machines;
@@ -510,6 +511,48 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         "
         CREATE INDEX IF NOT EXISTS idx_drafts_database_title ON drafts(database_id, title);
         CREATE INDEX IF NOT EXISTS idx_drafts_database_created ON drafts(database_id, created_at);
+        ",
+    )?;
+
+    // Draft versions and public share links: purely additive.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS draft_versions (
+            id TEXT PRIMARY KEY,
+            draft_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_draft_versions_draft
+            ON draft_versions(draft_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS draft_shares (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            view_id TEXT,
+            snapshot_title TEXT,
+            snapshot_content TEXT,
+            expires_at INTEGER,
+            revoked_at INTEGER,
+            created_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_draft_shares_target
+            ON draft_shares(user_id, target_id);
+
+        CREATE TABLE IF NOT EXISTS draft_share_assets (
+            share_id TEXT NOT NULL,
+            idx INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            mime TEXT NOT NULL,
+            bytes BLOB NOT NULL,
+            PRIMARY KEY (share_id, idx)
+        );
         ",
     )?;
 

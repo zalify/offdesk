@@ -13,6 +13,8 @@ pub const RESERVED_NAMES: [&str; 4] = ["title", "created_at", "updated_at", "id"
 pub const MAX_BATCH: usize = 500;
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 500;
+/// Result cap for public share queries.
+pub const PUBLIC_MAX_LIMIT: i64 = 200;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -667,6 +669,15 @@ fn resolve_target<'a>(cols: &'a [Column], key: &str) -> R<Target<'a>> {
     }
 }
 
+/// The property column id a filter/sort key refers to (`None` for the title /
+/// timestamp pseudo-columns and for unknown keys).
+pub(crate) fn property_column_id(cols: &[Column], key: &str) -> Option<String> {
+    match resolve_target(cols, key) {
+        Ok(Target::Col(c)) => Some(c.id.clone()),
+        _ => None,
+    }
+}
+
 #[derive(Default)]
 struct Binds(Vec<SqlValue>);
 
@@ -817,11 +828,17 @@ fn build_where(
     db_id: &str,
     filters: &[Filter],
     search: Option<&str>,
+    only_id: Option<&str>,
     b: &mut Binds,
 ) -> R<String> {
     let u = b.push(SqlValue::Text(user_id.to_string()));
     let d = b.push(SqlValue::Text(db_id.to_string()));
     let mut parts = vec![format!("user_id = {u}"), format!("database_id = {d}")];
+    // Internal only (public share row lookup); never reachable from a client filter.
+    if let Some(id) = only_id {
+        let p = b.push(SqlValue::Text(id.to_string()));
+        parts.push(format!("id = {p}"));
+    }
     for f in filters {
         parts.push(compile_filter(cols, f, b)?);
     }
@@ -1107,6 +1124,10 @@ pub fn delete_database(conn: &mut Connection, user_id: &str, id: &str) -> R<()> 
     // read-then-write upgrade fails at once with "database is locked").
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     get_database(&tx, user_id, id)?;
+    tx.execute(
+        "DELETE FROM draft_versions WHERE draft_id IN (SELECT id FROM drafts WHERE database_id = ?1)",
+        params![id],
+    )?;
     tx.execute("DELETE FROM drafts WHERE database_id = ?1", params![id])?;
     tx.execute(
         "DELETE FROM draft_databases WHERE id = ?1 AND user_id = ?2",
@@ -1141,11 +1162,24 @@ pub fn query_rows(
     db_id: &str,
     req: &QueryRequest,
 ) -> R<QueryResult> {
+    query_rows_inner(conn, user_id, db_id, req, None)
+}
+
+/// Same as `query_rows`, optionally restricted to one row id. The id
+/// restriction is an internal parameter (public share row lookups); it is not
+/// part of `QueryRequest`, so no client can supply it.
+pub(crate) fn query_rows_inner(
+    conn: &Connection,
+    user_id: &str,
+    db_id: &str,
+    req: &QueryRequest,
+    only_id: Option<&str>,
+) -> R<QueryResult> {
     let db = get_database(conn, user_id, db_id)?;
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = req.offset.unwrap_or(0).max(0);
     let mut b = Binds::default();
-    let wh = build_where(&db.columns, user_id, db_id, &req.filters, req.search.as_deref(), &mut b)?;
+    let wh = build_where(&db.columns, user_id, db_id, &req.filters, req.search.as_deref(), only_id, &mut b)?;
     let total: i64 = conn.query_row(
         &format!("SELECT COUNT(*) FROM drafts WHERE {wh}"),
         params_from_iter(b.0.iter()),
@@ -1192,7 +1226,7 @@ pub fn group_rows(
         }
     }
     let mut b = Binds::default();
-    let wh = build_where(&db.columns, user_id, db_id, &req.filters, req.search.as_deref(), &mut b)?;
+    let wh = build_where(&db.columns, user_id, db_id, &req.filters, req.search.as_deref(), None, &mut b)?;
     let e = target_expr(&target, &mut b)?;
     let is_bool = target.kind() == Kind::Bool;
     let sql = format!(
@@ -1405,6 +1439,16 @@ pub fn patch_row(
         Some(t) => t.to_string(),
         None => existing.row.title.clone(),
     };
+    // Keep the previous state when the title or body actually changes.
+    if new_title != existing.row.title || content.is_some_and(|c| c != existing.content) {
+        super::draft_shares::record_version(
+            &tx,
+            user_id,
+            row_id,
+            &existing.row.title,
+            &existing.content,
+        )?;
+    }
     tx.execute(
         "UPDATE drafts SET title = ?1, properties = ?2, content = COALESCE(?3, content), updated_at = ?4
          WHERE id = ?5",
@@ -1443,8 +1487,16 @@ pub fn delete_rows(conn: &mut Connection, user_id: &str, db_id: &str, ids: &[Str
         let mut stmt = tx.prepare(
             "DELETE FROM drafts WHERE id = ?1 AND database_id = ?2 AND user_id = ?3",
         )?;
+        let mut drop_versions = tx.prepare(
+            "DELETE FROM draft_versions WHERE draft_id = ?1 AND user_id = ?2
+               AND NOT EXISTS (SELECT 1 FROM drafts WHERE id = ?1)",
+        )?;
         for id in ids {
-            deleted += stmt.execute(params![id, db_id, user_id])?;
+            let n = stmt.execute(params![id, db_id, user_id])?;
+            if n > 0 {
+                drop_versions.execute(params![id, user_id])?;
+            }
+            deleted += n;
         }
     }
     if deleted > 0 {
