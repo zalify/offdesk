@@ -25,6 +25,7 @@ object NativeTerminalBridge {
     external fun nativeSendInput(handle: Long, bytes: ByteArray)
     external fun nativeScroll(handle: Long, deltaLines: Int)
     external fun nativeRender(handle: Long): Int
+    external fun nativeGetInventoryJson(handle: Long): String
     external fun nativeDestroy(handle: Long)
 }
 
@@ -73,6 +74,10 @@ class NativeTerminalSurfaceView @JvmOverloads constructor(
         if (handle != 0L) {
             NativeTerminalBridge.nativeSendInput(handle, bytes)
         }
+    }
+
+    fun getInventoryJson(): String {
+        return if (handle != 0L) NativeTerminalBridge.nativeGetInventoryJson(handle) else "{}"
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {

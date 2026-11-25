@@ -1,0 +1,172 @@
+name: Build Native GPU Clients (Mac, Linux, Android, iOS)
+
+# Builds the experimental pure-Rust GPU terminal client and shared mobile
+# rendering libraries (`crates/native-client` + `crates/native-term`) in
+# parallel alongside the existing Tauri app:
+# - Mac (arm64 + x64): `offdesk-native-darwin-{arm64,x64}`
+# - Linux (x64):       `offdesk-native-linux-x64`
+# - Android (arm64 + x86_64): `offdesk-term-android-jni.zip` (`liboffdesk_term.so` + Kotlin shell)
+# - iOS (arm64 + sim): `OffdeskTerm.xcframework.zip` (`liboffdesk_term.a` + `offdesk_term.h` + SwiftUI shell)
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: "Optional vX.Y.Z draft release tag to upload native assets into"
+        required: false
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Optional vX.Y.Z draft release tag to upload native assets into"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  desktop-native:
+    name: Native Desktop (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            platform: darwin-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            platform: darwin-x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            platform: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-${{ matrix.target }}
+
+      - name: Install Linux GUI/Vulkan build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - name: Build offdesk-native
+        run: cargo build --release --target ${{ matrix.target }} -p offdesk-native
+
+      - name: Package binary
+        run: |
+          cp "target/${{ matrix.target }}/release/offdesk-native" "offdesk-native-${{ matrix.platform }}"
+          chmod +x "offdesk-native-${{ matrix.platform }}"
+
+      - name: Upload to release draft
+        if: inputs.tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" "offdesk-native-${{ matrix.platform }}" --clobber
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: offdesk-native-${{ matrix.platform }}
+          path: offdesk-native-${{ matrix.platform }}
+
+  android-native-lib:
+    name: Native Android GPU Core (JNI .so)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: "ndk;27.1.12297006"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-term-android
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@cargo-ndk
+
+      - name: Build liboffdesk_term.so for arm64-v8a and x86_64
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.1.12297006
+        run: |
+          mkdir -p dist-android/jniLibs
+          cargo ndk -t arm64-v8a -t x86_64 -o dist-android/jniLibs build --release -p offdesk-native-term
+          cp -r crates/native-term/mobile/android dist-android/kotlin
+          (cd dist-android && zip -r ../offdesk-term-android-jni.zip .)
+
+      - name: Upload to release draft
+        if: inputs.tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" offdesk-term-android-jni.zip --clobber
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: offdesk-term-android-jni
+          path: offdesk-term-android-jni.zip
+
+  ios-native-lib:
+    name: Native iOS GPU Core (XCFramework)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || '' }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-term-ios
+
+      - name: Build liboffdesk_term.a for iOS device & simulator
+        run: |
+          cargo build --release --target aarch64-apple-ios -p offdesk-native-term
+          cargo build --release --target aarch64-apple-ios-sim -p offdesk-native-term
+          xcodebuild -create-xcframework \
+            -library target/aarch64-apple-ios/release/liboffdesk_term.a \
+            -headers crates/native-term/include \
+            -library target/aarch64-apple-ios-sim/release/liboffdesk_term.a \
+            -headers crates/native-term/include \
+            -output OffdeskTerm.xcframework
+          mkdir -p dist-ios
+          cp -r OffdeskTerm.xcframework dist-ios/
+          cp -r crates/native-term/mobile/ios dist-ios/swift
+          (cd dist-ios && zip -r ../OffdeskTerm.xcframework.zip .)
+
+      - name: Upload to release draft
+        if: inputs.tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" OffdeskTerm.xcframework.zip --clobber
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: OffdeskTerm.xcframework
+          path: OffdeskTerm.xcframework.zip

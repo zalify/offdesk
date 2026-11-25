@@ -53,6 +53,12 @@ int32_t offdesk_term_scroll(OffdeskTermHandle *handle, int32_t delta_lines);
 /* Drain pending WebSocket bytes and present one GPU frame. */
 int32_t offdesk_term_render(OffdeskTermHandle *handle);
 
+/* Return a UTF-8 JSON snapshot of machines & terminals. Free with offdesk_term_free_string. */
+char *offdesk_term_get_inventory_json(OffdeskTermHandle *handle);
+
+/* Free a string allocated by offdesk_term_get_inventory_json. */
+void offdesk_term_free_string(char *ptr);
+
 /* Destroy the handle and release all GPU and network resources. */
 void offdesk_term_destroy(OffdeskTermHandle *handle);
 

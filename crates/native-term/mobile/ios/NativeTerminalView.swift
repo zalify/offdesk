@@ -66,6 +66,12 @@ public final class OffdeskMetalTerminalView: UIView {
         }
     }
 
+    public func inventoryJson() -> String {
+        guard let handle, let cstr = offdesk_term_get_inventory_json(handle) else { return "{}" }
+        defer { offdesk_term_free_string(cstr) }
+        return String(cString: cstr)
+    }
+
     public override func layoutSubviews() {
         super.layoutSubviews()
         let w = UInt32(max(1, bounds.width * contentScaleFactor))
