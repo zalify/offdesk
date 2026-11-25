@@ -83,6 +83,7 @@ interface NativeTermFrame {
   bgs: NativeBgRun[];
   cursor: [number, number] | null;
   display_offset: number;
+  history_size?: number;
   wants_mouse: boolean;
   bracketed_paste: boolean;
   title?: string;
@@ -196,6 +197,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
+    const [historySize, setHistorySize] = useState(0);
+    const [scrollbarVisible, setScrollbarVisible] = useState(false);
+    const [scrollbarHover, setScrollbarHover] = useState(false);
+    const maxObservedOffsetRef = useRef(0);
+    const scrollbarFadeTimerRef = useRef<number | null>(null);
+    const scrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+    const scrollbarDragRef = useRef(false);
     const wheelAccumPxRef = useRef(0);
     const pendingScrollLinesRef = useRef(0);
     const scrollInFlightRef = useRef(false);
@@ -383,6 +391,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       });
     }, [paintFrame]);
 
+    const pingScrollbar = useCallback(() => {
+      setScrollbarVisible(true);
+      if (scrollbarFadeTimerRef.current !== null) {
+        window.clearTimeout(scrollbarFadeTimerRef.current);
+      }
+      scrollbarFadeTimerRef.current = window.setTimeout(() => {
+        scrollbarFadeTimerRef.current = null;
+        setScrollbarVisible(false);
+      }, 1200);
+    }, []);
+
     useEffect(
       () => () => {
         if (paintRafRef.current !== null) {
@@ -393,6 +412,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           window.cancelAnimationFrame(scrollRafRef.current);
           scrollRafRef.current = null;
         }
+        if (scrollbarFadeTimerRef.current !== null) {
+          window.clearTimeout(scrollbarFadeTimerRef.current);
+          scrollbarFadeTimerRef.current = null;
+        }
       },
       [],
     );
@@ -401,13 +424,25 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       (frame: NativeTermFrame) => {
         const prevOffset = frameRef.current?.display_offset ?? 0;
         frameRef.current = frame;
+        if (frame.display_offset > maxObservedOffsetRef.current) {
+          maxObservedOffsetRef.current = frame.display_offset;
+        }
+        const effectiveHistory =
+          typeof frame.history_size === "number"
+            ? frame.history_size
+            : maxObservedOffsetRef.current;
         const now = performance.now();
         if (
+          frame.display_offset !== prevOffset ||
           (frame.display_offset === 0) !== (prevOffset === 0) ||
           now - lastScrollBadgeUpdateRef.current > 80
         ) {
           lastScrollBadgeUpdateRef.current = now;
           setScrollbackOffset(frame.display_offset);
+          setHistorySize(effectiveHistory);
+        }
+        if (frame.display_offset !== prevOffset) {
+          pingScrollbar();
         }
         if (frame.title && callbacksRef.current.onTitleChange) {
           callbacksRef.current.onTitleChange(frame.title);
@@ -418,7 +453,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           callbacksRef.current.onReady?.();
         }
       },
-      [schedulePaint],
+      [schedulePaint, pingScrollbar],
     );
 
     const flushPendingScroll = useCallback(() => {
@@ -980,6 +1015,62 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     };
 
+    const scrollToTrackClientY = useCallback(
+      (clientY: number) => {
+        const track = scrollbarTrackRef.current;
+        const frame = frameRef.current;
+        if (!track || !frame) return;
+        const maxOff =
+          typeof frame.history_size === "number"
+            ? frame.history_size
+            : maxObservedOffsetRef.current;
+        if (maxOff <= 0) return;
+        const rect = track.getBoundingClientRect();
+        if (rect.height <= 0) return;
+        const ratio = Math.min(1, Math.max(0, (clientY - rect.top) / rect.height));
+        const targetOffset = Math.round((1 - ratio) * maxOff);
+        const deltaLines = targetOffset - frame.display_offset;
+        if (deltaLines === 0) return;
+        pingScrollbar();
+        pendingScrollLinesRef.current = deltaLines;
+        if (!scrollInFlightRef.current && scrollRafRef.current === null) {
+          scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+        }
+      },
+      [flushPendingScroll, pingScrollbar],
+    );
+
+    useEffect(() => {
+      const onMove = (e: MouseEvent) => {
+        if (!scrollbarDragRef.current) return;
+        e.preventDefault();
+        scrollToTrackClientY(e.clientY);
+      };
+      const onUp = () => {
+        scrollbarDragRef.current = false;
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      return () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+    }, [scrollToTrackClientY]);
+
+    const visibleRows = frameRef.current?.rows ?? dimsRef.current.rows;
+    const totalLines = Math.max(visibleRows, visibleRows + historySize);
+    const hasScrollback = historySize > 0 || scrollbackOffset > 0;
+    const thumbHeightPct = hasScrollback
+      ? Math.max(8, Math.min(100, (visibleRows / totalLines) * 100))
+      : 100;
+    const thumbTopPct =
+      hasScrollback && historySize > 0
+        ? ((historySize - Math.min(scrollbackOffset, historySize)) / historySize) *
+          (100 - thumbHeightPct)
+        : 100 - thumbHeightPct;
+    const showScrollbar =
+      hasScrollback && (scrollbarVisible || scrollbarHover || scrollbarDragRef.current || scrollbackOffset > 0);
+
     return (
       <div
         ref={containerRef}
@@ -1382,6 +1473,46 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             {uploadStatus.total && uploadStatus.total > 0 && uploadStatus.sent !== undefined
               ? ` (${Math.min(100, Math.round((uploadStatus.sent / uploadStatus.total) * 100))}%)`
               : ""}
+          </div>
+        )}
+        {hasScrollback && (
+          <div
+            ref={scrollbarTrackRef}
+            data-testid="native-terminal-scrollbar"
+            onMouseEnter={() => setScrollbarHover(true)}
+            onMouseLeave={() => setScrollbarHover(false)}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              scrollbarDragRef.current = true;
+              scrollToTrackClientY(e.clientY);
+            }}
+            style={{
+              position: "absolute",
+              top: 4,
+              right: 2,
+              bottom: 4,
+              width: scrollbarHover || scrollbarDragRef.current ? 12 : 8,
+              cursor: "pointer",
+              opacity: showScrollbar ? 1 : 0,
+              transition: "opacity 180ms ease, width 120ms ease",
+              zIndex: 5,
+            }}
+          >
+            <div
+              style={{
+                position: "absolute",
+                left: 2,
+                right: 2,
+                top: `${thumbTopPct}%`,
+                height: `${thumbHeightPct}%`,
+                borderRadius: 999,
+                background:
+                  scrollbarHover || scrollbarDragRef.current
+                    ? "rgba(255,255,255,0.48)"
+                    : "rgba(255,255,255,0.28)",
+              }}
+            />
           </div>
         )}
         {scrollbackOffset > 0 && (

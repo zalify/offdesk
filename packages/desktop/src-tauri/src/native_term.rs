@@ -74,6 +74,7 @@ pub struct NativeTermFrame {
     pub bgs: Vec<NativeBgRun>,
     pub cursor: Option<(usize, usize)>,
     pub display_offset: usize,
+    pub history_size: usize,
     pub wants_mouse: bool,
     pub bracketed_paste: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -259,6 +260,8 @@ impl TermInstance {
         };
         let title = self.sink.title.lock().ok().and_then(|mut g| g.take());
 
+        let history_size = grid.history_size();
+
         NativeTermFrame {
             cols: self.cols,
             rows: self.rows,
@@ -266,6 +269,7 @@ impl TermInstance {
             bgs,
             cursor,
             display_offset,
+            history_size,
             wants_mouse: mode.intersects(TermMode::MOUSE_MODE),
             bracketed_paste: mode.contains(TermMode::BRACKETED_PASTE),
             title,
