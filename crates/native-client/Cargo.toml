@@ -1,0 +1,34 @@
+[package]
+name = "offdesk-native"
+version.workspace = true
+edition = "2021"
+license = "MIT"
+description = "Pure-Rust GPU-accelerated native desktop client for Offdesk (wgpu + glyphon + alacritty_terminal)"
+
+[[bin]]
+name = "offdesk-native"
+path = "src/main.rs"
+
+[dependencies]
+offdesk-protocol = { path = "../protocol" }
+alacritty_terminal = "0.25"
+winit = "0.30"
+wgpu = "24"
+glyphon = "0.8"
+bytemuck = { version = "1", features = ["derive"] }
+pollster = "0.4"
+arboard = "3"
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = "0.8"
+dirs = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+url = "2"
+uuid = { workspace = true }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
