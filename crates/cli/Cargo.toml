@@ -21,6 +21,8 @@ vt100 = { workspace = true }
 tokio-tungstenite = { workspace = true }
 reqwest = { workspace = true }
 dirs = { workspace = true }
+csv = { workspace = true }
+unicode-width = "0.2"
 thiserror = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 regex = "1"

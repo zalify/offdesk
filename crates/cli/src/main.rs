@@ -289,6 +289,188 @@ enum DraftAction {
 }
 
 #[derive(Subcommand)]
+enum DbAction {
+    /// Create a database (a table whose rows are drafts)
+    Create {
+        /// Database name (unique within the project)
+        name: String,
+        /// Column as <name>:<type>[=opt1,opt2]; types: text, number, select, multi_select, date, checkbox, url (repeatable)
+        #[arg(long = "col")]
+        cols: Vec<String>,
+        /// Project group (auto-inferred from current directory if omitted)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Succeed and return the existing database if the name is taken
+        #[arg(long)]
+        if_not_exists: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// List databases
+    List {
+        /// Project group (auto-inferred from current directory if omitted)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// List databases of every project
+        #[arg(long)]
+        all_projects: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show or change a database's columns (add/remove/rename)
+    Schema {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Add a column <name>:<type>[=opt1,opt2] (repeatable)
+        #[arg(long = "add-col")]
+        add_col: Vec<String>,
+        /// Remove a column by name (repeatable)
+        #[arg(long = "rm-col")]
+        rm_col: Vec<String>,
+        /// Rename the database
+        #[arg(long)]
+        rename: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add a row (updates the row with the same title unless --new)
+    Add {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Row title
+        title: String,
+        /// Set a property: <col>=<value> (repeatable; empty value clears)
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// Row content (markdown)
+        #[arg(long, conflicts_with = "content_stdin")]
+        content: Option<String>,
+        /// Read row content from stdin
+        #[arg(long)]
+        content_stdin: bool,
+        /// Always create a new row even if the title exists
+        #[arg(long)]
+        new: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update a row's properties, title or content
+    Update {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Row title, id or unique id prefix
+        row: String,
+        /// Set a property: <col>=<value> (repeatable; empty value clears)
+        #[arg(long = "set")]
+        set: Vec<String>,
+        /// New title
+        #[arg(long)]
+        title: Option<String>,
+        /// New content (markdown)
+        #[arg(long, conflicts_with = "content_stdin")]
+        content: Option<String>,
+        /// Read new content from stdin
+        #[arg(long)]
+        content_stdin: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Query rows. --where forms: col=v, col!=v, col~v (contains), col!~v, col>v, col>=v, col<v, col<=v, col:empty, col:not_empty (ANDed)
+    Query {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Filter expression (repeatable, ANDed)
+        #[arg(long = "where")]
+        where_: Vec<String>,
+        /// Sort as <col>[:asc|:desc] (repeatable)
+        #[arg(long)]
+        sort: Vec<String>,
+        /// Substring search on the title
+        #[arg(long)]
+        search: Option<String>,
+        /// Max rows to return (hub default 100, max 500)
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Rows to skip
+        #[arg(long)]
+        offset: Option<usize>,
+        /// Hub response as JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print one row: properties, then content
+    Get {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Row title, id or unique id prefix
+        row: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete rows
+    Rm {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Row titles, ids or unique id prefixes
+        #[arg(required = true)]
+        rows: Vec<String>,
+    },
+    /// Delete a database and all its rows
+    Drop {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Confirm the deletion
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Import rows from a CSV file (header row required; `-` reads stdin)
+    Import {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// CSV file path, or - for stdin
+        file: String,
+        /// Header of the title column (default: "title"/"name", else the first column)
+        #[arg(long)]
+        title_col: Option<String>,
+        /// Create the database if missing; unknown headers become text columns
+        #[arg(long)]
+        create: bool,
+        /// Always create new rows instead of updating same-titled ones
+        #[arg(long)]
+        new: bool,
+        /// Project group used when creating (auto-inferred if omitted)
+        #[arg(short, long)]
+        project: Option<String>,
+        /// Machine-readable JSON summary on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Export rows as CSV or JSON
+    Export {
+        /// Database name, id or unique id prefix
+        db: String,
+        /// Filter expression (repeatable, same grammar as `db query`)
+        #[arg(long = "where")]
+        where_: Vec<String>,
+        /// Sort as <col>[:asc|:desc] (repeatable)
+        #[arg(long)]
+        sort: Vec<String>,
+        /// Output format: csv or json
+        #[arg(long, default_value = "csv")]
+        format: String,
+        /// Write to a file instead of stdout
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
     /// Agent-to-agent communication bus (direct messages, project channels, threads)
     Msg {
@@ -299,6 +481,11 @@ enum Commands {
     Draft {
         #[command(subcommand)]
         action: DraftAction,
+    },
+    /// Structured tables of drafts (task boards, comparison tables, bug lists): create, add, query, import/export
+    Db {
+        #[command(subcommand)]
+        action: DbAction,
     },
     /// Encrypted Secrets, Accounts & API Keys Vault (`list`, `set`, `reveal`, `rm`)
     Vault {
@@ -1656,6 +1843,35 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 commands::draft::archive(&hub_client, &draft, restore).await
             }
             DraftAction::Rm { draft } => commands::draft::rm(&hub_client, &draft).await,
+        },
+        Commands::Db { action } => match action {
+            DbAction::Create { name, cols, project, if_not_exists, json } => {
+                commands::db::create(&hub_client, &name, &cols, project, if_not_exists, json).await
+            }
+            DbAction::List { project, all_projects, json } => {
+                commands::db::list(&hub_client, project, all_projects, json).await
+            }
+            DbAction::Schema { db, add_col, rm_col, rename, json } => {
+                commands::db::schema(&hub_client, &db, &add_col, &rm_col, rename, json).await
+            }
+            DbAction::Add { db, title, set, content, content_stdin, new, json } => {
+                commands::db::add(&hub_client, &db, &title, &set, content, content_stdin, new, json).await
+            }
+            DbAction::Update { db, row, set, title, content, content_stdin, json } => {
+                commands::db::update(&hub_client, &db, &row, &set, title, content, content_stdin, json).await
+            }
+            DbAction::Query { db, where_, sort, search, limit, offset, json } => {
+                commands::db::query(&hub_client, &db, &where_, &sort, search, limit, offset, json).await
+            }
+            DbAction::Get { db, row, json } => commands::db::get(&hub_client, &db, &row, json).await,
+            DbAction::Rm { db, rows } => commands::db::rm(&hub_client, &db, &rows).await,
+            DbAction::Drop { db, yes } => commands::db::drop_db(&hub_client, &db, yes).await,
+            DbAction::Import { db, file, title_col, create, new, project, json } => {
+                commands::db::import(&hub_client, &db, &file, title_col, create, new, project, json).await
+            }
+            DbAction::Export { db, where_, sort, format, output } => {
+                commands::db::export(&hub_client, &db, &where_, &sort, &format, output).await
+            }
         },
         Commands::Version => unreachable!("version returns early"),
         Commands::Update => commands::version::update(&hub_client).await,
