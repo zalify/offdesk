@@ -215,6 +215,64 @@ impl HubClient {
         Ok(())
     }
 
+    pub async fn list_vault(
+        &self,
+        project: Option<&str>,
+    ) -> Result<Vec<crate::commands::vault::VaultSecretSummary>, CliError> {
+        let mut req = self.http.get(self.url("/vault"));
+        if let Some(p) = project {
+            req = req.query(&[("project", p)]);
+        }
+        let response = req.send().await.map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn create_vault(
+        &self,
+        payload: &crate::commands::vault::CreateVaultPayload<'_>,
+    ) -> Result<crate::commands::vault::VaultSecretSummary, CliError> {
+        let response = self
+            .http
+            .post(self.url("/vault"))
+            .json(payload)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn reveal_vault(&self, id: &str) -> Result<String, CliError> {
+        let response = self
+            .http
+            .post(self.url(&format!("/vault/{id}/reveal")))
+            .send()
+            .await
+            .map_err(network_error)?;
+        let val: serde_json::Value = parse_json(response).await?;
+        val.get("value")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .ok_or_else(|| CliError::Protocol("missing value in reveal response".to_string()))
+    }
+
+    pub async fn delete_vault(&self, id: &str) -> Result<(), CliError> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/vault/{id}")))
+            .send()
+            .await
+            .map_err(network_error)?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(CliError::Protocol(format!(
+                "hub returned {status}: {}",
+                error_message(&body).unwrap_or(body)
+            )));
+        }
+        Ok(())
+    }
+
     /// Claim the per-(user, machine) control lease (last-writer-wins) so the
     /// hub allows mutating calls from this device. Never released: the lease
     /// stays with this device until someone else claims it.

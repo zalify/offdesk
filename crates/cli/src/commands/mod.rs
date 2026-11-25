@@ -15,6 +15,7 @@ pub mod read_all;
 pub mod runs;
 pub mod send;
 pub mod tokens;
+pub mod vault;
 pub mod version;
 pub mod wait;
 pub mod webhooks;

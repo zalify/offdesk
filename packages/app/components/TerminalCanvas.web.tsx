@@ -1724,6 +1724,109 @@ function TerminalCanvasInner() {
   const [draftsOpen, setDraftsOpen] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [draftsCount, setDraftsCount] = useState(0);
+  const [shelvedIds, setShelvedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = window.localStorage.getItem("offdesk:shelf");
+      const arr = raw ? (JSON.parse(raw) as string[]) : [];
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const persistShelf = useCallback((next: Set<string>) => {
+    try {
+      window.localStorage.setItem("offdesk:shelf", JSON.stringify(Array.from(next)));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  const handleShelfTerminal = useCallback(
+    (terminal: TerminalInfo) => {
+      setShelvedIds((prev) => {
+        const next = new Set(prev);
+        next.add(terminal.id);
+        persistShelf(next);
+        return next;
+      });
+    },
+    [persistShelf],
+  );
+  const handleUnshelfTerminal = useCallback(
+    (terminalId: string) => {
+      setShelvedIds((prev) => {
+        if (!prev.has(terminalId)) return prev;
+        const next = new Set(prev);
+        next.delete(terminalId);
+        persistShelf(next);
+        return next;
+      });
+      handleZoomTerminal(terminalId);
+    },
+    [persistShelf, handleZoomTerminal],
+  );
+  const handleRestoreAllShelf = useCallback(() => {
+    setShelvedIds(() => {
+      const empty = new Set<string>();
+      persistShelf(empty);
+      return empty;
+    });
+  }, [persistShelf]);
+
+  const applyStagePreset = useCallback(
+    (preset: "focus" | "split" | "grid") => {
+      if (!activeMachine || !workspaceTerminal) return;
+      const activeGroup = tabGroups.find((g) =>
+        collectPaneTerminalIds(g.root).includes(workspaceTerminal.id),
+      );
+      if (!activeGroup) return;
+      const ids = collectPaneTerminalIds(activeGroup.root);
+      if (ids.length === 0) return;
+      let root: WorkspaceLayoutNode;
+      if (preset === "focus" || ids.length === 1) {
+        root = { type: "leaf", terminalId: workspaceTerminal.id };
+      } else if (preset === "split" || ids.length === 2) {
+        const other = ids.find((id) => id !== workspaceTerminal.id) ?? ids[0];
+        root = {
+          type: "split",
+          direction: "horizontal",
+          ratio: 0.5,
+          first: { type: "leaf", terminalId: workspaceTerminal.id },
+          second: { type: "leaf", terminalId: other },
+        };
+      } else {
+        const ordered = [
+          workspaceTerminal.id,
+          ...ids.filter((id) => id !== workspaceTerminal.id),
+        ].slice(0, 4);
+        const top: WorkspaceLayoutNode = {
+          type: "split",
+          direction: "horizontal",
+          ratio: 0.5,
+          first: { type: "leaf", terminalId: ordered[0] },
+          second: { type: "leaf", terminalId: ordered[1] },
+        };
+        const bottom: WorkspaceLayoutNode =
+          ordered.length >= 4
+            ? {
+                type: "split",
+                direction: "horizontal",
+                ratio: 0.5,
+                first: { type: "leaf", terminalId: ordered[2] },
+                second: { type: "leaf", terminalId: ordered[3] },
+              }
+            : { type: "leaf", terminalId: ordered[2] };
+        root = {
+          type: "split",
+          direction: "vertical",
+          ratio: 0.5,
+          first: top,
+          second: bottom,
+        };
+      }
+      void handleSaveWorkspaceLayout(activeMachine.id, activeGroup.id, root);
+    },
+    [activeMachine, workspaceTerminal, tabGroups, handleSaveWorkspaceLayout],
+  );
 
   const handleSendDraftToTerminal = useCallback(
     (content: string) => {
@@ -2355,10 +2458,17 @@ function TerminalCanvasInner() {
                         : undefined,
                     onToggleBrowser: handleToggleBrowserOverlay,
                     onOpenPhone: () => setPhoneOpen(true),
+                    onOpenChat: () => setChatOpen(true),
                     onOpenSettings: () => setShowSettings(true),
                   }}
                   onHide={toggleSidebar}
-                  onSelectTerminal={handleSelectSessionTerminal}
+                  onSelectTerminal={(id) => {
+                    if (shelvedIds.has(id)) {
+                      handleUnshelfTerminal(id);
+                    } else {
+                      handleSelectSessionTerminal(id);
+                    }
+                  }}
                   onNewGroup={handleNewGroupClick}
                   onNewTerminal={handleMobileNewTerminal}
                   onRenameGroup={handleRenameGroup}
@@ -2366,6 +2476,8 @@ function TerminalCanvasInner() {
                   onReorderGroups={handleRequestWorkspaceGroupReorder}
                   onMoveTerminal={handleMoveTerminalToWorkspace}
                   onCloseTerminal={handleMobileCloseTerminal}
+                  shelvedTerminalIds={shelvedIds}
+                  onShelfTerminal={handleShelfTerminal}
                 />
               )}
               <main
@@ -2555,6 +2667,123 @@ function TerminalCanvasInner() {
                 })
               )}
               </div>
+              {/* Auto-hidden Background Shelf + 1-click Stage Layout Presets */}
+              {(() => {
+                const shelved = terminals
+                  .filter((t) => shelvedIds.has(t.id) && (!activeMachine || t.machine_id === activeMachine.id))
+                  .sort((a, b) => (a.attention === "confirmation" ? -1 : b.attention === "confirmation" ? 1 : 0));
+                if (shelved.length === 0 && (!workspaceTerminal || !isActiveController)) return null;
+                return (
+                  <div
+                    data-testid="background-shelf-bar"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "4px 10px",
+                      borderTop: "1px solid rgb(var(--color-border))",
+                      background: "rgb(var(--color-bg-1))",
+                      fontSize: 11.5,
+                      overflowX: "auto",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {workspaceTerminal && isActiveController && (
+                      <div style={{ display: "inline-flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                        <span style={{ color: "rgb(var(--color-fg-3))", fontSize: 11 }}>stage</span>
+                        {(
+                          [
+                            { id: "focus", label: "▢ Focus" },
+                            { id: "split", label: "◫ Split" },
+                            { id: "grid", label: "⊞ 2×2" },
+                          ] as const
+                        ).map((p) => (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => applyStagePreset(p.id)}
+                            style={{
+                              border: "1px solid rgb(var(--color-border))",
+                              background: "transparent",
+                              color: "rgb(var(--color-fg-2))",
+                              borderRadius: 5,
+                              padding: "1px 6px",
+                              fontSize: 11,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => handleShelfTerminal(workspaceTerminal)}
+                          title="Minimize active terminal to background shelf (without killing)"
+                          style={{
+                            border: "1px solid rgb(var(--color-border))",
+                            background: "transparent",
+                            color: "rgb(var(--color-fg-2))",
+                            borderRadius: 5,
+                            padding: "1px 7px",
+                            fontSize: 11,
+                            cursor: "pointer",
+                          }}
+                        >
+                          — Shelf
+                        </button>
+                      </div>
+                    )}
+                    {shelved.length > 0 && (
+                      <>
+                        <span style={{ color: "rgb(var(--color-fg-3))", marginLeft: 4, flexShrink: 0 }}>
+                          shelf ({shelved.length}):
+                        </span>
+                        {shelved.map((t) => {
+                          const isWaiting = t.attention === "confirmation";
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => handleUnshelfTerminal(t.id)}
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 5,
+                                border: `1px solid ${isWaiting ? "#f59e0b" : "rgb(var(--color-border))"}`,
+                                background: isWaiting ? "rgba(245,158,11,0.14)" : "rgb(var(--color-bg-0))",
+                                color: isWaiting ? "#fbbf24" : "rgb(var(--color-fg-1))",
+                                borderRadius: 999,
+                                padding: "2px 9px",
+                                fontSize: 11,
+                                cursor: "pointer",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {isWaiting && <span>●</span>}
+                              <span>{displayTerminalTitle(t)}</span>
+                            </button>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={handleRestoreAllShelf}
+                          style={{
+                            marginLeft: "auto",
+                            border: "none",
+                            background: "transparent",
+                            color: "rgb(var(--color-fg-3))",
+                            fontSize: 11,
+                            cursor: "pointer",
+                            flexShrink: 0,
+                          }}
+                        >
+                          restore all
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
               <WorkspaceKeyBarSlot />
               <WorkspaceStatusLine
                 terminals={terminals}
