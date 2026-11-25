@@ -20,12 +20,14 @@ const LazyNativeImpl = lazy(() =>
 export const TERMINAL_RENDERER_STORAGE_KEY = "offdesk:terminalRenderer";
 
 let cachedNativeProbe: boolean | null = null;
+let cachedNativeProbeError: string | null = null;
 let nativeProbePromise: Promise<boolean> | null = null;
 
 function probeNativeTerminalIpc(): Promise<boolean> {
   if (cachedNativeProbe !== null) return Promise.resolve(cachedNativeProbe);
   if (!isTauri()) {
     cachedNativeProbe = false;
+    cachedNativeProbeError = "not running inside Tauri shell";
     return Promise.resolve(false);
   }
   if (!nativeProbePromise) {
@@ -38,19 +40,53 @@ function probeNativeTerminalIpc(): Promise<boolean> {
         const ok = Boolean(res && typeof res.cols === "number" && Array.isArray(res.spans));
         if (ok) {
           void invoke("native_term_close", { id: "__probe__" }).catch(() => {});
+          cachedNativeProbeError = null;
+        } else {
+          cachedNativeProbeError = "unexpected native_term_open response";
         }
         cachedNativeProbe = ok;
         return ok;
       })
-      .catch(() => {
+      .catch((err) => {
         cachedNativeProbe = false;
+        cachedNativeProbeError = err instanceof Error ? err.message : String(err);
         return false;
       });
   }
   return nativeProbePromise;
 }
 
-export function useNativeRustTerminal(): boolean {
+export function useNativeTerminalProbeStatus(): {
+  probed: boolean;
+  available: boolean;
+  error: string | null;
+} {
+  const [state, setState] = useState<{ probed: boolean; available: boolean; error: string | null }>(
+    () => ({
+      probed: cachedNativeProbe !== null,
+      available: cachedNativeProbe === true,
+      error: cachedNativeProbeError,
+    }),
+  );
+  useEffect(() => {
+    if (cachedNativeProbe !== null) {
+      setState({ probed: true, available: cachedNativeProbe, error: cachedNativeProbeError });
+      return;
+    }
+    let alive = true;
+    void probeNativeTerminalIpc().then((ok) => {
+      if (alive) {
+        setState({ probed: true, available: ok, error: cachedNativeProbeError });
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return state;
+}
+
+export function useNativeRustTerminal(): boolean | null {
   const optedOut = (() => {
     try {
       return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm";
@@ -59,9 +95,9 @@ export function useNativeRustTerminal(): boolean {
     }
   })();
 
-  const [available, setAvailable] = useState<boolean>(() => {
+  const [available, setAvailable] = useState<boolean | null>(() => {
     if (!isTauri() || optedOut) return false;
-    return cachedNativeProbe === true;
+    return cachedNativeProbe;
   });
 
   useEffect(() => {
@@ -85,7 +121,11 @@ export type { TerminalViewRef, TerminalViewProps };
 
 export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
   function TerminalView(props, ref) {
-    const Impl = useNativeRustTerminal() ? LazyNativeImpl : LazyXtermImpl;
+    const nativeAvailable = useNativeRustTerminal();
+    if (nativeAvailable === null) {
+      return <LazyLoadingFallback />;
+    }
+    const Impl = nativeAvailable ? LazyNativeImpl : LazyXtermImpl;
     return (
       <Suspense fallback={<LazyLoadingFallback />}>
         <Impl ref={ref} {...props} />

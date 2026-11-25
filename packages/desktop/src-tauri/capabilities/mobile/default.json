@@ -47,6 +47,13 @@
     "allow-ui-status",
     "allow-ui-check",
     "allow-ui-ready",
-    "allow-ui-recover"
+    "allow-ui-recover",
+    "allow-native-term-open",
+    "allow-native-term-feed",
+    "allow-native-term-resize",
+    "allow-native-term-scroll",
+    "allow-native-term-snap-bottom",
+    "allow-native-term-plain-lines",
+    "allow-native-term-close"
   ]
 }
