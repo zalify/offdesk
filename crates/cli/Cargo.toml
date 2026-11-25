@@ -29,3 +29,4 @@ toml = "0.8"
 toml_edit = "0.22"
 uuid = { workspace = true }
 hostname = "0.4"
+rpassword = "7"

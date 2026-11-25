@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{IsTerminal, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,30 @@ pub async fn list(
     Ok(())
 }
 
+/// Obtain the secret when `--value` was not given. On a terminal the hidden
+/// reader is used (it returns one line, line ending already stripped); otherwise
+/// all of stdin is read. Both readers are injected so this is testable without a TTY.
+fn read_secret(
+    is_terminal: bool,
+    name: &str,
+    hidden: impl FnOnce() -> std::io::Result<String>,
+    piped: impl FnOnce() -> std::io::Result<String>,
+) -> Result<String, CliError> {
+    let value = if is_terminal {
+        let v = hidden()
+            .map_err(|e| CliError::Usage(format!("failed to read secret for {name}: {e}")))?;
+        v.trim_end_matches(&['\r', '\n'][..]).to_string()
+    } else {
+        let v = piped()
+            .map_err(|e| CliError::Usage(format!("failed to read secret from stdin: {e}")))?;
+        v.trim_end_matches(&['\r', '\n'][..]).to_string()
+    };
+    if value.is_empty() {
+        return Err(CliError::Usage("secret value must not be empty".to_string()));
+    }
+    Ok(value)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn set(
     client: &HubClient,
@@ -81,13 +105,23 @@ pub async fn set(
 ) -> Result<(), CliError> {
     let secret_value = match value_arg {
         Some(v) => v,
-        None => {
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(|e| CliError::Usage(format!("failed to read secret from stdin: {e}")))?;
-            buf.trim_end_matches(&['\r', '\n'][..]).to_string()
-        }
+        None => read_secret(
+            std::io::stdin().is_terminal(),
+            name,
+            || {
+                // Prompt on stderr so stdout stays clean for --json consumers.
+                let mut err = std::io::stderr();
+                let _ = write!(err, "Secret value for {name} (input hidden): ");
+                let _ = err.flush();
+                // rpassword ends the line itself once the value is read.
+                rpassword::read_password()
+            },
+            || {
+                let mut buf = String::new();
+                std::io::stdin().read_to_string(&mut buf)?;
+                Ok(buf)
+            },
+        )?,
     };
     if secret_value.is_empty() {
         return Err(CliError::Usage("secret value must not be empty".to_string()));
@@ -139,4 +173,52 @@ pub async fn rm(client: &HubClient, id_or_prefix: &str) -> Result<(), CliError> 
     client.delete_vault(&target.id).await?;
     out_line(&format!("deleted vault secret {} \"{}\"", short_id(&target.id), target.name));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn never() -> std::io::Result<String> {
+        panic!("reader must not be called")
+    }
+
+    #[test]
+    fn piped_input_keeps_trailing_newline_trim() {
+        let v = read_secret(false, "N", never, || Ok("s3cret\r\n\n".to_string())).unwrap();
+        assert_eq!(v, "s3cret");
+    }
+
+    #[test]
+    fn piped_input_preserves_inner_and_leading_whitespace() {
+        let v = read_secret(false, "N", never, || Ok(" a b \n".to_string())).unwrap();
+        assert_eq!(v, " a b ");
+    }
+
+    #[test]
+    fn terminal_uses_hidden_reader_and_strips_newline() {
+        let v = read_secret(true, "N", || Ok("tty-secret\n".to_string()), never).unwrap();
+        assert_eq!(v, "tty-secret");
+    }
+
+    #[test]
+    fn empty_input_is_rejected_on_both_paths() {
+        assert!(matches!(
+            read_secret(true, "N", || Ok(String::new()), never),
+            Err(CliError::Usage(m)) if m.contains("empty")
+        ));
+        assert!(matches!(
+            read_secret(false, "N", never, || Ok("\n".to_string())),
+            Err(CliError::Usage(m)) if m.contains("empty")
+        ));
+    }
+
+    #[test]
+    fn reader_error_is_a_usage_error() {
+        let err = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        assert!(matches!(
+            read_secret(true, "N", || Err(err), never),
+            Err(CliError::Usage(m)) if m.contains("boom")
+        ));
+    }
 }
