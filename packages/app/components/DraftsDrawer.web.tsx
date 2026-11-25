@@ -3,7 +3,11 @@ import {
   Archive,
   Check,
   Copy,
+  Eye,
   FileText,
+  Maximize2,
+  Minimize2,
+  Pencil,
   Pin,
   Plus,
   RotateCcw,
@@ -11,6 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { DraftArtifactPreview } from "./DraftArtifactPreview.web";
 import {
   deleteDraft,
   listDrafts,
@@ -56,6 +61,8 @@ export function DraftsDrawer({
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<"preview" | "edit">("preview");
+  const [wide, setWide] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editProject, setEditProject] = useState(defaultProjectGroup);
@@ -125,6 +132,7 @@ export function DraftsDrawer({
   const openEditorFor = (draft: DraftInfo) => {
     setCreating(false);
     setSelectedId(draft.id);
+    setMode("preview");
     setEditTitle(draft.title);
     setEditContent(draft.content);
     setEditProject(draft.project_group);
@@ -133,6 +141,7 @@ export function DraftsDrawer({
   const startNewDraft = () => {
     setSelectedId(null);
     setCreating(true);
+    setMode("edit");
     setEditTitle("");
     setEditContent("");
     setEditProject(projectFilter !== "all" ? projectFilter : defaultProjectGroup || "~");
@@ -214,8 +223,9 @@ export function DraftsDrawer({
         data-testid="drafts-drawer"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: isCompact ? "100%" : "min(520px, 92vw)",
+          width: isCompact ? "100%" : wide ? "min(920px, 94vw)" : "min(540px, 92vw)",
           height: isCompact ? "86vh" : "100%",
+          transition: "width 160ms ease",
           background: colors.bg1,
           borderLeft: isCompact ? undefined : `1px solid ${colors.line}`,
           borderTop: isCompact ? `1px solid ${colors.line}` : undefined,
@@ -242,6 +252,28 @@ export function DraftsDrawer({
           <span style={{ fontWeight: 600, fontSize: rem(14), flex: 1 }}>
             Drafts · 草稿板
           </span>
+          {!isCompact && (
+            <button
+              type="button"
+              aria-label={wide ? "Narrow panel" : "Expand panel"}
+              title={wide ? "Narrow panel" : "Expand panel for tables & diagrams"}
+              onClick={() => setWide((w) => !w)}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                border: "none",
+                background: "transparent",
+                color: colors.fg2,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {wide ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
+          )}
           <button
             type="button"
             data-testid="drafts-new-btn"
@@ -419,6 +451,58 @@ export function DraftsDrawer({
               />
               <div style={{ flex: 1 }} />
               {selected && (
+                <div
+                  style={{
+                    display: "inline-flex",
+                    borderRadius: 6,
+                    border: `1px solid ${colors.line}`,
+                    overflow: "hidden",
+                  }}
+                >
+                  <button
+                    type="button"
+                    data-testid="draft-mode-preview"
+                    onClick={() => setMode("preview")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "4px 8px",
+                      border: "none",
+                      background: mode === "preview" ? colorAlpha.accentSoft : colors.bg2,
+                      color: mode === "preview" ? colors.accent : colors.fg2,
+                      fontSize: rem(11.5),
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Eye size={12} />
+                    Preview
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="draft-mode-edit"
+                    onClick={() => setMode("edit")}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      padding: "4px 8px",
+                      border: "none",
+                      borderLeft: `1px solid ${colors.line}`,
+                      background: mode === "edit" ? colorAlpha.accentSoft : colors.bg2,
+                      color: mode === "edit" ? colors.accent : colors.fg2,
+                      fontSize: rem(11.5),
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <Pencil size={12} />
+                    Edit
+                  </button>
+                </div>
+              )}
+              {selected && (
                 <>
                   <button
                     type="button"
@@ -473,40 +557,70 @@ export function DraftsDrawer({
               )}
             </div>
 
-            <input
-              data-testid="draft-title-input"
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              placeholder="Draft title…"
-              style={{
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: `1px solid ${colors.line}`,
-                background: colors.bg0,
-                color: colors.fg0,
-                fontSize: rem(14),
-                fontWeight: 600,
-              }}
-            />
+            {mode === "preview" && !creating ? (
+              <div
+                data-testid="draft-artifact-preview"
+                style={{
+                  flex: 1,
+                  overflowY: "auto",
+                  padding: "12px 14px",
+                  borderRadius: 8,
+                  border: `1px solid ${colors.lineSoft}`,
+                  background: colors.bg0,
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: rem(16),
+                    fontWeight: 700,
+                    color: colors.fg0,
+                    marginBottom: 10,
+                    paddingBottom: 8,
+                    borderBottom: `1px solid ${colors.lineSoft}`,
+                  }}
+                >
+                  {editTitle || "(untitled)"}
+                </div>
+                <DraftArtifactPreview content={editContent} />
+              </div>
+            ) : (
+              <>
+                <input
+                  data-testid="draft-title-input"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="Draft title…"
+                  style={{
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: `1px solid ${colors.line}`,
+                    background: colors.bg0,
+                    color: colors.fg0,
+                    fontSize: rem(14),
+                    fontWeight: 600,
+                  }}
+                />
 
-            <textarea
-              data-testid="draft-content-input"
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              placeholder="Write or edit scratchpad content (Markdown supported)…"
-              style={{
-                flex: 1,
-                resize: "none",
-                padding: 10,
-                borderRadius: 8,
-                border: `1px solid ${colors.line}`,
-                background: colors.bg0,
-                color: colors.fg0,
-                fontFamily: "var(--font-mono)",
-                fontSize: rem(13),
-                lineHeight: 1.55,
-              }}
-            />
+                <textarea
+                  data-testid="draft-content-input"
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  placeholder="Write Markdown, GFM tables, ```mermaid diagrams, or ```svg / ```html artifacts…"
+                  style={{
+                    flex: 1,
+                    resize: "none",
+                    padding: 10,
+                    borderRadius: 8,
+                    border: `1px solid ${colors.line}`,
+                    background: colors.bg0,
+                    color: colors.fg0,
+                    fontFamily: "var(--font-mono)",
+                    fontSize: rem(13),
+                    lineHeight: 1.55,
+                  }}
+                />
+              </>
+            )}
 
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               {selected && (
