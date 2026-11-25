@@ -157,6 +157,30 @@ function keyEventToBytes(e: React.KeyboardEvent<HTMLTextAreaElement>): string | 
   }
 }
 
+// Keep the last non-empty frame per terminal in memory so remounting a pane
+// paints its previous screen synchronously at 0ms while the WebSocket reconnects.
+const LAST_FRAME_CACHE_LIMIT = 64;
+const lastFrameCache = new Map<string, NativeTermFrame>();
+
+function frameHasContent(frame: NativeTermFrame | null | undefined): boolean {
+  if (!frame) return false;
+  for (const row of frame.spans) {
+    if (row.length > 0) return true;
+  }
+  return false;
+}
+
+function rememberFrame(terminalId: string, frame: NativeTermFrame) {
+  if (!frameHasContent(frame)) return;
+  if (lastFrameCache.has(terminalId)) {
+    lastFrameCache.delete(terminalId);
+  } else if (lastFrameCache.size >= LAST_FRAME_CACHE_LIMIT) {
+    const oldest = lastFrameCache.keys().next().value;
+    if (oldest !== undefined) lastFrameCache.delete(oldest);
+  }
+  lastFrameCache.set(terminalId, frame);
+}
+
 /**
  * Zero-xterm.js terminal view backed by Rust `alacritty_terminal 0.25` (10,000-line scrollback)
  * over Tauri IPC, painted directly onto a Retina HiDPI hardware-accelerated Canvas.
@@ -186,7 +210,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const wsRef = useRef<WebSocket | null>(null);
-    const frameRef = useRef<NativeTermFrame | null>(null);
+    const frameRef = useRef<NativeTermFrame | null>(lastFrameCache.get(terminalId) ?? null);
+    const hasLiveDataRef = useRef(false);
     const ptyDimsRef = useRef<{ cols: number; rows: number }>({
       cols: Math.max(20, initialCols || 80),
       rows: Math.max(6, initialRows || 24),
@@ -466,9 +491,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     );
 
     const applyFrame = useCallback(
-      (frame: NativeTermFrame) => {
+      (frame: NativeTermFrame, opts?: { sync?: boolean }) => {
         const prevOffset = frameRef.current?.display_offset ?? 0;
+        // Never overwrite a warm cached frame with an empty native_term_open frame
+        // before the first live WebSocket snapshot arrives.
+        if (!hasLiveDataRef.current && !frameHasContent(frame) && frameHasContent(frameRef.current)) {
+          return;
+        }
         frameRef.current = frame;
+        rememberFrame(terminalId, frame);
         if (frame.display_offset > maxObservedOffsetRef.current) {
           maxObservedOffsetRef.current = frame.display_offset;
         }
@@ -492,13 +523,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (frame.title && callbacksRef.current.onTitleChange) {
           callbacksRef.current.onTitleChange(frame.title);
         }
-        schedulePaint();
+        if (opts?.sync) {
+          paintFrame(frame);
+        } else {
+          schedulePaint();
+        }
         if (!readyFiredRef.current) {
           readyFiredRef.current = true;
           callbacksRef.current.onReady?.();
         }
       },
-      [schedulePaint, pingScrollbar],
+      [terminalId, paintFrame, schedulePaint, pingScrollbar],
     );
 
     const flushPendingScroll = useCallback(() => {
@@ -725,6 +760,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const batch = concatChunks(pendingChunks);
         pendingChunks = [];
         inFlight = true;
+        const isFirstLive = !hasLiveDataRef.current;
         void enqueueTermOp(() => {
           if (disposed) return Promise.resolve(null);
           return invoke<NativeTermFrame>("native_term_feed", {
@@ -733,7 +769,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           });
         })
           .then((frame) => {
-            if (frame && !disposed) applyFrame(frame);
+            if (frame && !disposed) {
+              hasLiveDataRef.current = true;
+              applyFrame(frame, isFirstLive ? { sync: true } : undefined);
+            }
           })
           .catch(() => {})
           .finally(() => {
@@ -747,6 +786,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const enqueueBytes = (bytes: Uint8Array) => {
         if (bytes.length === 0 || disposed) return;
         pendingChunks.push(bytes);
+        // First live snapshot bypasses rAF so initial screen paints immediately (~32ms faster).
+        if (!hasLiveDataRef.current && !inFlight) {
+          if (rafId !== null) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          flushToRust();
+          return;
+        }
         if (rafId === null) {
           rafId = requestAnimationFrame(flushToRust);
         }

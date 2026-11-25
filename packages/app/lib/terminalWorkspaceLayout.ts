@@ -456,8 +456,10 @@ export function mountedWorkspaceGroupIds(
   workspace: TerminalWorkspace,
   recentGroupIds: string | readonly string[] | null,
   isTouch: boolean,
+  limits?: { maxGroups?: number; maxPanes?: number },
 ): string[] {
-  const groupCap = isTouch ? 1 : MAX_MOUNTED_DESKTOP_GROUPS;
+  const groupCap = isTouch ? 1 : (limits?.maxGroups ?? MAX_MOUNTED_DESKTOP_GROUPS);
+  const paneCap = limits?.maxPanes ?? MAX_MOUNTED_DESKTOP_PANES;
   const byId = new Map(workspace.groups.map((group) => [group.id, group]));
   const recent =
     recentGroupIds === null
@@ -473,7 +475,7 @@ export function mountedWorkspaceGroupIds(
     const group = byId.get(id);
     if (!group) continue;
     const paneCount = collectPaneTerminalIds(group.root).length;
-    if (ids.length > 0 && mountedPanes + paneCount > MAX_MOUNTED_DESKTOP_PANES) {
+    if (ids.length > 0 && mountedPanes + paneCount > paneCap) {
       continue;
     }
     ids.push(id);
