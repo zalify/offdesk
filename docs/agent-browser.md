@@ -149,7 +149,7 @@ offdesk browser click <browser> <ref>
 offdesk browser click <browser> --text TEXT         # by visible text, for tabs/toggles without a ref
 offdesk browser click <browser> --xy X,Y            # at viewport coordinates (CSS pixels), e.g. --xy 640,360
 offdesk browser fill <browser> <ref> <text>
-offdesk browser upload <browser> [<ref>] --file PATH [--file PATH ...]   # put local files into a file input
+offdesk browser upload <browser> [<ref> | --nth N] --file PATH [--file PATH ...]   # put local files into a file input
 offdesk browser press <browser> <key>               # Enter, Tab, Escape, ArrowDown, a, ...
 offdesk browser dialog <browser> accept|dismiss [--text T]   # answer the page's alert/confirm/prompt
 offdesk browser wait <browser> [--text T] [--url-regex REGEX] [--idle MS] [--timeout SEC]
@@ -380,7 +380,7 @@ Tools (arguments in brackets are optional):
 | `browser_snapshot` | `browser_id` | `snapshot` |
 | `browser_click` | `browser_id`, `ref`, `text` or `xy` `[x, y]` (exactly one) | `click` / `click --text` / `click --xy` |
 | `browser_fill` | `browser_id`, `ref`, `text` | `fill` |
-| `browser_upload` | `browser_id`, `[ref]`, `paths` | `upload` |
+| `browser_upload` | `browser_id`, `[ref]`, `[nth]`, `paths` | `upload` |
 | `browser_press` | `browser_id`, `key` | `press` |
 | `browser_dialog` | `browser_id`, `accept`, `[prompt_text]` | `dialog` |
 | `browser_wait` | `browser_id`, `[text]`, `[url_regex]`, `[idle_ms]`, `[timeout_ms]` (default 30000) | `wait` |
@@ -637,13 +637,19 @@ spinbutton's value as a number, so the node reads `valuetext` first, then
 ## Uploading files
 
 The browser has no file dialog the agent can use, so `<input type=file>` cannot be driven
-by clicking. `upload <browser> [<ref>] --file PATH [--file PATH ...]` (MCP:
+by clicking. `upload <browser> [<ref> | --nth N] --file PATH [--file PATH ...]` (MCP:
 `browser_upload` with `paths`) sends the local files to the node and sets them
 on the page's file input. Which input it uses depends on the ref:
 
 - **No ref**: the page must have exactly one file input, in any frame or shadow
-  root, even a hidden one. With none or several, the command fails (and says
-  how many it found).
+  root, even a hidden one. With none the command fails; with several it fails
+  and lists them numbered, each with the text nearest to it (for example
+  `1: input[type=file] accept=".pdf" near "CI/PI/合同 点击上传"`).
+- **`--nth N`** (MCP: `nth`): the Nth (1-based) file input of the page, in the order
+  that list shows (document order, frames in enumeration order). It sets the files on
+  that input directly, without a click or a chooser, so it works when neither the
+  input nor its upload button has a ref. It cannot be combined with a ref; an `N` of
+  0 or past the last input fails and says how many inputs the page has.
 - **The ref of an `<input type=file>`**: that input.
 - **Any other ref** (normally the "Choose File" button, since the real input is
   often hidden and has no ref): the node clicks it, answers the file chooser it

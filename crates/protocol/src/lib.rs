@@ -1803,11 +1803,16 @@ pub enum AgentBrowserCommand {
     /// Put local files into a page's `<input type=file>`. With a `ref` that
     /// is the input, it is used; with any other `ref` (an upload button) the
     /// ref is clicked and the file chooser it opens is answered; without a
-    /// `ref` the page must have exactly one file input.
+    /// `ref` the page must have exactly one file input, unless `nth` picks
+    /// one: the Nth (1-based) file input of the page, in document order with
+    /// frames in enumeration order; the files go straight into it (no click,
+    /// no chooser). `nth` excludes `ref`.
     Upload {
         browser_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         r#ref: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        nth: Option<u32>,
         files: Vec<UploadFile>,
     },
     Press {
@@ -3918,6 +3923,7 @@ mod login_command_tests {
         let command = AgentBrowserCommand::Upload {
             browser_id: "b1".into(),
             r#ref: None,
+            nth: None,
             files: vec![UploadFile {
                 name: "id.png".into(),
                 data: Base64Data::new("aGVsbG8gd29ybGQ="),
@@ -3937,6 +3943,30 @@ mod login_command_tests {
         assert!(rendered.contains("id.png"), "{rendered}");
         assert!(rendered.contains("<16 bytes base64>"), "{rendered}");
         assert!(!rendered.contains("aGVsbG8"), "{rendered}");
+    }
+
+    #[test]
+    fn upload_nth_is_optional_on_the_wire() {
+        // An old peer's JSON has no `nth`.
+        let old = serde_json::json!({
+            "type": "upload", "browser_id": "b1", "ref": "e3", "files": [],
+        });
+        match serde_json::from_value::<AgentBrowserCommand>(old).unwrap() {
+            AgentBrowserCommand::Upload { nth, r#ref, .. } => {
+                assert_eq!(nth, None);
+                assert_eq!(r#ref.as_deref(), Some("e3"));
+            }
+            other => panic!("{other:?}"),
+        }
+        let command = AgentBrowserCommand::Upload {
+            browser_id: "b1".into(),
+            r#ref: None,
+            nth: Some(2),
+            files: vec![],
+        };
+        let wire = serde_json::to_value(&command).unwrap();
+        assert_eq!(wire["nth"], 2);
+        assert_eq!(serde_json::from_value::<AgentBrowserCommand>(wire).unwrap(), command);
     }
 
     #[test]

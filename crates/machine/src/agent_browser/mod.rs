@@ -404,12 +404,13 @@ impl AgentBrowserManager {
             C::Upload {
                 browser_id,
                 r#ref,
+                nth,
                 files,
             } => {
                 let tab = self.page_tab(&browser_id).await?;
                 let (names, paths) = save_uploads(files).await?;
                 match tab
-                    .until_dialog(tab.upload(r#ref.as_deref(), &paths))
+                    .until_dialog(tab.upload(r#ref.as_deref(), nth, &paths))
                     .await?
                 {
                     Acted::Done(input) => Ok(json!({"files": names, "input": input})),
@@ -2596,6 +2597,7 @@ mod tests {
             mgr.execute(AgentBrowserCommand::Upload {
                 browser_id: id.to_string(),
                 r#ref,
+                nth: None,
                 files,
             })
         };
@@ -2694,6 +2696,103 @@ mod tests {
         let id = open("data:text/html,<title>None</title><p>nothing</p>").await;
         let err = upload(&id, None, vec![file("a.txt", "a")]).await.unwrap_err();
         assert_eq!(err, "no file input on the page");
+        mgr.shutdown().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Two anonymous hidden file inputs behind identical trigger text: the
+    /// ambiguity error tells them apart by context and `nth` fills one.
+    #[tokio::test]
+    #[ignore]
+    async fn uploads_by_nth_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let file = |name: &str, text: &str| UploadFile {
+            name: name.to_string(),
+            data: offdesk_protocol::Base64Data::new(
+                base64::engine::general_purpose::STANDARD.encode(text),
+            ),
+        };
+        let page = "data:text/html;charset=utf-8,<meta charset=utf-8><title>Nth</title>\
+            <p>Page heading</p>\
+            <div class=item><label>CI/PI/合同</label><div class=upload><div>将文件拖到此处，或 点击上传</div>\
+            <input id=a type=file accept='.pdf' style='display:none' onchange=\"window.log=(window.log||'')+'a'\"></div></div>\
+            <div class=item><label>其他附件</label><div class=upload><div>将文件拖到此处，或 点击上传</div>\
+            <input id=b type=file style='display:none' onchange=\"window.log=(window.log||'')+'b'\"></div></div>";
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some(page.to_string()),
+                opener_terminal_id: None,
+            })
+            .await
+            .unwrap();
+        let id = info["id"].as_str().unwrap().to_string();
+        let upload = |r#ref: Option<String>, nth: Option<u32>| {
+            mgr.execute(AgentBrowserCommand::Upload {
+                browser_id: id.clone(),
+                r#ref,
+                nth,
+                files: vec![file("x.txt", "hello")],
+            })
+        };
+        let err = upload(None, None).await.unwrap_err();
+        eprintln!("ambiguity error: {err}");
+        assert!(err.starts_with("2 file inputs on the page:"), "{err}");
+        assert!(err.contains("\n1: input[type=file] id=\"a\" accept=\".pdf\" near \"CI/PI/合同 将文件拖到此处，或 点击上传\""), "{err}");
+        assert!(err.contains("\n2: input[type=file] id=\"b\" near \"其他附件 将文件拖到此处，或 点击上传\""), "{err}");
+        assert!(err.contains("--nth"), "{err}");
+        let err = upload(Some("e1".into()), Some(1)).await.unwrap_err();
+        assert!(err.contains("not both"), "{err}");
+
+        let done = upload(None, Some(2)).await.unwrap();
+        assert_eq!(done["files"][0], "x.txt");
+        let input = done["input"].as_str().unwrap();
+        assert!(input.contains("id=\"b\"") && input.contains("其他附件"), "{input}");
+        let tab = mgr.tabs.get(&id).unwrap();
+        assert_eq!(
+            tab.evaluate(
+                "document.getElementById('a').files.length + ':' + \
+                 document.getElementById('b').files.length + ':' + \
+                 document.getElementById('b').files[0].name + ':' + window.log"
+            )
+            .await
+            .unwrap(),
+            "0:1:x.txt:b"
+        );
+        for bad in [3, 0] {
+            let err = upload(None, Some(bad)).await.unwrap_err();
+            assert!(err.contains("out of range") && err.contains("2 file inputs"), "{err}");
+        }
+        // A single input: the context is its widget, not the page.
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some(
+                    "data:text/html;charset=utf-8,<meta charset=utf-8><title>One</title>\
+                    <p>Page heading</p><div><div>点击上传</div><input type=file style='display:none'></div>"
+                        .to_string(),
+                ),
+                opener_terminal_id: None,
+            })
+            .await
+            .unwrap();
+        let one = info["id"].as_str().unwrap().to_string();
+        let done = mgr
+            .execute(AgentBrowserCommand::Upload {
+                browser_id: one,
+                r#ref: None,
+                nth: None,
+                files: vec![file("x.txt", "hello")],
+            })
+            .await
+            .unwrap();
+        eprintln!("single input: {}", done["input"]);
+        let input = done["input"].as_str().unwrap();
+        assert!(input.contains("near \"点击上传\"") && !input.contains("Page heading"), "{input}");
         mgr.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -766,12 +766,17 @@ enum BrowserAction {
     },
     /// Put local files into a page's file input. Give the ref of the upload
     /// button (it is clicked and the file chooser answered) or of the input
-    /// itself; without a ref the page must have exactly one file input
+    /// itself; without a ref the page must have exactly one file input, or
+    /// pick one with --nth
     Upload {
         /// Browser id or unique prefix
         browser: String,
         /// Element ref of the upload button or the file input, e.g. e12
         element: Option<String>,
+        /// Fill the Nth file input of the page (1-based, document order)
+        /// directly, for inputs and buttons that have no ref
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..), conflicts_with = "element")]
+        nth: Option<u32>,
         /// Local file to upload; repeat for several (25 MB in total)
         #[arg(long = "file", required = true)]
         files: Vec<std::path::PathBuf>,
@@ -1324,8 +1329,9 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             BrowserAction::Upload {
                 browser,
                 element,
+                nth,
                 files,
-            } => commands::browser::upload(&hub_client, &browser, element, &files).await,
+            } => commands::browser::upload(&hub_client, &browser, element, nth, &files).await,
             BrowserAction::Press { browser, key } => {
                 commands::browser::press(&hub_client, &browser, key).await
             }
@@ -1689,6 +1695,18 @@ mod tests {
         assert!(parse(&["browser", "click", "b1", "--xy", "640"]).is_err());
         assert!(parse(&["browser", "click", "b1", "--xy", "a,b"]).is_err());
         assert!(parse(&["browser", "click", "b1", "--xy", "-5,10"]).is_err());
+    }
+
+    #[test]
+    fn browser_upload_nth_parses() {
+        let ok = parse(&["browser", "upload", "b1", "--nth", "2", "--file", "a.txt"]);
+        assert!(matches!(
+            ok.unwrap().command,
+            Commands::Browser { action: BrowserAction::Upload { nth: Some(2), element: None, .. }, .. }
+        ));
+        assert!(parse(&["browser", "upload", "b1", "e3", "--file", "a.txt"]).is_ok());
+        assert!(parse(&["browser", "upload", "b1", "e3", "--nth", "1", "--file", "a.txt"]).is_err());
+        assert!(parse(&["browser", "upload", "b1", "--nth", "0", "--file", "a.txt"]).is_err());
     }
 
     #[test]
