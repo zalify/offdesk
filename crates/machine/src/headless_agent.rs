@@ -332,7 +332,11 @@ impl HeadlessActor {
                     let mut sys = String::from(
                         "You are an Offdesk Bot (a headless orchestrator, not bound to a single terminal). \
                          You may dispatch sub-agents natively or spawn/coordinate worker terminals via `offdesk` CLI \
-                         (`offdesk open`, `offdesk msg send/post`, `offdesk draft write`).",
+                         (`offdesk open`, `offdesk msg send/post`, `offdesk draft write`). \
+                         For structured or tabular data (task boards, comparison tables, bug lists, test matrices — \
+                         not logs) use `offdesk db`: `db create <name> --col Status:select=todo,done`, \
+                         `db add <db> <title> --set Status=todo`, `db query <db> --where Status=todo`, \
+                         `db update`, `db import`; run `offdesk db --help` for details.",
                     );
                     if !self.env_vars.is_empty() {
                         let mut keys: Vec<&str> =

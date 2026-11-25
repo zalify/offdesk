@@ -10,6 +10,7 @@ pub mod agent_runs;
 pub mod integrations;
 pub mod agent_sessions;
 pub mod bookmarks;
+pub mod draft_databases;
 pub mod drafts;
 pub mod hub_state;
 pub mod machines;
@@ -28,7 +29,9 @@ pub mod workspace_layouts;
 pub type DbPool = Pool<SqliteConnectionManager>;
 
 pub fn create_pool(path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
-    let manager = SqliteConnectionManager::file(path);
+    // busy_timeout is per-connection, so set it on every pooled connection.
+    let manager = SqliteConnectionManager::file(path)
+        .with_init(|c| c.execute_batch("PRAGMA busy_timeout=5000;"));
     let pool = Pool::builder().max_size(8).build(manager)?;
     let conn = pool.get()?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
@@ -476,6 +479,39 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+
+    // Draft databases: purely additive. Rows are drafts with database_id set.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS draft_databases (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            project_group TEXT NOT NULL DEFAULT '~',
+            columns TEXT NOT NULL DEFAULT '[]',
+            views TEXT NOT NULL DEFAULT '[]',
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_draft_databases_name
+            ON draft_databases(user_id, project_group, name);
+        ",
+    )?;
+    if !column_exists(conn, "drafts", "database_id")? {
+        conn.execute("ALTER TABLE drafts ADD COLUMN database_id TEXT", [])?;
+    }
+    if !column_exists(conn, "drafts", "properties")? {
+        conn.execute(
+            "ALTER TABLE drafts ADD COLUMN properties TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
+    }
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_drafts_database_title ON drafts(database_id, title);
+        CREATE INDEX IF NOT EXISTS idx_drafts_database_created ON drafts(database_id, created_at);
+        ",
+    )?;
 
     if !column_exists(conn, "machines", "production")? {
         conn.execute(

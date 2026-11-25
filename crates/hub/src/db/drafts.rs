@@ -24,9 +24,13 @@ fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
     let pinned_i: i64 = row.get(6)?;
     let archived_i: i64 = row.get(7)?;
     let updated_at: i64 = row.get(9)?;
+    let database_id: Option<String> = row.get(10)?;
     let pinned = pinned_i != 0;
     let explicitly_archived = archived_i != 0;
-    let stale_archived = !pinned && (now_ms().saturating_sub(updated_at) > AUTO_ARCHIVE_AFTER_MS);
+    // Draft-database rows never auto-archive.
+    let stale_archived = database_id.is_none()
+        && !pinned
+        && (now_ms().saturating_sub(updated_at) > AUTO_ARCHIVE_AFTER_MS);
     Ok(DraftRow {
         id: row.get(0)?,
         user_id: row.get(1)?,
@@ -51,9 +55,9 @@ pub fn list_drafts(
     if let Some(proj) = project_group.filter(|p| !p.trim().is_empty()) {
         let mut stmt = conn.prepare(
             "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                    pinned, archived, created_at, updated_at
+                    pinned, archived, created_at, updated_at, database_id
              FROM drafts
-             WHERE user_id = ?1 AND project_group = ?2
+             WHERE user_id = ?1 AND project_group = ?2 AND database_id IS NULL
              ORDER BY pinned DESC, updated_at DESC",
         )?;
         let iter = stmt.query_map(params![user_id, proj.trim()], map_draft_row)?;
@@ -63,9 +67,9 @@ pub fn list_drafts(
     } else {
         let mut stmt = conn.prepare(
             "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                    pinned, archived, created_at, updated_at
+                    pinned, archived, created_at, updated_at, database_id
              FROM drafts
-             WHERE user_id = ?1
+             WHERE user_id = ?1 AND database_id IS NULL
              ORDER BY pinned DESC, updated_at DESC",
         )?;
         let iter = stmt.query_map(params![user_id], map_draft_row)?;
@@ -86,7 +90,7 @@ pub fn get_draft(
 ) -> rusqlite::Result<Option<DraftRow>> {
     conn.query_row(
         "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                pinned, archived, created_at, updated_at
+                pinned, archived, created_at, updated_at, database_id
          FROM drafts
          WHERE id = ?1 AND user_id = ?2",
         params![draft_id, user_id],
@@ -119,6 +123,7 @@ pub fn upsert_draft(
             .query_row(
                 "SELECT id FROM drafts
                  WHERE user_id = ?1 AND project_group = ?2 AND title = ?3 AND archived = 0
+                   AND database_id IS NULL
                  ORDER BY updated_at DESC LIMIT 1",
                 params![user_id, project_group, title],
                 |r| r.get(0),

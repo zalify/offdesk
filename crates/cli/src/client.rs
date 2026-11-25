@@ -156,6 +156,160 @@ impl HubClient {
         Ok(())
     }
 
+    // ---- Draft databases (Notion-style tables whose rows are drafts) ----
+
+    /// Send one draft-database request and decode the JSON reply. An empty
+    /// body (204) decodes to `Value::Null`.
+    async fn db_json(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, CliError> {
+        let mut req = self.http.request(method, self.url(path)).query(query);
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let response = req.send().await.map_err(network_error)?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            // An older hub has no database routes at all.
+            if status == StatusCode::NOT_FOUND && error_message(&body).is_none() {
+                return Err(CliError::Protocol(
+                    "this hub does not support `offdesk db` yet — update the hub".to_string(),
+                ));
+            }
+            return Err(match error_message(&body) {
+                Some(message) if status.is_client_error() && status != StatusCode::UNAUTHORIZED => {
+                    CliError::Protocol(message)
+                }
+                _ => plain_status_error(status, &body),
+            });
+        }
+        let text = response.text().await.map_err(network_error)?;
+        if text.trim().is_empty() {
+            return Ok(serde_json::Value::Null);
+        }
+        serde_json::from_str(&text)
+            .map_err(|error| CliError::Protocol(format!("invalid JSON from hub: {error}")))
+    }
+
+    pub async fn db_list(&self, project: Option<&str>) -> Result<serde_json::Value, CliError> {
+        let query: Vec<(&str, &str)> = project.map(|p| ("project", p)).into_iter().collect();
+        self.db_json(reqwest::Method::GET, "/draft-databases", &query, None)
+            .await
+    }
+
+    pub async fn db_create(&self, body: &serde_json::Value) -> Result<serde_json::Value, CliError> {
+        self.db_json(reqwest::Method::POST, "/draft-databases", &[], Some(body))
+            .await
+    }
+
+    pub async fn db_patch(
+        &self,
+        id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::PATCH,
+            &format!("/draft-databases/{id}"),
+            &[],
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn db_delete(&self, id: &str) -> Result<(), CliError> {
+        self.db_json(
+            reqwest::Method::DELETE,
+            &format!("/draft-databases/{id}"),
+            &[],
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn db_rows_query(
+        &self,
+        id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::POST,
+            &format!("/draft-databases/{id}/rows/query"),
+            &[],
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn db_rows_batch(
+        &self,
+        id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::POST,
+            &format!("/draft-databases/{id}/rows"),
+            &[],
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn db_row_get(&self, id: &str, row_id: &str) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::GET,
+            &format!("/draft-databases/{id}/rows/{row_id}"),
+            &[],
+            None,
+        )
+        .await
+    }
+
+    pub async fn db_row_patch(
+        &self,
+        id: &str,
+        row_id: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::PATCH,
+            &format!("/draft-databases/{id}/rows/{row_id}"),
+            &[],
+            Some(body),
+        )
+        .await
+    }
+
+    pub async fn db_row_delete(&self, id: &str, row_id: &str) -> Result<(), CliError> {
+        self.db_json(
+            reqwest::Method::DELETE,
+            &format!("/draft-databases/{id}/rows/{row_id}"),
+            &[],
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn db_rows_delete(
+        &self,
+        id: &str,
+        row_ids: &[String],
+    ) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::POST,
+            &format!("/draft-databases/{id}/rows/delete"),
+            &[],
+            Some(&serde_json::json!({ "ids": row_ids })),
+        )
+        .await
+    }
+
     pub async fn post_agent_message(
         &self,
         payload: &crate::commands::msg::PostAgentMessagePayload<'_>,

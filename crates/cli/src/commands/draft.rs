@@ -43,7 +43,7 @@ pub struct PatchDraftPayload<'a> {
     pub archived: Option<bool>,
 }
 
-fn infer_project_group() -> String {
+pub(crate) fn infer_project_group() -> String {
     let cwd = std::env::current_dir()
         .ok()
         .and_then(|p| p.to_str().map(str::to_string))
