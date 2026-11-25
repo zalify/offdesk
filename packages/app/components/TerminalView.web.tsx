@@ -11,17 +11,32 @@ const LazyXtermImpl = lazy(() =>
   ),
 );
 
-const LazyNativeImpl = lazy(() =>
+const loadNativeImpl = () =>
   lazyWithReload(() =>
     import("./TerminalView.native").then((m) => ({ default: m.TerminalView })),
-  ),
-);
+  );
+
+const LazyNativeImpl = lazy(loadNativeImpl);
 
 export const TERMINAL_RENDERER_STORAGE_KEY = "offdesk:terminalRenderer";
 
 let cachedNativeProbe: boolean | null = null;
 let cachedNativeProbeError: string | null = null;
 let nativeProbePromise: Promise<boolean> | null = null;
+
+// Eagerly kick off IPC probe + native module preload at boot so the first
+// terminal mount has zero probe latency and zero Suspense chunk stall.
+if (typeof window !== "undefined" && isTauri()) {
+  try {
+    if (window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) !== "xterm") {
+      void loadNativeImpl();
+      void Promise.resolve().then(() => probeNativeTerminalIpc());
+    }
+  } catch {
+    void loadNativeImpl();
+    void Promise.resolve().then(() => probeNativeTerminalIpc());
+  }
+}
 
 function probeNativeTerminalIpc(): Promise<boolean> {
   if (cachedNativeProbe !== null) return Promise.resolve(cachedNativeProbe);

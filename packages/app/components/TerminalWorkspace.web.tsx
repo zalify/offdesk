@@ -24,6 +24,7 @@ import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
 import { AgentMarker, Button } from "./Primitives.web";
 import { displayTerminalTitle, shortenCwd } from "@/lib/displayTerminalTitle";
 import { TerminalCard, type TerminalCardRef } from "./TerminalCard.web";
+import { useNativeRustTerminal } from "./TerminalView.web";
 import { colors, colorAlpha } from "@/lib/colors";
 import {
   type CompactSwitchHold,
@@ -350,10 +351,11 @@ function TerminalWorkspaceComponent({
         ...recentGroupIdsRef.current.filter(
           (id) => id !== shown && id !== workspace.activeGroupId,
         ),
-      ].slice(0, 6);
+      ].slice(0, 12);
     }
     renderedActiveGroupIdRef.current = workspace.activeGroupId;
   }
+  const nativeRustTerminal = useNativeRustTerminal();
   if (groupHoldRef.current && !groupWaiting(groupHoldRef.current.to)) {
     groupHoldRef.current = null;
   }
@@ -362,6 +364,7 @@ function TerminalWorkspaceComponent({
     workspace,
     recentGroupIdsRef.current,
     isTouch,
+    nativeRustTerminal ? { maxGroups: 10, maxPanes: 32 } : undefined,
   )
     .map((id) => workspace.groups.find((group) => group.id === id))
     .filter((group): group is WorkspaceGroup => Boolean(group));
