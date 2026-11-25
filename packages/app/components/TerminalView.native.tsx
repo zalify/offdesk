@@ -799,8 +799,21 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     }, [wsUrl, terminalId, sessionGen, applyFrame]);
 
+    const [copiedToast, setCopiedToast] = useState(false);
+    const copiedToastTimerRef = useRef<number | null>(null);
+
     const copyToClipboard = useCallback(async (text: string) => {
       if (!text) return;
+      const showCopied = () => {
+        setCopiedToast(true);
+        if (copiedToastTimerRef.current !== null) {
+          window.clearTimeout(copiedToastTimerRef.current);
+        }
+        copiedToastTimerRef.current = window.setTimeout(() => {
+          copiedToastTimerRef.current = null;
+          setCopiedToast(false);
+        }, 1100);
+      };
       try {
         const internals = (
           window as unknown as {
@@ -811,6 +824,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ).__TAURI_INTERNALS__;
         if (typeof internals?.invoke === "function") {
           await internals.invoke("plugin:clipboard-manager|write_text", { text });
+          showCopied();
           return;
         }
       } catch {
@@ -819,6 +833,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       try {
         if (navigator.clipboard?.writeText) {
           await navigator.clipboard.writeText(text);
+          showCopied();
           return;
         }
       } catch {
@@ -833,6 +848,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ta.select();
         document.execCommand("copy");
         document.body.removeChild(ta);
+        showCopied();
       } catch {
         /* ignore */
       }
@@ -870,6 +886,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, []);
 
     useEffect(() => {
+      const onWinMouseMove = (e: MouseEvent) => {
+        if (!draggingRef.current || !selectionRef.current) return;
+        selectionRef.current = {
+          ...selectionRef.current,
+          end: pointerToCell(e.clientX, e.clientY),
+        };
+        paintFrame(frameRef.current);
+      };
       const onWinMouseUp = () => {
         if (!draggingRef.current) return;
         draggingRef.current = false;
@@ -878,9 +902,23 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           void copyToClipboard(text);
         }
       };
+      const onDocCopy = (e: ClipboardEvent) => {
+        if (document.activeElement !== inputRef.current) return;
+        const text = getSelectionText();
+        if (!text) return;
+        e.preventDefault();
+        e.clipboardData?.setData("text/plain", text);
+        void copyToClipboard(text);
+      };
+      window.addEventListener("mousemove", onWinMouseMove);
       window.addEventListener("mouseup", onWinMouseUp);
-      return () => window.removeEventListener("mouseup", onWinMouseUp);
-    }, [getSelectionText, copyToClipboard]);
+      document.addEventListener("copy", onDocCopy);
+      return () => {
+        window.removeEventListener("mousemove", onWinMouseMove);
+        window.removeEventListener("mouseup", onWinMouseUp);
+        document.removeEventListener("copy", onDocCopy);
+      };
+    }, [getSelectionText, copyToClipboard, paintFrame]);
 
     useImperativeHandle(
       ref,
@@ -1126,11 +1164,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return { col: 0, row: 0 };
       const { cellW, cellH } = metricsRef.current;
+      const maxCols = frameRef.current?.cols ?? dimsRef.current.cols;
+      const maxRows = frameRef.current?.rows ?? dimsRef.current.rows;
       const col = Math.max(0, Math.floor((clientX - rect.left - 8) / cellW));
       const row = Math.max(0, Math.floor((clientY - rect.top - 6) / cellH));
       return {
-        col: Math.min(col, dimsRef.current.cols),
-        row: Math.min(row, Math.max(0, dimsRef.current.rows - 1)),
+        col: Math.min(col, maxCols),
+        row: Math.min(row, Math.max(0, maxRows - 1)),
       };
     };
 
@@ -1212,7 +1252,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }}
         onMouseDown={(e) => {
           setCtxMenu(null);
-          inputRef.current?.focus();
+          if (e.button === 0) {
+            e.preventDefault();
+          }
+          inputRef.current?.focus({ preventScroll: true });
           if (e.button !== 0) return;
           const cell = pointerToCell(e.clientX, e.clientY);
           if (e.detail === 2) {
@@ -1326,6 +1369,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           minHeight: 0,
           overflow: "hidden",
           cursor: "text",
+          userSelect: "none",
+          WebkitUserSelect: "none",
           background: theme.background ?? "#131415",
           ...style,
         }}
@@ -1658,6 +1703,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           >
             ↓ +{scrollbackOffset} lines
           </button>
+        )}
+        {copiedToast && (
+          <div
+            style={{
+              position: "absolute",
+              right: 12,
+              bottom: scrollbackOffset > 0 ? 42 : 10,
+              padding: "3px 9px",
+              borderRadius: 999,
+              border: "1px solid rgba(163,230,53,0.35)",
+              background: "rgba(24,25,29,0.92)",
+              color: "#d9f99d",
+              fontSize: 11,
+              pointerEvents: "none",
+            }}
+          >
+            Copied
+          </div>
         )}
       </div>
     );
