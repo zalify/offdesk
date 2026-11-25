@@ -129,7 +129,12 @@ function AddressBar({
       onFocus={(event) => {
         setDraft(url);
         const field = event.currentTarget;
-        window.requestAnimationFrame(() => field.select());
+        // select() focuses the field in Chromium, so skip it when the field
+        // was left (Enter or Esc) before this frame: it would pull the
+        // keyboard back from the page.
+        window.requestAnimationFrame(() => {
+          if (document.activeElement === field) field.select();
+        });
       }}
       onBlur={() => {
         setDraft(null);
