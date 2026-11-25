@@ -2128,6 +2128,14 @@ pub enum HubToMachine {
         /// after the session is ready, before flushing queued prompts.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         model_id: Option<String>,
+        /// Resume event sequence watermark so headless runners continue
+        /// numbering above previously persisted events.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        initial_seq: Option<u64>,
+        /// Scoped Vault environment variables injected into the headless agent
+        /// process (never echoed in logs or transcripts).
+        #[serde(skip_serializing_if = "HashMap::is_empty", default)]
+        env_vars: HashMap<String, String>,
     },
     #[serde(rename = "agent_session_prompt")]
     AgentSessionPrompt { session_id: String, text: String },
@@ -3104,6 +3112,8 @@ mod tests {
             auto_run: true,
             resume_acp_session_id: Some("acp-9".to_string()),
             model_id: Some("kimi-code/k3".to_string()),
+            initial_seq: None,
+            env_vars: std::collections::HashMap::new(),
         };
         let json = serde_json::to_string(&start).unwrap();
         assert!(json.contains(r#""type":"agent_session_start""#));
@@ -3156,6 +3166,8 @@ mod tests {
             auto_run: false,
             resume_acp_session_id: None,
             model_id: None,
+            initial_seq: None,
+            env_vars: std::collections::HashMap::new(),
         };
         assert!(!serde_json::to_string(&start).unwrap().contains("model_id"));
 

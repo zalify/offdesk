@@ -789,3 +789,181 @@ export async function listSecureDevicesAt(baseUrl: string, token: string): Promi
   return await res.json() as SecureDevice[];
 }
 export const revokeSecureDevice = (id: string) => request<void>("DELETE", `/api/security/devices/${encodeURIComponent(id)}`);
+
+// ── Headless Bots (Agent Sessions), Group Chat Channels, and Encrypted Vault ──
+
+export type BotAgentKind = "claude" | "codex" | "grok" | "kimi";
+export type BotSessionStatus =
+  | "starting"
+  | "working"
+  | "asked"
+  | "idle"
+  | "error"
+  | "disconnected";
+
+export interface BotSessionInfo {
+  id: string;
+  machine_id: string;
+  agent_kind: BotAgentKind;
+  cwd: string;
+  title: string;
+  status: BotSessionStatus;
+  auto_run: boolean;
+  acp_session_id?: string | null;
+  workspace_group_id?: string | null;
+  current_model_id?: string | null;
+  last_event_seq: number;
+  created_at_ms: number;
+}
+
+export interface BotEventEntry {
+  seq: number;
+  event: Record<string, unknown>;
+}
+
+export interface BotEventsPage {
+  events: BotEventEntry[];
+  last_seq: number;
+}
+
+export const listBotSessions = () =>
+  request<BotSessionInfo[]>("GET", "/api/agent-sessions");
+
+export const createBotSession = (
+  machineId: string,
+  body: {
+    agent_kind: BotAgentKind;
+    cwd: string;
+    title?: string;
+    auto_run?: boolean;
+    model_id?: string;
+    device_id?: string;
+  },
+) =>
+  request<BotSessionInfo>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-sessions`,
+    body,
+  );
+
+export const promptBotSession = (
+  machineId: string,
+  sessionId: string,
+  body: { text: string; device_id?: string },
+) =>
+  request<void>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-sessions/${encodeURIComponent(sessionId)}/prompt`,
+    body,
+  );
+
+export const cancelBotSession = (
+  machineId: string,
+  sessionId: string,
+  deviceId?: string,
+) =>
+  request<void>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-sessions/${encodeURIComponent(sessionId)}/cancel${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`,
+  );
+
+export const resumeBotSession = (
+  machineId: string,
+  sessionId: string,
+  deviceId?: string,
+) =>
+  request<BotSessionInfo>(
+    "POST",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-sessions/${encodeURIComponent(sessionId)}/resume${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`,
+  );
+
+export const deleteBotSession = (
+  machineId: string,
+  sessionId: string,
+  deviceId?: string,
+) =>
+  request<void>(
+    "DELETE",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-sessions/${encodeURIComponent(sessionId)}${deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : ""}`,
+  );
+
+export const getBotSessionEvents = (
+  machineId: string,
+  sessionId: string,
+  fromSeq = 0,
+  limit = 500,
+) =>
+  request<BotEventsPage>(
+    "GET",
+    `/api/machines/${encodeURIComponent(machineId)}/agent-sessions/${encodeURIComponent(sessionId)}/events?from_seq=${fromSeq}&limit=${limit}`,
+  );
+
+export interface AgentMessageInfo {
+  id: string;
+  thread_id: string;
+  channel: string | null;
+  from_terminal_id: string | null;
+  from_label: string;
+  to_terminal_id: string | null;
+  to_label: string | null;
+  body: string;
+  draft_id: string | null;
+  read_at: number | null;
+  created_at: number;
+}
+
+export const listChatChannels = () =>
+  request<string[]>("GET", "/api/chat/channels");
+
+export const listChannelMessages = (channel: string, limit = 100) =>
+  request<AgentMessageInfo[]>(
+    "GET",
+    `/api/messages?channel=${encodeURIComponent(channel)}&limit=${limit}`,
+  );
+
+export const sendChannelMessage = (
+  channel: string,
+  body: { body: string; from_label?: string; thread_id?: string },
+) =>
+  request<{ message: AgentMessageInfo; routed_bots: string[] }>(
+    "POST",
+    `/api/chat/channels/${encodeURIComponent(channel)}/send`,
+    body,
+  );
+
+export type VaultCategory = "api_key" | "account" | "token" | "ssh" | "other";
+
+export interface VaultSecretSummary {
+  id: string;
+  name: string;
+  category: VaultCategory;
+  project_group: string;
+  env_var: string | null;
+  username: string | null;
+  masked_preview: string;
+  notes: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export const listVaultSecrets = (project?: string) =>
+  request<VaultSecretSummary[]>(
+    "GET",
+    project ? `/api/vault?project=${encodeURIComponent(project)}` : "/api/vault",
+  );
+
+export const createVaultSecret = (body: {
+  name: string;
+  category?: VaultCategory;
+  project_group?: string;
+  env_var?: string;
+  username?: string;
+  secret_value: string;
+  notes?: string;
+}) => request<VaultSecretSummary>("POST", "/api/vault", body);
+
+export const deleteVaultSecret = (id: string) =>
+  request<void>("DELETE", `/api/vault/${encodeURIComponent(id)}`);
+
+export const revealVaultSecret = (id: string) =>
+  request<{ value: string }>("POST", `/api/vault/${encodeURIComponent(id)}/reveal`);

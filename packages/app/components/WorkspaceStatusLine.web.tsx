@@ -36,6 +36,7 @@ export function WorkspaceStatusLine({
   onDisengageViewOnly,
   onOpenCommandPalette,
   onOpenDrafts,
+  onOpenChat,
   draftsCount = 0,
   browserWaiting = null,
   rttShownElsewhere = false,
@@ -58,6 +59,7 @@ export function WorkspaceStatusLine({
   onDisengageViewOnly: () => void;
   onOpenCommandPalette?: () => void;
   onOpenDrafts?: () => void;
+  onOpenChat?: () => void;
   draftsCount?: number;
   /** An agent browser tab that handed off to a person. */
   browserWaiting?: { label: string; reason: string; open: () => void } | null;
@@ -193,6 +195,18 @@ export function WorkspaceStatusLine({
           onClick={openUpdateCard}
         >
           ↑ update {update.available}
+        </button>
+      ) : null}
+      {onOpenChat ? (
+        <button
+          type="button"
+          className="odk-status-btn odk-status-btn--quiet"
+          data-testid="status-bot-chat"
+          onClick={onOpenChat}
+          title="Headless Bots, Group Chat & Secrets Vault (Beta)"
+          aria-label="Open Bots and Chat"
+        >
+          chat (beta)
         </button>
       ) : null}
       {onOpenDrafts ? (

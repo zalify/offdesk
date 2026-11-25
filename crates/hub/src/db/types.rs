@@ -21,6 +21,7 @@ pub struct MachineRow {
     pub production: bool,
 }
 
+#[derive(Clone)]
 pub struct AgentSessionRow {
     pub id: String,
     pub user_id: String,

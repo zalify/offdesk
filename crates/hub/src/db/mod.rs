@@ -21,6 +21,7 @@ pub mod tokens;
 pub mod types;
 pub mod user_focus;
 pub mod users;
+pub mod vault;
 pub mod workspace_groups;
 pub mod workspace_layouts;
 
@@ -119,6 +120,24 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             read_at INTEGER,
             created_at INTEGER NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS vault_secrets (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'api_key',
+            project_group TEXT NOT NULL DEFAULT '*',
+            env_var TEXT,
+            username TEXT,
+            secret_enc TEXT NOT NULL,
+            masked_preview TEXT NOT NULL,
+            notes TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vault_secrets_user_proj
+            ON vault_secrets(user_id, project_group, name);
 
         CREATE INDEX IF NOT EXISTS idx_agent_messages_user_created
             ON agent_messages(user_id, created_at DESC);

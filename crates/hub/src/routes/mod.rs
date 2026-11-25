@@ -14,6 +14,7 @@ pub(crate) mod onboarding;
 mod registration;
 mod settings;
 mod terminals;
+mod vault;
 mod version;
 
 use axum::Router;
@@ -38,5 +39,6 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(mode::router())
         .merge(settings::router())
+        .merge(vault::router())
         .merge(version::router())
 }

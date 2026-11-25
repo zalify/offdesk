@@ -20,6 +20,85 @@ pub const MAX_RECORD: usize = 65_535;
 pub const MAX_PLAINTEXT_RECORD: usize = MAX_RECORD - 16;
 pub const MAX_MESSAGE: usize = 32 * 1024 * 1024;
 
+/// Encrypt a secret value at rest using ChaCha20-Poly1305 with a per-record
+/// 16-byte random salt derived through SHA-256. Returns `v1:<base64(salt||ct)>`.
+pub fn seal_secret(master_key: &[u8; 32], aad: &[u8], plaintext: &[u8]) -> Result<String, Error> {
+    use base64::Engine;
+    use snow::params::{CipherChoice, HashChoice};
+    use snow::resolvers::{CryptoResolver, DefaultResolver};
+
+    let resolver = DefaultResolver::default();
+    let mut salt = [0u8; 16];
+    let mut rng = resolver.resolve_rng().ok_or(Error::InvalidMessage)?;
+    rng.try_fill_bytes(&mut salt).map_err(|_| Error::InvalidMessage)?;
+
+    let mut hasher = resolver
+        .resolve_hash(&HashChoice::SHA256)
+        .ok_or(Error::InvalidMessage)?;
+    hasher.input(b"offdesk-vault-subkey-v1");
+    hasher.input(master_key);
+    hasher.input(&salt);
+    let mut subkey = Zeroizing::new([0u8; 32]);
+    hasher.result(&mut *subkey);
+
+    let mut cipher = resolver
+        .resolve_cipher(&CipherChoice::ChaChaPoly)
+        .ok_or(Error::InvalidMessage)?;
+    cipher.set(&*subkey);
+    let mut out = vec![0u8; plaintext.len() + 16];
+    let written = cipher.encrypt(0, aad, plaintext, &mut out);
+    out.truncate(written);
+
+    let mut blob = Vec::with_capacity(16 + out.len());
+    blob.extend_from_slice(&salt);
+    blob.extend_from_slice(&out);
+    Ok(format!(
+        "v1:{}",
+        base64::engine::general_purpose::STANDARD.encode(blob)
+    ))
+}
+
+/// Decrypt a secret produced by [`seal_secret`].
+pub fn open_secret(
+    master_key: &[u8; 32],
+    aad: &[u8],
+    sealed: &str,
+) -> Result<Zeroizing<Vec<u8>>, Error> {
+    use base64::Engine;
+    use snow::params::{CipherChoice, HashChoice};
+    use snow::resolvers::{CryptoResolver, DefaultResolver};
+
+    let b64 = sealed.strip_prefix("v1:").ok_or(Error::InvalidMessage)?;
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|_| Error::InvalidMessage)?;
+    if blob.len() < 16 + 16 {
+        return Err(Error::InvalidMessage);
+    }
+    let (salt, ct) = blob.split_at(16);
+
+    let resolver = DefaultResolver::default();
+    let mut hasher = resolver
+        .resolve_hash(&HashChoice::SHA256)
+        .ok_or(Error::InvalidMessage)?;
+    hasher.input(b"offdesk-vault-subkey-v1");
+    hasher.input(master_key);
+    hasher.input(salt);
+    let mut subkey = Zeroizing::new([0u8; 32]);
+    hasher.result(&mut *subkey);
+
+    let mut cipher = resolver
+        .resolve_cipher(&CipherChoice::ChaChaPoly)
+        .ok_or(Error::InvalidMessage)?;
+    cipher.set(&*subkey);
+    let mut plain = Zeroizing::new(vec![0u8; ct.len()]);
+    let written = cipher
+        .decrypt(0, aad, ct, &mut plain)
+        .map_err(|_| Error::InvalidMessage)?;
+    plain.truncate(written);
+    Ok(plain)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("Secure handshake or authentication failed")]
