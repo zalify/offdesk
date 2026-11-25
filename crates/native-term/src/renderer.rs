@@ -214,6 +214,7 @@ pub struct GpuRenderer {
     viewport: Viewport,
     text_renderer: TextRenderer,
     pub font_size: f32,
+    pub scale: f32,
     pub cell_width: f32,
     pub cell_height: f32,
 }
@@ -345,9 +346,14 @@ impl GpuRenderer {
             viewport,
             text_renderer,
             font_size,
+            scale: 1.0,
             cell_width,
             cell_height,
         })
+    }
+
+    pub fn set_scale_factor(&mut self, scale: f32) {
+        self.scale = scale.clamp(1.0, 3.0);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -369,20 +375,24 @@ impl GpuRenderer {
 
     /// Compute the stage rectangle available for foreground panes.
     pub fn stage_rect(&self, has_shelf: bool) -> LayoutRect {
-        let shelf_h = if has_shelf { SHELF_HEIGHT } else { 0.0 };
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        let top_h = TOPBAR_HEIGHT * s;
+        let st_h = STATUSBAR_HEIGHT * s;
+        let shelf_h = if has_shelf { SHELF_HEIGHT * s } else { 0.0 };
         LayoutRect {
-            x: SIDEBAR_WIDTH + 1.0,
-            y: TOPBAR_HEIGHT + 1.0,
-            w: (self.config.width as f32 - SIDEBAR_WIDTH - 1.0).max(160.0),
-            h: (self.config.height as f32 - TOPBAR_HEIGHT - STATUSBAR_HEIGHT - shelf_h - 2.0)
-                .max(100.0),
+            x: sb_w + s,
+            y: top_h + s,
+            w: (self.config.width as f32 - sb_w - s).max(160.0),
+            h: (self.config.height as f32 - top_h - st_h - shelf_h - 2.0 * s).max(100.0),
         }
     }
 
     /// Compute exact terminal (cols, rows) for a given pane rectangle.
     pub fn pane_grid_size(&self, pane: LayoutRect) -> (u16, u16) {
-        let term_w = (pane.w - 14.0).max(80.0);
-        let term_h = (pane.h - PANE_HEADER_HEIGHT - 10.0).max(60.0);
+        let s = self.scale;
+        let term_w = (pane.w - 14.0 * s).max(80.0);
+        let term_h = (pane.h - PANE_HEADER_HEIGHT * s - 10.0 * s).max(60.0);
         let cols = (term_w / self.cell_width).floor().max(20.0) as u16;
         let rows = (term_h / self.cell_height).floor().max(6.0) as u16;
         (cols, rows)
@@ -395,16 +405,20 @@ impl GpuRenderer {
 
     /// Hit-test the 4 clickable layout switcher icons in the top-right of the topbar.
     pub fn hit_test_layout_button(&self, px: f32, py: f32) -> Option<StageLayout> {
-        if py > TOPBAR_HEIGHT {
+        let s = self.scale;
+        let top_h = TOPBAR_HEIGHT * s;
+        if py > top_h {
             return None;
         }
         let w = self.config.width as f32;
-        let total_w = StageLayout::ALL.len() as f32 * LAYOUT_BTN_W
-            + (StageLayout::ALL.len() as f32 - 1.0) * LAYOUT_BTN_GAP;
-        let start_x = w - 10.0 - total_w;
+        let btn_w = LAYOUT_BTN_W * s;
+        let btn_gap = LAYOUT_BTN_GAP * s;
+        let total_w = StageLayout::ALL.len() as f32 * btn_w
+            + (StageLayout::ALL.len() as f32 - 1.0) * btn_gap;
+        let start_x = w - 10.0 * s - total_w;
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
-            let bx = start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
-            if px >= bx && px <= bx + LAYOUT_BTN_W && py >= 4.0 && py <= TOPBAR_HEIGHT - 4.0 {
+            let bx = start_x + i as f32 * (btn_w + btn_gap);
+            if px >= bx && px <= bx + btn_w && py >= 4.0 * s && py <= top_h - 4.0 * s {
                 return Some(*layout);
             }
         }
@@ -416,30 +430,38 @@ impl GpuRenderer {
         if pills.is_empty() {
             return None;
         }
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        let st_h = STATUSBAR_HEIGHT * s;
+        let sh_h = SHELF_HEIGHT * s;
+        let pill_w = SHELF_PILL_W * s;
+        let pill_gap = SHELF_PILL_GAP * s;
         let h = self.config.height as f32;
-        let shelf_y = h - STATUSBAR_HEIGHT - SHELF_HEIGHT;
-        if py < shelf_y || py > h - STATUSBAR_HEIGHT || px < SIDEBAR_WIDTH {
+        let shelf_y = h - st_h - sh_h;
+        if py < shelf_y || py > h - st_h || px < sb_w {
             return None;
         }
-        let mut x = SIDEBAR_WIDTH + 8.0;
+        let mut x = sb_w + 8.0 * s;
         for pill in pills {
-            if px >= x && px <= x + SHELF_PILL_W {
+            if px >= x && px <= x + pill_w {
                 return Some(pill.terminal_id.clone());
             }
-            x += SHELF_PILL_W + SHELF_PILL_GAP;
+            x += pill_w + pill_gap;
         }
         None
     }
 
     /// Hit-test sidebar rows (project group toggle, `[▶]` focus-group, or terminal selection).
     pub fn hit_test_sidebar(&self, px: f32, py: f32, rows: &[SidebarItem]) -> Option<SidebarHitAction> {
-        if px >= SIDEBAR_WIDTH || py < 38.0 {
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        if px >= sb_w || py < 38.0 * s {
             return None;
         }
-        let idx = ((py - 38.0) / 28.0).floor() as usize;
+        let idx = ((py - 38.0 * s) / (28.0 * s)).floor() as usize;
         match rows.get(idx)? {
             SidebarItem::GroupHeader { group, .. } => {
-                if px >= SIDEBAR_WIDTH - 34.0 {
+                if px >= sb_w - 34.0 * s {
                     Some(SidebarHitAction::FocusGroup(group.clone()))
                 } else {
                     Some(SidebarHitAction::ToggleGroup(group.clone()))
@@ -456,17 +478,18 @@ impl GpuRenderer {
         py: f32,
         panes: &[(String, LayoutRect, bool)],
     ) -> Option<PaneHitAction> {
+        let s = self.scale;
         for (id, rect, is_master) in panes {
             if !rect.contains(px, py) {
                 continue;
             }
-            if py <= rect.y + PANE_HEADER_HEIGHT {
-                let min_x = rect.x + rect.w - 26.0;
+            if py <= rect.y + PANE_HEADER_HEIGHT * s {
+                let min_x = rect.x + rect.w - 26.0 * s;
                 if px >= min_x {
                     return Some(PaneHitAction::Minimize(id.clone()));
                 }
                 if !*is_master {
-                    let swap_x = rect.x + rect.w - 50.0;
+                    let swap_x = rect.x + rect.w - 50.0 * s;
                     if px >= swap_x && px < min_x {
                         return Some(PaneHitAction::SwapToMaster(id.clone()));
                     }
@@ -566,37 +589,47 @@ impl GpuRenderer {
     pub fn render(&mut self, ui: UiSnapshot<'_>) -> Result<(), String> {
         let w = self.config.width as f32;
         let h = self.config.height as f32;
+        let s = self.scale;
+        let sb_w = SIDEBAR_WIDTH * s;
+        let top_h = TOPBAR_HEIGHT * s;
+        let hdr_h = PANE_HEADER_HEIGHT * s;
+        let sh_h = SHELF_HEIGHT * s;
+        let st_h = STATUSBAR_HEIGHT * s;
+        let btn_w = LAYOUT_BTN_W * s;
+        let btn_gap = LAYOUT_BTN_GAP * s;
+        let pill_w = SHELF_PILL_W * s;
+        let pill_gap = SHELF_PILL_GAP * s;
         let mut quads = std::mem::take(&mut self.quad_scratch);
         quads.clear();
         let has_shelf = !ui.shelf_pills.is_empty();
-        let shelf_y = h - STATUSBAR_HEIGHT - SHELF_HEIGHT;
+        let shelf_y = h - st_h - sh_h;
 
         // Sidebar, topbar, statusbar chrome backgrounds.
-        push_rect(&mut quads, w, h, 0.0, 0.0, SIDEBAR_WIDTH, h - STATUSBAR_HEIGHT, [0.095, 0.098, 0.105, 1.0]);
-        push_rect(&mut quads, w, h, SIDEBAR_WIDTH, 0.0, 1.0, h - STATUSBAR_HEIGHT, [0.18, 0.19, 0.21, 1.0]);
-        push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, 0.0, w - SIDEBAR_WIDTH, TOPBAR_HEIGHT, [0.09, 0.093, 0.10, 1.0]);
-        push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, TOPBAR_HEIGHT, w - SIDEBAR_WIDTH, 1.0, [0.18, 0.19, 0.21, 1.0]);
-        push_rect(&mut quads, w, h, 0.0, h - STATUSBAR_HEIGHT, w, STATUSBAR_HEIGHT, [0.085, 0.088, 0.095, 1.0]);
-        push_rect(&mut quads, w, h, 0.0, h - STATUSBAR_HEIGHT, w, 1.0, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, 0.0, sb_w, h - st_h, [0.095, 0.098, 0.105, 1.0]);
+        push_rect(&mut quads, w, h, sb_w, 0.0, s, h - st_h, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, sb_w + s, 0.0, w - sb_w, top_h, [0.09, 0.093, 0.10, 1.0]);
+        push_rect(&mut quads, w, h, sb_w + s, top_h, w - sb_w, s, [0.18, 0.19, 0.21, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, h - st_h, w, st_h, [0.085, 0.088, 0.095, 1.0]);
+        push_rect(&mut quads, w, h, 0.0, h - st_h, w, s, [0.18, 0.19, 0.21, 1.0]);
 
         // Topbar clickable layout switcher buttons ([▢] [◫] [◧] [⊞]).
-        let total_layout_w = StageLayout::ALL.len() as f32 * LAYOUT_BTN_W
-            + (StageLayout::ALL.len() as f32 - 1.0) * LAYOUT_BTN_GAP;
-        let layout_start_x = w - 10.0 - total_layout_w;
+        let total_layout_w = StageLayout::ALL.len() as f32 * btn_w
+            + (StageLayout::ALL.len() as f32 - 1.0) * btn_gap;
+        let layout_start_x = w - 10.0 * s - total_layout_w;
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
-            let bx = layout_start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
+            let bx = layout_start_x + i as f32 * (btn_w + btn_gap);
             let bg = if *layout == ui.layout {
                 [0.24, 0.34, 0.52, 1.0]
             } else {
                 [0.14, 0.15, 0.17, 1.0]
             };
-            push_rect(&mut quads, w, h, bx, 5.0, LAYOUT_BTN_W, TOPBAR_HEIGHT - 10.0, bg);
+            push_rect(&mut quads, w, h, bx, 5.0 * s, btn_w, top_h - 10.0 * s, bg);
         }
 
         // Sidebar items background + status dots (grouped by project).
         for (idx, row) in ui.sidebar_rows.iter().enumerate() {
-            let y = 38.0 + idx as f32 * 28.0;
-            if y + 26.0 > h - STATUSBAR_HEIGHT {
+            let y = 38.0 * s + idx as f32 * (28.0 * s);
+            if y + 26.0 * s > h - st_h {
                 break;
             }
             match row {
@@ -610,11 +643,11 @@ impl GpuRenderer {
                     } else {
                         [0.115, 0.12, 0.132, 1.0]
                     };
-                    push_rect(&mut quads, w, h, 4.0, y + 1.0, SIDEBAR_WIDTH - 8.0, 24.0, hdr_bg);
+                    push_rect(&mut quads, w, h, 4.0 * s, y + s, sb_w - 8.0 * s, 24.0 * s, hdr_bg);
                     // Clickable [▶] focus-group button on right
-                    push_rect(&mut quads, w, h, SIDEBAR_WIDTH - 30.0, y + 4.0, 22.0, 18.0, [0.18, 0.20, 0.24, 1.0]);
+                    push_rect(&mut quads, w, h, sb_w - 30.0 * s, y + 4.0 * s, 22.0 * s, 18.0 * s, [0.18, 0.20, 0.24, 1.0]);
                     if *waiting_count > 0 {
-                        push_rect(&mut quads, w, h, SIDEBAR_WIDTH - 44.0, y + 9.0, 7.0, 7.0, [0.95, 0.40, 0.35, 1.0]);
+                        push_rect(&mut quads, w, h, sb_w - 44.0 * s, y + 9.0 * s, 7.0 * s, 7.0 * s, [0.95, 0.40, 0.35, 1.0]);
                     }
                 }
                 SidebarItem::Terminal {
@@ -624,14 +657,14 @@ impl GpuRenderer {
                     ..
                 } => {
                     if *active {
-                        push_rect(&mut quads, w, h, 10.0, y, SIDEBAR_WIDTH - 16.0, 24.0, [0.18, 0.20, 0.24, 1.0]);
+                        push_rect(&mut quads, w, h, 10.0 * s, y, sb_w - 16.0 * s, 24.0 * s, [0.18, 0.20, 0.24, 1.0]);
                     }
                     if *waiting {
-                        push_rect(&mut quads, w, h, 16.0, y + 8.0, 7.0, 7.0, [0.95, 0.42, 0.35, 1.0]);
+                        push_rect(&mut quads, w, h, 16.0 * s, y + 8.0 * s, 7.0 * s, 7.0 * s, [0.95, 0.42, 0.35, 1.0]);
                     } else if *active {
-                        push_rect(&mut quads, w, h, 16.0, y + 8.0, 7.0, 7.0, [0.30, 0.82, 0.45, 1.0]);
+                        push_rect(&mut quads, w, h, 16.0 * s, y + 8.0 * s, 7.0 * s, 7.0 * s, [0.30, 0.82, 0.45, 1.0]);
                     } else if *minimized {
-                        push_rect(&mut quads, w, h, 16.0, y + 10.0, 7.0, 3.0, [0.45, 0.65, 0.95, 1.0]);
+                        push_rect(&mut quads, w, h, 16.0 * s, y + 10.0 * s, 7.0 * s, 3.0 * s, [0.45, 0.65, 0.95, 1.0]);
                     }
                 }
             }
@@ -646,19 +679,19 @@ impl GpuRenderer {
             } else {
                 [0.088, 0.092, 0.10, 1.0]
             };
-            push_rect(&mut quads, w, h, r.x, r.y, r.w, PANE_HEADER_HEIGHT, hdr_bg);
-            push_rect(&mut quads, w, h, r.x, r.y + PANE_HEADER_HEIGHT, r.w, 1.0, [0.16, 0.17, 0.19, 1.0]);
+            push_rect(&mut quads, w, h, r.x, r.y, r.w, hdr_h, hdr_bg);
+            push_rect(&mut quads, w, h, r.x, r.y + hdr_h, r.w, s, [0.16, 0.17, 0.19, 1.0]);
             if pane.active && ui.panes.len() > 1 {
-                push_rect(&mut quads, w, h, r.x, r.y, r.w, 2.0, [0.45, 0.72, 0.98, 1.0]);
+                push_rect(&mut quads, w, h, r.x, r.y, r.w, 2.0 * s, [0.45, 0.72, 0.98, 1.0]);
             }
             // Pane action button backgrounds: [↖] (secondary) and [—] (minimize)
-            push_rect(&mut quads, w, h, r.x + r.w - 24.0, r.y + 3.0, 20.0, PANE_HEADER_HEIGHT - 6.0, [0.15, 0.16, 0.18, 1.0]);
+            push_rect(&mut quads, w, h, r.x + r.w - 24.0 * s, r.y + 3.0 * s, 20.0 * s, hdr_h - 6.0 * s, [0.15, 0.16, 0.18, 1.0]);
             if !pane.is_master {
-                push_rect(&mut quads, w, h, r.x + r.w - 48.0, r.y + 3.0, 20.0, PANE_HEADER_HEIGHT - 6.0, [0.15, 0.16, 0.18, 1.0]);
+                push_rect(&mut quads, w, h, r.x + r.w - 48.0 * s, r.y + 3.0 * s, 20.0 * s, hdr_h - 6.0 * s, [0.15, 0.16, 0.18, 1.0]);
             }
 
-            let term_x = r.x + 7.0;
-            let term_y = r.y + PANE_HEADER_HEIGHT + 4.0;
+            let term_x = r.x + 7.0 * s;
+            let term_y = r.y + hdr_h + 4.0 * s;
             if let Some(frame) = pane.frame {
                 for run in &frame.bg_runs {
                     let rx = term_x + run.col as f32 * self.cell_width;
@@ -697,11 +730,11 @@ impl GpuRenderer {
 
         // Background Shelf bar (auto-hidden when empty).
         if has_shelf {
-            push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, shelf_y, w - SIDEBAR_WIDTH - 1.0, SHELF_HEIGHT, [0.095, 0.10, 0.115, 1.0]);
-            push_rect(&mut quads, w, h, SIDEBAR_WIDTH + 1.0, shelf_y, w - SIDEBAR_WIDTH - 1.0, 1.0, [0.18, 0.19, 0.22, 1.0]);
-            let mut px = SIDEBAR_WIDTH + 8.0;
+            push_rect(&mut quads, w, h, sb_w + s, shelf_y, w - sb_w - s, sh_h, [0.095, 0.10, 0.115, 1.0]);
+            push_rect(&mut quads, w, h, sb_w + s, shelf_y, w - sb_w - s, s, [0.18, 0.19, 0.22, 1.0]);
+            let mut px = sb_w + 8.0 * s;
             for pill in ui.shelf_pills {
-                if px + SHELF_PILL_W > w - 8.0 {
+                if px + pill_w > w - 8.0 * s {
                     break;
                 }
                 let bg = if pill.waiting {
@@ -709,7 +742,7 @@ impl GpuRenderer {
                 } else {
                     [0.15, 0.165, 0.195, 1.0]
                 };
-                push_rect(&mut quads, w, h, px, shelf_y + 4.0, SHELF_PILL_W, SHELF_HEIGHT - 8.0, bg);
+                push_rect(&mut quads, w, h, px, shelf_y + 4.0 * s, pill_w, sh_h - 8.0 * s, bg);
                 let dot_color = if pill.waiting {
                     [0.95, 0.35, 0.35, 1.0]
                 } else if pill.working {
@@ -717,8 +750,8 @@ impl GpuRenderer {
                 } else {
                     [0.50, 0.54, 0.62, 1.0]
                 };
-                push_rect(&mut quads, w, h, px + 7.0, shelf_y + 11.0, 6.0, 6.0, dot_color);
-                px += SHELF_PILL_W + SHELF_PILL_GAP;
+                push_rect(&mut quads, w, h, px + 7.0 * s, shelf_y + 11.0 * s, 6.0 * s, 6.0 * s, dot_color);
+                px += pill_w + pill_gap;
             }
         }
 
@@ -746,21 +779,21 @@ impl GpuRenderer {
 
         self.text_cache.begin_frame();
         let mut buffers: Vec<(SpanCacheKey, f32, f32, Color, TextBounds)> = Vec::with_capacity(512);
-        let ui_metrics = Metrics::new(13.0, 18.0);
-        let small_metrics = Metrics::new(11.5, 16.0);
+        let ui_metrics = Metrics::new(13.0 * s, 18.0 * s);
+        let small_metrics = Metrics::new(11.5 * s, 16.0 * s);
         let term_metrics = Metrics::new(self.font_size, self.cell_height);
 
         buffers.push((
             self.text_cache.ensure(&mut self.font_system, "OFFDESK NATIVE", ui_metrics, Weight::BOLD, false),
-            14.0,
-            10.0,
+            14.0 * s,
+            10.0 * s,
             Color::rgb(150, 155, 165),
-            TextBounds { left: 0, top: 0, right: SIDEBAR_WIDTH as i32, bottom: 34 },
+            TextBounds { left: 0, top: 0, right: sb_w as i32, bottom: top_h as i32 },
         ));
 
         for (idx, row) in ui.sidebar_rows.iter().enumerate() {
-            let y = 41.0 + idx as f32 * 28.0;
-            if y + 20.0 > h - STATUSBAR_HEIGHT {
+            let y = 41.0 * s + idx as f32 * (28.0 * s);
+            if y + 20.0 * s > h - st_h {
                 break;
             }
             match row {
@@ -780,27 +813,27 @@ impl GpuRenderer {
                     };
                     buffers.push((
                         self.text_cache.ensure(&mut self.font_system, &text, small_metrics, Weight::BOLD, false),
-                        10.0,
-                        y + 1.0,
+                        10.0 * s,
+                        y + s,
                         color,
                         TextBounds {
-                            left: 8,
+                            left: (8.0 * s) as i32,
                             top: y as i32,
-                            right: (SIDEBAR_WIDTH - 48.0) as i32,
-                            bottom: (y + 20.0) as i32,
+                            right: (sb_w - 48.0 * s) as i32,
+                            bottom: (y + 20.0 * s) as i32,
                         },
                     ));
                     // [▶] focus-group glyph
                     buffers.push((
                         self.text_cache.ensure(&mut self.font_system, "▶", small_metrics, Weight::NORMAL, false),
-                        SIDEBAR_WIDTH - 24.0,
-                        y + 1.0,
+                        sb_w - 24.0 * s,
+                        y + s,
                         Color::rgb(170, 185, 210),
                         TextBounds {
-                            left: (SIDEBAR_WIDTH - 30.0) as i32,
+                            left: (sb_w - 30.0 * s) as i32,
                             top: y as i32,
-                            right: (SIDEBAR_WIDTH - 8.0) as i32,
-                            bottom: (y + 20.0) as i32,
+                            right: (sb_w - 8.0 * s) as i32,
+                            bottom: (y + 20.0 * s) as i32,
                         },
                     ));
                 }
@@ -828,14 +861,14 @@ impl GpuRenderer {
                     };
                     buffers.push((
                         self.text_cache.ensure(&mut self.font_system, &text, ui_metrics, if *active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
-                        30.0,
-                        y - 1.0,
+                        30.0 * s,
+                        y - s,
                         color,
                         TextBounds {
-                            left: 28,
+                            left: (28.0 * s) as i32,
                             top: y as i32,
-                            right: (SIDEBAR_WIDTH - 10.0) as i32,
-                            bottom: (y + 20.0) as i32,
+                            right: (sb_w - 10.0 * s) as i32,
+                            bottom: (y + 20.0 * s) as i32,
                         },
                     ));
                 }
@@ -845,28 +878,28 @@ impl GpuRenderer {
         // Topbar title + layout icons
         buffers.push((
             self.text_cache.ensure(&mut self.font_system, ui.header_title, ui_metrics, Weight::MEDIUM, false),
-            SIDEBAR_WIDTH + 14.0,
-            8.0,
+            sb_w + 14.0 * s,
+            8.0 * s,
             Color::rgb(215, 220, 230),
             TextBounds {
-                left: SIDEBAR_WIDTH as i32,
+                left: sb_w as i32,
                 top: 0,
-                right: (layout_start_x - 10.0).max(SIDEBAR_WIDTH) as i32,
-                bottom: TOPBAR_HEIGHT as i32,
+                right: (layout_start_x - 10.0 * s).max(sb_w) as i32,
+                bottom: top_h as i32,
             },
         ));
         for (i, layout) in StageLayout::ALL.iter().enumerate() {
-            let bx = layout_start_x + i as f32 * (LAYOUT_BTN_W + LAYOUT_BTN_GAP);
+            let bx = layout_start_x + i as f32 * (btn_w + btn_gap);
             buffers.push((
                 self.text_cache.ensure(&mut self.font_system, layout.icon_label(), ui_metrics, Weight::MEDIUM, false),
-                bx + 8.0,
-                8.0,
+                bx + 8.0 * s,
+                8.0 * s,
                 if *layout == ui.layout { Color::rgb(255, 255, 255) } else { Color::rgb(155, 160, 170) },
                 TextBounds {
                     left: bx as i32,
                     top: 0,
-                    right: (bx + LAYOUT_BTN_W) as i32,
-                    bottom: TOPBAR_HEIGHT as i32,
+                    right: (bx + btn_w) as i32,
+                    bottom: top_h as i32,
                 },
             ));
         }
@@ -876,55 +909,55 @@ impl GpuRenderer {
             let r = pane.rect;
             let dot = if pane.active { "● " } else { "○ " };
             let title_str = format!("{}{}", dot, pane.title);
-            let action_reserve = if pane.is_master { 30.0 } else { 54.0 };
+            let action_reserve = if pane.is_master { 30.0 * s } else { 54.0 * s };
             buffers.push((
                 self.text_cache.ensure(&mut self.font_system, &title_str, small_metrics, if pane.active { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
-                r.x + 8.0,
-                r.y + 4.0,
+                r.x + 8.0 * s,
+                r.y + 4.0 * s,
                 if pane.active { Color::rgb(235, 240, 248) } else { Color::rgb(155, 160, 170) },
                 TextBounds {
                     left: r.x as i32,
                     top: r.y as i32,
                     right: (r.x + r.w - action_reserve).max(r.x) as i32,
-                    bottom: (r.y + PANE_HEADER_HEIGHT) as i32,
+                    bottom: (r.y + hdr_h) as i32,
                 },
             ));
             // [—] minimize button glyph
             buffers.push((
                 self.text_cache.ensure(&mut self.font_system, "—", small_metrics, Weight::BOLD, false),
-                r.x + r.w - 19.0,
-                r.y + 4.0,
+                r.x + r.w - 19.0 * s,
+                r.y + 4.0 * s,
                 Color::rgb(185, 190, 200),
                 TextBounds {
-                    left: (r.x + r.w - 24.0) as i32,
+                    left: (r.x + r.w - 24.0 * s) as i32,
                     top: r.y as i32,
-                    right: (r.x + r.w - 4.0) as i32,
-                    bottom: (r.y + PANE_HEADER_HEIGHT) as i32,
+                    right: (r.x + r.w - 4.0 * s) as i32,
+                    bottom: (r.y + hdr_h) as i32,
                 },
             ));
             // [↖] swap-to-master button glyph on secondary panes
             if !pane.is_master {
                 buffers.push((
                     self.text_cache.ensure(&mut self.font_system, "↖", small_metrics, Weight::BOLD, false),
-                    r.x + r.w - 43.0,
-                    r.y + 4.0,
+                    r.x + r.w - 43.0 * s,
+                    r.y + 4.0 * s,
                     Color::rgb(185, 190, 200),
                     TextBounds {
-                        left: (r.x + r.w - 48.0) as i32,
+                        left: (r.x + r.w - 48.0 * s) as i32,
                         top: r.y as i32,
-                        right: (r.x + r.w - 28.0) as i32,
-                        bottom: (r.y + PANE_HEADER_HEIGHT) as i32,
+                        right: (r.x + r.w - 28.0 * s) as i32,
+                        bottom: (r.y + hdr_h) as i32,
                     },
                 ));
             }
 
-            let term_x = r.x + 7.0;
-            let term_y = r.y + PANE_HEADER_HEIGHT + 4.0;
+            let term_x = r.x + 7.0 * s;
+            let term_y = r.y + hdr_h + 4.0 * s;
             let term_bounds = TextBounds {
                 left: r.x as i32,
-                top: (r.y + PANE_HEADER_HEIGHT) as i32,
-                right: (r.x + r.w - 2.0) as i32,
-                bottom: (r.y + r.h - 2.0) as i32,
+                top: (r.y + hdr_h) as i32,
+                right: (r.x + r.w - 2.0 * s) as i32,
+                bottom: (r.y + r.h - 2.0 * s) as i32,
             };
             if let Some(frame) = pane.frame {
                 for (row_idx, spans) in frame.spans_by_row.iter().enumerate() {
@@ -949,41 +982,41 @@ impl GpuRenderer {
 
         // Background Shelf pill labels
         if has_shelf {
-            let mut px = SIDEBAR_WIDTH + 8.0;
+            let mut px = sb_w + 8.0 * s;
             for pill in ui.shelf_pills {
-                if px + SHELF_PILL_W > w - 8.0 {
+                if px + pill_w > w - 8.0 * s {
                     break;
                 }
                 buffers.push((
                     self.text_cache.ensure(&mut self.font_system, &pill.label, small_metrics, if pill.waiting { Weight::SEMIBOLD } else { Weight::NORMAL }, false),
-                    px + 18.0,
-                    shelf_y + 6.0,
+                    px + 18.0 * s,
+                    shelf_y + 6.0 * s,
                     if pill.waiting { Color::rgb(255, 190, 180) } else { Color::rgb(205, 212, 224) },
                     TextBounds {
-                        left: (px + 16.0) as i32,
+                        left: (px + 16.0 * s) as i32,
                         top: shelf_y as i32,
-                        right: (px + SHELF_PILL_W - 6.0) as i32,
-                        bottom: (shelf_y + SHELF_HEIGHT) as i32,
+                        right: (px + pill_w - 6.0 * s) as i32,
+                        bottom: (shelf_y + sh_h) as i32,
                     },
                 ));
-                px += SHELF_PILL_W + SHELF_PILL_GAP;
+                px += pill_w + pill_gap;
             }
         }
 
         // Status bar
         buffers.push((
             self.text_cache.ensure(&mut self.font_system, ui.status_left, ui_metrics, Weight::NORMAL, false),
-            12.0,
-            h - STATUSBAR_HEIGHT + 4.0,
+            12.0 * s,
+            h - st_h + 4.0 * s,
             Color::rgb(155, 160, 170),
-            TextBounds { left: 8, top: (h - STATUSBAR_HEIGHT) as i32, right: (w * 0.65) as i32, bottom: h as i32 },
+            TextBounds { left: (8.0 * s) as i32, top: (h - st_h) as i32, right: (w * 0.65) as i32, bottom: h as i32 },
         ));
         buffers.push((
             self.text_cache.ensure(&mut self.font_system, ui.status_right, ui_metrics, Weight::NORMAL, false),
-            (w - 280.0).max(SIDEBAR_WIDTH),
-            h - STATUSBAR_HEIGHT + 4.0,
+            (w - 310.0 * s).max(sb_w),
+            h - st_h + 4.0 * s,
             Color::rgb(155, 160, 170),
-            TextBounds { left: (w - 290.0).max(SIDEBAR_WIDTH) as i32, top: (h - STATUSBAR_HEIGHT) as i32, right: w as i32 - 8, bottom: h as i32 },
+            TextBounds { left: (w - 320.0 * s).max(sb_w) as i32, top: (h - st_h) as i32, right: w as i32 - (8.0 * s) as i32, bottom: h as i32 },
         ));
 
         if let Some(pal) = &ui.palette {

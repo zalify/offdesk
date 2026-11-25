@@ -447,7 +447,7 @@ fn spawn_terminal_socket(
                         Message::Text(text) => {
                             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
                                 match val.get("type").and_then(|t| t.as_str()) {
-                                    Some("compression") => {
+                                    Some("compression_enabled") | Some("compression") => {
                                         if val.get("algo").and_then(|a| a.as_str()) == Some("deflate-raw-v1") {
                                             inflater = Some(AttachInflater::new());
                                         }

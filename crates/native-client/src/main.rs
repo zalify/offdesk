@@ -494,7 +494,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
         let surface = instance
             .create_surface(Arc::clone(&window))
             .expect("create wgpu surface");
-        let renderer = GpuRenderer::from_surface(
+        let mut renderer = GpuRenderer::from_surface(
             instance,
             surface,
             size.width,
@@ -502,6 +502,7 @@ impl ApplicationHandler<HubEvent> for NativeApp {
             (self.cfg.font_size * scale).clamp(12.0, 36.0),
         )
         .expect("init wgpu renderer");
+        renderer.set_scale_factor(scale);
         self.window = Some(window);
         self.renderer = Some(renderer);
         self.request_redraw();
