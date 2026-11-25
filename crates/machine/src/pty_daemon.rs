@@ -421,7 +421,6 @@ mod unix_impl {
                 return self.render_ansi_at_scrollback(0).0;
             }
             let replay = history_size.min(max_scrollback);
-            let app_wants_mouse = mode.intersects(TermMode::MOUSE_MODE);
 
             let mut out = String::with_capacity((replay + self.rows as usize) * 64);
             out.push_str("\x1b[?2026h\x1b[0m\x1b[r\x1b[3J\x1b[2J\x1b[H");
@@ -499,9 +498,7 @@ mod unix_impl {
             if mode.contains(TermMode::APP_CURSOR) {
                 out.push_str("\x1b[?1h");
             }
-            if !app_wants_mouse {
-                out.push_str("\x1b[?1000h\x1b[?1006h");
-            }
+            write_mouse_mode_replay(&mut out, mode);
             out.push_str("\x1b[?2026l");
             out.into_bytes()
         }
@@ -513,7 +510,6 @@ mod unix_impl {
             let history_size = grid.history_size();
             let actual_offset = requested_offset.min(history_size);
             let mode = *self.term.mode();
-            let app_wants_mouse = mode.intersects(TermMode::MOUSE_MODE);
 
             let mut out = String::with_capacity(self.rows as usize * self.cols as usize * 2);
             // Begin DEC 2026 synchronized output + full SGR/DECSTBM/viewport reset.
@@ -594,15 +590,27 @@ mod unix_impl {
                 }
             }
 
-            // Keep SGR mouse reporting enabled on the client even when the app
-            // doesn't request it (e.g., agy, fish, bash) so wheel/touch scroll
-            // drives daemon-side scrollback — matching tmux's mouse mode.
-            if !app_wants_mouse {
-                out.push_str("\x1b[?1000h\x1b[?1006h");
-            }
+            // Always replay active mouse reporting on attach/refresh so both
+            // mouse-aware TUIs (Claude Code, vim) and daemon-side scrollback
+            // work immediately after a client reconnects.
+            write_mouse_mode_replay(&mut out, mode);
             out.push_str("\x1b[?2026l");
 
             (out.into_bytes(), actual_offset)
+        }
+    }
+
+    fn write_mouse_mode_replay(out: &mut String, mode: TermMode) {
+        let app_wants_mouse = mode.intersects(TermMode::MOUSE_MODE);
+        if mode.contains(TermMode::MOUSE_MOTION) {
+            out.push_str("\x1b[?1003h");
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            out.push_str("\x1b[?1002h");
+        } else {
+            out.push_str("\x1b[?1000h");
+        }
+        if !app_wants_mouse || mode.contains(TermMode::SGR_MOUSE) {
+            out.push_str("\x1b[?1006h");
         }
     }
 
@@ -1950,6 +1958,21 @@ mod unix_impl {
             assert!(down_str.contains("> prompt"), "scrolled back to bottom missing prompt");
             assert!(down_str.contains("LINE_39"), "scrolled back to bottom missing latest line");
             assert!(down_str.contains("\x1b[?25h"), "scrolled back to bottom should restore cursor");
+        }
+
+        #[test]
+        fn replays_mouse_mode_on_attach_when_app_wants_mouse() {
+            let mut term = DaemonTerm::new(24, 80, 1000);
+            // Simulate Claude Code entering alt-screen and enabling SGR button+drag mouse reporting.
+            term.process(b"\x1b[?1049h\x1b[?1002h\x1b[?1006hClaude Code TUI");
+            assert!(term.app_wants_mouse());
+
+            let attach_bytes = term.render_ansi_with_scrollback(1500);
+            let attach_str = String::from_utf8_lossy(&attach_bytes);
+            assert!(
+                attach_str.contains("\x1b[?1002h") && attach_str.contains("\x1b[?1006h"),
+                "attach snapshot must replay app's mouse mode so wheel scroll works after reconnect: {attach_str}"
+            );
         }
     }
 }
