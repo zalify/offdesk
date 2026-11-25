@@ -3,7 +3,7 @@ use std::io::Read;
 use serde::{Deserialize, Serialize};
 
 use crate::client::HubClient;
-use crate::commands::{json_pretty, out_line};
+use crate::commands::{json_pretty, out_line, share};
 use crate::resolve::{resolve_prefix, short_id};
 use crate::CliError;
 
@@ -158,7 +158,51 @@ async fn resolve_draft(client: &HubClient, query: &str) -> Result<DraftInfo, Cli
     resolve_prefix(query, &drafts, |d| d.id.as_str()).cloned()
 }
 
-pub async fn read(client: &HubClient, id_or_prefix: &str, json: bool) -> Result<(), CliError> {
+/// A draft (or database row) reduced to what the version/share commands need.
+struct DraftRef {
+    id: String,
+    title: String,
+}
+
+/// Resolve a draft id or unique prefix. `GET /api/drafts` does not list
+/// database rows, so when nothing matches the query is also tried as a full
+/// id against `GET /api/drafts/{id}` (rows therefore need their full id).
+async fn resolve_draft_ref(client: &HubClient, query: &str) -> Result<DraftRef, CliError> {
+    let drafts = client.list_drafts(None, true).await?;
+    match resolve_prefix(query, &drafts, |d| d.id.as_str()) {
+        Ok(d) => Ok(DraftRef { id: d.id.clone(), title: d.title.clone() }),
+        Err(CliError::Usage(message)) if message.starts_with("no id matching") => {
+            match client.draft_get(query).await {
+                Ok(row) => Ok(DraftRef {
+                    id: row.get("id").and_then(|v| v.as_str()).unwrap_or(query).to_string(),
+                    title: row.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                }),
+                Err(_) => Err(CliError::Usage(format!(
+                    "no draft matching '{query}' (database rows need their full id)"
+                ))),
+            }
+        }
+        Err(error) => Err(error),
+    }
+}
+
+pub async fn read(
+    client: &HubClient,
+    id_or_prefix: &str,
+    version: Option<&str>,
+    json: bool,
+) -> Result<(), CliError> {
+    if let Some(version) = version {
+        let draft = resolve_draft_ref(client, id_or_prefix).await?;
+        let version = resolve_version(client, &draft.id, version).await?;
+        let full = client.draft_version(&draft.id, &str_of(&version, "id")).await?;
+        if json {
+            out_line(&json_pretty(&full)?);
+        } else {
+            out_line(full.get("content").and_then(|v| v.as_str()).unwrap_or(""));
+        }
+        return Ok(());
+    }
     let draft = resolve_draft(client, id_or_prefix).await?;
     if json {
         out_line(&json_pretty(&draft)?);
@@ -166,6 +210,96 @@ pub async fn read(client: &HubClient, id_or_prefix: &str, json: bool) -> Result<
         out_line(&draft.content);
     }
     Ok(())
+}
+
+fn str_of(value: &serde_json::Value, key: &str) -> String {
+    value.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+}
+
+async fn resolve_version(
+    client: &HubClient,
+    draft_id: &str,
+    query: &str,
+) -> Result<serde_json::Value, CliError> {
+    let versions = client.draft_versions(draft_id).await?;
+    let versions = versions.as_array().cloned().unwrap_or_default();
+    resolve_prefix(query, &versions, |v| {
+        v.get("id").and_then(|id| id.as_str()).unwrap_or("")
+    })
+    .cloned()
+    .map_err(|e| match e {
+        CliError::Usage(m) if m.starts_with("no id matching") => {
+            CliError::Usage(format!("no version matching '{query}'; see `offdesk draft history`"))
+        }
+        other => other,
+    })
+}
+
+pub async fn history(client: &HubClient, id_or_prefix: &str, json: bool) -> Result<(), CliError> {
+    let draft = resolve_draft_ref(client, id_or_prefix).await?;
+    let versions = client.draft_versions(&draft.id).await?;
+    if json {
+        out_line(&json_pretty(&versions)?);
+        return Ok(());
+    }
+    let versions = versions.as_array().cloned().unwrap_or_default();
+    if versions.is_empty() {
+        out_line("no saved versions");
+        return Ok(());
+    }
+    for v in &versions {
+        out_line(&format!(
+            "{}  {}  {} B  {}",
+            short_id(&str_of(v, "id")),
+            share::when(v.get("created_at").and_then(|t| t.as_i64()).unwrap_or(0)),
+            v.get("size").and_then(|s| s.as_u64()).unwrap_or(0),
+            str_of(v, "title")
+        ));
+    }
+    Ok(())
+}
+
+pub async fn restore(client: &HubClient, id_or_prefix: &str, version: &str) -> Result<(), CliError> {
+    let draft = resolve_draft_ref(client, id_or_prefix).await?;
+    let version = resolve_version(client, &draft.id, version).await?;
+    let version_id = str_of(&version, "id");
+    let restored = client.draft_version_restore(&draft.id, &version_id).await?;
+    out_line(&format!(
+        "restored \"{}\" to version {} (previous state saved as a new version)",
+        str_of(&restored, "title"),
+        short_id(&version_id)
+    ));
+    Ok(())
+}
+
+pub async fn share(
+    client: &HubClient,
+    id_or_prefix: &str,
+    live: bool,
+    expires: Option<&str>,
+    json: bool,
+) -> Result<(), CliError> {
+    let days = expires.map(share::parse_expires).transpose()?;
+    let draft = resolve_draft_ref(client, id_or_prefix).await?;
+    let mode = if live { "live" } else { "snapshot" };
+    let body = share::build_create_body("draft", &draft.id, mode, None, days);
+    share::create(client, &body, json).await
+}
+
+pub async fn shares(client: &HubClient, draft: Option<&str>, json: bool) -> Result<(), CliError> {
+    let target = match draft {
+        Some(query) => Some(resolve_draft_ref(client, query).await?.id),
+        None => None,
+    };
+    share::list(client, "draft", target.as_deref(), json).await
+}
+
+pub async fn unshare(client: &HubClient, query: &str, json: bool) -> Result<(), CliError> {
+    share::unshare(client, "draft", query, json, || async {
+        let draft = resolve_draft_ref(client, query).await?;
+        Ok((draft.id, draft.title))
+    })
+    .await
 }
 
 pub async fn archive(client: &HubClient, id_or_prefix: &str, restore: bool) -> Result<(), CliError> {

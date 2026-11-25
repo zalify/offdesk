@@ -175,11 +175,18 @@ impl HubClient {
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            // An older hub has no database routes at all.
+            // An older hub has no database / sharing / version routes at all.
             if status == StatusCode::NOT_FOUND && error_message(&body).is_none() {
-                return Err(CliError::Protocol(
-                    "this hub does not support `offdesk db` yet — update the hub".to_string(),
-                ));
+                let feature = if path.starts_with("/draft-shares") {
+                    "sharing"
+                } else if path.contains("/versions") {
+                    "draft history"
+                } else {
+                    "`offdesk db`"
+                };
+                return Err(CliError::Protocol(format!(
+                    "this hub does not support {feature} yet — update the hub"
+                )));
             }
             return Err(match error_message(&body) {
                 Some(message) if status.is_client_error() && status != StatusCode::UNAUTHORIZED => {
@@ -194,6 +201,46 @@ impl HubClient {
         }
         serde_json::from_str(&text)
             .map_err(|error| CliError::Protocol(format!("invalid JSON from hub: {error}")))
+    }
+
+    // ---- Draft versions and public shares ----
+
+    pub async fn draft_get(&self, id: &str) -> Result<serde_json::Value, CliError> {
+        self.db_json(reqwest::Method::GET, &format!("/drafts/{id}"), &[], None).await
+    }
+
+    pub async fn draft_versions(&self, id: &str) -> Result<serde_json::Value, CliError> {
+        self.db_json(reqwest::Method::GET, &format!("/drafts/{id}/versions"), &[], None).await
+    }
+
+    pub async fn draft_version(&self, id: &str, version_id: &str) -> Result<serde_json::Value, CliError> {
+        self.db_json(reqwest::Method::GET, &format!("/drafts/{id}/versions/{version_id}"), &[], None)
+            .await
+    }
+
+    pub async fn draft_version_restore(&self, id: &str, version_id: &str) -> Result<serde_json::Value, CliError> {
+        self.db_json(
+            reqwest::Method::POST,
+            &format!("/drafts/{id}/versions/{version_id}/restore"),
+            &[],
+            None,
+        )
+        .await
+    }
+
+    pub async fn share_create(&self, body: &serde_json::Value) -> Result<serde_json::Value, CliError> {
+        self.db_json(reqwest::Method::POST, "/draft-shares", &[], Some(body)).await
+    }
+
+    pub async fn shares_list(&self, target_id: Option<&str>) -> Result<serde_json::Value, CliError> {
+        let query: Vec<(&str, &str)> = target_id.map(|t| ("target_id", t)).into_iter().collect();
+        self.db_json(reqwest::Method::GET, "/draft-shares", &query, None).await
+    }
+
+    pub async fn share_delete(&self, id: &str) -> Result<(), CliError> {
+        self.db_json(reqwest::Method::DELETE, &format!("/draft-shares/{id}"), &[], None)
+            .await
+            .map(|_| ())
     }
 
     pub async fn db_list(&self, project: Option<&str>) -> Result<serde_json::Value, CliError> {
