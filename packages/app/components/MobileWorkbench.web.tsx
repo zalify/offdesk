@@ -35,6 +35,7 @@ import {
   ChevronRight,
   CircuitBoard,
   Eye,
+  FileText,
   FolderTree,
   FolderOpen,
   Globe,
@@ -114,6 +115,8 @@ interface MobileWorkbenchProps {
   filesButton?: { open: boolean };
   onToggleFiles?: () => void;
   filesSurface?: React.ReactNode;
+  onOpenDrafts?: () => void;
+  draftsCount?: number;
   canCreateTerminal: boolean;
   canSendAttention: (machineId: string) => boolean;
   /** "Picked up where you left off": shown in the subtitle line for a moment. */
@@ -182,6 +185,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     filesButton,
     onToggleFiles,
     filesSurface,
+    onOpenDrafts,
+    draftsCount = 0,
     canCreateTerminal,
     canSendAttention,
     resumeNotice,
@@ -740,6 +745,41 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             <span aria-hidden="true">●</span>
             <span>waiting</span>
           </button>
+        )}
+
+        {onOpenDrafts && (
+          <span
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => event.stopPropagation()}
+            onTouchMove={(event) => event.stopPropagation()}
+            onTouchEnd={(event) => event.stopPropagation()}
+            style={{ display: "flex", flexShrink: 0, position: "relative" }}
+          >
+            <TextButton
+              square
+              testId="mobile-title-bar-drafts"
+              label="Drafts"
+              onClick={onOpenDrafts}
+              style={titleBarButton}
+            >
+              <FileText size={17} aria-hidden />
+            </TextButton>
+            {draftsCount > 0 && (
+              <span
+                aria-hidden
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  right: 6,
+                  width: 7,
+                  height: 7,
+                  borderRadius: 999,
+                  background: colors.accent,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
+          </span>
         )}
 
         {filesButton && onToggleFiles && wideTitleBar && (

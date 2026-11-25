@@ -35,6 +35,8 @@ export function WorkspaceStatusLine({
   onEngageViewOnly,
   onDisengageViewOnly,
   onOpenCommandPalette,
+  onOpenDrafts,
+  draftsCount = 0,
   browserWaiting = null,
   rttShownElsewhere = false,
 }: {
@@ -55,6 +57,8 @@ export function WorkspaceStatusLine({
   onEngageViewOnly: () => void;
   onDisengageViewOnly: () => void;
   onOpenCommandPalette?: () => void;
+  onOpenDrafts?: () => void;
+  draftsCount?: number;
   /** An agent browser tab that handed off to a person. */
   browserWaiting?: { label: string; reason: string; open: () => void } | null;
   /** The sessions sidebar's machine row shows the round trip. */
@@ -189,6 +193,19 @@ export function WorkspaceStatusLine({
           onClick={openUpdateCard}
         >
           ↑ update {update.available}
+        </button>
+      ) : null}
+      {onOpenDrafts ? (
+        <button
+          type="button"
+          className="odk-status-btn odk-status-btn--quiet"
+          data-testid="status-drafts"
+          onClick={onOpenDrafts}
+          title="Agent Scratchpad Drafts"
+          aria-label="Open drafts"
+          style={draftsCount > 0 ? { color: "rgb(var(--color-accent))" } : undefined}
+        >
+          {draftsCount > 0 ? `drafts (${draftsCount})` : "drafts"}
         </button>
       ) : null}
       {onOpenCommandPalette ? (

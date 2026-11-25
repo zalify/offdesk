@@ -19,6 +19,7 @@ import type {
   WorkspaceLayoutNode,
 } from "@offdesk/shared";
 import { AppTitleBar } from "./AppTitleBar.web";
+import { DraftsDrawer } from "./DraftsDrawer.web";
 import { TabBar } from "./TabBar.web";
 import {
   CommandPalette,
@@ -48,6 +49,7 @@ import {
   releaseControl,
   renameWorkspaceGroup,
   saveWorkspaceLayout,
+  terminalWsUrl,
 } from "@/lib/api";
 import {
   estimateInitialTerminalDimensions,
@@ -1718,6 +1720,38 @@ function TerminalCanvasInner() {
     prefixKeyRef.current = prefixKey;
   }, [prefixKey]);
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
+  const [draftsOpen, setDraftsOpen] = useState(false);
+  const [draftsCount, setDraftsCount] = useState(0);
+
+  const handleSendDraftToTerminal = useCallback(
+    (content: string) => {
+      if (!workspaceTerminal || !deviceId || !content) return;
+      const ws = openSocket(
+        terminalWsUrl(workspaceTerminal.machine_id, workspaceTerminal.id, deviceId),
+      );
+      ws.binaryType = "arraybuffer";
+      let sent = false;
+      const closeSoon = window.setTimeout(() => ws.close(), 6000);
+      ws.onmessage = (event) => {
+        if (typeof event.data === "string" || sent) return;
+        sent = true;
+        try {
+          ws.send(JSON.stringify({ type: "command_input", data: content }));
+        } catch {
+          /* ignore */
+        }
+        window.setTimeout(() => {
+          window.clearTimeout(closeSoon);
+          ws.close();
+        }, 250);
+      };
+      ws.onerror = () => {
+        window.clearTimeout(closeSoon);
+        ws.close();
+      };
+    },
+    [workspaceTerminal, deviceId],
+  );
 
   const canvasPrefixActionsRef = useRef<
     Partial<Record<PrefixActionId, () => void>>
@@ -2194,6 +2228,8 @@ function TerminalCanvasInner() {
               onCloseBrowserSurface={() => setBrowserOverlayOpen(false)}
               filesButton={filesButtonProps}
               onToggleFiles={handleToggleFiles}
+              onOpenDrafts={() => setDraftsOpen(true)}
+              draftsCount={draftsCount}
               filesSurface={
                 filesState && filesMachine ? (
                   <FileBrowserMobileSurface
@@ -2543,6 +2579,8 @@ function TerminalCanvasInner() {
                 onOpenCommandPalette={() =>
                   setPaletteState({ open: true, filter: "all" })
                 }
+                onOpenDrafts={() => setDraftsOpen(true)}
+                draftsCount={draftsCount}
                 browserWaiting={(() => {
                   const browser = scopedAgentBrowsers.find(browserNeedsPerson);
                   return browser && !browserOverlayOpen
@@ -2628,6 +2666,28 @@ function TerminalCanvasInner() {
         {cheatSheetOpen && (
           <CheatSheetOverlay onClose={() => setCheatSheetOpen(false)} />
         )}
+
+        <DraftsDrawer
+          open={draftsOpen}
+          isCompact={isCompact}
+          defaultProjectGroup={
+            workspaceTerminal?.cwd
+              ?.replace(/\/+$/, "")
+              .split("/")
+              .filter(Boolean)
+              .slice(-1)[0] || "~"
+          }
+          activeTerminalLabel={
+            workspaceTerminal ? displayTerminalTitle(workspaceTerminal) : null
+          }
+          onClose={() => setDraftsOpen(false)}
+          onSendToTerminal={
+            workspaceTerminal && canTypeOnMachine(workspaceTerminal.machine_id)
+              ? handleSendDraftToTerminal
+              : undefined
+          }
+          onCountChange={setDraftsCount}
+        />
 
         {hostRemoveTarget && (
           <ConfirmDialog
