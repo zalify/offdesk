@@ -1,4 +1,4 @@
-import { TERMINAL_RENDERER_STORAGE_KEY } from "./TerminalView.web";
+import { TERMINAL_RENDERER_STORAGE_KEY, useNativeTerminalProbeStatus } from "./TerminalView.web";
 import { UiUpdateNotification } from "./UiUpdateNotification";
 import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
@@ -866,46 +866,7 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
             </label>
           </SettingRow>
 
-          {isTauri() && (
-            <SettingRow
-              label="Terminal engine"
-              description="Native Rust (Alacritty) runs the terminal emulator in Rust with 10,000-line scrollback and zero xterm.js / WebGL limits. Switch anytime and reload."
-            >
-              <select
-                aria-label="Terminal Engine"
-                defaultValue={
-                  (() => {
-                    try {
-                      return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm"
-                        ? "xterm"
-                        : "native";
-                    } catch {
-                      return "native";
-                    }
-                  })()
-                }
-                onChange={(e) => {
-                  try {
-                    window.localStorage.setItem(TERMINAL_RENDERER_STORAGE_KEY, e.target.value);
-                  } catch {
-                    /* ignore */
-                  }
-                  window.location.reload();
-                }}
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 6,
-                  border: `1px solid ${colors.line}`,
-                  background: colors.bg0,
-                  color: colors.fg0,
-                  fontSize: rem(12.5),
-                }}
-              >
-                <option value="native">Native Rust (Alacritty)</option>
-                <option value="xterm">Legacy (xterm.js)</option>
-              </select>
-            </SettingRow>
-          )}
+          {isTauri() && <TerminalEngineSettingRow />}
 
         </section>
 
@@ -1779,3 +1740,55 @@ const pxInput: React.CSSProperties = {
   textAlign: "right",
   outline: "none",
 };
+
+
+function TerminalEngineSettingRow() {
+  const probe = useNativeTerminalProbeStatus();
+  const saved = (() => {
+    try {
+      return window.localStorage.getItem(TERMINAL_RENDERER_STORAGE_KEY) === "xterm"
+        ? "xterm"
+        : "native";
+    } catch {
+      return "native";
+    }
+  })();
+  const statusNote =
+    saved === "xterm"
+      ? "Active: Legacy (xterm.js)"
+      : !probe.probed
+        ? "Checking Native Rust IPC..."
+        : probe.available
+          ? "Active: Native Rust (Alacritty)"
+          : `Fallback to xterm.js (${probe.error ?? "update desktop app"})`;
+  return (
+    <SettingRow
+      label="Terminal engine"
+      description={`Native Rust (Alacritty) runs the terminal emulator in Rust with 10,000-line scrollback and zero xterm.js / WebGL limits. ${statusNote}`}
+    >
+      <select
+        aria-label="Terminal Engine"
+        defaultValue={saved}
+        onChange={(e) => {
+          try {
+            window.localStorage.setItem(TERMINAL_RENDERER_STORAGE_KEY, e.target.value);
+          } catch {
+            /* ignore */
+          }
+          window.location.reload();
+        }}
+        style={{
+          padding: "6px 10px",
+          borderRadius: 6,
+          border: `1px solid ${colors.line}`,
+          background: colors.bg0,
+          color: colors.fg0,
+          fontSize: rem(12.5),
+        }}
+      >
+        <option value="native">Native Rust (Alacritty)</option>
+        <option value="xterm">Legacy (xterm.js)</option>
+      </select>
+    </SettingRow>
+  );
+}

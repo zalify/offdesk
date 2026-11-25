@@ -597,7 +597,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               resizeDebounceTimerRef.current = window.setTimeout(() => {
                 resizeDebounceTimerRef.current = null;
                 sendResizeNow();
-              }, 40);
+              }, 150);
             }
           }
         }
@@ -1248,6 +1248,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }}
         onContextMenu={(e) => {
           e.preventDefault();
+          e.stopPropagation();
           setCtxMenu({ x: e.clientX, y: e.clientY });
         }}
         onMouseDown={(e) => {

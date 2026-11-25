@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-term-plain-lines"
+description = "Enables the native_term_plain_lines command without any pre-configured scope."
+commands.allow = ["native_term_plain_lines"]
+
+[[permission]]
+identifier = "deny-native-term-plain-lines"
+description = "Denies the native_term_plain_lines command without any pre-configured scope."
+commands.deny = ["native_term_plain_lines"]

@@ -48,6 +48,13 @@ fn main() {
         "open_download",
         "file_preview_open",
         "file_preview_respond",
+        "native_term_open",
+        "native_term_feed",
+        "native_term_resize",
+        "native_term_scroll",
+        "native_term_snap_bottom",
+        "native_term_plain_lines",
+        "native_term_close",
     ]);
     let attributes = tauri_build::Attributes::new().app_manifest(app_manifest);
 
