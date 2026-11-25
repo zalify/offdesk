@@ -556,6 +556,7 @@ pub async fn upload_files(
     client: &HubClient,
     browser: &str,
     element: Option<String>,
+    nth: Option<u32>,
     paths: &[PathBuf],
 ) -> Result<Acted<UploadOutcome>, CliError> {
     let files = read_upload_files(paths)?;
@@ -566,6 +567,7 @@ pub async fn upload_files(
         AgentBrowserCommand::Upload {
             browser_id,
             r#ref: element,
+            nth,
             files,
         },
     )
@@ -880,9 +882,10 @@ pub async fn upload(
     client: &HubClient,
     browser: &str,
     element: Option<String>,
+    nth: Option<u32>,
     paths: &[PathBuf],
 ) -> Result<(), CliError> {
-    let done = upload_files(client, browser, element, paths).await?;
+    let done = upload_files(client, browser, element, nth, paths).await?;
     let outcome = &done.result;
     super::out_line(&format!(
         "uploaded {} to {}",

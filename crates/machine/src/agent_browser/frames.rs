@@ -248,7 +248,12 @@ fn content_size(model: &Value) -> Option<(f64, f64)> {
 }
 
 fn short(text: &str) -> String {
-    let t: String = text.chars().take(60).collect();
+    short_to(text, 60)
+}
+
+/// `text` cut to `max` characters (never inside one), with `…` when cut.
+fn short_to(text: &str, max: usize) -> String {
+    let t: String = text.chars().take(max).collect();
     if t.chars().count() < text.chars().count() {
         format!("{t}…")
     } else {
@@ -1090,10 +1095,18 @@ fn file_input_of(node: &Value) -> Option<(bool, String)> {
 
 /// Every file input under `node`, shadow roots and same-process iframes
 /// included (a `DOM.getDocument` with `pierce`).
-fn collect_file_inputs(node: &Value, session: &str, out: &mut Vec<FileInput>) {
-    if let (Some((multiple, what)), Some(backend)) =
+fn collect_file_inputs<'a>(
+    node: &'a Value,
+    session: &str,
+    ancestors: &mut Vec<&'a Value>,
+    out: &mut Vec<FileInput>,
+) {
+    if let (Some((multiple, mut what)), Some(backend)) =
         (file_input_of(node), node["backendNodeId"].as_i64())
     {
+        if let Some(near) = text_near(ancestors) {
+            what.push_str(&format!(" near \"{near}\""));
+        }
         out.push(FileInput {
             session: session.to_string(),
             backend,
@@ -1101,14 +1114,102 @@ fn collect_file_inputs(node: &Value, session: &str, out: &mut Vec<FileInput>) {
             what,
         });
     }
+    ancestors.push(node);
     for key in ["children", "shadowRoots"] {
         for child in node[key].as_array().into_iter().flatten() {
-            collect_file_inputs(child, session, out);
+            collect_file_inputs(child, session, ancestors, out);
         }
     }
     if node["contentDocument"].is_object() {
-        collect_file_inputs(&node["contentDocument"], session, out);
+        collect_file_inputs(&node["contentDocument"], session, ancestors, out);
     }
+    ancestors.pop();
+}
+
+/// The text content of a CDP DOM subtree (scripts and styles skipped), so it
+/// works for `display:none` markup too.
+fn node_text(node: &Value, out: &mut String) {
+    if node["nodeType"].as_i64() == Some(3) {
+        out.push(' ');
+        out.push_str(node["nodeValue"].as_str().unwrap_or(""));
+        return;
+    }
+    if matches!(
+        node["nodeName"].as_str().map(str::to_ascii_lowercase).as_deref(),
+        Some("script" | "style" | "noscript")
+    ) {
+        return;
+    }
+    for key in ["children", "shadowRoots"] {
+        for child in node[key].as_array().into_iter().flatten() {
+            // The browser's own widget text ("Choose File") is not page text.
+            if child["shadowRootType"].as_str() == Some("user-agent") {
+                continue;
+            }
+            node_text(child, out);
+        }
+    }
+}
+
+/// How many file inputs lie under `node`, by the same walk as
+/// `collect_file_inputs`.
+fn count_file_inputs(node: &Value) -> usize {
+    let mut n = usize::from(file_input_of(node).is_some());
+    for key in ["children", "shadowRoots"] {
+        for child in node[key].as_array().into_iter().flatten() {
+            n += count_file_inputs(child);
+        }
+    }
+    if node["contentDocument"].is_object() {
+        n += count_file_inputs(&node["contentDocument"]);
+    }
+    n
+}
+
+fn collapsed_text(node: &Value) -> String {
+    let mut raw = String::new();
+    node_text(node, &mut raw);
+    raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The text that tells a file input from the others. `ancestors` is
+/// outermost first. The best context is the highest ancestor that holds
+/// this input and no other file input (the form item, with its label); when
+/// that is the whole page, or has no text, the nearest ancestor with text.
+fn text_near(ancestors: &[&Value]) -> Option<String> {
+    const EXCERPT: usize = 80;
+    // Ancestors are outermost first, so those holding only this input are
+    // the innermost ones: pick the outermost of them.
+    let alone_from = ancestors
+        .iter()
+        .rposition(|a| count_file_inputs(a) != 1)
+        .map_or(0, |i| i + 1);
+    if let Some(top) = ancestors.get(alone_from).filter(|_| alone_from < ancestors.len()) {
+        let page_level = matches!(
+            top["nodeName"].as_str().map(str::to_ascii_lowercase).as_deref(),
+            Some("#document" | "html" | "body")
+        );
+        if !page_level {
+            let text = collapsed_text(top);
+            if !text.is_empty() {
+                return Some(short_to(&text, EXCERPT));
+            }
+        }
+    }
+    ancestors.iter().rev().find_map(|ancestor| {
+        let text = collapsed_text(ancestor);
+        (!text.is_empty()).then(|| short_to(&text, EXCERPT))
+    })
+}
+
+/// The "N file inputs on the page" error: one numbered line per input.
+fn ambiguous_inputs_error(inputs: &[FileInput]) -> String {
+    let mut msg = format!("{} file inputs on the page:", inputs.len());
+    for (i, input) in inputs.iter().enumerate() {
+        msg.push_str(&format!("\n{}: {}", i + 1, input.what));
+    }
+    msg.push_str("\npass --nth N (nth in MCP) to fill one of them, or the ref of the one to fill or of its upload button");
+    msg
 }
 
 impl Tab {
@@ -1128,7 +1229,7 @@ impl Tab {
                     json!({"depth": -1, "pierce": true}),
                 )
                 .await?;
-            collect_file_inputs(&doc["root"], &frame.session, &mut inputs);
+            collect_file_inputs(&doc["root"], &frame.session, &mut Vec::new(), &mut inputs);
         }
         Ok(inputs)
     }
@@ -1200,10 +1301,34 @@ impl Tab {
     /// Put the files at `paths` into a file input and return a description
     /// of it. `r` names the input or the button that opens the chooser; with
     /// no `r` the page must have exactly one file input.
-    pub(super) async fn upload(&self, r: Option<&str>, paths: &[String]) -> Result<String, String> {
+    pub(super) async fn upload(
+        &self,
+        r: Option<&str>,
+        nth: Option<u32>,
+        paths: &[String],
+    ) -> Result<String, String> {
         let many = paths.len() > 1;
         let too_many = |what: &str| format!("{what} takes one file, but {} were given", paths.len());
+        if r.is_some() && nth.is_some() {
+            return Err("pass either a ref or nth, not both".to_string());
+        }
         let (session, backend, what) = match r {
+            None if nth.is_some() => {
+                let nth = nth.unwrap_or(0) as usize;
+                let mut inputs = self.find_file_inputs().await?;
+                let n = inputs.len();
+                if nth == 0 || nth > n {
+                    return Err(format!(
+                        "nth {nth} is out of range: the page has {n} file input{} (nth is 1-based)",
+                        if n == 1 { "" } else { "s" }
+                    ));
+                }
+                let input = inputs.swap_remove(nth - 1);
+                if many && !input.multiple {
+                    return Err(too_many(&input.what));
+                }
+                (input.session, input.backend, input.what)
+            }
             None => {
                 let mut inputs = self.find_file_inputs().await?;
                 match inputs.len() {
@@ -1215,13 +1340,7 @@ impl Tab {
                         }
                         (input.session, input.backend, input.what)
                     }
-                    n => {
-                        let list: Vec<_> = inputs.iter().map(|i| i.what.as_str()).collect();
-                        return Err(format!(
-                            "{n} file inputs on the page ({}); pass the ref of the one to fill, or of its upload button",
-                            list.join("; ")
-                        ));
-                    }
+                    _ => return Err(ambiguous_inputs_error(&inputs)),
                 }
             }
             Some(r) => {
@@ -1277,6 +1396,43 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const PASSWORD: &str = "Sup3r-Secret-pw!";
+
+    #[test]
+    fn file_inputs_carry_the_text_near_them() {
+        let text = |v: &str| json!({"nodeType": 3, "nodeName": "#text", "nodeValue": v});
+        let el = |name: &str, kids: Vec<Value>| json!({"nodeType": 1, "nodeName": name, "children": kids});
+        let input = |id: &str, n: i64| json!({"nodeType": 1, "nodeName": "INPUT", "backendNodeId": n,
+            "attributes": ["type", "file", "id", id]});
+        // A label outside an identical widget, as in a form item.
+        let item = |label: &str, id: &str, n: i64| {
+            el("DIV", vec![
+                el("LABEL", vec![text(label)]),
+                el("DIV", vec![
+                    el("SCRIPT", vec![text("var x")]),
+                    el("DIV", vec![text("  将文件拖到此处，\n 或 点击上传 ")]),
+                    input(id, n),
+                ]),
+            ])
+        };
+        let root = el("BODY", vec![item("CI/PI/合同", "a", 1), item("其他附件", "b", 2)]);
+        let mut out = Vec::new();
+        collect_file_inputs(&root, "s", &mut Vec::new(), &mut out);
+        assert_eq!(out[0].what, "input[type=file] id=\"a\" near \"CI/PI/合同 将文件拖到此处， 或 点击上传\"");
+        assert_eq!(out[1].what, "input[type=file] id=\"b\" near \"其他附件 将文件拖到此处， 或 点击上传\"");
+        let msg = ambiguous_inputs_error(&out);
+        assert!(msg.starts_with("2 file inputs on the page:\n1: input[type=file] id=\"a\""), "{msg}");
+        assert!(msg.contains("\n2: ") && msg.contains("--nth N"), "{msg}");
+
+        // A single input: the climb would reach the body, so the nearest
+        // ancestor with text is used, not the page.
+        let root = el("BODY", vec![
+            el("P", vec![text("a long page text")]),
+            el("DIV", vec![el("DIV", vec![text("点击上传")]), input("only", 3)]),
+        ]);
+        let mut out = Vec::new();
+        collect_file_inputs(&root, "s", &mut Vec::new(), &mut out);
+        assert_eq!(out[0].what, "input[type=file] id=\"only\" near \"点击上传\"");
+    }
 
     /// Serve `route(path)` on a free 127.0.0.1 port; returns the port.
     async fn serve(route: Arc<dyn Fn(&str) -> String + Send + Sync>) -> u16 {

@@ -199,11 +199,12 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "browser_upload",
-            "Put files from this machine into a page's file input. Omit ref when the page has a single file input; otherwise pass the ref of the upload button (\"Choose File\", \"Upload\", ...) or of the input from the latest browser_snapshot. Never click the button yourself first: this tool clicks it and answers the file chooser. Paths are local to the machine running this MCP server; 25 MB in total.",
+            "Put files from this machine into a page's file input. Omit ref when the page has a single file input; otherwise pass the ref of the upload button (\"Choose File\", \"Upload\", ...) or of the input from the latest browser_snapshot. When the inputs and their buttons have no ref (plain text in the snapshot), pass nth instead: the 1-based position of the file input on the page; the error for an ambiguous call lists every input with the text near it. Never click the button yourself first: this tool clicks it and answers the file chooser. Paths are local to the machine running this MCP server; 25 MB in total.",
             schema(
                 json!({
                     "browser_id": id(),
                     "ref": {"type": "string", "description": "Ref of the upload button or the file input, e.g. e12; omit if the page has exactly one file input"},
+                    "nth": {"type": "integer", "minimum": 1, "description": "1-based position of the file input on the page (document order); fills it directly. Use when no ref exists; not together with ref"},
                     "paths": {"type": "array", "items": {"type": "string"}, "description": "Local file paths to upload"},
                 }),
                 &["browser_id", "paths"],
@@ -460,6 +461,8 @@ struct UploadArgs {
     browser_id: String,
     #[serde(default)]
     r#ref: Option<String>,
+    #[serde(default)]
+    nth: Option<u32>,
     paths: Vec<String>,
 }
 
@@ -775,7 +778,8 @@ impl Server {
                 self.run(Some(&id), |client, _| async move {
                     let paths: Vec<std::path::PathBuf> = a.paths.iter().map(Into::into).collect();
                     let done =
-                        browser::upload_files(&client, &a.browser_id, a.r#ref, &paths).await?;
+                        browser::upload_files(&client, &a.browser_id, a.r#ref, a.nth, &paths)
+                            .await?;
                     let text = format!(
                         "uploaded {} to {}",
                         done.result.files.join(", "),
