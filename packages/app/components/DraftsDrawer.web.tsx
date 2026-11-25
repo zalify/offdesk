@@ -63,6 +63,50 @@ export function DraftsDrawer({
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState<"preview" | "edit">("preview");
   const [wide, setWide] = useState(false);
+  const [customWidth, setCustomWidth] = useState<number | null>(() => {
+    try {
+      const raw = Number(localStorage.getItem("offdesk:drafts-drawer-width"));
+      return Number.isFinite(raw) && raw >= 360 ? raw : null;
+    } catch {
+      return null;
+    }
+  });
+  const [resizing, setResizing] = useState(false);
+  const [resizeHover, setResizeHover] = useState(false);
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setResizing(true);
+    const onMove = (ev: MouseEvent) => {
+      const maxW = Math.max(420, Math.floor(window.innerWidth * 0.95));
+      const next = Math.max(360, Math.min(maxW, Math.round(window.innerWidth - ev.clientX)));
+      setCustomWidth(next);
+    };
+    const onUp = (ev: MouseEvent) => {
+      setResizing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      const maxW = Math.max(420, Math.floor(window.innerWidth * 0.95));
+      const finalW = Math.max(360, Math.min(maxW, Math.round(window.innerWidth - ev.clientX)));
+      try {
+        localStorage.setItem("offdesk:drafts-drawer-width", String(finalW));
+      } catch {
+        // ignore storage quota errors
+      }
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
+
+  const resetWidth = useCallback(() => {
+    setCustomWidth(null);
+    try {
+      localStorage.removeItem("offdesk:drafts-drawer-width");
+    } catch {
+      // ignore
+    }
+  }, []);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
   const [editProject, setEditProject] = useState(defaultProjectGroup);
@@ -223,9 +267,16 @@ export function DraftsDrawer({
         data-testid="drafts-drawer"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: isCompact ? "100%" : wide ? "min(920px, 94vw)" : "min(540px, 92vw)",
+          position: "relative",
+          width: isCompact
+            ? "100%"
+            : customWidth !== null
+              ? `min(${customWidth}px, 95vw)`
+              : wide
+                ? "min(920px, 94vw)"
+                : "min(540px, 92vw)",
           height: isCompact ? "86vh" : "100%",
-          transition: "width 160ms ease",
+          transition: resizing ? "none" : "width 160ms ease",
           background: colors.bg1,
           borderLeft: isCompact ? undefined : `1px solid ${colors.line}`,
           borderTop: isCompact ? `1px solid ${colors.line}` : undefined,
@@ -235,8 +286,43 @@ export function DraftsDrawer({
           overflow: "hidden",
           color: colors.fg0,
           fontFamily: "var(--font-sans)",
+          userSelect: resizing ? "none" : undefined,
         }}
       >
+        {/* Left-edge drag handle to resize drawer width */}
+        {!isCompact && (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize drafts drawer"
+            title="Drag to resize width · Double-click to reset"
+            onMouseDown={startResize}
+            onDoubleClick={resetWidth}
+            onMouseEnter={() => setResizeHover(true)}
+            onMouseLeave={() => setResizeHover(false)}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 8,
+              cursor: "col-resize",
+              zIndex: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "flex-start",
+            }}
+          >
+            <div
+              style={{
+                width: resizing || resizeHover ? 3 : 0,
+                height: "100%",
+                background: resizing ? colors.accent : colorAlpha.accentLine,
+                transition: "width 120ms ease, background 120ms ease",
+              }}
+            />
+          </div>
+        )}
         {/* Header */}
         <div
           style={{
@@ -257,7 +343,10 @@ export function DraftsDrawer({
               type="button"
               aria-label={wide ? "Narrow panel" : "Expand panel"}
               title={wide ? "Narrow panel" : "Expand panel for tables & diagrams"}
-              onClick={() => setWide((w) => !w)}
+              onClick={() => {
+                resetWidth();
+                setWide((w) => !w);
+              }}
               style={{
                 width: 28,
                 height: 28,
