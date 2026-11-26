@@ -1584,6 +1584,7 @@ u.addEventListener('input', () => { document.getElementById('echo').textContent 
             .execute(C::Open {
                 url: Some(format!("http://127.0.0.1:{same}/")),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -1740,7 +1741,7 @@ u.addEventListener('input', () => { document.getElementById('echo').textContent 
         let dir = std::env::temp_dir().join(format!("offdesk-frames-{}", uuid::Uuid::new_v4()));
         let mgr = AgentBrowserManager::with_dir(dir.clone());
         let info = mgr
-            .execute(C::Open { url: Some(format!("http://127.0.0.1:{port}/")), opener_terminal_id: None })
+            .execute(C::Open { url: Some(format!("http://127.0.0.1:{port}/")), opener_terminal_id: None, private: false })
             .await
             .unwrap();
         let id = info["id"].as_str().unwrap().to_string();

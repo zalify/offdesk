@@ -25,6 +25,7 @@ export function useAgentBrowserTabs({
   browsers,
   rememberedId,
   deviceId,
+  activeTerminalId = null,
   onSelect,
 }: {
   machineId: string;
@@ -32,6 +33,8 @@ export function useAgentBrowserTabs({
   /** The tab the person last picked on this machine; may be gone by now. */
   rememberedId: string | null;
   deviceId: string | null;
+  /** The focused terminal; its browser is picked when nothing is remembered. */
+  activeTerminalId?: string | null;
   onSelect: (browserId: string) => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -46,7 +49,15 @@ export function useAgentBrowserTabs({
     browsers,
     rememberedId,
     awaitingId,
+    activeTerminalId,
   );
+  // A pick made because the remembered tab is gone becomes the remembered one,
+  // so later terminal focus changes do not move it.
+  useEffect(() => {
+    if (selectedBrowserId !== null && selectedBrowserId !== rememberedId) {
+      onSelect(selectedBrowserId);
+    }
+  }, [selectedBrowserId, rememberedId, onSelect]);
   const selected =
     browsers.find((browser) => browser.id === selectedBrowserId) ?? null;
   const controlling = selected ? browserControlledBy(selected, deviceId) : false;

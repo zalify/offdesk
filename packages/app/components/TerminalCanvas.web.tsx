@@ -89,6 +89,8 @@ import {
   browserOverlayModeForFiles,
   type BrowserOverlayMode,
   findNewHandoffs,
+  handoffToastText,
+  browserOwnerLabel,
   findNewReclaims,
   pickBrowserToOpen,
 } from "@/lib/agentBrowserOverlay";
@@ -1209,6 +1211,7 @@ function TerminalCanvasInner() {
       const pick = pickBrowserToOpen(
         scopedAgentBrowsers,
         rememberedBrowserIds[overlayMachineId],
+        workspaceTerminal?.id ?? null,
       );
       if (pick) handleSelectOverlayBrowser(pick);
     }
@@ -1220,6 +1223,7 @@ function TerminalCanvasInner() {
     handleSelectOverlayBrowser,
     rememberedBrowserIds,
     scopedAgentBrowsers,
+    workspaceTerminal?.id,
   ]);
   // A mini window with no tab left to show goes away (the agent closed its
   // browser); the full dialog stays for its empty state and address field.
@@ -1327,10 +1331,7 @@ function TerminalCanvasInner() {
     const fresh = findNewHandoffs(previous.browsers, scopedAgentBrowsers);
     if (fresh.length > 0) {
       const first = fresh[0];
-      showWorkspaceToast(
-        `The agent needs you in ${browserLabel(first)}: ${first.handoff?.reason ?? ""}`,
-        6000,
-      );
+      showWorkspaceToast(handoffToastText(first, terminals), 6000);
       // The mini follows whoever needs the person now.
       if (browserMini) handleSelectOverlayBrowser(first.id);
     }
@@ -1341,7 +1342,7 @@ function TerminalCanvasInner() {
     );
     if (lost?.reclaimed) {
       showWorkspaceToast(
-        reclaimNoticeText(lost.reclaimed.reason, true),
+        reclaimNoticeText(lost.reclaimed.reason, true, browserOwnerLabel(lost, terminals)),
         6000,
       );
     }
@@ -1352,6 +1353,7 @@ function TerminalCanvasInner() {
     handleSelectOverlayBrowser,
     scopedAgentBrowsers,
     deviceId,
+    terminals,
   ]);
 
   // Create a tab named after the cwd directory when available (falling back
@@ -2896,6 +2898,8 @@ function TerminalCanvasInner() {
             browsers={scopedAgentBrowsers}
             selectedId={rememberedBrowserIds[activeMachine.id] ?? null}
             deviceId={deviceId}
+            terminals={terminals}
+            activeTerminalId={workspaceTerminal?.id ?? null}
             onSelect={handleSelectOverlayBrowser}
             onClose={() => setBrowserOverlayMode("closed")}
             mini={browserMini}

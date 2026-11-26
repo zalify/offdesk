@@ -544,6 +544,7 @@ mod tests {
                 AgentBrowserCommand::Open {
                     url: Some("https://example.com".to_string()),
                     opener_terminal_id: None,
+                    private: false,
                 }
             );
             node_state
@@ -682,7 +683,8 @@ mod tests {
         assert_eq!(
             timeout_for(&AgentBrowserCommand::Open {
                 url: None,
-                opener_terminal_id: None
+                opener_terminal_id: None,
+                private: false,
             }),
             Duration::from_secs(300)
         );

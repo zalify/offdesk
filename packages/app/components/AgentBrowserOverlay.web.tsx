@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { AgentBrowserInfo } from "@offdesk/shared";
+import type { AgentBrowserInfo, TerminalInfo } from "@offdesk/shared";
 import { Globe, Plus, X } from "lucide-react";
 import { controlAgentBrowser } from "@/lib/api";
 import { AgentBrowserPane } from "./AgentBrowserPane.web";
 import {
   browserControlledBy,
+  browserIsPrivate,
   browserLabel,
   browserNeedsPerson,
+  browserOwnerLabel,
   miniBrowserStatus,
 } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
@@ -64,6 +66,8 @@ export function AgentBrowserOverlay({
   browsers,
   selectedId: rememberedId,
   deviceId,
+  terminals,
+  activeTerminalId = null,
   onSelect,
   onClose,
   mini = false,
@@ -77,6 +81,10 @@ export function AgentBrowserOverlay({
   /** The tab the person last picked on this machine; may be gone by now. */
   selectedId: string | null;
   deviceId: string | null;
+  /** Terminals of the workspace; an opener's name labels its tabs. */
+  terminals: readonly TerminalInfo[];
+  /** The focused terminal; its browser is picked when the shown tab goes away. */
+  activeTerminalId?: string | null;
   onSelect: (browserId: string) => void;
   onClose: () => void;
   /** Show as the small read-only window instead of the dialog. */
@@ -107,6 +115,7 @@ export function AgentBrowserOverlay({
     browsers,
     rememberedId,
     deviceId,
+    activeTerminalId,
     onSelect,
   });
 
@@ -159,6 +168,7 @@ export function AgentBrowserOverlay({
     }
   };
   const status = selected ? miniBrowserStatus(selected, deviceId) : null;
+  const selectedOwner = selected ? browserOwnerLabel(selected, terminals) : null;
 
   const onAddressKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Escape") return;
@@ -243,6 +253,7 @@ export function AgentBrowserOverlay({
               const label = browserLabel(browser);
               const needsYou = browserNeedsPerson(browser);
               const mine = browserControlledBy(browser, deviceId);
+              const owner = browserOwnerLabel(browser, terminals);
               const closing = closingIds.has(browser.id);
               return (
                 <div
@@ -291,6 +302,32 @@ export function AgentBrowserOverlay({
                   >
                     {label}
                   </span>
+                  {owner && (
+                    <span
+                      data-testid={`agent-browser-tab-owner-${browser.id}`}
+                      title={`Opened by ${owner}`}
+                      style={{
+                        fontSize: rem(10.5),
+                        maxWidth: 90,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        color: colors.fg3,
+                        flexShrink: 1,
+                      }}
+                    >
+                      {owner}
+                    </span>
+                  )}
+                  {browserIsPrivate(browser) && (
+                    <span
+                      data-testid="agent-browser-tab-private"
+                      title="Private browser: separate from the machine's logins"
+                      style={{ fontSize: rem(10.5), color: colors.fg3, flexShrink: 0 }}
+                    >
+                      [private]
+                    </span>
+                  )}
                   {mine && (
                     <span
                       data-testid={`agent-browser-tab-you-${browser.id}`}
@@ -494,6 +531,29 @@ export function AgentBrowserOverlay({
             >
               {selected ? browserLabel(selected) : "No browser tabs"}
             </button>
+            {selectedOwner && (
+              <span
+                data-testid="agent-browser-mini-owner"
+                title={`Opened by ${selectedOwner}`}
+                style={{
+                  ...miniTextButton,
+                  maxWidth: "30%",
+                  flexShrink: 1,
+                  color: colors.fg3,
+                }}
+              >
+                {selectedOwner}
+              </span>
+            )}
+            {selected && browserIsPrivate(selected) && (
+              <span
+                data-testid="agent-browser-tab-private"
+                title="Private browser"
+                style={{ color: colors.fg3, flexShrink: 0 }}
+              >
+                [private]
+              </span>
+            )}
             {status && (
               <span
                 data-testid="agent-browser-mini-state"

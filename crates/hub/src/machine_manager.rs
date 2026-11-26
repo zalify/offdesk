@@ -769,6 +769,50 @@ impl MachineManager {
         }
     }
 
+    /// Terminals were destroyed: close the agent browsers they opened.
+    ///
+    /// Only browsers whose `opener_terminal_id` names a destroyed terminal are
+    /// closed; tabs without an opener are never touched. This is the hub's own
+    /// action, so it does not go through the HTTP route's `user_in_control`
+    /// check: a person controlling the tab does not keep it alive. The close
+    /// is fire-and-forget (the node's reply carries an unknown request id and
+    /// is ignored); the node's `AgentBrowserDestroyed` then removes the
+    /// browser, its control state and activity like any normal close. Takes
+    /// the connection by reference so callers may hold the `machines` lock.
+    fn close_browsers_of_terminals(
+        &self,
+        machine_id: &str,
+        conn: &MachineConnection,
+        terminal_ids: &[&str],
+    ) {
+        for browser in conn.agent_browsers.values() {
+            let Some(opener) = browser.opener_terminal_id.as_deref() else {
+                continue;
+            };
+            if !terminal_ids.contains(&opener) {
+                continue;
+            }
+            let cmd_tx = conn.cmd_tx.clone();
+            let machine_id = machine_id.to_string();
+            let browser_id = browser.id.clone();
+            tokio::spawn(async move {
+                let request = HubToMachine::AgentBrowser {
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    command: offdesk_protocol::AgentBrowserCommand::Close {
+                        browser_id: browser_id.clone(),
+                    },
+                };
+                if cmd_tx.send(request).await.is_err() {
+                    tracing::debug!(
+                        machine_id = %machine_id,
+                        browser_id = %browser_id,
+                        "could not close agent browser of a destroyed terminal: machine offline"
+                    );
+                }
+            });
+        }
+    }
+
     /// A machine connection ended: its agent browsers are gone from the UI's
     /// point of view, viewers are told, and its pending agent browser
     /// requests fail now rather than after their timeout.
@@ -2617,6 +2661,7 @@ impl MachineManager {
                             .terminals
                             .remove(&terminal_id)
                             .and_then(|terminal| terminal.workspace_group_id);
+                        self.close_browsers_of_terminals(machine_id, conn, &[&terminal_id]);
                         (target_user_id, group_id)
                     })
                 };
@@ -3116,8 +3161,10 @@ impl MachineManager {
                     }
 
                     // 2. Persisted terminals NOT reported by machine — they died
+                    let mut died: Vec<&str> = Vec::new();
                     for old_terminal in &persisted {
                         if !reported_ids.contains(&old_terminal.id) {
+                            died.push(&old_terminal.id);
                             if let Ok(db_conn) = self.db.get() {
                                 if let Err(e) = crate::db::terminal_sessions::mark_destroyed(
                                     &db_conn,
@@ -3146,6 +3193,10 @@ impl MachineManager {
                             );
                         }
                     }
+                    // Only browsers the hub already knows are closed here; if
+                    // the node's browser list arrives after this report, the
+                    // orphan stays open.
+                    self.close_browsers_of_terminals(machine_id, conn, &died);
                 }
             }
             MachineToHub::ForegroundProcessResult {
@@ -3449,6 +3500,7 @@ impl MachineManager {
                     .terminals
                     .remove(terminal_id)
                     .and_then(|terminal| terminal.workspace_group_id);
+                self.close_browsers_of_terminals(machine_id, conn, &[terminal_id]);
                 if let Ok(db_conn) = self.db.get() {
                     if let Err(e) =
                         crate::db::terminal_sessions::mark_destroyed(&db_conn, terminal_id)
@@ -6762,6 +6814,216 @@ mod tests {
         let types = event_types(&manager);
         assert!(types.contains(&"agent_browser_destroyed".to_string()), "{types:?}");
         assert!(manager.snapshot_for_user("user-a").await.agent_browsers.is_empty());
+    }
+
+    fn browser_of(id: &str, opener: Option<&str>) -> AgentBrowserInfo {
+        AgentBrowserInfo {
+            opener_terminal_id: opener.map(str::to_string),
+            ..browser(id, "about:blank")
+        }
+    }
+
+    /// Browser ids the hub asked the node to close, in arrival order.
+    async fn closed_browsers(rx: &mut mpsc::Receiver<HubToMachine>) -> Vec<String> {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let mut closed = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let HubToMachine::AgentBrowser {
+                command: offdesk_protocol::AgentBrowserCommand::Close { browser_id },
+                ..
+            } = msg
+            {
+                closed.push(browser_id);
+            }
+        }
+        closed.sort();
+        closed
+    }
+
+    async fn seed_browsers(manager: &MachineManager) {
+        for b in [
+            browser_of("popup-a", Some("term-a")),
+            browser_of("main-a", Some("term-a")),
+            browser_of("main-b", Some("term-b")),
+            browser_of("ownerless", None),
+        ] {
+            manager
+                .handle_machine_message("machine-a", MachineToHub::AgentBrowserCreated { browser: b })
+                .await;
+        }
+    }
+
+    async fn seed_terminals(manager: &MachineManager) {
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![terminal("machine-a", "term-a"), terminal("machine-a", "term-b")],
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn terminal_destroyed_closes_only_its_openers_browsers() {
+        let manager = MachineManager::new(test_db());
+        let (_conn_id, mut rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        seed_terminals(&manager).await;
+        seed_browsers(&manager).await;
+
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::TerminalDestroyed { terminal_id: "term-a".into() },
+            )
+            .await;
+        assert_eq!(closed_browsers(&mut rx).await, vec!["main-a", "popup-a"]);
+    }
+
+    #[tokio::test]
+    async fn terminal_died_closes_its_openers_browsers() {
+        let manager = MachineManager::new(test_db());
+        let (_conn_id, mut rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        seed_terminals(&manager).await;
+        seed_browsers(&manager).await;
+
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::TerminalDied { terminal_id: "term-b".into(), reason: "exited".into() },
+            )
+            .await;
+        assert_eq!(closed_browsers(&mut rx).await, vec!["main-b"]);
+    }
+
+    #[tokio::test]
+    async fn terminal_gone_from_reconnect_report_closes_known_browsers() {
+        let manager = MachineManager::new(test_db());
+        let (conn_id, _rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        seed_terminals(&manager).await;
+        manager.unregister_machine("machine-a", &conn_id).await;
+
+        let (_conn_id, mut rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        // Order A: browsers first, then the terminal report without term-a.
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingAgentBrowsers {
+                    browsers: vec![
+                        browser_of("popup-a", Some("term-a")),
+                        browser_of("main-b", Some("term-b")),
+                        browser_of("ownerless", None),
+                        browser_of("unknown-opener", Some("term-zzz")),
+                    ],
+                },
+            )
+            .await;
+        assert!(closed_browsers(&mut rx).await.is_empty());
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::ExistingTerminals {
+                    terminals: vec![terminal("machine-a", "term-b")],
+                },
+            )
+            .await;
+        assert_eq!(closed_browsers(&mut rx).await, vec!["popup-a"]);
+    }
+
+    #[tokio::test]
+    async fn reconnect_closes_nothing_alive_in_either_message_order() {
+        for browsers_first in [true, false] {
+            let manager = MachineManager::new(test_db());
+            let (conn_id, _rx) = manager
+                .register_machine(machine("machine-a"), Some("user-a".to_string()))
+                .await;
+            seed_terminals(&manager).await;
+            manager.unregister_machine("machine-a", &conn_id).await;
+            let (_conn_id, mut rx) = manager
+                .register_machine(machine("machine-a"), Some("user-a".to_string()))
+                .await;
+
+            let browsers = MachineToHub::ExistingAgentBrowsers {
+                browsers: vec![
+                    browser_of("main-a", Some("term-a")),
+                    browser_of("main-b", Some("term-b")),
+                    browser_of("ownerless", None),
+                ],
+            };
+            let terminals = MachineToHub::ExistingTerminals {
+                terminals: vec![terminal("machine-a", "term-a"), terminal("machine-a", "term-b")],
+            };
+            if browsers_first {
+                manager.handle_machine_message("machine-a", browsers).await;
+                manager.handle_machine_message("machine-a", terminals).await;
+            } else {
+                manager.handle_machine_message("machine-a", terminals).await;
+                manager.handle_machine_message("machine-a", browsers).await;
+            }
+            assert!(
+                closed_browsers(&mut rx).await.is_empty(),
+                "browsers_first={browsers_first}"
+            );
+            assert_eq!(manager.snapshot_for_user("user-a").await.agent_browsers.len(), 3);
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_a_human_controlled_browser_is_not_refused_and_cleans_up() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let (_conn_id, mut rx) = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        seed_terminals(&manager).await;
+        seed_browsers(&manager).await;
+        manager
+            .change_agent_browser_control(
+                "machine-a",
+                "main-a",
+                ControlChange::Take { device_id: "dev-1".into() },
+            )
+            .await
+            .unwrap();
+        let waiter = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                manager
+                    .wait_agent_browser_control(
+                        "machine-a",
+                        "main-a",
+                        ControlWait::Agent,
+                        Duration::from_secs(30),
+                    )
+                    .await
+            })
+        };
+        tokio::task::yield_now().await;
+
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::TerminalDestroyed { terminal_id: "term-a".into() },
+            )
+            .await;
+        assert_eq!(closed_browsers(&mut rx).await, vec!["main-a", "popup-a"]);
+
+        // The node confirms the close like any normal destruction.
+        manager
+            .handle_machine_message(
+                "machine-a",
+                MachineToHub::AgentBrowserDestroyed { browser_id: "main-a".into() },
+            )
+            .await;
+        assert!(waiter.await.unwrap().is_none());
+        assert!(!manager.agent_browser_exists("machine-a", "main-a").await);
     }
 
     #[tokio::test]

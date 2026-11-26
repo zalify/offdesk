@@ -259,6 +259,7 @@ pub async fn open_browser(
     machine: Option<&str>,
     local_machine_id: Option<&str>,
     url: Option<String>,
+    private: bool,
 ) -> Result<AgentBrowserInfo, CliError> {
     let machines = client.machines().await?;
     let target = pick_open_machine(&machines, machine, local_machine_id)?;
@@ -271,9 +272,37 @@ pub async fn open_browser(
     let command = AgentBrowserCommand::Open {
         url,
         opener_terminal_id,
+        private,
     };
     let value = call(client, &target.id, command).await?;
-    parse(value)
+    let info = parse(value)?;
+    if let Err(error) = check_private_honored(private, &info) {
+        // Never leave the non-private tab behind: the caller wanted isolation.
+        let _ = call(
+            client,
+            &target.id,
+            AgentBrowserCommand::Close {
+                browser_id: info.id.clone(),
+            },
+        )
+        .await;
+        return Err(error);
+    }
+    Ok(info)
+}
+
+/// An old node (or hub) ignores the unknown `private` field and opens a
+/// normal tab that shares the persistent profile's logins. Refuse that.
+fn check_private_honored(requested: bool, info: &AgentBrowserInfo) -> Result<(), CliError> {
+    if requested && !info.private {
+        return Err(CliError::Protocol(
+            "this machine's node (or the hub) is too old for private browser tabs: it opened a \
+             normal tab, which was closed again. Update offdesk on the machine and the hub, \
+             or open without --private."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// The `offdesk browser ls` table (no trailing newline).
@@ -282,13 +311,18 @@ fn format_table(browsers: &[(MachineInfo, AgentBrowserInfo)]) -> String {
         "{:<10} {:<16} {:<40} {}",
         "ID", "MACHINE", "URL", "TITLE"
     )];
+    // Private tabs are marked in the title column (kept minimal on purpose).
     for (machine, info) in browsers {
         lines.push(format!(
             "{:<10} {:<16} {:<40} {}",
             short_id(&info.id),
             machine.name,
             info.url,
-            info.title
+            if info.private {
+                format!("[private] {}", info.title)
+            } else {
+                info.title.clone()
+            }
         ));
     }
     lines.join("\n")
@@ -785,9 +819,10 @@ pub async fn open(
     machine: Option<&str>,
     local_machine_id: Option<&str>,
     url: Option<String>,
+    private: bool,
     json: bool,
 ) -> Result<(), CliError> {
-    let info = open_browser(client, machine, local_machine_id, url).await?;
+    let info = open_browser(client, machine, local_machine_id, url, private).await?;
     print_info(&info, json, true)
 }
 
@@ -1088,6 +1123,29 @@ mod tests {
             opener_terminal_id: None,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn private_check_refuses_a_normal_tab() {
+        let mut i = info("abc");
+        assert!(check_private_honored(false, &i).is_ok());
+        let err = check_private_honored(true, &i).unwrap_err().to_string();
+        assert!(err.contains("too old for private browser tabs"), "{err}");
+        i.private = true;
+        assert!(check_private_honored(true, &i).is_ok());
+    }
+
+    #[test]
+    fn table_marks_private_tabs() {
+        let machine = machine("m", "box");
+        let mut a = info("aaaaaaaaaa");
+        a.title = "Plain".into();
+        let mut b = info("bbbbbbbbbb");
+        b.title = "Secret".into();
+        b.private = true;
+        let table = format_table(&[(machine.clone(), a), (machine, b)]);
+        assert!(table.contains("[private] Secret"), "{table}");
+        assert!(!table.contains("[private] Plain"), "{table}");
     }
 
     #[test]

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AgentBrowserInfo } from "@offdesk/shared";
+import type { AgentBrowserInfo, TerminalInfo } from "@offdesk/shared";
 import {
   browserControlledBy,
+  browserIsPrivate,
   browserLabel,
+  browserOwnerLabel,
+  handoffToastText,
   browserNeedsPerson,
   dialogText,
   findNewHandoffs,
@@ -206,5 +209,76 @@ describe("miniBrowserStatus", () => {
       text: "needs you: Please log in",
       tone: "needsYou",
     });
+  });
+});
+
+const term = (id: string, title: string): TerminalInfo => ({
+  id,
+  machine_id: "m",
+  title,
+  cwd: "/tmp",
+  cols: 80,
+  rows: 24,
+  reachable: true,
+});
+
+describe("browserOwnerLabel", () => {
+  const terminals = [term("t1", "api work"), term("t2", "Terminal 0123abcd")];
+  it("uses the name the workspace shows for the opener terminal", () => {
+    expect(browserOwnerLabel(browser("a", { opener_terminal_id: "t1" }), terminals)).toBe("api work");
+    expect(browserOwnerLabel(browser("a", { opener_terminal_id: "t2" }), terminals)).toBe("shell");
+  });
+  it("is null without an opener or when the terminal is unknown", () => {
+    expect(browserOwnerLabel(browser("a"), terminals)).toBeNull();
+    expect(browserOwnerLabel(browser("a", { opener_terminal_id: "gone" }), terminals)).toBeNull();
+  });
+});
+
+describe("browserIsPrivate", () => {
+  it("is true only for private: true", () => {
+    expect(browserIsPrivate(browser("a", { private: true }))).toBe(true);
+    expect(browserIsPrivate(browser("a", { private: false }))).toBe(false);
+    expect(browserIsPrivate(browser("a"))).toBe(false);
+  });
+});
+
+describe("handoffToastText", () => {
+  const handoff = { reason: "log in", requested_at: 1 };
+  it("names the asking session when known", () => {
+    const b = browser("a", { opener_terminal_id: "t1", handoff });
+    expect(handoffToastText(b, [term("t1", "api work")])).toBe("api work needs you in a: log in");
+  });
+  it("keeps the generic wording when unknown", () => {
+    expect(handoffToastText(browser("a", { handoff }), [])).toBe("The agent needs you in a: log in");
+  });
+});
+
+describe("tab pick order", () => {
+  const list = [
+    browser("a", { opener_terminal_id: "t1" }),
+    browser("b", { opener_terminal_id: "t2" }),
+    browser("c", { opener_terminal_id: "t2" }),
+    browser("d"),
+  ];
+  it("on open: asking, then the active terminal's, then remembered, then first", () => {
+    const asking = [...list.slice(0, 3), browser("d", { handoff: { reason: "x", requested_at: 1 } })];
+    expect(pickBrowserToOpen(asking, "a", "t2")).toBe("d");
+    expect(pickBrowserToOpen(list, "a", "t2")).toBe("b");
+    expect(pickBrowserToOpen(list, "c", "t2")).toBe("c");
+    expect(pickBrowserToOpen(list, "d", "t-none")).toBe("d");
+    expect(pickBrowserToOpen(list, "d", null)).toBe("d");
+    expect(pickBrowserToOpen(list, "gone", null)).toBe("a");
+  });
+  it("does not move an existing selection when the focused terminal changes", () => {
+    expect(pickSelectedBrowserId(list, "a", null, "t2")).toBe("a");
+  });
+  it("when the shown tab is gone: asking, then the active terminal's, then first", () => {
+    expect(pickSelectedBrowserId(list, "gone", null, "t2")).toBe("b");
+    expect(pickSelectedBrowserId(list, "gone", null, null)).toBe("a");
+    const asking = [...list.slice(0, 3), browser("d", { handoff: { reason: "x", requested_at: 1 } })];
+    expect(pickSelectedBrowserId(asking, "gone", null, "t2")).toBe("d");
+  });
+  it("still waits for a tab just opened", () => {
+    expect(pickSelectedBrowserId(list, "new", "new", "t2")).toBeNull();
   });
 });
