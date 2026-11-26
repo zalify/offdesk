@@ -27,6 +27,8 @@ export interface TerminalInfo {
   /** When it last had output, ms since the epoch, in 30-second steps;
    *  absent until the node reports it, and from older nodes. */
   last_activity_ms?: number | null
+  /** User-defined manual display title; hub-authoritative and synced across devices. */
+  custom_title?: string | null
 }
 
 export interface TerminalOpener {

@@ -2,7 +2,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Json, Response},
-    routing::{delete, get, patch, post, put},
+    routing::{get, patch, post, put},
     Router,
 };
 use offdesk_protocol::{
@@ -801,6 +801,35 @@ async fn reorder_workspace_groups(
     }
 
     Ok(Json(groups))
+}
+
+#[derive(Deserialize)]
+struct RenameTerminalRequest {
+    title: String,
+}
+
+async fn rename_terminal(
+    State(state): State<AppState>,
+    auth_user: AuthUser,
+    Path((machine_id, terminal_id)): Path<(String, String)>,
+    Json(req): Json<RenameTerminalRequest>,
+) -> Result<Json<TerminalInfo>, (StatusCode, String)> {
+    ensure_machine_row(&state, &auth_user.user_id, &machine_id).await?;
+    let trimmed = req.title.trim();
+    let custom_title = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(120).collect::<String>())
+    };
+    let updated = state
+        .manager
+        .set_terminal_custom_title(&auth_user.user_id, &machine_id, &terminal_id, custom_title)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    match updated {
+        Some(terminal) => Ok(Json(terminal)),
+        None => Err((StatusCode::NOT_FOUND, "Terminal not found".to_string())),
+    }
 }
 
 async fn rename_workspace_group(
@@ -1661,7 +1690,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/api/machines/{machine_id}/terminals/{terminal_id}",
-            delete(destroy_terminal),
+            patch(rename_terminal).delete(destroy_terminal),
         )
         .route(
             "/api/machines/{machine_id}/terminals/{terminal_id}/foreground-process",
@@ -1780,6 +1809,7 @@ mod tests {
             attention: None,
             opened_by: None,
             last_activity_ms: None,
+            custom_title: None,
             reachable: true,
         }
     }

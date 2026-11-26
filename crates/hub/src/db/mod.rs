@@ -224,7 +224,8 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             created_at INTEGER NOT NULL,
             destroyed_at INTEGER,
             opened_by_kind TEXT,
-            opened_by_label TEXT
+            opened_by_label TEXT,
+            custom_title TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_terminal_sessions_machine
@@ -471,6 +472,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     if !column_exists(conn, "terminal_sessions", "opened_by_label")? {
         conn.execute(
             "ALTER TABLE terminal_sessions ADD COLUMN opened_by_label TEXT",
+            [],
+        )?;
+    }
+
+    if !column_exists(conn, "terminal_sessions", "custom_title")? {
+        conn.execute(
+            "ALTER TABLE terminal_sessions ADD COLUMN custom_title TEXT",
             [],
         )?;
     }

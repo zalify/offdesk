@@ -115,4 +115,5 @@ pub struct TerminalSessionRow {
     /// `TerminalOpenerKind` name ("cli"); NULL for terminals a person opened.
     pub opened_by_kind: Option<String>,
     pub opened_by_label: Option<String>,
+    pub custom_title: Option<String>,
 }

@@ -46,6 +46,8 @@ function cleanCliTitle(title: string, cwd?: string | null): string {
 }
 
 export function displayTerminalTitle(terminal: TerminalInfo): string {
+  const custom = terminal.custom_title?.trim();
+  if (custom) return custom;
   const title = terminal.title?.trim();
   if (!title || LEGACY_TERMINAL_TITLE.test(title)) return "shell";
   return cleanCliTitle(title, terminal.cwd);

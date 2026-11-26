@@ -418,6 +418,7 @@ impl MachineManager {
                         reachable: false,
                         opened_by,
                         last_activity_ms: None,
+                        custom_title: row.custom_title,
                     });
             }
             by_machine
@@ -1324,6 +1325,7 @@ impl MachineManager {
                     reachable: true,
                     opened_by,
                     last_activity_ms: None,
+                    custom_title: None,
                 };
                 Ok(terminal)
             }
@@ -2561,6 +2563,7 @@ impl MachineManager {
                             reachable: true,
                             opened_by: opened_by.clone(),
                             last_activity_ms: None,
+                            custom_title: None,
                         };
                         conn.terminals.insert(terminal_id.clone(), terminal.clone());
 
@@ -3029,6 +3032,7 @@ impl MachineManager {
                             terminal.title = persisted_terminal.title.clone();
                             terminal.title_source = persisted_terminal.title_source;
                             terminal.opened_by = persisted_terminal.opened_by.clone();
+                            terminal.custom_title = persisted_terminal.custom_title.clone();
                         } else if let Ok(db_conn) = self.db.get() {
                             // Not in the in-memory stash (e.g. hub restarted
                             // or the row was marked destroyed): adopt the
@@ -3051,6 +3055,7 @@ impl MachineManager {
                                     terminal.workspace_group_id = row.workspace_group_id.clone();
                                     terminal.opened_by =
                                         crate::db::terminal_sessions::opener_from_row(&row);
+                                    terminal.custom_title = row.custom_title.clone();
                                 }
                                 Ok(None) => {}
                                 Err(e) => tracing::warn!(
@@ -4109,6 +4114,64 @@ fn history_has_gap_after_seq(history: &VecDeque<EventEnvelope>, after_seq: u64) 
     after_seq.saturating_add(1) < oldest_seq
 }
 
+impl MachineManager {
+    /// Set or clear a user-defined manual display title for a terminal,
+    /// persisting to SQLite and broadcasting `TerminalUpdated` to all clients.
+    pub async fn set_terminal_custom_title(
+        &self,
+        user_id: &str,
+        machine_id: &str,
+        terminal_id: &str,
+        custom_title: Option<String>,
+    ) -> Result<Option<TerminalInfo>, String> {
+        let mut updated_terminal: Option<TerminalInfo> = None;
+        {
+            let mut machines = self.machines.lock().await;
+            if let Some(conn) = machines.get_mut(machine_id) {
+                if conn.user_id.as_deref() == Some(user_id) {
+                    if let Some(term) = conn.terminals.get_mut(terminal_id) {
+                        term.custom_title = custom_title.clone();
+                        updated_terminal = Some(term.clone());
+                    }
+                }
+            }
+        }
+        if updated_terminal.is_none() {
+            let mut persisted = self.persisted_terminals.lock().await;
+            if let Some(list) = persisted.get_mut(machine_id) {
+                if let Some(term) = list.iter_mut().find(|t| t.id == terminal_id) {
+                    term.custom_title = custom_title.clone();
+                    updated_terminal = Some(term.clone());
+                }
+            }
+        }
+
+        let db_conn = self.db.get().map_err(|e| format!("DB error: {e}"))?;
+        let rows_changed = crate::db::terminal_sessions::set_custom_title(
+            &db_conn,
+            machine_id,
+            terminal_id,
+            custom_title.as_deref(),
+        )
+        .map_err(|e| format!("DB error: {e}"))?;
+
+        if let Some(terminal) = updated_terminal {
+            self.send_event(
+                Some(user_id.to_string()),
+                BrowserEvent::TerminalUpdated {
+                    terminal: terminal.clone(),
+                },
+            );
+            return Ok(Some(terminal));
+        }
+
+        if rows_changed == 0 {
+            return Ok(None);
+        }
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4145,6 +4208,7 @@ mod tests {
             attention: None,
             opened_by: None,
             last_activity_ms: None,
+            custom_title: None,
             reachable: true,
         }
     }

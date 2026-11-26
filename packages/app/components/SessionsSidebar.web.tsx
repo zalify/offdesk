@@ -91,6 +91,7 @@ interface SessionsSidebarProps {
   ) => void;
   onMoveTerminal: (terminal: TerminalInfo, targetGroup: WorkspaceGroup) => void;
   onCloseTerminal: (terminal: TerminalInfo) => void;
+  onRenameTerminal?: (terminal: TerminalInfo, title: string) => void;
   shelvedTerminalIds?: Set<string>;
   onShelfTerminal?: (terminal: TerminalInfo) => void;
 }
@@ -117,9 +118,20 @@ function SessionsSidebarComponent({
   onReorderGroups,
   onMoveTerminal,
   onCloseTerminal,
+  onRenameTerminal,
   shelvedTerminalIds,
   onShelfTerminal,
 }: SessionsSidebarProps) {
+  const [renamingTerminalId, setRenamingTerminalId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const startRenameTerminal = (terminal: TerminalInfo) => {
+    setRenamingTerminalId(terminal.id);
+    setRenameDraft(terminal.custom_title?.trim() || displayTerminalTitle(terminal));
+  };
+  const commitRenameTerminal = (terminal: TerminalInfo) => {
+    setRenamingTerminalId(null);
+    onRenameTerminal?.(terminal, renameDraft.trim());
+  };
   const isDrawer = placement === "drawer";
 
   const [order, setOrder] = useState<SessionOrder>(readSessionOrder);
@@ -248,6 +260,14 @@ function SessionsSidebarComponent({
   const rowMenuItems = (terminal: TerminalInfo, group: WorkspaceGroup): ContextMenuEntry[] => {
     const targets = moveTargets(group.id);
     return [
+      ...(onRenameTerminal
+        ? [
+            {
+              label: "rename",
+              onClick: () => startRenameTerminal(terminal),
+            },
+          ]
+        : []),
       ...(onShelfTerminal
         ? [
             {
@@ -383,15 +403,62 @@ function SessionsSidebarComponent({
         data-unread={unread ? "true" : undefined}
         className="odk-sessions-row"
         onContextMenu={(event) => openMenuAt(event, rowMenuItems(terminal, group))}
-        onMouseDown={(event) =>
-          armDrag({ kind: "row", terminalId: terminal.id, groupId: group.id }, event)
-        }
+        onMouseDown={(event) => {
+          if (renamingTerminalId === terminal.id) return;
+          armDrag({ kind: "row", terminalId: terminal.id, groupId: group.id }, event);
+        }}
       >
+        {renamingTerminalId === terminal.id ? (
+          <div
+            className="odk-sessions-row-main"
+            style={{ padding: "2px 6px", cursor: "text" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="text"
+              autoFocus
+              aria-label={`Rename ${title}`}
+              placeholder="Empty resets to auto title"
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onFocus={(e) => e.currentTarget.select()}
+              onBlur={() => commitRenameTerminal(terminal)}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || (e.nativeEvent as KeyboardEvent).keyCode === 229) {
+                  return;
+                }
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  commitRenameTerminal(terminal);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setRenamingTerminalId(null);
+                }
+              }}
+              style={{
+                width: "100%",
+                background: "rgb(var(--color-bg-0))",
+                color: "rgb(var(--color-fg-0))",
+                border: "1px solid rgb(var(--color-accent))",
+                borderRadius: 4,
+                padding: "2px 6px",
+                fontSize: "0.75rem",
+                fontFamily: "inherit",
+                outline: "none",
+              }}
+            />
+          </div>
+        ) : (
         <button
           type="button"
           aria-current={current ? "true" : undefined}
           title={terminal.cwd}
           onClick={() => selectTerminal(terminal.id)}
+          onDoubleClick={(event) => {
+            if (!onRenameTerminal) return;
+            event.preventDefault();
+            startRenameTerminal(terminal);
+          }}
           className="odk-sessions-row-main"
         >
           <span className="odk-sessions-title">
@@ -418,7 +485,8 @@ function SessionsSidebarComponent({
           </span>
           <SessionRowEnd state={state} age={age} />
         </button>
-        {canManage && (
+        )}
+        {canManage && renamingTerminalId !== terminal.id && (
           <button
             type="button"
             data-testid={`sessions-row-close-${terminal.id}`}
