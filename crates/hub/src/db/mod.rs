@@ -12,6 +12,7 @@ pub mod agent_sessions;
 pub mod bookmarks;
 pub mod draft_databases;
 pub mod draft_shares;
+pub mod draft_tags;
 pub mod drafts;
 pub mod hub_state;
 pub mod machines;
@@ -504,6 +505,13 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
     if !column_exists(conn, "drafts", "properties")? {
         conn.execute(
             "ALTER TABLE drafts ADD COLUMN properties TEXT NOT NULL DEFAULT '{}'",
+            [],
+        )?;
+    }
+    // Draft tags: explicit tags as a JSON array; inline tags are derived from content.
+    if !column_exists(conn, "drafts", "tags")? {
+        conn.execute(
+            "ALTER TABLE drafts ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
             [],
         )?;
     }

@@ -249,6 +249,10 @@ enum DraftAction {
         /// Always create a new draft even if one with the same title exists
         #[arg(long)]
         new: bool,
+        /// Tag the draft, e.g. `--tag research/competitors` (repeatable or comma-separated;
+        /// replaces the draft's tags; omit to keep existing tags)
+        #[arg(long = "tag", value_delimiter = ',')]
+        tags: Vec<String>,
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -261,6 +265,35 @@ enum DraftAction {
         /// Include archived drafts
         #[arg(long)]
         all: bool,
+        /// Only drafts with this tag or any sub-tag (`--tag research` matches `research/competitors`)
+        #[arg(long)]
+        tag: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Add, remove or replace a draft's tags (explicit tags only; inline #tags come from the body)
+    Tag {
+        /// Draft id or unique prefix
+        draft: String,
+        /// Add a tag (repeatable or comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        add: Vec<String>,
+        /// Remove an explicit tag (repeatable or comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        rm: Vec<String>,
+        /// Replace all explicit tags with these (repeatable or comma-separated)
+        #[arg(long, value_delimiter = ',')]
+        set: Vec<String>,
+        /// Remove all explicit tags
+        #[arg(long)]
+        clear: bool,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show the tag tree with draft counts (active drafts)
+    Tags {
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -1909,11 +1942,19 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 project,
                 pin,
                 new,
+                tags,
                 json,
-            } => commands::draft::write(&hub_client, &title, content, project, pin, new, json).await,
-            DraftAction::List { project, all, json } => {
-                commands::draft::list(&hub_client, project, all, json).await
+            } => {
+                commands::draft::write(&hub_client, &title, content, project, pin, new, tags, json)
+                    .await
             }
+            DraftAction::List { project, all, tag, json } => {
+                commands::draft::list(&hub_client, project, all, tag, json).await
+            }
+            DraftAction::Tag { draft, add, rm, set, clear, json } => {
+                commands::draft::tag(&hub_client, &draft, add, rm, set, clear, json).await
+            }
+            DraftAction::Tags { json } => commands::draft::tags(&hub_client, json).await,
             DraftAction::Read { draft, version, json } => {
                 commands::draft::read(&hub_client, &draft, version.as_deref(), json).await
             }
