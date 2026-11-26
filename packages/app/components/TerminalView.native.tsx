@@ -23,6 +23,15 @@ import {
 import { UploadError, uploadFallsBackToLegacy, uploadFileChunked } from "@/lib/terminalUpload";
 import { createExternalUrlOpener } from "@/lib/terminalLinks";
 import { readClipboardText } from "@/lib/readClipboardText";
+import {
+  createSelection,
+  extractSelectionText,
+  getVisibleSelectionRanges,
+  isWideChar,
+  syncSelectionWithFrame,
+  updateSelectionEnd,
+  type NativeSelectionState,
+} from "@/lib/nativeTermSelection";
 import type { SelectionSnapshot, TerminalViewProps, TerminalViewRef } from "./TerminalView.types";
 
 const openExternalUrl = createExternalUrlOpener({
@@ -41,24 +50,6 @@ function resolveRemotePath(raw: string, cwd?: string): string {
   if (!cwd) return trimmed;
   const base = cwd.replace(/\/+$/, "");
   return `${base}/${trimmed.replace(/^\.\//, "")}`;
-}
-
-function isWideChar(cp: number): boolean {
-  return (
-    cp >= 0x1100 &&
-    (cp <= 0x115f ||
-      cp === 0x2329 ||
-      cp === 0x232a ||
-      (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
-      (cp >= 0xac00 && cp <= 0xd7a3) ||
-      (cp >= 0xf900 && cp <= 0xfaff) ||
-      (cp >= 0xfe10 && cp <= 0xfe19) ||
-      (cp >= 0xfe30 && cp <= 0xfe6f) ||
-      (cp >= 0xff00 && cp <= 0xff60) ||
-      (cp >= 0xffe0 && cp <= 0xffe6) ||
-      (cp >= 0x1f300 && cp <= 0x1faff) ||
-      (cp >= 0x20000 && cp <= 0x3fffd))
-  );
 }
 
 interface NativeSpan {
@@ -549,13 +540,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       canResizeTerminal,
     };
 
-    // Selection state (grid cell coordinates)
-    const selectionRef = useRef<{
-      start: { col: number; row: number };
-      end: { col: number; row: number };
-      rectangular?: boolean;
-    } | null>(null);
+    // Selection state (content-anchored logical document coordinates + stitched line buffer)
+    const selectionRef = useRef<NativeSelectionState | null>(null);
     const draggingRef = useRef(false);
+    const lastPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
+    const lastRemoteScrollDirRef = useRef<-1 | 0 | 1>(0);
+    const edgeAutoScrollTimerRef = useRef<number | null>(null);
+    const pointerToSelectionCellRef = useRef<(clientX: number, clientY: number) => { col: number; row: number }>(
+      () => ({ col: 0, row: 0 }),
+    );
+    const scrollByLinesRef = useRef<(lines: number, clientX: number, clientY: number) => void>(
+      () => {},
+    );
+    const stopEdgeAutoScroll = useCallback(() => {
+      if (edgeAutoScrollTimerRef.current !== null) {
+        window.clearInterval(edgeAutoScrollTimerRef.current);
+        edgeAutoScrollTimerRef.current = null;
+      }
+    }, []);
     const focusedRef = useRef(false);
     const hoverLinkRef = useRef<{ row: number; startCol: number; endCol: number } | null>(null);
     const [hoverPointer, setHoverPointer] = useState(false);
@@ -661,33 +663,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           );
         }
 
-        // 2. Selection highlight (supports normal stream & Option+Drag rectangular block)
+        // 2. Selection highlight (content-anchored; supports stream & Option+Drag rectangular block)
         const sel = selectionRef.current;
         if (sel) {
           ctx.fillStyle = "rgba(96, 165, 250, 0.32)";
-          if (sel.rectangular) {
-            const r0 = Math.min(sel.start.row, sel.end.row);
-            const r1 = Math.max(sel.start.row, sel.end.row);
-            const c0 = Math.min(sel.start.col, sel.end.col);
-            const c1 = Math.max(sel.start.col, sel.end.col);
-            if (c1 > c0) {
-              for (let r = r0; r <= r1; r++) {
-                ctx.fillRect(padX + c0 * cellW, padY + r * cellH, (c1 - c0) * cellW, cellH);
-              }
-            }
-          } else {
-            const [a, b] =
-              sel.start.row < sel.end.row ||
-              (sel.start.row === sel.end.row && sel.start.col <= sel.end.col)
-                ? [sel.start, sel.end]
-                : [sel.end, sel.start];
-            for (let r = a.row; r <= b.row; r++) {
-              const c0 = r === a.row ? a.col : 0;
-              const c1 = r === b.row ? b.col : frame.cols;
-              if (c1 > c0) {
-                ctx.fillRect(padX + c0 * cellW, padY + r * cellH, (c1 - c0) * cellW, cellH);
-              }
-            }
+          for (const seg of getVisibleSelectionRanges(sel, frame.cols, frame.rows)) {
+            ctx.fillRect(
+              padX + seg.startCol * cellW,
+              padY + seg.row * cellH,
+              (seg.endCol - seg.startCol) * cellW,
+              cellH,
+            );
           }
         }
 
@@ -920,8 +906,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           window.clearTimeout(resizeSettleTimerRef.current);
           resizeSettleTimerRef.current = null;
         }
+        stopEdgeAutoScroll();
       },
-      [],
+      [stopEdgeAutoScroll],
     );
 
     const applyFrame = useCallback(
@@ -950,10 +937,38 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           )
             .then((snapped) => {
               frameRef.current = snapped;
+              if (selectionRef.current) {
+                const pointerCell =
+                  draggingRef.current && lastPointerRef.current
+                    ? pointerToSelectionCellRef.current(
+                        lastPointerRef.current.clientX,
+                        lastPointerRef.current.clientY,
+                      )
+                    : null;
+                syncSelectionWithFrame(selectionRef.current, snapped, {
+                  dragging: draggingRef.current,
+                  pointerCell,
+                  preferredDirection: lastRemoteScrollDirRef.current,
+                });
+              }
               paintFrame(snapped);
             })
             .catch(() => {});
           return;
+        }
+        if (selectionRef.current) {
+          const pointerCell =
+            draggingRef.current && lastPointerRef.current
+              ? pointerToSelectionCellRef.current(
+                  lastPointerRef.current.clientX,
+                  lastPointerRef.current.clientY,
+                )
+              : null;
+          syncSelectionWithFrame(selectionRef.current, frame, {
+            dragging: draggingRef.current,
+            pointerCell,
+            preferredDirection: lastRemoteScrollDirRef.current,
+          });
         }
         const effectiveHistory =
           typeof frame.history_size === "number"
@@ -994,9 +1009,19 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const flushPendingScroll = useCallback(() => {
       scrollRafRef.current = null;
       if (scrollInFlightRef.current) return;
-      const deltaLines = pendingScrollLinesRef.current;
-      if (deltaLines === 0) return;
-      pendingScrollLinesRef.current = 0;
+      const queued = pendingScrollLinesRef.current;
+      if (queued === 0) return;
+      // While drag-selecting, cap each local scroll step to < viewport height so
+      // every intermediate line passes through applyFrame and is stitched into
+      // selectionRef.current.lines with zero gaps.
+      let deltaLines = queued;
+      if (draggingRef.current && selectionRef.current) {
+        const maxStep = Math.max(1, (frameRef.current?.rows ?? dimsRef.current.rows) - 2);
+        if (Math.abs(deltaLines) > maxStep) {
+          deltaLines = Math.sign(deltaLines) * maxStep;
+        }
+      }
+      pendingScrollLinesRef.current = queued - deltaLines;
       scrollInFlightRef.current = true;
       void invoke<NativeTermFrame>("native_term_scroll", {
         id: terminalId,
@@ -1141,6 +1166,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       lastSentResizeRef.current = null;
       remoteWheelActiveRef.current = false;
       daemonBackedRef.current = false;
+      selectionRef.current = null;
+      draggingRef.current = false;
+      lastPointerRef.current = null;
+      lastRemoteScrollDirRef.current = 0;
+      stopEdgeAutoScroll();
       let cancelled = false;
       const openCols = ptyDimsRef.current.cols;
       const openRows = ptyDimsRef.current.rows;
@@ -1485,53 +1515,61 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
     const getSelectionText = useCallback((): string => {
       const sel = selectionRef.current;
-      const frame = frameRef.current;
-      if (!sel || !frame) return "";
-      const [a, b] =
-        sel.start.row < sel.end.row ||
-        (sel.start.row === sel.end.row && sel.start.col <= sel.end.col)
-          ? [sel.start, sel.end]
-          : [sel.end, sel.start];
-      if (a.row === b.row && a.col === b.col) return "";
-      const rectC0 = Math.min(sel.start.col, sel.end.col);
-      const rectC1 = Math.max(sel.start.col, sel.end.col);
-      let out = "";
-      for (let r = a.row; r <= b.row; r++) {
-        const rowSpans = frame.spans[r] ?? [];
-        const chars = new Array<string>(frame.cols).fill(" ");
-        for (const sp of rowSpans) {
-          let col = sp.c;
-          for (const ch of sp.t) {
-            const cp = ch.codePointAt(0) ?? 0;
-            const w = isWideChar(cp) ? 2 : 1;
-            if (col < frame.cols) chars[col] = ch;
-            if (w === 2 && col + 1 < frame.cols) chars[col + 1] = "";
-            col += w;
-          }
-        }
-        const c0 = sel.rectangular ? rectC0 : r === a.row ? a.col : 0;
-        const c1 = sel.rectangular ? rectC1 : r === b.row ? b.col : frame.cols;
-        const isSoftWrapped =
-          !sel.rectangular && r < b.row && Boolean(frame.wrapped_rows?.[r]) && c1 >= frame.cols;
-        const chunk = chars.slice(c0, c1).join("");
-        out += isSoftWrapped ? chunk : chunk.trimEnd();
-        if (r < b.row && !isSoftWrapped) {
-          out += "\n";
-        }
-      }
-      return out.trimEnd();
+      if (!sel) return "";
+      return extractSelectionText(sel);
     }, []);
 
     useEffect(() => {
+      const ensureEdgeAutoScroll = (clientY: number) => {
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!rect || !draggingRef.current) {
+          stopEdgeAutoScroll();
+          return;
+        }
+        const edgeMargin = 6;
+        const outside = clientY < rect.top + edgeMargin || clientY > rect.bottom - edgeMargin;
+        if (!outside) {
+          stopEdgeAutoScroll();
+          return;
+        }
+        if (edgeAutoScrollTimerRef.current !== null) return;
+        edgeAutoScrollTimerRef.current = window.setInterval(() => {
+          const ptr = lastPointerRef.current;
+          const r = containerRef.current?.getBoundingClientRect();
+          if (!draggingRef.current || !ptr || !r) {
+            stopEdgeAutoScroll();
+            return;
+          }
+          // Dispatch remote wheel events at the vertical midpoint of the viewport so
+          // TUIs with fixed headers/footers (Claude Code, tmux) scroll their main pane.
+          const midY = r.top + r.height / 2;
+          if (ptr.clientY < r.top + edgeMargin) {
+            const dist = Math.max(1, r.top + edgeMargin - ptr.clientY);
+            const lines = Math.min(5, Math.max(1, Math.ceil(dist / 24)));
+            scrollByLinesRef.current(lines, ptr.clientX, midY);
+          } else if (ptr.clientY > r.bottom - edgeMargin) {
+            const dist = Math.max(1, ptr.clientY - (r.bottom - edgeMargin));
+            const lines = -Math.min(5, Math.max(1, Math.ceil(dist / 24)));
+            scrollByLinesRef.current(lines, ptr.clientX, midY);
+          } else {
+            stopEdgeAutoScroll();
+          }
+        }, 75);
+      };
+
       const onWinMouseMove = (e: MouseEvent) => {
         if (!draggingRef.current || !selectionRef.current) return;
-        selectionRef.current = {
-          ...selectionRef.current,
-          end: pointerToCell(e.clientX, e.clientY),
-        };
+        lastPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
+        selectionRef.current = updateSelectionEnd(
+          selectionRef.current,
+          pointerToSelectionCellRef.current(e.clientX, e.clientY),
+        );
+        ensureEdgeAutoScroll(e.clientY);
         paintFrame(frameRef.current);
       };
       const onWinMouseUp = () => {
+        stopEdgeAutoScroll();
+        lastPointerRef.current = null;
         if (!draggingRef.current) return;
         draggingRef.current = false;
         const text = getSelectionText();
@@ -1551,11 +1589,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       window.addEventListener("mouseup", onWinMouseUp);
       document.addEventListener("copy", onDocCopy);
       return () => {
+        stopEdgeAutoScroll();
         window.removeEventListener("mousemove", onWinMouseMove);
         window.removeEventListener("mouseup", onWinMouseUp);
         document.removeEventListener("copy", onDocCopy);
       };
-    }, [getSelectionText, copyToClipboard, paintFrame]);
+    }, [getSelectionText, copyToClipboard, paintFrame, stopEdgeAutoScroll]);
 
     useImperativeHandle(
       ref,
@@ -1910,6 +1949,69 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     };
 
+    const pointerToSelectionCell = (clientX: number, clientY: number) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return { col: 0, row: 0 };
+      const maxCols = frameRef.current?.cols ?? dimsRef.current.cols;
+      const maxRows = frameRef.current?.rows ?? dimsRef.current.rows;
+      const isRectangular = Boolean(selectionRef.current?.rectangular);
+      if (clientY < rect.top + 6) {
+        return { col: isRectangular ? pointerToCell(clientX, clientY).col : 0, row: 0 };
+      }
+      if (clientY > rect.bottom - 6) {
+        return {
+          col: isRectangular ? pointerToCell(clientX, clientY).col : maxCols,
+          row: Math.max(0, maxRows - 1),
+        };
+      }
+      return pointerToCell(clientX, clientY);
+    };
+    pointerToSelectionCellRef.current = pointerToSelectionCell;
+
+    const scrollByLines = (lines: number, clientX: number, clientY: number) => {
+      if (lines === 0) return;
+      const frame = frameRef.current;
+      const hist = frame?.history_size ?? 0;
+      const off = frame?.display_offset ?? 0;
+      if (hist > 5 && !frame?.wants_mouse && !daemonBackedRef.current) {
+        remoteWheelActiveRef.current = false;
+      }
+      const sendRemoteWheel =
+        Boolean(frame?.wants_mouse) ||
+        daemonBackedRef.current ||
+        hist <= 5 ||
+        (remoteWheelActiveRef.current && off === 0);
+      if (sendRemoteWheel) {
+        lastRemoteScrollDirRef.current = lines > 0 ? 1 : -1;
+        if (!frame?.wants_mouse) {
+          remoteWheelActiveRef.current = true;
+        }
+        if (off > 0) {
+          void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
+            .then(applyFrame)
+            .catch(() => {});
+        }
+        const btn = lines > 0 ? 64 : 65;
+        // When a selection is active, cap each remote wheel burst to 2 events (<= 6 lines
+        // in pty-daemon) so consecutive remote frames always overlap for scroll stitching,
+        // even in short split panes or TUIs with fixed headers/footers.
+        const maxCount = selectionRef.current ? 2 : 5;
+        const count = Math.min(maxCount, Math.max(1, Math.abs(lines)));
+        const cell = pointerToCell(clientX, clientY);
+        let seq = "";
+        for (let i = 0; i < count; i++) {
+          seq += `\x1b[<${btn};${cell.col + 1};${cell.row + 1}M`;
+        }
+        sendRawInput(seq);
+      } else {
+        pendingScrollLinesRef.current += lines;
+        if (!scrollInFlightRef.current && scrollRafRef.current === null) {
+          scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
+        }
+      }
+    };
+    scrollByLinesRef.current = scrollByLines;
+
     const scrollToTrackClientY = useCallback(
       (clientY: number) => {
         const track = scrollbarTrackRef.current;
@@ -1993,34 +2095,50 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
           inputRef.current?.focus({ preventScroll: true });
           if (e.button !== 0) return;
+          stopEdgeAutoScroll();
+          lastRemoteScrollDirRef.current = 0;
           const cell = pointerToCell(e.clientX, e.clientY);
+          const frame = frameRef.current;
           if (e.detail === 2) {
             const tok = tokenAtCell(cell.col, cell.row);
-            if (tok) {
-              selectionRef.current = {
-                start: { col: tok.startCol, row: cell.row },
-                end: { col: tok.endCol, row: cell.row },
-              };
+            if (tok && frame) {
+              selectionRef.current = createSelection(
+                frame,
+                { col: tok.startCol, row: cell.row },
+                { col: tok.endCol, row: cell.row },
+                false,
+              );
               draggingRef.current = false;
-              paintFrame(frameRef.current);
+              lastPointerRef.current = null;
+              paintFrame(frame);
               void copyToClipboard(tok.token);
               return;
             }
           }
           if (e.detail >= 3) {
             const lineText = rowToPlainString(cell.row).trimEnd();
-            selectionRef.current = {
-              start: { col: 0, row: cell.row },
-              end: { col: dimsRef.current.cols, row: cell.row },
-            };
+            if (frame) {
+              selectionRef.current = createSelection(
+                frame,
+                { col: 0, row: cell.row },
+                { col: frame.cols, row: cell.row },
+                false,
+              );
+            }
             draggingRef.current = false;
-            paintFrame(frameRef.current);
+            lastPointerRef.current = null;
+            paintFrame(frame);
             if (lineText) void copyToClipboard(lineText);
             return;
           }
-          selectionRef.current = { start: cell, end: cell, rectangular: e.altKey };
+          if (frame) {
+            selectionRef.current = createSelection(frame, cell, cell, e.altKey);
+          } else {
+            selectionRef.current = null;
+          }
           draggingRef.current = true;
-          paintFrame(frameRef.current);
+          lastPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
+          paintFrame(frame);
         }}
         onMouseLeave={() => {
           if (hoverLinkRef.current) {
@@ -2030,12 +2148,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }}
         onMouseMove={(e) => {
+          // Drag selection updates (including edge auto-scroll & repaint) are handled
+          // once per event by window `onWinMouseMove`.
           if (draggingRef.current && selectionRef.current) {
-            selectionRef.current = {
-              ...selectionRef.current,
-              end: pointerToCell(e.clientX, e.clientY),
-            };
-            paintFrame(frameRef.current);
             return;
           }
           const cell = pointerToCell(e.clientX, e.clientY);
@@ -2074,6 +2189,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }}
         onMouseUp={(e) => {
+          stopEdgeAutoScroll();
+          lastPointerRef.current = null;
           if (!draggingRef.current) return;
           draggingRef.current = false;
           const text = getSelectionText();
@@ -2131,6 +2248,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }}
         onWheel={(e) => {
           e.preventDefault();
+          if (draggingRef.current) {
+            lastPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
+          }
           const stepPx = Math.max(12, lineHeight);
           const deltaPx =
             e.deltaMode === 1
@@ -2152,40 +2272,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           if (lines === 0) return;
           wheelAccumPxRef.current += lines * stepPx;
 
-          const frame = frameRef.current;
-          const hist = frame?.history_size ?? 0;
-          const off = frame?.display_offset ?? 0;
-          if (hist > 5 && !frame?.wants_mouse && !daemonBackedRef.current) {
-            remoteWheelActiveRef.current = false;
-          }
-          const sendRemoteWheel =
-            Boolean(frame?.wants_mouse) ||
-            daemonBackedRef.current ||
-            hist <= 5 ||
-            (remoteWheelActiveRef.current && off === 0);
-          if (sendRemoteWheel) {
-            if (!frame?.wants_mouse) {
-              remoteWheelActiveRef.current = true;
-            }
-            if (off > 0) {
-              void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
-                .then(applyFrame)
-                .catch(() => {});
-            }
-            const btn = lines > 0 ? 64 : 65;
-            const count = Math.min(5, Math.max(1, Math.abs(lines)));
-            const cell = pointerToCell(e.clientX, e.clientY);
-            let seq = "";
-            for (let i = 0; i < count; i++) {
-              seq += `\x1b[<${btn};${cell.col + 1};${cell.row + 1}M`;
-            }
-            sendRawInput(seq);
-          } else {
-            pendingScrollLinesRef.current += lines;
-            if (!scrollInFlightRef.current && scrollRafRef.current === null) {
-              scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
-            }
-          }
+          scrollByLines(lines, e.clientX, e.clientY);
         }}
         onTouchStart={(e) => {
           if (e.touches.length !== 1) {
