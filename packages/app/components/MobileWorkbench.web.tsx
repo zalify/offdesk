@@ -376,14 +376,12 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   );
 
   const spaceGroups = useMemo(
-    () => (activeSpaceId ? groups.filter((group) => getGroupSpaceId(group) === activeSpaceId) : groups),
+    () => groups.filter((group) => getGroupSpaceId(group) === (activeSpaceId ?? null)),
     [groups, activeSpaceId],
   );
   const sessionGroups = useMemo(
     () =>
-      activeSpaceId
-        ? allSessionGroups.filter(({ group }) => getGroupSpaceId(group) === activeSpaceId)
-        : allSessionGroups,
+      allSessionGroups.filter(({ group }) => getGroupSpaceId(group) === (activeSpaceId ?? null)),
     [allSessionGroups, activeSpaceId],
   );
   const chips = useMemo(
@@ -392,10 +390,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   );
 
   const spaceWaitingCounts = useMemo(() => {
-    const counts = new Map<string, number>();
+    const counts = new Map<string | null, number>();
     for (const { group, panes } of allSessionGroups) {
       const sid = getGroupSpaceId(group);
-      if (!sid) continue;
       let waiting = 0;
       for (const { terminal } of panes) {
         if (sessionState(terminal, now) === "waiting") waiting += 1;
@@ -474,11 +471,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     : 0;
 
   const handleNewTerminalInActiveSpace = useCallback(() => {
-    const targetGroup = activeSpaceId
-      ? activeGroup && getGroupSpaceId(activeGroup) === activeSpaceId
+    const targetSpace = activeSpaceId ?? null;
+    const targetGroup =
+      activeGroup && getGroupSpaceId(activeGroup) === targetSpace
         ? activeGroup
-        : (spaceGroups[0] ?? null)
-      : activeGroup;
+        : (spaceGroups[0] ?? null);
     const options = activeSpace?.default_cwd
       ? { cwd: activeSpace.default_cwd }
       : undefined;
@@ -531,7 +528,28 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             whiteSpace: "nowrap",
           }}
         >
-          <span>All</span>
+          <span>Default</span>
+          {activeSpaceId !== null && (spaceWaitingCounts.get(null) ?? 0) > 0 && (
+            <span
+              data-testid={`${testIdPrefix}-space-all-waiting`}
+              style={{
+                minWidth: 15,
+                height: 15,
+                padding: "0 4px",
+                borderRadius: 999,
+                background: colors.accent,
+                color: colors.bg0,
+                fontSize: rem(10),
+                fontWeight: 700,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                lineHeight: 1,
+              }}
+            >
+              {spaceWaitingCounts.get(null)}
+            </span>
+          )}
         </button>
         {sortedSpaces.map((space) => {
           const selected = activeSpaceId === space.id;
@@ -1303,7 +1321,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   <div className="odk-sessions-empty" style={{ padding: "16px 10px" }}>
                     <span>No sessions in {activeSpace.name}.</span>
                     <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
-                      show all spaces
+                      switch to Default
                     </Button>
                   </div>
                 ) : sessionOrder === "recent" ? (
@@ -1587,7 +1605,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
               <div className="odk-sessions-empty">
                 <span>No sessions in {activeSpace.name}.</span>
                 <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
-                  show all spaces
+                  switch to Default
                 </Button>
               </div>
             ) : sessionFilter !== "all" &&
@@ -1736,7 +1754,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             onClose={close}
           >
             <MenuRow
-              label={currentSid === null ? "No Space (current)" : "No Space"}
+              label={currentSid === null ? "Default (current)" : "Default"}
               testid="mobile-group-space-none"
               disabled={!isController}
               onClick={() => {
