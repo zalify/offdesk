@@ -78,6 +78,10 @@ export interface DraftInfo {
   archived: boolean;
   created_at: number;
   updated_at: number;
+  /** Explicit + inline tag paths. Absent on hubs without tag support. */
+  tags?: string[];
+  /** Subset of `tags` that only comes from `#tag` in the body. */
+  inline_tags?: string[];
 }
 
 export const listDrafts = (options?: { project?: string; includeArchived?: boolean }) => {
@@ -95,6 +99,7 @@ export const upsertDraft = (payload: {
   source_terminal_id?: string | null;
   pinned?: boolean;
   force_new?: boolean;
+  tags?: string[];
 }) => request<DraftInfo>("POST", "/api/drafts", payload);
 
 export const updateDraft = (
@@ -105,6 +110,8 @@ export const updateDraft = (
     project_group?: string;
     pinned?: boolean;
     archived?: boolean;
+    /** Replaces the EXPLICIT tag set; omit to leave tags unchanged. */
+    tags?: string[];
   },
 ) => request<DraftInfo>("PATCH", `/api/drafts/${encodeURIComponent(draftId)}`, patch);
 

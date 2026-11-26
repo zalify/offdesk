@@ -20,6 +20,9 @@ import { DatabasesPane } from "./draftdb/DatabasesPane.web";
 import { useDraftDatabases } from "./draftdb/useDraftDatabases";
 import { ShareControl } from "./draftdb/ShareControl.web";
 import { HistoryButton, VersionBanner } from "./draftdb/VersionHistory.web";
+import { DraftsBrowser } from "./drafts/DraftsBrowser.web";
+import { TagEditor } from "./drafts/TagEditor.web";
+import { buildTagTree, flattenTagPaths } from "@/lib/draftTags";
 import {
   deleteDraft,
   listDrafts,
@@ -41,16 +44,6 @@ interface DraftsDrawerProps {
   onCountChange?: (activeCount: number) => void;
 }
 
-function relativeTime(ms: number): string {
-  const diffSec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (diffSec < 60) return "just now";
-  const mins = Math.floor(diffSec / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
-
 export function DraftsDrawer({
   open,
   isCompact,
@@ -64,6 +57,7 @@ export function DraftsDrawer({
   const [loading, setLoading] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string>("all");
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [mode, setMode] = useState<"preview" | "edit">("preview");
@@ -179,20 +173,12 @@ export function DraftsDrawer({
     return Array.from(set).sort();
   }, [drafts, dbs.databases]);
 
-  const visibleDrafts = useMemo(
-    () =>
-      drafts.filter((d) => {
-        if (showArchived ? !d.archived : d.archived) return false;
-        if (projectFilter !== "all" && d.project_group !== projectFilter) return false;
-        return true;
-      }),
-    [drafts, showArchived, projectFilter],
-  );
-
   const selected = useMemo(
     () => drafts.find((d) => d.id === selectedId) ?? null,
     [drafts, selectedId],
   );
+
+  const allTagPaths = useMemo(() => flattenTagPaths(buildTagTree(drafts)), [drafts]);
 
   const openEditorFor = (draft: DraftInfo) => {
     setCreating(false);
@@ -258,6 +244,23 @@ export function DraftsDrawer({
     await updateDraft(draft.id, { archived: !draft.archived });
     if (selectedId === draft.id) setSelectedId(null);
     await refresh();
+  };
+
+  // Optimistic: patch the row now, revert just that row's tags if the PATCH fails.
+  const handleTagsChange = async (draft: DraftInfo, explicit: string[]) => {
+    const inline = draft.inline_tags ?? [];
+    const prevTags = draft.tags;
+    const prevInline = draft.inline_tags;
+    const patchRow = (tags: string[] | undefined, inlineTags: string[] | undefined) =>
+      setDrafts((rows) => rows.map((r) => (r.id === draft.id ? { ...r, tags, inline_tags: inlineTags } : r)));
+    patchRow([...explicit, ...inline.filter((t) => !explicit.some((e) => e.toLowerCase() === t.toLowerCase()))], inline);
+    try {
+      const updated = await updateDraft(draft.id, { tags: explicit });
+      patchRow(updated.tags, updated.inline_tags);
+    } catch (e) {
+      patchRow(prevTags, prevInline);
+      throw e;
+    }
   };
 
   const handleDelete = async (draft: DraftInfo) => {
@@ -511,10 +514,8 @@ export function DraftsDrawer({
             </button>
             </>
             )}
-            {!inDatabases && projects.length > 0 && (
-              <span style={{ color: colors.line, margin: "0 2px" }}>|</span>
-            )}
-            {projects.length > 0 && (
+            {/* In drafts mode projects live in the tag tree; databases still filter by project here. */}
+            {inDatabases && projects.length > 0 && (
               <button
                 type="button"
                 onClick={() => setProjectFilter("all")}
@@ -532,7 +533,7 @@ export function DraftsDrawer({
                 All
               </button>
             )}
-            {projects.map((p) => (
+            {inDatabases && projects.map((p) => (
               <button
                 key={p}
                 type="button"
@@ -731,6 +732,16 @@ export function DraftsDrawer({
               )}
             </div>
 
+            {selected && !creating && Array.isArray(selected.tags) && (
+              <TagEditor
+                tags={selected.tags}
+                inlineTags={selected.inline_tags ?? []}
+                allPaths={allTagPaths}
+                compact={isCompact}
+                onChange={(explicit) => handleTagsChange(selected, explicit)}
+              />
+            )}
+
             {selected && viewing && !creating && (
               <VersionBanner
                 draftId={selected.id}
@@ -902,183 +913,28 @@ export function DraftsDrawer({
             </div>
           </div>
         ) : (
-          <div
-            style={{
-              flex: 1,
-              overflowY: "auto",
-              padding: 12,
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
-            }}
-          >
-            {loading && drafts.length === 0 ? (
-              <div style={{ color: colors.fg2, fontSize: rem(13), padding: 16 }}>
-                Loading drafts…
-              </div>
-            ) : visibleDrafts.length === 0 ? (
-              <div
-                style={{
-                  color: colors.fg2,
-                  fontSize: rem(13),
-                  padding: 20,
-                  textAlign: "center",
-                  lineHeight: 1.6,
-                }}
-              >
-                {showArchived
-                  ? "No archived drafts."
-                  : "No drafts yet. Agents can write here anytime with:"}
-                {!showArchived && (
-                  <pre
-                    style={{
-                      marginTop: 10,
-                      padding: "8px 10px",
-                      borderRadius: 6,
-                      background: colors.bg0,
-                      color: colors.fg1,
-                      fontFamily: "var(--font-mono)",
-                      fontSize: rem(11.5),
-                      textAlign: "left",
-                      overflowX: "auto",
-                    }}
-                  >
-                    {`echo "..." | offdesk draft write "草稿标题"`}
-                  </pre>
-                )}
-              </div>
-            ) : (
-              visibleDrafts.map((d) => (
-                <div
-                  key={d.id}
-                  data-testid={`draft-card-${d.id}`}
-                  onClick={() => openEditorFor(d)}
-                  style={{
-                    padding: "10px 12px",
-                    borderRadius: 8,
-                    border: `1px solid ${d.pinned ? colorAlpha.accentLine : colors.lineSoft}`,
-                    background: colors.bg0,
-                    cursor: "pointer",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 6,
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {d.pinned && <Pin size={12} color={colors.accent} />}
-                    <span
-                      style={{
-                        fontWeight: 600,
-                        fontSize: rem(13.5),
-                        color: colors.fg0,
-                        flex: 1,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {d.title}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: rem(11),
-                        padding: "1px 6px",
-                        borderRadius: 4,
-                        background: colors.bg2,
-                        color: colors.fg2,
-                      }}
-                    >
-                      {d.project_group}
-                    </span>
-                    <span style={{ fontSize: rem(11), color: colors.fg2 }}>
-                      {relativeTime(d.updated_at)}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      fontSize: rem(12),
-                      color: colors.fg2,
-                      fontFamily: "var(--font-mono)",
-                      display: "-webkit-box",
-                      WebkitLineClamp: 2,
-                      WebkitBoxOrient: "vertical",
-                      overflow: "hidden",
-                      whiteSpace: "pre-wrap",
-                    }}
-                  >
-                    {d.content || "(empty)"}
-                  </div>
-                  <div
-                    style={{ display: "flex", gap: 6, marginTop: 2 }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => void handleCopy(d)}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                        padding: "3px 7px",
-                        borderRadius: 5,
-                        border: `1px solid ${colors.lineSoft}`,
-                        background: colors.bg1,
-                        color: copiedId === d.id ? colors.ok : colors.fg2,
-                        fontSize: rem(11),
-                        cursor: "pointer",
-                      }}
-                    >
-                      {copiedId === d.id ? <Check size={11} /> : <Copy size={11} />}
-                      {copiedId === d.id ? "Copied" : "Copy"}
-                    </button>
-                    {onSendToTerminal && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onSendToTerminal(d.content);
-                          onClose();
-                        }}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
-                          padding: "3px 7px",
-                          borderRadius: 5,
-                          border: `1px solid ${colors.lineSoft}`,
-                          background: colors.bg1,
-                          color: colors.fg2,
-                          fontSize: rem(11),
-                          cursor: "pointer",
-                        }}
-                      >
-                        <Send size={11} />
-                        Send
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => void handleToggleArchive(d)}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 4,
-                        padding: "3px 7px",
-                        borderRadius: 5,
-                        border: `1px solid ${colors.lineSoft}`,
-                        background: colors.bg1,
-                        color: colors.fg2,
-                        fontSize: rem(11),
-                        cursor: "pointer",
-                      }}
-                    >
-                      {d.archived ? <RotateCcw size={11} /> : <Archive size={11} />}
-                      {d.archived ? "Restore" : "Done"}
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <DraftsBrowser
+            drafts={drafts}
+            loading={loading}
+            showArchived={showArchived}
+            compact={isCompact}
+            project={projectFilter === "all" ? null : projectFilter}
+            tag={tagFilter}
+            onProjectChange={(p) => setProjectFilter(p ?? "all")}
+            onTagChange={setTagFilter}
+            copiedId={copiedId}
+            onOpen={openEditorFor}
+            onCopy={(d) => void handleCopy(d)}
+            onArchive={(d) => void handleToggleArchive(d)}
+            onSend={
+              onSendToTerminal
+                ? (d) => {
+                    onSendToTerminal(d.content);
+                    onClose();
+                  }
+                : undefined
+            }
+          />
         )}
       </div>
     </div>
