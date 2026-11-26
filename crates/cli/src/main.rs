@@ -963,6 +963,34 @@ enum AgentsAction {
         #[command(subcommand)]
         action: HooksAction,
     },
+    /// Install, check, or remove the `offdesk` agent skill so Claude Code, Codex,
+    /// and Antigravity know how to use `offdesk draft`, `browser`, `fetch`, `db`, `msg`, etc.
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SkillAction {
+    /// Install (or update) the built-in `offdesk` skill into ~/.agents/skills/offdesk
+    /// and link it into ~/.claude/skills and ~/.codex/skills
+    Install {
+        /// Print the skill markdown to stdout instead of writing files
+        #[arg(long)]
+        print: bool,
+        /// Overwrite an existing unmanaged SKILL.md
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show whether the installed skill matches this offdesk CLI version
+    Status,
+    /// Remove the offdesk-managed skill files and links
+    Uninstall {
+        /// Remove even if SKILL.md was customized outside offdesk
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1520,6 +1548,13 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             return match action {
                 HooksAction::Install { agent, print } => agents::hooks(true, *print, agent.map(StartAgent::run_agent)),
                 HooksAction::Uninstall { agent, print } => agents::hooks(false, *print, agent.map(StartAgent::run_agent)),
+            };
+        }
+        Commands::Agents { action: AgentsAction::Skill { action } } => {
+            return match action {
+                SkillAction::Install { print, force } => agents::skill_install(*print, *force),
+                SkillAction::Status => agents::skill_status(),
+                SkillAction::Uninstall { force } => agents::skill_uninstall(*force),
             };
         }
         _ => {}
