@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, Code2, Copy, Eye, X } from "lucide-react";
 import { listMachines, readFile as apiReadFile } from "@/lib/api";
 import { colors, colorAlpha } from "@/lib/colors";
@@ -129,7 +129,7 @@ const MARKDOWN_CSS = `
 .odk-md hr { border: none; border-top: 1px solid var(--odk-line); margin: 1em 0; }
 `;
 
-function MarkdownSegmentView({
+const MarkdownSegmentView = memo(function MarkdownSegmentView({
   text,
   onZoomImage,
 }: {
@@ -139,6 +139,11 @@ function MarkdownSegmentView({
   const [html, setHtml] = useState<string>("");
   const containerRef = useRef<HTMLDivElement>(null);
   const openDirectory = useOpenDirectory();
+  // Keep a stable object identity across parent re-renders: React 19 checks
+  // reference equality on `dangerouslySetInnerHTML` and re-assigns `innerHTML`
+  // on every new object, which destroys child DOM nodes and resets `<pre>` /
+  // table horizontal `scrollLeft`, text selection, and hydrated `file://` images.
+  const htmlMarkup = useMemo(() => ({ __html: html }), [html]);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,19 +259,20 @@ function MarkdownSegmentView({
           "--odk-accent": colors.accent,
         } as React.CSSProperties
       }
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={htmlMarkup}
     />
   );
-}
+});
 
 let mermaidInitialized = false;
 
-function MermaidArtifactCard({ code }: { code: string }) {
+const MermaidArtifactCard = memo(function MermaidArtifactCard({ code }: { code: string }) {
   const rawId = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
+  const svgMarkup = useMemo(() => (svg ? { __html: svg } : undefined), [svg]);
 
   useEffect(() => {
     let cancelled = false;
@@ -394,7 +400,7 @@ function MermaidArtifactCard({ code }: { code: string }) {
             {code}
           </pre>
         </div>
-      ) : svg ? (
+      ) : svgMarkup ? (
         <div
           style={{
             padding: 12,
@@ -402,7 +408,7 @@ function MermaidArtifactCard({ code }: { code: string }) {
             display: "flex",
             justifyContent: "center",
           }}
-          dangerouslySetInnerHTML={{ __html: svg }}
+          dangerouslySetInnerHTML={svgMarkup}
         />
       ) : (
         <div style={{ padding: 14, color: colors.fg2, fontSize: rem(12) }}>
@@ -411,9 +417,9 @@ function MermaidArtifactCard({ code }: { code: string }) {
       )}
     </div>
   );
-}
+});
 
-function SandboxedArtifactCard({
+const SandboxedArtifactCard = memo(function SandboxedArtifactCard({
   kind,
   code,
 }: {
@@ -552,7 +558,7 @@ function SandboxedArtifactCard({
       )}
     </div>
   );
-}
+});
 
 export function DraftArtifactPreview({
   content,
@@ -567,6 +573,9 @@ export function DraftArtifactPreview({
 }) {
   const segments = useMemo(() => parseArtifactSegments(content), [content]);
   const [zoomed, setZoomed] = useState<{ src: string; alt: string } | null>(null);
+  const handleZoomImage = useCallback((src: string, alt: string) => {
+    setZoomed({ src, alt });
+  }, []);
 
   useEffect(() => {
     if (!zoomed) return;
@@ -595,7 +604,7 @@ export function DraftArtifactPreview({
               <MarkdownSegmentView
                 key={idx}
                 text={seg.text}
-                onZoomImage={(src, alt) => setZoomed({ src, alt })}
+                onZoomImage={handleZoomImage}
               />
             );
           case "mermaid":
