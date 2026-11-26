@@ -226,26 +226,22 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   // Below 360px the title bar has no room for the Files button; the Machines
   // sheet always offers it instead.
   const wideTitleBar = useMinViewportWidth(TITLE_BAR_FILES_MIN_WIDTH);
-  const [foldableViewport, setFoldableViewport] = useState<{
-    wide: boolean;
-    keyboardOpen: boolean;
-  }>(() => {
-    if (typeof window === "undefined") return { wide: false, keyboardOpen: false };
-    const vv = window.visualViewport;
-    return {
-      wide: window.innerWidth >= 680 && window.innerHeight >= 450,
-      keyboardOpen: vv ? vv.height < window.innerHeight * 0.72 : false,
-    };
-  });
+  const isFoldableWide = () => {
+    if (typeof window === "undefined") return false;
+    if (window.innerWidth < 680) return false;
+    // Unfolded foldables / tablets keep their left sidebar even when the soft
+    // keyboard shrinks window.innerHeight (Android adjustResize); regular
+    // phones in landscape have a short physical minor screen dimension (< 500).
+    const minScreenDim =
+      typeof window.screen !== "undefined"
+        ? Math.min(window.screen.width, window.screen.height)
+        : 0;
+    return window.innerHeight >= 450 || minScreenDim >= 500;
+  };
+  const [showFoldableRail, setShowFoldableRail] = useState<boolean>(isFoldableWide);
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const update = () => {
-      const vv = window.visualViewport;
-      setFoldableViewport({
-        wide: window.innerWidth >= 680 && window.innerHeight >= 450,
-        keyboardOpen: vv ? vv.height < window.innerHeight * 0.72 : false,
-      });
-    };
+    const update = () => setShowFoldableRail(isFoldableWide());
     window.addEventListener("resize", update);
     window.visualViewport?.addEventListener("resize", update);
     return () => {
@@ -271,7 +267,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       return next;
     });
   }, []);
-  const showFoldableRail = foldableViewport.wide && !foldableViewport.keyboardOpen;
   const [hubPickerOpen, setHubPickerOpen] = useState(false);
   const { switchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
