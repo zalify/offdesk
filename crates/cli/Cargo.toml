@@ -32,3 +32,4 @@ toml_edit = "0.22"
 uuid = { workspace = true }
 hostname = "0.4"
 rpassword = "7"
+crossterm = "0.28"
