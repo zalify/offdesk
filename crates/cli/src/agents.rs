@@ -613,6 +613,246 @@ pub fn hooks(install: bool, print: bool, agent: Option<RunAgent>) -> Result<(), 
     Ok(())
 }
 
+const SKILL_TEMPLATE: &str = include_str!("offdesk-skill.md");
+const SKILL_MARKER_PREFIX: &str = "<!-- managed-by: offdesk-cli v";
+
+pub fn render_skill(version: &str) -> String {
+    SKILL_TEMPLATE.replace("{{VERSION}}", version)
+}
+
+fn parse_managed_skill_version(content: &str) -> Option<&str> {
+    let start = content.find(SKILL_MARKER_PREFIX)? + SKILL_MARKER_PREFIX.len();
+    let rest = &content[start..];
+    let end = rest.find(" -->")?;
+    Some(&rest[..end])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SkillInstallState {
+    NotInstalled,
+    UpToDate(String),
+    Outdated { installed: String, current: String },
+    CustomUnmanaged,
+}
+
+fn inspect_skill_file(path: &Path, current_version: &str) -> Result<SkillInstallState, CliError> {
+    if !path.exists() {
+        return Ok(SkillInstallState::NotInstalled);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| CliError::Config(format!("failed to read {}: {e}", path.display())))?;
+    match parse_managed_skill_version(&content) {
+        Some(v) if v == current_version => Ok(SkillInstallState::UpToDate(v.to_string())),
+        Some(v) => Ok(SkillInstallState::Outdated {
+            installed: v.to_string(),
+            current: current_version.to_string(),
+        }),
+        None => Ok(SkillInstallState::CustomUnmanaged),
+    }
+}
+
+fn link_or_copy_skill(canonical_dir: &Path, target_dir: &Path, skill_content: &str) -> Result<(), CliError> {
+    if let Some(parent) = target_dir.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| CliError::Config(format!("failed to create {}: {e}", parent.display())))?;
+    }
+    #[cfg(unix)]
+    {
+        let _ = skill_content;
+        if let Ok(meta) = std::fs::symlink_metadata(target_dir) {
+            if meta.file_type().is_symlink() {
+                std::fs::remove_file(target_dir).map_err(|e| {
+                    CliError::Config(format!("failed to replace symlink {}: {e}", target_dir.display()))
+                })?;
+            } else {
+                // Keep existing real directory untouched if user put a custom dir there.
+                let file = target_dir.join("SKILL.md");
+                if file.exists() {
+                    let existing = std::fs::read_to_string(&file).unwrap_or_default();
+                    if parse_managed_skill_version(&existing).is_none() {
+                        return Ok(());
+                    }
+                }
+                std::fs::remove_dir_all(target_dir).map_err(|e| {
+                    CliError::Config(format!("failed to replace {}: {e}", target_dir.display()))
+                })?;
+            }
+        }
+        std::os::unix::fs::symlink(canonical_dir, target_dir).map_err(|e| {
+            CliError::Config(format!(
+                "failed to symlink {} -> {}: {e}",
+                target_dir.display(),
+                canonical_dir.display()
+            ))
+        })?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = canonical_dir;
+        std::fs::create_dir_all(target_dir)
+            .map_err(|e| CliError::Config(format!("failed to create {}: {e}", target_dir.display())))?;
+        std::fs::write(target_dir.join("SKILL.md"), skill_content).map_err(|e| {
+            CliError::Config(format!("failed to write {}: {e}", target_dir.join("SKILL.md").display()))
+        })?;
+        Ok(())
+    }
+}
+
+fn install_skill_in_home(home: &Path, version: &str, force: bool) -> Result<Vec<PathBuf>, CliError> {
+    let canonical_dir = home.join(".agents").join("skills").join("offdesk");
+    let canonical_file = canonical_dir.join("SKILL.md");
+
+    if canonical_file.exists() && !force {
+        if let SkillInstallState::CustomUnmanaged = inspect_skill_file(&canonical_file, version)? {
+            return Err(CliError::Usage(format!(
+                "{} exists and was not installed by offdesk; pass --force to overwrite it",
+                canonical_file.display()
+            )));
+        }
+    }
+
+    std::fs::create_dir_all(&canonical_dir)
+        .map_err(|e| CliError::Config(format!("failed to create {}: {e}", canonical_dir.display())))?;
+    let content = render_skill(version);
+    std::fs::write(&canonical_file, &content)
+        .map_err(|e| CliError::Config(format!("failed to write {}: {e}", canonical_file.display())))?;
+
+    let mut installed = vec![canonical_file];
+    for agent_root in [".claude", ".codex"] {
+        let root = home.join(agent_root);
+        if root.is_dir() {
+            let link_path = root.join("skills").join("offdesk");
+            link_or_copy_skill(&canonical_dir, &link_path, &content)?;
+            installed.push(link_path);
+        }
+    }
+    Ok(installed)
+}
+
+fn uninstall_skill_in_home(home: &Path, force: bool) -> Result<Vec<PathBuf>, CliError> {
+    let mut removed = Vec::new();
+    let canonical_dir = home.join(".agents").join("skills").join("offdesk");
+    let canonical_file = canonical_dir.join("SKILL.md");
+
+    if canonical_file.exists() && !force {
+        if let SkillInstallState::CustomUnmanaged = inspect_skill_file(&canonical_file, "")? {
+            return Err(CliError::Usage(format!(
+                "{} was not installed by offdesk; pass --force to remove it",
+                canonical_file.display()
+            )));
+        }
+    }
+
+    for agent_root in [".claude", ".codex"] {
+        let link_path = home.join(agent_root).join("skills").join("offdesk");
+        if let Ok(meta) = std::fs::symlink_metadata(&link_path) {
+            if meta.file_type().is_symlink() {
+                std::fs::remove_file(&link_path).map_err(|e| {
+                    CliError::Config(format!("failed to remove {}: {e}", link_path.display()))
+                })?;
+                removed.push(link_path);
+            } else if meta.is_dir() {
+                let file = link_path.join("SKILL.md");
+                let managed = file.exists()
+                    && std::fs::read_to_string(&file)
+                        .ok()
+                        .and_then(|s| parse_managed_skill_version(&s).map(|_| ()))
+                        .is_some();
+                if managed || force {
+                    std::fs::remove_dir_all(&link_path).map_err(|e| {
+                        CliError::Config(format!("failed to remove {}: {e}", link_path.display()))
+                    })?;
+                    removed.push(link_path);
+                }
+            }
+        }
+    }
+
+    if canonical_dir.exists() {
+        std::fs::remove_dir_all(&canonical_dir).map_err(|e| {
+            CliError::Config(format!("failed to remove {}: {e}", canonical_dir.display()))
+        })?;
+        removed.push(canonical_dir);
+    }
+    Ok(removed)
+}
+
+pub fn skill_install(print: bool, force: bool) -> Result<(), CliError> {
+    let version = env!("CARGO_PKG_VERSION");
+    if print {
+        print!("{}", render_skill(version));
+        return Ok(());
+    }
+    let home = dirs::home_dir()
+        .ok_or_else(|| CliError::Config("could not determine home directory".to_string()))?;
+    let paths = install_skill_in_home(&home, version, force)?;
+    println!("Installed offdesk skill (v{version}):");
+    for p in paths {
+        println!("  {}", p.display());
+    }
+    Ok(())
+}
+
+pub fn skill_status() -> Result<(), CliError> {
+    let version = env!("CARGO_PKG_VERSION");
+    let home = dirs::home_dir()
+        .ok_or_else(|| CliError::Config("could not determine home directory".to_string()))?;
+    let canonical = home.join(".agents").join("skills").join("offdesk").join("SKILL.md");
+    let state = inspect_skill_file(&canonical, version)?;
+    println!("offdesk CLI: v{version}");
+    match state {
+        SkillInstallState::NotInstalled => {
+            println!("skill:       not installed ({})", canonical.display());
+            println!("hint:        run `offdesk agents skill install`");
+        }
+        SkillInstallState::UpToDate(v) => {
+            println!("skill:       up to date (v{v}) — {}", canonical.display());
+        }
+        SkillInstallState::Outdated { installed, current } => {
+            println!(
+                "skill:       outdated (v{installed} -> v{current}) — {}",
+                canonical.display()
+            );
+            println!("hint:        run `offdesk agents skill install` to update");
+        }
+        SkillInstallState::CustomUnmanaged => {
+            println!("skill:       custom unmanaged file — {}", canonical.display());
+        }
+    }
+    for agent_root in [".claude", ".codex"] {
+        let root = home.join(agent_root);
+        if root.is_dir() {
+            let link_path = root.join("skills").join("offdesk");
+            let linked = std::fs::symlink_metadata(&link_path).is_ok();
+            println!(
+                "  {agent_root:<8} {}",
+                if linked {
+                    format!("linked ({})", link_path.display())
+                } else {
+                    "not linked".to_string()
+                }
+            );
+        }
+    }
+    Ok(())
+}
+
+pub fn skill_uninstall(force: bool) -> Result<(), CliError> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| CliError::Config("could not determine home directory".to_string()))?;
+    let removed = uninstall_skill_in_home(&home, force)?;
+    if removed.is_empty() {
+        println!("offdesk skill was not installed.");
+    } else {
+        println!("Removed offdesk skill:");
+        for p in removed {
+            println!("  {}", p.display());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,5 +1116,69 @@ mod tests {
         let fresh = update_antigravity_hooks("", exe, true).unwrap();
         assert_eq!(update_antigravity_hooks(&fresh, exe, false).unwrap(), "{}\n");
         assert!(update_antigravity_hooks("[1]", exe, true).is_err());
+    }
+
+    #[test]
+    fn skill_install_update_status_and_uninstall_roundtrip() {
+        let dir = std::env::temp_dir().join(format!(
+            "offdesk-skill-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        std::fs::create_dir_all(dir.join(".codex")).unwrap();
+
+        let canonical = dir.join(".agents/skills/offdesk/SKILL.md");
+        assert_eq!(
+            inspect_skill_file(&canonical, "0.34.0").unwrap(),
+            SkillInstallState::NotInstalled
+        );
+
+        let paths = install_skill_in_home(&dir, "0.34.0", false).unwrap();
+        assert_eq!(paths.len(), 3);
+        assert_eq!(
+            inspect_skill_file(&canonical, "0.34.0").unwrap(),
+            SkillInstallState::UpToDate("0.34.0".into())
+        );
+        assert_eq!(
+            inspect_skill_file(&canonical, "0.35.0").unwrap(),
+            SkillInstallState::Outdated {
+                installed: "0.34.0".into(),
+                current: "0.35.0".into(),
+            }
+        );
+
+        // Idempotent upgrade to newer CLI version
+        install_skill_in_home(&dir, "0.35.0", false).unwrap();
+        assert_eq!(
+            inspect_skill_file(&canonical, "0.35.0").unwrap(),
+            SkillInstallState::UpToDate("0.35.0".into())
+        );
+
+        // Unmanaged custom skill is protected unless --force is passed
+        std::fs::write(&canonical, "# my custom offdesk skill\n").unwrap();
+        assert_eq!(
+            inspect_skill_file(&canonical, "0.35.0").unwrap(),
+            SkillInstallState::CustomUnmanaged
+        );
+        assert!(install_skill_in_home(&dir, "0.35.0", false).is_err());
+        assert!(uninstall_skill_in_home(&dir, false).is_err());
+
+        // --force overwrites and uninstalls cleanly
+        install_skill_in_home(&dir, "0.35.0", true).unwrap();
+        assert_eq!(
+            inspect_skill_file(&canonical, "0.35.0").unwrap(),
+            SkillInstallState::UpToDate("0.35.0".into())
+        );
+        let removed = uninstall_skill_in_home(&dir, false).unwrap();
+        assert_eq!(removed.len(), 3);
+        assert!(!canonical.exists());
+        assert!(std::fs::symlink_metadata(dir.join(".claude/skills/offdesk")).is_err());
+        assert!(std::fs::symlink_metadata(dir.join(".codex/skills/offdesk")).is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
