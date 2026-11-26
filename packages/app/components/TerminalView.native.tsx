@@ -93,6 +93,7 @@ interface NativeTermFrame {
   app_cursor?: boolean;
   title?: string;
   clipboard_write?: string;
+  wrapped_rows?: boolean[];
 }
 
 /**
@@ -438,6 +439,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const composingRef = useRef(false);
     const compositionTextRef = useRef("");
     const compositionEndAtRef = useRef(0);
+    const pendingInputRef = useRef("");
+    const mouseForwardBtnRef = useRef<number | null>(null);
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
@@ -482,6 +485,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
     const [searchOpen, setSearchOpen] = useState(false);
     const [searchQuery, setSearchQuery] = useState("");
+    const searchOpenRef = useRef(false);
+    const searchQueryRef = useRef("");
+    searchOpenRef.current = searchOpen;
+    searchQueryRef.current = searchQuery;
     const [searchMatches, setSearchMatches] = useState<number[]>([]);
     const [searchIndex, setSearchIndex] = useState(0);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -648,6 +655,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
 
         // 3. Cursor (dynamic DECSCUSR shape + unfocused hollow outline + IME anchor)
+        let solidBlockCursor: { col: number; row: number } | null = null;
         if (frame.cursor) {
           const [cx, cy] = frame.cursor;
           const cursorX = padX + cx * cellW;
@@ -666,8 +674,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             ctx.lineWidth = 1.25;
             ctx.strokeRect(cursorX + 0.75, cursorY + 0.75, cellW - 1.5, cellH - 1.5);
           } else {
-            ctx.globalAlpha = 0.85;
+            ctx.globalAlpha = 0.92;
             ctx.fillRect(cursorX, cursorY, cellW, cellH);
+            solidBlockCursor = { col: cx, row: cy };
           }
           ctx.globalAlpha = 1;
           const ta = inputRef.current;
@@ -680,6 +689,38 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }
 
+        // 3b. Search match highlights (Cmd+F)
+        const activeQuery = searchOpenRef.current ? searchQueryRef.current.trim().toLowerCase() : "";
+        if (activeQuery) {
+          ctx.fillStyle = "rgba(250, 204, 21, 0.35)";
+          for (let r = 0; r < frame.spans.length; r++) {
+            const rowChars = new Array<string>(frame.cols).fill(" ");
+            for (const sp of frame.spans[r]) {
+              let col = sp.c;
+              for (const ch of sp.t) {
+                const cp = ch.codePointAt(0) ?? 0;
+                const w = isWideChar(cp) ? 2 : 1;
+                if (col < frame.cols) rowChars[col] = ch;
+                if (w === 2 && col + 1 < frame.cols) rowChars[col + 1] = "";
+                col += w;
+              }
+            }
+            const lower = rowChars.join("").toLowerCase();
+            let pos = 0;
+            while ((pos = lower.indexOf(activeQuery, pos)) !== -1) {
+              // Map character offset in joined string back to column index
+              let colStart = 0;
+              let seen = 0;
+              for (let c = 0; c < rowChars.length && seen < pos; c++) {
+                seen += rowChars[c].length;
+                colStart = c + 1;
+              }
+              ctx.fillRect(padX + colStart * cellW, padY + r * cellH, activeQuery.length * cellW, cellH);
+              pos += activeQuery.length;
+            }
+          }
+        }
+
         // 4. Text spans (cached font/fill, geometric box-drawing, CJK grid align, underline/strikeout)
         ctx.textBaseline = "top";
         let lastFont = `${fontSize}px ${fontFamily}`;
@@ -689,6 +730,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           const spans = frame.spans[r];
           const rowY = padY + r * cellH;
           const y = rowY + Math.floor((cellH - fontSize) * 0.5);
+          const cursorOnRow = solidBlockCursor && solidBlockCursor.row === r ? solidBlockCursor.col : -1;
           for (const sp of spans) {
             const nextFont =
               sp.i || sp.b
@@ -704,7 +746,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               lastFill = nextFill;
             }
             let spanCols = 0;
-            if (/^[\x20-\x7e]*$/.test(sp.t)) {
+            const spanContainsCursor =
+              cursorOnRow >= sp.c && cursorOnRow < sp.c + sp.t.length * 2;
+            if (/^[\x20-\x7e]*$/.test(sp.t) && !spanContainsCursor) {
               ctx.fillText(sp.t, padX + sp.c * cellW, y);
               spanCols = sp.t.length;
             } else {
@@ -712,6 +756,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               for (const ch of sp.t) {
                 const cp = ch.codePointAt(0) ?? 0;
                 const w = isWideChar(cp) ? 2 : 1;
+                const isCursorCell = cursorOnRow >= col && cursorOnRow < col + w;
+                if (isCursorCell && lastFill !== bg) {
+                  ctx.fillStyle = bg;
+                  lastFill = bg;
+                } else if (!isCursorCell && lastFill !== nextFill) {
+                  ctx.fillStyle = nextFill;
+                  lastFill = nextFill;
+                }
                 if (!drawBoxChar(ctx, cp, padX + col * cellW, rowY, cellW * w, cellH)) {
                   ctx.fillText(ch, padX + col * cellW, y);
                 }
@@ -901,6 +953,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       (data: string) => {
         if (!canType || !data) return;
         const transformed = inputTransformRef?.current ? inputTransformRef.current(data) : data;
+        // Clear selection highlight on real keyboard input (preserve during SGR mouse events).
+        if (selectionRef.current && !transformed.startsWith("\x1b[<")) {
+          selectionRef.current = null;
+          schedulePaint();
+        }
         const ws = wsRef.current;
         if (ws && ws.readyState === WebSocket.OPEN) {
           if ((frameRef.current?.display_offset ?? 0) > 0) {
@@ -909,9 +966,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               .catch(() => {});
           }
           ws.send(JSON.stringify({ type: "input", data: transformed }));
+        } else if (!transformed.startsWith("\x1b[<")) {
+          // Queue non-mouse keystrokes during brief reconnects so initial typing isn't lost.
+          pendingInputRef.current = (pendingInputRef.current + transformed).slice(-4096);
         }
       },
-      [canType, inputTransformRef, terminalId, applyFrame],
+      [canType, inputTransformRef, terminalId, applyFrame, schedulePaint],
     );
 
     const resizeLocalEmulator = useCallback(
@@ -1085,10 +1145,45 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     }, [fitToContainer, schedulePaint]);
 
-    // Repaint when theme or font changes.
+    // Repaint when theme, font, or search highlight changes.
     useEffect(() => {
       paintFrame(frameRef.current);
-    }, [paintFrame]);
+    }, [paintFrame, searchOpen, searchQuery]);
+
+    // Repaint crisply when dragging the window across monitors with different DPI.
+    useEffect(() => {
+      let mq: MediaQueryList | null = null;
+      const listen = () => {
+        mq?.removeEventListener("change", onChange);
+        mq = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+        mq.addEventListener("change", onChange);
+      };
+      const onChange = () => {
+        schedulePaint();
+        listen();
+      };
+      listen();
+      return () => {
+        mq?.removeEventListener("change", onChange);
+      };
+    }, [schedulePaint]);
+
+    // Immediately reconnect if the WebSocket went closed while sleeping or offline.
+    useEffect(() => {
+      const wakeCheck = () => {
+        if (document.visibilityState === "hidden") return;
+        const ws = wsRef.current;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          setSessionGen((v) => v + 1);
+        }
+      };
+      document.addEventListener("visibilitychange", wakeCheck);
+      window.addEventListener("online", wakeCheck);
+      return () => {
+        document.removeEventListener("visibilitychange", wakeCheck);
+        window.removeEventListener("online", wakeCheck);
+      };
+    }, []);
 
     // Live WebSocket stream with deflate-raw-v1 decompression + rAF batching into Rust alacritty_terminal.
     useEffect(() => {
@@ -1197,6 +1292,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         callbacksRef.current.onReconnectingChange?.(false);
         lastSentResizeRef.current = null;
         fitToContainerRef.current({ skipIfUnchanged: false, immediate: true });
+        if (pendingInputRef.current) {
+          const queued = pendingInputRef.current;
+          pendingInputRef.current = "";
+          ws.send(JSON.stringify({ type: "input", data: queued }));
+        }
       };
 
       ws.onmessage = (event) => {
@@ -1307,7 +1407,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       if (a.row === b.row && a.col === b.col) return "";
       const rectC0 = Math.min(sel.start.col, sel.end.col);
       const rectC1 = Math.max(sel.start.col, sel.end.col);
-      const lines: string[] = [];
+      let out = "";
       for (let r = a.row; r <= b.row; r++) {
         const rowSpans = frame.spans[r] ?? [];
         const chars = new Array<string>(frame.cols).fill(" ");
@@ -1323,9 +1423,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
         const c0 = sel.rectangular ? rectC0 : r === a.row ? a.col : 0;
         const c1 = sel.rectangular ? rectC1 : r === b.row ? b.col : frame.cols;
-        lines.push(chars.slice(c0, c1).join("").trimEnd());
+        const isSoftWrapped =
+          !sel.rectangular && r < b.row && Boolean(frame.wrapped_rows?.[r]) && c1 >= frame.cols;
+        const chunk = chars.slice(c0, c1).join("");
+        out += isSoftWrapped ? chunk : chunk.trimEnd();
+        if (r < b.row && !isSoftWrapped) {
+          out += "\n";
+        }
       }
-      return lines.join("\n").trimEnd();
+      return out.trimEnd();
     }, []);
 
     useEffect(() => {
@@ -1698,8 +1804,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             e.preventDefault();
           }
           inputRef.current?.focus({ preventScroll: true });
-          if (e.button !== 0) return;
           const cell = pointerToCell(e.clientX, e.clientY);
+          // When a TUI (vim, htop, Claude Code, lazygit) owns mouse reporting,
+          // forward normal clicks to it; hold Shift or Option to force local selection.
+          if (
+            frameRef.current?.wants_mouse &&
+            !e.shiftKey &&
+            !e.altKey &&
+            !e.metaKey &&
+            !e.ctrlKey &&
+            e.detail === 1 &&
+            (e.button === 0 || e.button === 1 || e.button === 2)
+          ) {
+            const btn = e.button === 0 ? 0 : e.button === 1 ? 1 : 2;
+            mouseForwardBtnRef.current = btn;
+            sendRawInput(`\x1b[<${btn};${cell.col + 1};${cell.row + 1}M`);
+            return;
+          }
+          if (e.button !== 0) return;
           if (e.detail === 2) {
             const tok = tokenAtCell(cell.col, cell.row);
             if (tok) {
@@ -1785,6 +1907,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }}
         onMouseUp={(e) => {
+          if (mouseForwardBtnRef.current !== null) {
+            const btn = mouseForwardBtnRef.current;
+            mouseForwardBtnRef.current = null;
+            const cell = pointerToCell(e.clientX, e.clientY);
+            sendRawInput(`\x1b[<${btn};${cell.col + 1};${cell.row + 1}m`);
+            return;
+          }
           if (!draggingRef.current) return;
           draggingRef.current = false;
           const text = getSelectionText();
@@ -1974,8 +2103,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             focusedRef.current = true;
             paintFrame(frameRef.current);
           }}
-          onBlur={() => {
+          onBlur={(e) => {
             focusedRef.current = false;
+            composingRef.current = false;
+            compositionTextRef.current = "";
+            e.currentTarget.value = "";
             paintFrame(frameRef.current);
           }}
           onCompositionStart={() => {
