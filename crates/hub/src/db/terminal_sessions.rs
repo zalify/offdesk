@@ -181,7 +181,7 @@ pub fn count_active_in_workspace_group(
 }
 
 const SESSION_COLUMNS: &str = "id, machine_id, title, title_source, cwd, workspace_group_id, \
-     cols, rows, created_at, destroyed_at, opened_by_kind, opened_by_label";
+     cols, rows, created_at, destroyed_at, opened_by_kind, opened_by_label, custom_title";
 
 fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TerminalSessionRow> {
     Ok(TerminalSessionRow {
@@ -197,6 +197,7 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TerminalSessionRow> 
         destroyed_at: row.get(9)?,
         opened_by_kind: row.get(10)?,
         opened_by_label: row.get(11)?,
+        custom_title: row.get(12)?,
     })
 }
 
@@ -244,6 +245,21 @@ pub fn set_opened_by(
         params![opener.kind.as_str(), opener.label, id],
     )?;
     Ok(())
+}
+
+/// Set or clear a user-defined manual display title for a terminal.
+/// Passing `None` clears the override so the live OSC/process title shows again.
+pub fn set_custom_title(
+    conn: &Connection,
+    machine_id: &str,
+    id: &str,
+    custom_title: Option<&str>,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE terminal_sessions SET custom_title = ?1
+         WHERE id = ?2 AND machine_id = ?3 AND destroyed_at IS NULL",
+        params![custom_title, id, machine_id],
+    )
 }
 
 /// The opener stored on a row, if any. Unknown kinds (written by a later

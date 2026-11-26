@@ -289,6 +289,7 @@ mod tests {
             attention: None,
             opened_by: None,
             last_activity_ms: None,
+            custom_title: None,
             reachable: true,
         }
     }

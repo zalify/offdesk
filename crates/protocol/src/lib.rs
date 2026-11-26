@@ -56,6 +56,10 @@ pub struct TerminalInfo {
     /// reports it, and from older nodes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_activity_ms: Option<i64>,
+    /// User-defined manual display title; hub-authoritative and synced across
+    /// all devices. Never overwritten by OSC or process title updates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
 }
 
 /// How far a terminal's activity time must move before the node reports it

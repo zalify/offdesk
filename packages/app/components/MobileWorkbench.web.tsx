@@ -129,6 +129,7 @@ interface MobileWorkbenchProps {
   // null group = machine home directory (empty state / no active group).
   onNewTerminal: (group: WorkspaceGroup | null) => void;
   onCloseTerminal: (terminal: TerminalInfo) => void;
+  onRenameTerminal?: (terminal: TerminalInfo, title: string) => void;
   onNewGroup: () => void;
   onRenameGroup: (group: WorkspaceGroup) => void;
   onDeleteGroup: (group: WorkspaceGroup) => void;
@@ -198,6 +199,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     onSelectGroup,
     onNewTerminal,
     onCloseTerminal,
+    onRenameTerminal,
     onNewGroup,
     onRenameGroup,
     onDeleteGroup,
@@ -274,6 +276,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const { switchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
   const [chipSheet, setChipSheet] = useState<MobileSessionPane | null>(null);
+  const [renameTarget, setRenameTarget] = useState<TerminalInfo | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   // A tab's actions, from its header in the session switcher.
   const [groupSheet, setGroupSheet] = useState<WorkspaceGroup | null>(null);
   const sessionSwitcherScrollRef = useRef<HTMLDivElement | null>(null);
@@ -989,6 +993,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 borderRight: `1px solid ${colors.lineSoft}`,
                 fontFamily: fontDisplay,
                 overflow: "hidden",
+                transition: "width 180ms cubic-bezier(0.16, 1, 0.3, 1)",
               }}
             >
               <div
@@ -1711,6 +1716,18 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           title={`${chipSheet.group.label} · ${displayTerminalTitle(chipSheet.terminal)}`}
           onClose={() => setChipSheet(null)}
         >
+          {onRenameTerminal && (
+            <MenuRow
+              label="Rename terminal"
+              testid="mobile-chip-rename-terminal"
+              onClick={() => {
+                const { terminal } = chipSheet;
+                setChipSheet(null);
+                setRenameTarget(terminal);
+                setRenameDraft(terminal.custom_title?.trim() || displayTerminalTitle(terminal));
+              }}
+            />
+          )}
           <MenuRow
             icon={<X size={17} />}
             label="Close terminal"
@@ -1755,6 +1772,59 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 }}
               />
             ))}
+        </Sheet>
+      )}
+
+      {renameTarget && (
+        <Sheet
+          title="Rename terminal"
+          testid="mobile-rename-terminal-sheet"
+          onClose={() => setRenameTarget(null)}
+        >
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              onRenameTerminal?.(renameTarget, renameDraft.trim());
+              setRenameTarget(null);
+            }}
+            style={{ padding: "4px 16px 12px", display: "flex", flexDirection: "column", gap: 10 }}
+          >
+            <input
+              type="text"
+              autoFocus
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              placeholder="Leave empty to use auto title"
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                height: 44,
+                padding: "0 12px",
+                borderRadius: 6,
+                border: `1px solid ${colors.line}`,
+                background: colors.bg0,
+                color: colors.fg0,
+                fontSize: rem(14),
+                outline: "none",
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              {renameTarget.custom_title && (
+                <Button
+                  kind="secondary"
+                  onClick={() => {
+                    onRenameTerminal?.(renameTarget, "");
+                    setRenameTarget(null);
+                  }}
+                >
+                  reset auto
+                </Button>
+              )}
+              <Button kind="primary" type="submit">
+                save
+              </Button>
+            </div>
+          </form>
         </Sheet>
       )}
     </div>

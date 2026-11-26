@@ -433,6 +433,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(null);
     const resizeConfirmTimerRef = useRef<number | null>(null);
     const resizeDebounceTimerRef = useRef<number | null>(null);
+    const resizeHudTimerRef = useRef<number | null>(null);
+    const resizeSettleTimerRef = useRef<number | null>(null);
+    const hasInitialFitRef = useRef(false);
+    const [resizeHud, setResizeHud] = useState<{ cols: number; rows: number; visible: boolean }>({
+      cols: Math.max(20, initialCols || 80),
+      rows: Math.max(6, initialRows || 24),
+      visible: false,
+    });
+    const [isResizingVisual, setIsResizingVisual] = useState(false);
     const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const metricsRef = useRef<{ cellW: number; cellH: number }>({ cellW: 8.4, cellH: 18 });
     const readyFiredRef = useRef(false);
@@ -877,6 +886,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           window.clearTimeout(scrollbarFadeTimerRef.current);
           scrollbarFadeTimerRef.current = null;
         }
+        if (resizeHudTimerRef.current !== null) {
+          window.clearTimeout(resizeHudTimerRef.current);
+          resizeHudTimerRef.current = null;
+        }
+        if (resizeSettleTimerRef.current !== null) {
+          window.clearTimeout(resizeSettleTimerRef.current);
+          resizeSettleTimerRef.current = null;
+        }
       },
       [],
     );
@@ -1022,6 +1039,25 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const rows = Math.max(6, Math.floor((rect.height - 12) / cellH));
         const unchanged = dimsRef.current.cols === cols && dimsRef.current.rows === rows;
         dimsRef.current = { cols, rows };
+        if (hasInitialFitRef.current && !unchanged) {
+          setResizeHud({ cols, rows, visible: true });
+          setIsResizingVisual(true);
+          if (resizeHudTimerRef.current !== null) {
+            window.clearTimeout(resizeHudTimerRef.current);
+          }
+          resizeHudTimerRef.current = window.setTimeout(() => {
+            resizeHudTimerRef.current = null;
+            setResizeHud((prev) => ({ ...prev, visible: false }));
+          }, 550);
+          if (resizeSettleTimerRef.current !== null) {
+            window.clearTimeout(resizeSettleTimerRef.current);
+          }
+          resizeSettleTimerRef.current = window.setTimeout(() => {
+            resizeSettleTimerRef.current = null;
+            setIsResizingVisual(false);
+          }, 180);
+        }
+        hasInitialFitRef.current = true;
 
         const sendResizeNow = () => {
           if (!callbacksRef.current.canResizeTerminal) return;
@@ -1058,7 +1094,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               resizeDebounceTimerRef.current = window.setTimeout(() => {
                 resizeDebounceTimerRef.current = null;
                 sendResizeNow();
-              }, 150);
+              }, 75);
             }
           }
         }
@@ -2144,8 +2180,40 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             display: "block",
             width: "100%",
             height: "100%",
+            opacity: isResizingVisual ? 0.92 : 1,
+            transition: "opacity 160ms ease-out",
           }}
         />
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            transform: resizeHud.visible
+              ? "translate(-50%, -50%) scale(1)"
+              : "translate(-50%, -50%) scale(0.94)",
+            opacity: resizeHud.visible ? 1 : 0,
+            transition: "opacity 150ms ease, transform 150ms cubic-bezier(0.16, 1, 0.3, 1)",
+            pointerEvents: "none",
+            zIndex: 10,
+            padding: "5px 12px",
+            borderRadius: 999,
+            border: "1px solid rgba(255,255,255,0.14)",
+            background: "rgba(22, 23, 27, 0.84)",
+            backdropFilter: "blur(10px)",
+            WebkitBackdropFilter: "blur(10px)",
+            color: "#e4e4e7",
+            fontFamily: "var(--font-mono, monospace)",
+            fontSize: 12,
+            fontWeight: 500,
+            fontVariantNumeric: "tabular-nums",
+            letterSpacing: "0.02em",
+            boxShadow: "0 6px 20px rgba(0, 0, 0, 0.35)",
+          }}
+        >
+          {resizeHud.cols} × {resizeHud.rows}
+        </div>
         <textarea
           ref={inputRef}
           aria-label="Terminal input"

@@ -830,6 +830,16 @@ export const renameWorkspaceGroup = (
     `/api/machines/${machineId}/workspace-groups/${groupId}`,
     { name },
   );
+export const renameTerminal = (
+  machineId: string,
+  terminalId: string,
+  title: string,
+) =>
+  request<TerminalInfo>(
+    "PATCH",
+    `/api/machines/${machineId}/terminals/${terminalId}`,
+    { title },
+  );
 export const assignTerminalWorkspaceGroup = (
   machineId: string,
   terminalId: string,

@@ -48,6 +48,7 @@ import {
   requestControl,
   reorderWorkspaceGroups,
   releaseControl,
+  renameTerminal,
   renameWorkspaceGroup,
   saveWorkspaceLayout,
   terminalWsUrl,
@@ -1739,6 +1740,33 @@ function TerminalCanvasInner() {
     [isActiveController],
   );
 
+  const handleRenameTerminal = useCallback(
+    async (terminal: TerminalInfo, title: string) => {
+      const nextCustom = title.trim() || null;
+      // Optimistically update local state so the sidebar feels instant.
+      setBrowserState((prev) => ({
+        ...prev,
+        terminals: prev.terminals.map((item) =>
+          item.id === terminal.id ? { ...item, custom_title: nextCustom } : item,
+        ),
+      }));
+      try {
+        const updated = await renameTerminal(terminal.machine_id, terminal.id, title);
+        setBrowserState((prev) => ({
+          ...prev,
+          terminals: prev.terminals.map((item) =>
+            item.id === updated.id ? { ...item, ...updated } : item,
+          ),
+        }));
+      } catch (err) {
+        showWorkspaceToast(
+          `Could not rename terminal: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+    [],
+  );
+
   // ---- prefix-key shortcut engine (⌃B) ----
   // The engine singleton lives in PrefixKeyProvider; this window listener is
   // the only place keydowns enter it. Workspace-owned actions (splits, pane
@@ -2397,6 +2425,7 @@ function TerminalCanvasInner() {
               }
               onNewTerminal={handleMobileNewTerminal}
               onCloseTerminal={handleMobileCloseTerminal}
+              onRenameTerminal={handleRenameTerminal}
               onNewGroup={handleNewGroupClick}
               onRenameGroup={handleRenameGroup}
               onDeleteGroup={handleDeleteGroup}
@@ -2505,6 +2534,7 @@ function TerminalCanvasInner() {
                   onReorderGroups={handleRequestWorkspaceGroupReorder}
                   onMoveTerminal={handleMoveTerminalToWorkspace}
                   onCloseTerminal={handleMobileCloseTerminal}
+                  onRenameTerminal={handleRenameTerminal}
                   shelvedTerminalIds={shelvedIds}
                   onShelfTerminal={handleShelfTerminal}
                 />
