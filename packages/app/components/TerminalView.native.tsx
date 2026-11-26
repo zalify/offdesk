@@ -491,6 +491,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     searchQueryRef.current = searchQuery;
     const [searchMatches, setSearchMatches] = useState<number[]>([]);
     const [searchIndex, setSearchIndex] = useState(0);
+    const [searchLinesGen, setSearchLinesGen] = useState(0);
+    const activeSearchLineRef = useRef<number | null>(null);
     const searchInputRef = useRef<HTMLInputElement | null>(null);
     const plainLinesRef = useRef<string[]>([]);
     useEffect(() => {
@@ -689,10 +691,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }
 
-        // 3b. Search match highlights (Cmd+F)
+        // 3b. Search match highlights (Cmd+F) — bright orange on active match, soft amber on others
         const activeQuery = searchOpenRef.current ? searchQueryRef.current.trim().toLowerCase() : "";
         if (activeQuery) {
-          ctx.fillStyle = "rgba(250, 204, 21, 0.35)";
+          const totalPlain = plainLinesRef.current.length;
+          const activeLine = activeSearchLineRef.current;
+          const activeVisRow =
+            activeLine !== null && totalPlain > 0
+              ? activeLine - (totalPlain - frame.rows - frame.display_offset)
+              : -1;
           for (let r = 0; r < frame.spans.length; r++) {
             const rowChars = new Array<string>(frame.cols).fill(" ");
             for (const sp of frame.spans[r]) {
@@ -708,14 +715,25 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             const lower = rowChars.join("").toLowerCase();
             let pos = 0;
             while ((pos = lower.indexOf(activeQuery, pos)) !== -1) {
-              // Map character offset in joined string back to column index
               let colStart = 0;
               let seen = 0;
               for (let c = 0; c < rowChars.length && seen < pos; c++) {
                 seen += rowChars[c].length;
                 colStart = c + 1;
               }
-              ctx.fillRect(padX + colStart * cellW, padY + r * cellH, activeQuery.length * cellW, cellH);
+              const isActiveRow = r === activeVisRow;
+              const mx = padX + colStart * cellW;
+              const my = padY + r * cellH;
+              const mw = activeQuery.length * cellW;
+              ctx.fillStyle = isActiveRow
+                ? "rgba(251, 146, 60, 0.72)"
+                : "rgba(250, 204, 21, 0.28)";
+              ctx.fillRect(mx, my, mw, cellH);
+              if (isActiveRow) {
+                ctx.strokeStyle = "#fb923c";
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(mx + 0.5, my + 0.5, mw - 1, cellH - 1);
+              }
               pos += activeQuery.length;
             }
           }
@@ -876,7 +894,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (frame.display_offset > maxObservedOffsetRef.current) {
           maxObservedOffsetRef.current = frame.display_offset;
         }
-        if (frame.wants_mouse && frame.display_offset > 0) {
+        if (frame.wants_mouse && frame.display_offset > 0 && !searchOpenRef.current) {
           // Remote app / pty-daemon / tmux owns scrollback via SGR mouse wheel;
           // keep local alacritty_terminal pinned to bottom so local offset never
           // drifts out of sync with the remote viewport.
@@ -1651,42 +1669,73 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       [],
     );
 
+    const closeSearchBar = useCallback(() => {
+      setSearchOpen(false);
+      activeSearchLineRef.current = null;
+      if (frameRef.current?.wants_mouse && (frameRef.current.display_offset ?? 0) > 0) {
+        void enqueueTermOp(() =>
+          invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+        )
+          .then(applyFrame)
+          .catch(() => {});
+      } else {
+        paintFrame(frameRef.current);
+      }
+      inputRef.current?.focus();
+    }, [terminalId, enqueueTermOp, applyFrame, paintFrame]);
+
     const openSearchBar = useCallback(() => {
       setSearchOpen(true);
-      void invoke<string[]>("native_term_plain_lines", { id: terminalId })
+      void enqueueTermOp(() => invoke<string[]>("native_term_plain_lines", { id: terminalId }))
         .then((lines) => {
           plainLinesRef.current = lines;
+          setSearchLinesGen((v) => v + 1);
         })
         .catch(() => {});
-      window.setTimeout(() => searchInputRef.current?.focus(), 0);
-    }, [terminalId]);
+      window.setTimeout(() => {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+      }, 0);
+    }, [terminalId, enqueueTermOp]);
 
     const jumpToSearchMatch = useCallback(
       (matches: number[], idx: number) => {
-        if (matches.length === 0) return;
+        if (matches.length === 0) {
+          activeSearchLineRef.current = null;
+          paintFrame(frameRef.current);
+          return;
+        }
         const wrapped = ((idx % matches.length) + matches.length) % matches.length;
         setSearchIndex(wrapped);
         const total = plainLinesRef.current.length;
         const lineIdx = matches[wrapped];
+        activeSearchLineRef.current = lineIdx;
         const rows = frameRef.current?.rows ?? dimsRef.current.rows;
+        const maxOff = frameRef.current?.history_size ?? Math.max(0, total - rows);
         const curOff = frameRef.current?.display_offset ?? 0;
-        const targetOff = Math.max(0, total - lineIdx - Math.ceil(rows / 2));
+        const targetOff = Math.max(0, Math.min(maxOff, total - lineIdx - Math.ceil(rows / 2)));
         const deltaLines = targetOff - curOff;
         if (deltaLines !== 0) {
-          void invoke<NativeTermFrame>("native_term_scroll", { id: terminalId, deltaLines })
-            .then(applyFrame)
+          void enqueueTermOp(() =>
+            invoke<NativeTermFrame>("native_term_scroll", { id: terminalId, deltaLines }),
+          )
+            .then((scrolled) => applyFrame(scrolled, { sync: true }))
             .catch(() => {});
+        } else {
+          paintFrame(frameRef.current);
         }
       },
-      [terminalId, applyFrame],
+      [terminalId, enqueueTermOp, applyFrame, paintFrame],
     );
 
     useEffect(() => {
       if (!searchOpen) return;
       const q = searchQuery.trim().toLowerCase();
       if (!q) {
+        activeSearchLineRef.current = null;
         setSearchMatches([]);
         setSearchIndex(0);
+        paintFrame(frameRef.current);
         return;
       }
       const lines = plainLinesRef.current;
@@ -1695,8 +1744,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (lines[i].toLowerCase().includes(q)) found.push(i);
       }
       setSearchMatches(found);
-      if (found.length > 0) jumpToSearchMatch(found, 0);
-    }, [searchOpen, searchQuery, jumpToSearchMatch]);
+      if (found.length > 0) {
+        jumpToSearchMatch(found, 0);
+      } else {
+        activeSearchLineRef.current = null;
+        paintFrame(frameRef.current);
+      }
+    }, [searchOpen, searchQuery, searchLinesGen, jumpToSearchMatch, paintFrame]);
 
     useEffect(() => {
       if (!ctxMenu) return;
@@ -2236,9 +2290,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing || (e.nativeEvent as KeyboardEvent).keyCode === 229) {
+                  return;
+                }
                 if (e.key === "Escape") {
-                  setSearchOpen(false);
-                  inputRef.current?.focus();
+                  closeSearchBar();
                 } else if (e.key === "Enter") {
                   e.preventDefault();
                   jumpToSearchMatch(searchMatches, searchIndex + (e.shiftKey ? -1 : 1));
@@ -2277,10 +2333,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             </button>
             <button
               type="button"
-              onClick={() => {
-                setSearchOpen(false);
-                inputRef.current?.focus();
-              }}
+              onClick={closeSearchBar}
               style={{ border: "none", background: "transparent", color: "rgba(228,228,231,0.7)", cursor: "pointer", padding: "0 4px" }}
               title="Close (Esc)"
             >
