@@ -769,7 +769,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       }
       onReadyRef.current?.();
     }, []);
-    if (!readyRef.current && !outputPaintWatcherRef.current && onReady) {
+    if (!readyRef.current && !outputPaintWatcherRef.current) {
       outputPaintWatcherRef.current = () => {
         const seq = resizeSeqRef.current;
         return () => {
@@ -784,6 +784,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         };
       };
     }
+    useEffect(() => {
+      if (onReady && readyRef.current) {
+        onReady();
+      }
+    }, [onReady]);
     useEffect(
       () => () => {
         if (resizeRedrawWaitRef.current !== null) {
