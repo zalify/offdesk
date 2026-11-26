@@ -2,7 +2,7 @@ import { useKeyBarLayout, type KeyBarKey, type KeyBarLayout } from "@/lib/keyBar
 import { readClipboardText } from "@/lib/readClipboardText";
 import { AttachmentPicker, AttachmentReview, formatAttachmentSize } from "./AttachmentPicker";
 import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
-import { ArrowUp, Keyboard, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import "./ExtendedKeyBar.css";
 
 export interface ExtendedKeyBarProps {
@@ -33,23 +33,6 @@ export interface ExtendedKeyBarProps {
 
 const KEY_GAP = 6;
 const MIN_KEY_WIDTH = 48;
-const KEYBAR_COLLAPSED_KEY = "offdesk:mobile-keybar-collapsed";
-
-function readKeybarCollapsed(): boolean {
-  try {
-    return localStorage.getItem(KEYBAR_COLLAPSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function writeKeybarCollapsed(collapsed: boolean): void {
-  try {
-    localStorage.setItem(KEYBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
-  } catch {
-    // Ignore storage errors in private mode.
-  }
-}
 
 export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
@@ -97,30 +80,6 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   const attachHandler = useRef(onAttachFile); attachHandler.current = onAttachFile;
   const controller = useRef(isController); controller.current = isController;
   const [copying, setCopying] = useState(false);
-  const [composeText, setComposeText] = useState("");
-  const [keysCollapsed, setKeysCollapsed] = useState<boolean>(readKeybarCollapsed);
-  const composeInputRef = useRef<HTMLTextAreaElement>(null);
-  const toggleKeysCollapsed = () => {
-    setKeysCollapsed((prev) => {
-      const next = !prev;
-      writeKeybarCollapsed(next);
-      return next;
-    });
-  };
-  const submitCompose = () => {
-    const trimmed = composeText;
-    if (!trimmed || !isController) return;
-    if (onPasteText) {
-      onPasteText(trimmed);
-    } else {
-      onKey(trimmed);
-    }
-    window.setTimeout(() => onKey("\r"), 30);
-    setComposeText("");
-    if (composeInputRef.current) {
-      composeInputRef.current.style.height = "auto";
-    }
-  };
   const selectionAvailable = !!(onEnterSelectMode && onExitSelectMode && onCopySelection);
   const selection = selectMode && selectionAvailable;
   const updateEdges = () => {
@@ -235,97 +194,41 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       {attachmentStatus && <div role="status" data-testid="attachment-status" className="offdesk-attachment-status">
         <span>{attachmentStatus.message}</span><button aria-label="Dismiss attachment status" onClick={() => setAttachmentStatus(null)}>Dismiss</button>
       </div>}
-      <div className="offdesk-compose-bar" data-testid="mobile-compose-bar">
-        <textarea
-          ref={composeInputRef}
-          rows={1}
-          value={composeText}
-          disabled={!isController}
-          placeholder={isController ? "Message agent…" : "Take control to send"}
-          aria-label="Compose message to terminal"
-          data-testid="mobile-compose-input"
-          className="offdesk-compose-input"
-          onChange={(event) => {
-            setComposeText(event.target.value);
-            const el = event.currentTarget;
-            el.style.height = "auto";
-            el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              submitCompose();
-            }
-          }}
-        />
-        {isController && !hasControl && onTakeControl && (
+      {isController && !hasControl && onTakeControl && (
+        <div className="offdesk-keybar-watching" data-testid="extended-keybar-watching">
+          <span>watching — tap to take control & fit terminal</span>
           <button
             type="button"
             className="odk-btn odk-btn--primary"
             data-testid="extended-keybar-take-control"
             aria-label="Take control"
-            title="Take control"
             onPointerDown={(event) => event.preventDefault()}
             onClick={onTakeControl}
-            style={{
-              height: 30,
-              padding: "0 10px",
-              fontSize: 12,
-              fontWeight: 600,
-              flexShrink: 0,
-              whiteSpace: "nowrap",
-            }}
           >
             take control
           </button>
-        )}
-        <button
-          type="button"
-          className="offdesk-compose-btn"
-          data-testid="mobile-compose-toggle-keys"
-          aria-label={keysCollapsed ? "Show terminal keys" : "Hide terminal keys"}
-          aria-pressed={!keysCollapsed}
-          title={keysCollapsed ? "Show terminal keys" : "Hide terminal keys"}
-          onClick={toggleKeysCollapsed}
-        >
-          <Keyboard size={15} aria-hidden />
-        </button>
-        <button
-          type="button"
-          className="offdesk-compose-send"
-          data-testid="mobile-compose-send"
-          aria-label="Send message"
-          title="Send"
-          disabled={!isController || composeText.length === 0}
-          onClick={submitCompose}
-        >
-          <ArrowUp size={15} strokeWidth={2.5} aria-hidden />
-        </button>
-      </div>
-      {!keysCollapsed && (
-        <>
-          <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
-            <div className="offdesk-keybar-primary">{layout.primary.map(renderKey)}</div>
-            {key("Arrow up", "\x1b[A", "extended-keybar-up", "↑", true)}
-            {/* Enter is what you press most: the one key on the accent. */}
-            <KeyButton label="Enter" testid="extended-keybar-enter" disabled={!isController} accent onPress={() => onKey("\r")}>enter</KeyButton>
-          </div>
-          <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
-            <KeyButton label={keyboardVisible ? "Hide keyboard" : "Show keyboard"} disabled={!isController} pressed={keyboardVisible}
-              testid="extended-keybar-keyboard" onPress={onToggleKeyboard}>kb</KeyButton>
-            <div className="offdesk-keybar-scroll-wrap" data-left={edges.left} data-right={edges.right}>
-              <div ref={scroller} className="offdesk-keybar-scroll" onScroll={updateEdges} data-testid="keybar-scroll" role="group" aria-label="Input tools and symbols, scroll horizontally">
-                <div ref={track} className="offdesk-keybar-track">
-                  {layout.secondary.map(renderKey)}
-                </div>
-              </div>
-            </div>
-            {key("Arrow left", "\x1b[D", "extended-keybar-left", "←", true)}
-            {key("Arrow down", "\x1b[B", "extended-keybar-down", "↓", true)}
-            {key("Arrow right", "\x1b[C", "extended-keybar-right", "→", true)}
-          </div>
-        </>
+        </div>
       )}
+      <div className="offdesk-keybar-row" data-testid="keybar-fixed-row" role="group" aria-label="Frequent terminal keys">
+        <div className="offdesk-keybar-primary">{layout.primary.map(renderKey)}</div>
+        {key("Arrow up", "\x1b[A", "extended-keybar-up", "↑", true)}
+        {/* Enter is what you press most: the one key on the accent. */}
+        <KeyButton label="Enter" testid="extended-keybar-enter" disabled={!isController} accent onPress={() => onKey("\r")}>enter</KeyButton>
+      </div>
+      <div className="offdesk-keybar-row" data-testid="keybar-secondary-row">
+        <KeyButton label={keyboardVisible ? "Hide keyboard" : "Show keyboard"} disabled={!isController} pressed={keyboardVisible}
+          testid="extended-keybar-keyboard" onPress={onToggleKeyboard}>kb</KeyButton>
+        <div className="offdesk-keybar-scroll-wrap" data-left={edges.left} data-right={edges.right}>
+          <div ref={scroller} className="offdesk-keybar-scroll" onScroll={updateEdges} data-testid="keybar-scroll" role="group" aria-label="Input tools and symbols, scroll horizontally">
+            <div ref={track} className="offdesk-keybar-track">
+              {layout.secondary.map(renderKey)}
+            </div>
+          </div>
+        </div>
+        {key("Arrow left", "\x1b[D", "extended-keybar-left", "←", true)}
+        {key("Arrow down", "\x1b[B", "extended-keybar-down", "↓", true)}
+        {key("Arrow right", "\x1b[C", "extended-keybar-right", "→", true)}
+      </div>
     </>}
     <input ref={fileInput} type="file" accept="image/*,video/*" multiple hidden onChange={attach} data-testid="extended-keybar-file-input" disabled={!onAttachFile} />
     <input ref={documentInput} type="file" multiple hidden onChange={attach} data-testid="extended-keybar-document-input" disabled={!onAttachFile} />
