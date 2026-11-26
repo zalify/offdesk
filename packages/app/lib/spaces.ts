@@ -55,8 +55,8 @@ export function filterGroupsBySpace(
   groups: WorkspaceGroup[],
   activeSpaceId: string | null | undefined,
 ): WorkspaceGroup[] {
-  if (!activeSpaceId) return groups;
-  return groups.filter((group) => group.spaceId === activeSpaceId);
+  const target = activeSpaceId ?? null;
+  return groups.filter((group) => (group.spaceId ?? null) === target);
 }
 
 export interface SpaceWaitingCounts {

@@ -1440,8 +1440,8 @@ function TerminalCanvasInner() {
   const resolveNewTerminalGroupId = useCallback(
     async (machineId: string, cwd: string, tabId: string | null) => {
       const candidateGroups =
-        tabId === null && activeSpaceId
-          ? tabGroups.filter((group) => group.spaceId === activeSpaceId)
+        tabId === null
+          ? tabGroups.filter((group) => (group.spaceId ?? null) === (activeSpaceId ?? null))
           : tabGroups;
       const placement = planNewTerminalPlacement(candidateGroups, { tabId, cwd });
       if (!placement.needsNewTab) return placement.workspaceGroupId;

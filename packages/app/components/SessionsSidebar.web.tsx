@@ -275,7 +275,7 @@ function SessionsSidebarComponent({
               ...(group.spaceId
                 ? [
                     {
-                      label: "Unassigned",
+                      label: "Default",
                       onClick: () => onMoveGroupToSpace(group, null),
                     },
                   ]
@@ -549,11 +549,7 @@ function SessionsSidebarComponent({
     () => countWaitingBySpace(groups, terminalsById),
     [groups, terminalsById],
   );
-  const otherSpacesWaiting = useMemo(() => {
-    if (!activeSpaceId) return 0;
-    const activeCount = waitingBySpace.bySpace.get(activeSpaceId) ?? 0;
-    return Math.max(0, waitingBySpace.total - activeCount);
-  }, [activeSpaceId, waitingBySpace]);
+  const defaultSpaceWaiting = waitingBySpace.bySpace.get(null) ?? 0;
 
   const recentRows = useMemo(
     () => (order === "recent" ? sessionRows(scopedGroups, terminalsById, "recent") : []),
@@ -822,14 +818,14 @@ function SessionsSidebarComponent({
             className="odk-sessions-space-pill"
             onClick={() => onSelectSpace?.(null)}
           >
-            <span>All</span>
-            {otherSpacesWaiting > 0 && (
+            <span>Default</span>
+            {defaultSpaceWaiting > 0 && activeSpaceId !== null && (
               <span
                 data-testid="sessions-space-all-waiting"
                 className="odk-sessions-space-waiting"
-                title={`${otherSpacesWaiting} waiting in other spaces`}
+                title={`${defaultSpaceWaiting} waiting in Default`}
               >
-                {otherSpacesWaiting}
+                {defaultSpaceWaiting}
               </span>
             )}
           </button>

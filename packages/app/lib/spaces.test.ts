@@ -131,11 +131,7 @@ describe("filterGroupsBySpace & countWaitingBySpace", () => {
       ["g3", null],
     ]);
 
-    expect(filterGroupsBySpace(ws.groups, null).map((g) => g.id)).toEqual([
-      "g1",
-      "g2",
-      "g3",
-    ]);
+    expect(filterGroupsBySpace(ws.groups, null).map((g) => g.id)).toEqual(["g3"]);
     expect(filterGroupsBySpace(ws.groups, "s1").map((g) => g.id)).toEqual(["g1"]);
     expect(filterGroupsBySpace(ws.groups, "s2").map((g) => g.id)).toEqual(["g2"]);
 
