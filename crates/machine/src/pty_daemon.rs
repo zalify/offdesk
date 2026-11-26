@@ -423,7 +423,8 @@ mod unix_impl {
             let replay = history_size.min(max_scrollback);
 
             let mut out = String::with_capacity((replay + self.rows as usize) * 64);
-            out.push_str("\x1b[?2026h\x1b[0m\x1b[r\x1b[3J\x1b[2J\x1b[H");
+            // Begin DEC 2026 synchronized output, ensure primary screen, and reset viewport.
+            out.push_str("\x1b[?2026h\x1b[?1049l\x1b[0m\x1b[r\x1b[3J\x1b[2J\x1b[H");
 
             let mut cur_fg = AnsiColor::Named(NamedColor::Foreground);
             let mut cur_bg = AnsiColor::Named(NamedColor::Background);
@@ -512,8 +513,13 @@ mod unix_impl {
             let mode = *self.term.mode();
 
             let mut out = String::with_capacity(self.rows as usize * self.cols as usize * 2);
-            // Begin DEC 2026 synchronized output + full SGR/DECSTBM/viewport reset.
-            out.push_str("\x1b[?2026h\x1b[0m\x1b[r\x1b[2J\x1b[H");
+            // Begin DEC 2026 synchronized output, sync alt-screen mode so clients never
+            // leak TUI redraws into local scrollback, then reset SGR/DECSTBM/viewport.
+            if mode.contains(TermMode::ALT_SCREEN) {
+                out.push_str("\x1b[?2026h\x1b[?1049h\x1b[0m\x1b[r\x1b[2J\x1b[H");
+            } else {
+                out.push_str("\x1b[?2026h\x1b[?1049l\x1b[0m\x1b[r\x1b[2J\x1b[H");
+            }
 
             let mut cur_fg = AnsiColor::Named(NamedColor::Foreground);
             let mut cur_bg = AnsiColor::Named(NamedColor::Background);
@@ -1972,6 +1978,10 @@ mod unix_impl {
             assert!(
                 attach_str.contains("\x1b[?1002h") && attach_str.contains("\x1b[?1006h"),
                 "attach snapshot must replay app's mouse mode so wheel scroll works after reconnect: {attach_str}"
+            );
+            assert!(
+                attach_str.contains("\x1b[?1049h"),
+                "attach snapshot must replay alt-screen mode so TUI redraws never leak into client scrollback: {attach_str}"
             );
         }
     }

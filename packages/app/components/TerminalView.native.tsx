@@ -79,6 +79,32 @@ interface NativeBgRun {
   g: string;
 }
 
+const DAEMON_SNAP_PREFIX_LEGACY = new TextEncoder().encode("\x1b[?2026h\x1b[0m\x1b[r");
+const DAEMON_SNAP_PREFIX_ALT = new TextEncoder().encode("\x1b[?2026h\x1b[?1049");
+
+function bytesContainPrefix(haystack: Uint8Array, needle: Uint8Array): boolean {
+  if (needle.length === 0 || haystack.length < needle.length) return false;
+  const limit = Math.min(haystack.length - needle.length, 64);
+  for (let i = 0; i <= limit; i++) {
+    let ok = true;
+    for (let j = 0; j < needle.length; j++) {
+      if (haystack[i + j] !== needle[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) return true;
+  }
+  return false;
+}
+
+function hasDaemonSnapshotHeader(bytes: Uint8Array): boolean {
+  return (
+    bytesContainPrefix(bytes, DAEMON_SNAP_PREFIX_LEGACY) ||
+    bytesContainPrefix(bytes, DAEMON_SNAP_PREFIX_ALT)
+  );
+}
+
 interface NativeTermFrame {
   cols: number;
   rows: number;
@@ -461,6 +487,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const scrollbarDragRef = useRef(false);
     const wheelAccumPxRef = useRef(0);
     const remoteWheelActiveRef = useRef(false);
+    const daemonBackedRef = useRef(false);
     const touchScrollRef = useRef<{ lastY: number; accumPx: number; clientX: number; clientY: number } | null>(null);
     const paintOffsetYRef = useRef(0);
     const pendingScrollLinesRef = useRef(0);
@@ -910,7 +937,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (frame.display_offset > maxObservedOffsetRef.current) {
           maxObservedOffsetRef.current = frame.display_offset;
         }
-        if (frame.wants_mouse && frame.display_offset > 0 && !searchOpenRef.current) {
+        if (
+          (frame.wants_mouse || daemonBackedRef.current) &&
+          frame.display_offset > 0 &&
+          !searchOpenRef.current
+        ) {
           // Remote app / pty-daemon / tmux owns scrollback via SGR mouse wheel;
           // keep local alacritty_terminal pinned to bottom so local offset never
           // drifts out of sync with the remote viewport.
@@ -1109,6 +1140,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       readyFiredRef.current = false;
       lastSentResizeRef.current = null;
       remoteWheelActiveRef.current = false;
+      daemonBackedRef.current = false;
       let cancelled = false;
       const openCols = ptyDimsRef.current.cols;
       const openRows = ptyDimsRef.current.rows;
@@ -1295,6 +1327,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
       const enqueueBytes = (bytes: Uint8Array) => {
         if (bytes.length === 0 || disposed) return;
+        if (!daemonBackedRef.current && hasDaemonSnapshotHeader(bytes)) {
+          daemonBackedRef.current = true;
+        }
         pendingChunks.push(bytes);
         const scanned = scanSyncUpdateMarkers(syncTail, bytes, inSyncUpdate);
         syncTail = scanned.nextTail;
@@ -1767,7 +1802,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const closeSearchBar = useCallback(() => {
       setSearchOpen(false);
       activeSearchLineRef.current = null;
-      if (frameRef.current?.wants_mouse && (frameRef.current.display_offset ?? 0) > 0) {
+      if (
+        (frameRef.current?.wants_mouse || daemonBackedRef.current) &&
+        (frameRef.current?.display_offset ?? 0) > 0
+      ) {
         void enqueueTermOp(() =>
           invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
         )
@@ -1917,6 +1955,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const visibleRows = frameRef.current?.rows ?? dimsRef.current.rows;
     const remoteOwnsScroll =
       Boolean(frameRef.current?.wants_mouse) ||
+      daemonBackedRef.current ||
       (remoteWheelActiveRef.current && historySize <= 5);
     const totalLines = Math.max(visibleRows, visibleRows + historySize);
     const hasScrollback = !remoteOwnsScroll && (historySize > 0 || scrollbackOffset > 0);
@@ -2078,7 +2117,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
           }
           // 2. Non-drag plain click in a mouse-aware TUI (e.g. Claude Code "Jump to bottom")
-          if (frameRef.current?.wants_mouse && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+          if (
+            (frameRef.current?.wants_mouse || daemonBackedRef.current) &&
+            !e.shiftKey &&
+            !e.altKey &&
+            !e.metaKey &&
+            !e.ctrlKey
+          ) {
             sendRawInput(
               `\x1b[<0;${cell.col + 1};${cell.row + 1}M\x1b[<0;${cell.col + 1};${cell.row + 1}m`,
             );
@@ -2110,11 +2155,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           const frame = frameRef.current;
           const hist = frame?.history_size ?? 0;
           const off = frame?.display_offset ?? 0;
-          if (hist > 5 && !frame?.wants_mouse) {
+          if (hist > 5 && !frame?.wants_mouse && !daemonBackedRef.current) {
             remoteWheelActiveRef.current = false;
           }
           const sendRemoteWheel =
             Boolean(frame?.wants_mouse) ||
+            daemonBackedRef.current ||
             hist <= 5 ||
             (remoteWheelActiveRef.current && off === 0);
           if (sendRemoteWheel) {
@@ -2174,7 +2220,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           if (lines === 0) return;
           state.accumPx -= lines * stepPx;
 
-          if (frameRef.current?.wants_mouse) {
+          if (frameRef.current?.wants_mouse || daemonBackedRef.current) {
             const btn = lines > 0 ? 64 : 65;
             const count = Math.min(5, Math.max(1, Math.abs(lines)));
             const cell = pointerToCell(t.clientX, t.clientY);
