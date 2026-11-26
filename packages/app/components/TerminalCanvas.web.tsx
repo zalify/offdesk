@@ -1211,7 +1211,9 @@ function TerminalCanvasInner() {
       const pick = pickBrowserToOpen(
         scopedAgentBrowsers,
         rememberedBrowserIds[overlayMachineId],
-        workspaceTerminal?.id ?? null,
+        // Expanding the mini keeps the tab it shows; only a fresh open
+        // goes to the focused terminal's tab.
+        browserOverlayMode === "mini" ? null : (workspaceTerminal?.id ?? null),
       );
       if (pick) handleSelectOverlayBrowser(pick);
     }

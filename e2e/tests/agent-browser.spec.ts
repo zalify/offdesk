@@ -425,6 +425,16 @@ test.describe("agent browser", () => {
     await page.getByTestId("agent-browser-overlay-minimize").click();
     await expect(page.getByTestId("agent-browser-mini-owner")).toHaveText("owner-beta");
 
+    // Expanding the mini keeps its tab, whichever terminal is focused.
+    await page.getByTestId(`workspace-pane-${termA}`).click();
+    await page.getByTestId("agent-browser-mini-expand").click();
+    await expect(selected(b.id)).toHaveAttribute("data-selected", "true");
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    await page.getByTestId(`workspace-pane-${termA}`).click();
+    await openOverlay(page);
+    await expect(selected(b.id)).toHaveAttribute("data-selected", "true");
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+
     // A handoff while the overlay is closed names the session that asks.
     await page.getByTestId("agent-browser-mini-close").click();
     await requestAgentBrowserHandoffViaApi(page, a.id, "Please log in");
@@ -456,6 +466,9 @@ test.describe("agent browser", () => {
     await expect(
       page.getByTestId(`agent-browser-tab-${kept.id}`).getByTestId("agent-browser-tab-private"),
     ).toHaveCount(0);
+    // A private tab streams like any other.
+    await ownedTab.click();
+    await expect.poll(() => frames(page, owned.id)).toBeGreaterThan(0);
     await page.screenshot({ path: "e2e/artifacts/agent-browser-owner-private.png" });
 
     await destroyTerminalViaApi(page, owner);
@@ -464,6 +477,25 @@ test.describe("agent browser", () => {
       .poll(async () => (await listAgentBrowsersViaApi(page)).map((b) => b.id).sort())
       .toEqual([kept.id, loose.id].sort());
     await expect(page.getByTestId(`agent-browser-tab-${kept.id}`)).toBeVisible();
+  });
+
+  test("a terminal whose command exits by itself takes its tabs with it", async ({ page }) => {
+    const shortLived = await createTerminalViaApi(page, {
+      cwd: "/root",
+      startupCommand: "exec sleep 8",
+    });
+    const owned = await openAgentBrowserViaApi(page, {
+      url: animatedPage("Short lived"),
+      openerTerminalId: shortLived,
+    });
+    const loose = await openAgentBrowserViaApi(page, { url: animatedPage("Stays") });
+    expect((await listAgentBrowsersViaApi(page)).map((b) => b.id)).toContain(owned.id);
+    // The node notices the dead session within a few seconds.
+    await expect
+      .poll(async () => (await listAgentBrowsersViaApi(page)).map((b) => b.id), {
+        timeout: 40_000,
+      })
+      .toEqual([loose.id]);
   });
 
   test("minimising keeps the stream in a mini window that leaves the terminals alone", async ({
