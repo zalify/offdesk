@@ -44,6 +44,8 @@ import {
   Lock,
   LockOpen,
   Monitor,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Settings as SettingsIcon,
@@ -222,6 +224,52 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   // Below 360px the title bar has no room for the Files button; the Machines
   // sheet always offers it instead.
   const wideTitleBar = useMinViewportWidth(TITLE_BAR_FILES_MIN_WIDTH);
+  const [foldableViewport, setFoldableViewport] = useState<{
+    wide: boolean;
+    keyboardOpen: boolean;
+  }>(() => {
+    if (typeof window === "undefined") return { wide: false, keyboardOpen: false };
+    const vv = window.visualViewport;
+    return {
+      wide: window.innerWidth >= 680 && window.innerHeight >= 450,
+      keyboardOpen: vv ? vv.height < window.innerHeight * 0.72 : false,
+    };
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => {
+      const vv = window.visualViewport;
+      setFoldableViewport({
+        wide: window.innerWidth >= 680 && window.innerHeight >= 450,
+        keyboardOpen: vv ? vv.height < window.innerHeight * 0.72 : false,
+      });
+    };
+    window.addEventListener("resize", update);
+    window.visualViewport?.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.visualViewport?.removeEventListener("resize", update);
+    };
+  }, []);
+  const [railCollapsed, setRailCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("offdesk:mobile-foldable-rail-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleRailCollapsed = useCallback(() => {
+    setRailCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("offdesk:mobile-foldable-rail-collapsed", next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
+  const showFoldableRail = foldableViewport.wide && !foldableViewport.keyboardOpen;
   const [hubPickerOpen, setHubPickerOpen] = useState(false);
   const { switchHub, switching: switchingHub, error: switchHubError } = useMobileHubSwitch();
   const [sessionSwitcherOpen, setSessionSwitcherOpen] = useState(false);
@@ -250,14 +298,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   }, [sessionSwitcherOpen]);
 
   // Ages read "5m" and "working" lasts a minute; refresh both while the
-  // switcher shows them.
+  // switcher or foldable sidebar shows them.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    if (!sessionSwitcherOpen) return;
+    if (!sessionSwitcherOpen && !(showFoldableRail && !railCollapsed)) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 15_000);
     return () => window.clearInterval(timer);
-  }, [sessionSwitcherOpen]);
+  }, [sessionSwitcherOpen, showFoldableRail, railCollapsed]);
 
   // Holding a switcher row opens its actions (iOS fires no contextmenu); the
   // click that ends the hold must not also pick the row.
@@ -363,7 +411,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     ? chips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
     : 0;
 
-  const renderSessionRow = (pane: MobileSessionPane, showTab: boolean) => {
+  const renderSessionRow = (
+    pane: MobileSessionPane,
+    showTab: boolean,
+    testIdPrefix = "mobile-session",
+  ) => {
     const { terminal } = pane;
     const state = sessionState(terminal, now);
     const opener = terminalOpenerDescription(terminal);
@@ -377,7 +429,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       >
         <button
           type="button"
-          data-testid={`mobile-session-row-${terminal.id}`}
+          data-testid={`${testIdPrefix}-row-${terminal.id}`}
           aria-current={current ? "true" : undefined}
           title={terminal.cwd}
           className="odk-sessions-row-main"
@@ -409,7 +461,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 role="img"
                 aria-label={opener}
                 title={opener}
-                data-testid={`mobile-session-opener-${terminal.id}`}
+                data-testid={`${testIdPrefix}-opener-${terminal.id}`}
                 className="odk-sessions-bot"
               >
                 <Bot size={13} strokeWidth={2} aria-hidden style={{ display: "block" }} />
@@ -886,16 +938,230 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           onPickTerminal(id);
         }} />
       <div
-        ref={terminalAreaRef}
-        data-testid="mobile-terminal-area"
         style={{
           flex: 1,
           minHeight: 0,
+          minWidth: 0,
           display: "flex",
-          flexDirection: "column",
-          position: "relative",
+          flexDirection: "row",
+          overflow: "hidden",
         }}
       >
+        {/* Foldable / tablet unfolded left session navigation sidebar */}
+        {showFoldableRail &&
+          (railCollapsed ? (
+            <div
+              data-testid="mobile-foldable-sidebar-collapsed"
+              style={{
+                width: 30,
+                flexShrink: 0,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                paddingTop: 8,
+                background: colors.bg1,
+                borderRight: `1px solid ${colors.lineSoft}`,
+              }}
+            >
+              <button
+                type="button"
+                data-testid="mobile-foldable-sidebar-expand"
+                aria-label="Show sessions sidebar"
+                title="Show sessions sidebar"
+                onClick={toggleRailCollapsed}
+                className="odk-text-btn odk-text-btn--square"
+                style={{ width: 26, height: 34, color: colors.fg2 }}
+              >
+                <PanelLeftOpen size={16} aria-hidden />
+              </button>
+            </div>
+          ) : (
+            <aside
+              aria-label="Sessions navigation"
+              data-testid="mobile-foldable-sidebar"
+              style={{
+                width: 216,
+                flexShrink: 0,
+                display: "flex",
+                flexDirection: "column",
+                minHeight: 0,
+                background: colors.bg1,
+                borderRight: `1px solid ${colors.lineSoft}`,
+                fontFamily: fontDisplay,
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "6px 6px 4px 10px",
+                  borderBottom: `1px solid ${colors.lineSoft}`,
+                }}
+              >
+                <span style={{ fontSize: rem(12.5), fontWeight: 600, color: colors.fg0 }}>
+                  sessions
+                </span>
+                <span style={{ fontSize: rem(11), color: colors.fg3 }}>{chips.length}</span>
+                <span style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  aria-label="Latest output first"
+                  aria-pressed={sessionOrder === "recent"}
+                  title={sessionOrder === "recent" ? "Latest output first (on)" : "Latest output first"}
+                  onClick={toggleSessionOrder}
+                  className="odk-sessions-icon"
+                  style={{ width: 28, height: 28 }}
+                >
+                  <History size={14} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  data-testid="mobile-foldable-sidebar-collapse"
+                  aria-label="Hide sessions sidebar"
+                  title="Hide sessions sidebar"
+                  onClick={toggleRailCollapsed}
+                  className="odk-text-btn odk-text-btn--square"
+                  style={{ width: 28, height: 28, color: colors.fg2 }}
+                >
+                  <PanelLeftClose size={15} aria-hidden />
+                </button>
+              </div>
+              {chips.length > 0 && (
+                <div
+                  className="odk-sessions-filters"
+                  role="tablist"
+                  aria-label="Filter sidebar terminals"
+                  style={{ padding: "6px 8px 4px", gap: 4, flexShrink: 0 }}
+                >
+                  {(
+                    [
+                      { id: "all", label: "All", count: chips.length },
+                      { id: "waiting", label: "Wait", count: mobileWaitingTotal },
+                      { id: "working", label: "Work", count: mobileWorkingTotal },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={sessionFilter === item.id}
+                      data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
+                      className="odk-sessions-filter-pill"
+                      style={{ height: 26, fontSize: rem(11), padding: "0 7px" }}
+                      onClick={() => setSessionFilter(item.id)}
+                    >
+                      <span>{item.label}</span>
+                      {item.count > 0 && item.id !== "all" && (
+                        <span className="odk-sessions-filter-count">{item.count}</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div
+                className="odk-sessions-touch"
+                style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 4px 8px" }}
+              >
+                {sessionOrder === "recent" ? (
+                  <section aria-label="Latest output first" className="odk-sessions-section">
+                    {filteredRecentPanes.map((pane) => renderSessionRow(pane, true, "mobile-rail"))}
+                  </section>
+                ) : (
+                  visibleSessionGroups.map(({ group, panes }) => {
+                    const waiting = groupWaitingCount(group, scopedTerminalsById);
+                    return (
+                      <section key={group.id} aria-label={group.label} className="odk-sessions-section">
+                        <button
+                          type="button"
+                          onClick={() => setGroupSheet(group)}
+                          className="odk-sessions-touch-group"
+                          style={{
+                            minHeight: 30,
+                            padding: "2px 6px",
+                            opacity: panes.length === 0 ? 0.52 : 1,
+                          }}
+                        >
+                          <span className="odk-sessions-touch-group-label">{group.label}</span>
+                          <span className="odk-sessions-group-count">{panes.length}</span>
+                          <span className="odk-sessions-group-end">
+                            {waiting > 0 && <span className="odk-sessions-group-waiting">{waiting}</span>}
+                          </span>
+                        </button>
+                        {panes.map((pane) => renderSessionRow(pane, false, "mobile-rail"))}
+                      </section>
+                    );
+                  })
+                )}
+              </div>
+              <div
+                style={{
+                  flexShrink: 0,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "6px 8px",
+                  borderTop: `1px solid ${colors.lineSoft}`,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setHostSheetOpen(true)}
+                  className="odk-text-btn"
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    height: 32,
+                    padding: "0 6px",
+                    justifyContent: "flex-start",
+                    gap: 6,
+                    fontSize: rem(11.5),
+                    color: colors.fg1,
+                  }}
+                >
+                  <span style={{ color: activeMachine && machineOnline(activeMachine) ? colors.ok : colors.fg3 }}>
+                    {activeMachine && machineOnline(activeMachine) ? "●" : "○"}
+                  </span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {activeMachine?.name ?? "machines"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  aria-label="New terminal"
+                  title="New terminal"
+                  disabled={!canCreateTerminal}
+                  onClick={() => onNewTerminal(activeGroup)}
+                  className="odk-btn odk-btn--primary"
+                  style={{
+                    width: 32,
+                    height: 32,
+                    padding: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  <Plus size={15} aria-hidden />
+                </button>
+              </div>
+            </aside>
+          ))}
+        <div
+          ref={terminalAreaRef}
+          data-testid="mobile-terminal-area"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            position: "relative",
+          }}
+        >
         {scopedTerminals.length === 0 ? (
           <div
             style={{
@@ -945,6 +1211,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             onClose={onCloseBrowserSurface}
           />
         )}
+        </div>
       </div>
 
       {/* Session switcher sheet (wireframe R05): the desktop sidebar's

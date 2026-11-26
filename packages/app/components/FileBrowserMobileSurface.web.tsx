@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FileBrowser } from "./FileBrowser.web";
 import { colors } from "@/lib/colors";
 import { rem } from "@/lib/rem";
@@ -30,6 +30,15 @@ export function FileBrowserMobileSurface({
 }) {
   // An open editor with unsaved changes keeps the surface open.
   const [dirty, setDirty] = useState(false);
+  const [isSplitPane, setIsSplitPane] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth >= 680 : false,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setIsSplitPane(window.innerWidth >= 680);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   // Back first closes a sheet or leaves selection mode, then the surface.
   const backHandlerRef = useRef<(() => boolean) | null>(null);
   const onClose = useCallback(() => {
@@ -51,7 +60,13 @@ export function FileBrowserMobileSurface({
       data-edge-swipe="off"
       style={{
         position: "absolute",
-        inset: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: isSplitPane ? "auto" : 0,
+        width: isSplitPane ? "min(440px, 52vw)" : "100%",
+        borderLeft: isSplitPane ? `1px solid ${colors.line}` : undefined,
+        boxShadow: isSplitPane ? "-8px 0 24px rgba(0, 0, 0, 0.35)" : undefined,
         zIndex: 5,
         display: "flex",
         flexDirection: "column",
