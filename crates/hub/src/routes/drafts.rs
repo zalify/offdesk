@@ -31,6 +31,8 @@ struct UpsertDraftRequest {
     pinned: bool,
     #[serde(default)]
     force_new: bool,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -40,6 +42,8 @@ struct UpdateDraftRequest {
     project_group: Option<String>,
     pinned: Option<bool>,
     archived: Option<bool>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
 }
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
@@ -49,6 +53,17 @@ fn db_err(e: impl std::fmt::Display) -> ApiErr {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(serde_json::json!({"error": format!("DB error: {e}")})),
     )
+}
+
+fn parse_tags(tags: Option<&[String]>) -> Result<Option<Vec<String>>, ApiErr> {
+    tags.map(db::draft_tags::normalize_tags)
+        .transpose()
+        .map_err(|msg| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": msg})),
+            )
+        })
 }
 
 async fn list_drafts(
@@ -78,8 +93,9 @@ async fn create_or_upsert_draft(
             Json(serde_json::json!({"error": "title must not be empty"})),
         ));
     }
+    let tags = parse_tags(req.tags.as_deref())?;
     let conn = state.db.get().map_err(db_err)?;
-    let row = db::drafts::upsert_draft(
+    let row = db::drafts::upsert_draft_with_tags(
         &conn,
         &auth_user.user_id,
         &req.title,
@@ -88,6 +104,7 @@ async fn create_or_upsert_draft(
         req.source_terminal_id.as_deref(),
         req.pinned,
         req.force_new,
+        tags.as_deref(),
     )
     .map_err(db_err)?;
     Ok(Json(row))
@@ -116,6 +133,7 @@ async fn update_draft(
     Path(draft_id): Path<String>,
     Json(req): Json<UpdateDraftRequest>,
 ) -> Result<Json<DraftRow>, ApiErr> {
+    let tags = parse_tags(req.tags.as_deref())?;
     let conn = state.db.get().map_err(db_err)?;
     let row = db::drafts::update_draft(
         &conn,
@@ -127,6 +145,7 @@ async fn update_draft(
             project_group: req.project_group.as_deref(),
             pinned: req.pinned,
             archived: req.archived,
+            tags: tags.as_deref(),
         },
     )
     .map_err(db_err)?

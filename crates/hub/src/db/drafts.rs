@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
+use super::draft_tags;
 use super::now_ms;
 
 /// Unpinned drafts untouched for 7 days are automatically surfaced under Archived.
@@ -18,6 +19,13 @@ pub struct DraftRow {
     pub archived: bool,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Union of explicit and inline tags (explicit first). Always empty for
+    /// draft-database rows.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// The subset of `tags` that only comes from the body.
+    #[serde(default)]
+    pub inline_tags: Vec<String>,
 }
 
 fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
@@ -25,6 +33,13 @@ fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
     let archived_i: i64 = row.get(7)?;
     let updated_at: i64 = row.get(9)?;
     let database_id: Option<String> = row.get(10)?;
+    let content: String = row.get(3)?;
+    let (tags, inline_tags) = if database_id.is_some() {
+        (Vec::new(), Vec::new())
+    } else {
+        let stored: String = row.get(11)?;
+        draft_tags::merge(&draft_tags::parse_stored(&stored), &content)
+    };
     let pinned = pinned_i != 0;
     let explicitly_archived = archived_i != 0;
     // Draft-database rows never auto-archive.
@@ -35,13 +50,15 @@ fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         id: row.get(0)?,
         user_id: row.get(1)?,
         title: row.get(2)?,
-        content: row.get(3)?,
+        content,
         project_group: row.get(4)?,
         source_terminal_id: row.get(5)?,
         pinned,
         archived: explicitly_archived || stale_archived,
         created_at: row.get(8)?,
         updated_at,
+        tags,
+        inline_tags,
     })
 }
 
@@ -55,7 +72,7 @@ pub fn list_drafts(
     if let Some(proj) = project_group.filter(|p| !p.trim().is_empty()) {
         let mut stmt = conn.prepare(
             "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                    pinned, archived, created_at, updated_at, database_id
+                    pinned, archived, created_at, updated_at, database_id, tags
              FROM drafts
              WHERE user_id = ?1 AND project_group = ?2 AND database_id IS NULL
              ORDER BY pinned DESC, updated_at DESC",
@@ -67,7 +84,7 @@ pub fn list_drafts(
     } else {
         let mut stmt = conn.prepare(
             "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                    pinned, archived, created_at, updated_at, database_id
+                    pinned, archived, created_at, updated_at, database_id, tags
              FROM drafts
              WHERE user_id = ?1 AND database_id IS NULL
              ORDER BY pinned DESC, updated_at DESC",
@@ -90,7 +107,7 @@ pub fn get_draft(
 ) -> rusqlite::Result<Option<DraftRow>> {
     conn.query_row(
         "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                pinned, archived, created_at, updated_at, database_id
+                pinned, archived, created_at, updated_at, database_id, tags
          FROM drafts
          WHERE id = ?1 AND user_id = ?2",
         params![draft_id, user_id],
@@ -109,6 +126,33 @@ pub fn upsert_draft(
     source_terminal_id: Option<&str>,
     pinned: bool,
     force_new: bool,
+) -> rusqlite::Result<DraftRow> {
+    upsert_draft_with_tags(
+        conn,
+        user_id,
+        title,
+        content,
+        project_group,
+        source_terminal_id,
+        pinned,
+        force_new,
+        None,
+    )
+}
+
+/// `tags` must already be normalised (see `draft_tags::normalize_tags`).
+/// `None` leaves an existing draft's explicit tags untouched.
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_draft_with_tags(
+    conn: &Connection,
+    user_id: &str,
+    title: &str,
+    content: &str,
+    project_group: &str,
+    source_terminal_id: Option<&str>,
+    pinned: bool,
+    force_new: bool,
+    tags: Option<&[String]>,
 ) -> rusqlite::Result<DraftRow> {
     // IMMEDIATE: take the write lock up front so busy_timeout applies; the
     // version snapshot and the overwrite must be one atomic step.
@@ -144,9 +188,18 @@ pub fn upsert_draft(
                      source_terminal_id = COALESCE(?2, source_terminal_id),
                      pinned = CASE WHEN ?3 != 0 THEN 1 ELSE pinned END,
                      archived = 0,
-                     updated_at = ?4
+                     updated_at = ?4,
+                     tags = COALESCE(?7, tags)
                  WHERE id = ?5 AND user_id = ?6",
-                params![content, source_terminal_id, i64::from(pinned), now, id, user_id],
+                params![
+                    content,
+                    source_terminal_id,
+                    i64::from(pinned),
+                    now,
+                    id,
+                    user_id,
+                    tags.map(draft_tags::to_stored)
+                ],
             )?;
             let out = get_draft(conn, user_id, &id)?
                 .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
@@ -159,8 +212,8 @@ pub fn upsert_draft(
     conn.execute(
         "INSERT INTO drafts (
             id, user_id, title, content, project_group, source_terminal_id,
-            pinned, archived, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
+            pinned, archived, created_at, updated_at, tags
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10)",
         params![
             id,
             user_id,
@@ -170,22 +223,13 @@ pub fn upsert_draft(
             source_terminal_id,
             i64::from(pinned),
             now,
-            now
+            now,
+            draft_tags::to_stored(tags.unwrap_or(&[]))
         ],
     )?;
+    let out = get_draft(conn, user_id, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
     tx.commit()?;
-    Ok(DraftRow {
-        id,
-        user_id: user_id.to_string(),
-        title: title.to_string(),
-        content: content.to_string(),
-        project_group: project_group.to_string(),
-        source_terminal_id: source_terminal_id.map(str::to_string),
-        pinned,
-        archived: false,
-        created_at: now,
-        updated_at: now,
-    })
+    Ok(out)
 }
 
 pub struct DraftPatch<'a> {
@@ -194,6 +238,9 @@ pub struct DraftPatch<'a> {
     pub project_group: Option<&'a str>,
     pub pinned: Option<bool>,
     pub archived: Option<bool>,
+    /// Already-normalised explicit tags. `None` leaves them unchanged; `Some`
+    /// replaces the set. Ignored for draft-database rows.
+    pub tags: Option<&'a [String]>,
 }
 
 pub fn update_draft(
@@ -222,6 +269,17 @@ pub fn update_draft(
     let next_pinned = patch.pinned.unwrap_or(existing.pinned);
     let next_archived = patch.archived.unwrap_or(existing.archived);
     let now = now_ms();
+    // Tags are not part of versions: a tag-only change records none (below).
+    let is_db_row: bool = conn.query_row(
+        "SELECT database_id IS NOT NULL FROM drafts WHERE id = ?1 AND user_id = ?2",
+        params![draft_id, user_id],
+        |r| r.get(0),
+    )?;
+    let new_tags = if is_db_row {
+        None
+    } else {
+        patch.tags.map(draft_tags::to_stored)
+    };
 
     if next_title != existing.title || next_content != existing.content {
         super::draft_shares::record_version(
@@ -236,7 +294,8 @@ pub fn update_draft(
     conn.execute(
         "UPDATE drafts
          SET title = ?1, content = ?2, project_group = ?3,
-             pinned = ?4, archived = ?5, updated_at = ?6
+             pinned = ?4, archived = ?5, updated_at = ?6,
+             tags = COALESCE(?9, tags)
          WHERE id = ?7 AND user_id = ?8",
         params![
             next_title,
@@ -246,7 +305,8 @@ pub fn update_draft(
             i64::from(next_archived),
             now,
             draft_id,
-            user_id
+            user_id,
+            new_tags
         ],
     )?;
     let out = get_draft(conn, user_id, draft_id)?;
@@ -322,6 +382,7 @@ mod tests {
                 project_group: None,
                 pinned: None,
                 archived: Some(true),
+                tags: None,
             },
         )
         .unwrap()
@@ -332,5 +393,111 @@ mod tests {
 
         assert!(delete_draft(&conn, "u1", &d1.id).unwrap());
         assert_eq!(list_drafts(&conn, "u1", None, true).unwrap().len(), 1);
+    }
+
+    fn tv(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn patch_of<'a>(content: Option<&'a str>, tags: Option<&'a [String]>) -> DraftPatch<'a> {
+        DraftPatch {
+            title: None,
+            content,
+            project_group: None,
+            pinned: None,
+            archived: None,
+            tags,
+        }
+    }
+
+    fn version_count(conn: &Connection, id: &str) -> usize {
+        crate::db::draft_shares::list_versions(conn, "u1", id).unwrap().unwrap().len()
+    }
+
+    #[test]
+    fn explicit_tags_survive_upsert_and_patch_without_tags() {
+        let conn = test_conn();
+        let t = tv(&["research/competitors", "Todo"]);
+        let d = upsert_draft_with_tags(&conn, "u1", "T", "body", "p", None, false, false, Some(&t)).unwrap();
+        assert_eq!(d.tags, t);
+        assert!(d.inline_tags.is_empty());
+
+        // Re-upsert the same title without tags: tags survive.
+        let d2 = upsert_draft(&conn, "u1", "T", "body2 #inline", "p", None, false, false).unwrap();
+        assert_eq!(d2.id, d.id);
+        assert_eq!(d2.tags, tv(&["research/competitors", "Todo", "inline"]));
+        assert_eq!(d2.inline_tags, tv(&["inline"]));
+
+        // PATCH content only: tags survive.
+        let d3 = update_draft(&conn, "u1", &d.id, patch_of(Some("plain"), None)).unwrap().unwrap();
+        assert_eq!(d3.tags, t);
+
+        // PATCH tags: [] clears the explicit set.
+        let empty: Vec<String> = vec![];
+        let d4 = update_draft(&conn, "u1", &d.id, patch_of(None, Some(&empty))).unwrap().unwrap();
+        assert!(d4.tags.is_empty());
+    }
+
+    #[test]
+    fn inline_tags_follow_content_and_dedupe_against_explicit() {
+        let conn = test_conn();
+        let t = tv(&["Work"]);
+        let d = upsert_draft_with_tags(&conn, "u1", "T", "#work and #todo", "p", None, false, false, Some(&t)).unwrap();
+        assert_eq!(d.tags, tv(&["Work", "todo"]));
+        assert_eq!(d.inline_tags, tv(&["todo"]));
+        let d = update_draft(&conn, "u1", &d.id, patch_of(Some("no tags"), None)).unwrap().unwrap();
+        assert_eq!(d.tags, tv(&["Work"]));
+        assert!(d.inline_tags.is_empty());
+        // list_drafts carries the same fields.
+        let listed = list_drafts(&conn, "u1", None, false).unwrap();
+        assert_eq!(listed[0].tags, tv(&["Work"]));
+    }
+
+    #[test]
+    fn tag_only_patch_records_no_version() {
+        let conn = test_conn();
+        let d = upsert_draft(&conn, "u1", "T", "body", "p", None, false, false).unwrap();
+        let t = tv(&["a"]);
+        update_draft(&conn, "u1", &d.id, patch_of(None, Some(&t))).unwrap();
+        assert_eq!(version_count(&conn, &d.id), 0);
+        // A content change still records one.
+        update_draft(&conn, "u1", &d.id, patch_of(Some("new"), None)).unwrap();
+        assert_eq!(version_count(&conn, &d.id), 1);
+        // Upserting identical content with new tags records none either.
+        let t2 = tv(&["b"]);
+        upsert_draft_with_tags(&conn, "u1", "T", "new", "p", None, false, false, Some(&t2)).unwrap();
+        assert_eq!(version_count(&conn, &d.id), 1);
+    }
+
+    #[test]
+    fn restore_keeps_explicit_tags_and_inline_follow_content() {
+        let mut conn = test_conn();
+        let t = tv(&["keep"]);
+        let d = upsert_draft_with_tags(&conn, "u1", "T", "v1 #old", "p", None, false, false, Some(&t)).unwrap();
+        update_draft(&conn, "u1", &d.id, patch_of(Some("v2 #new"), None)).unwrap();
+        let versions = crate::db::draft_shares::list_versions(&conn, "u1", &d.id).unwrap().unwrap();
+        let restored = crate::db::draft_shares::restore_version(&mut conn, "u1", &d.id, &versions[0].id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored.content, "v1 #old");
+        assert_eq!(restored.tags, tv(&["keep", "old"]));
+        assert_eq!(restored.inline_tags, tv(&["old"]));
+    }
+
+    #[test]
+    fn database_rows_never_have_tags() {
+        let conn = test_conn();
+        let d = upsert_draft(&conn, "u1", "Row", "#inline", "p", None, false, false).unwrap();
+        conn.execute("UPDATE drafts SET database_id = 'db1', tags = '[\"x\"]' WHERE id = ?1", [&d.id]).unwrap();
+        let row = get_draft(&conn, "u1", &d.id).unwrap().unwrap();
+        assert!(row.tags.is_empty() && row.inline_tags.is_empty());
+        // Tag input on a row is ignored.
+        let t = tv(&["y"]);
+        let row = update_draft(&conn, "u1", &d.id, patch_of(None, Some(&t))).unwrap().unwrap();
+        assert!(row.tags.is_empty());
+        let stored: String = conn
+            .query_row("SELECT tags FROM drafts WHERE id = ?1", [&d.id], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, "[\"x\"]");
     }
 }

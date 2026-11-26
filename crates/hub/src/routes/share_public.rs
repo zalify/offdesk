@@ -554,7 +554,7 @@ mod tests {
                 &conn,
                 "u1",
                 &did,
-                DraftPatch { title: Some("T2"), content: Some("v2"), project_group: None, pinned: None, archived: None },
+                DraftPatch { title: Some("T2"), content: Some("v2"), project_group: None, pinned: None, archived: None, tags: None },
             )
             .unwrap();
         }

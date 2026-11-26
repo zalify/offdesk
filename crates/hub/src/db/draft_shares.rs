@@ -769,7 +769,7 @@ mod tests {
     }
 
     fn patch<'a>(title: Option<&'a str>, content: Option<&'a str>) -> DraftPatch<'a> {
-        DraftPatch { title, content, project_group: None, pinned: None, archived: None }
+        DraftPatch { title, content, project_group: None, pinned: None, archived: None, tags: None }
     }
 
     fn versions(conn: &Connection, id: &str) -> Vec<VersionSummary> {
@@ -798,7 +798,7 @@ mod tests {
             &conn,
             "u1",
             &d.id,
-            DraftPatch { title: None, content: None, project_group: None, pinned: Some(true), archived: None },
+            DraftPatch { title: None, content: None, project_group: None, pinned: Some(true), archived: None, tags: None },
         )
         .unwrap();
         assert_eq!(versions(&conn, &d.id).len(), 1);
