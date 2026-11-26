@@ -8,7 +8,11 @@ import { hubErrorMessage } from "@/lib/draftDatabases";
 
 const POLL_MS = 30_000;
 
-export function useDraftDatabases(open: boolean, project: string | undefined) {
+export function useDraftDatabases(
+  open: boolean,
+  project: string | undefined,
+  spaceId?: string | null,
+) {
   const [databases, setDatabases] = useState<DraftDatabase[]>([]);
   /** null until the first answer; false when the hub answered 404. */
   const [available, setAvailable] = useState<boolean | null>(null);
@@ -18,7 +22,7 @@ export function useDraftDatabases(open: boolean, project: string | undefined) {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await listDraftDatabases(project);
+      const list = await listDraftDatabases(project, spaceId);
       if (list === null) {
         setAvailable(false);
         setDatabases([]);
@@ -32,7 +36,7 @@ export function useDraftDatabases(open: boolean, project: string | undefined) {
     } finally {
       setLoading(false);
     }
-  }, [project]);
+  }, [project, spaceId]);
 
   useEffect(() => {
     if (!open || available === false) return;

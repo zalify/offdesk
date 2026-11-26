@@ -311,11 +311,28 @@ pub struct ControlLeaseSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SpaceInfo {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_cwd: Option<String>,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WorkspaceGroupInfo {
     pub id: String,
     pub machine_id: String,
     pub name: String,
     pub sort_order: i64,
+    #[serde(default)]
+    pub space_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1364,6 +1381,8 @@ pub struct BrowserStateSnapshot {
     pub machines: Vec<MachineInfo>,
     pub terminals: Vec<TerminalInfo>,
     pub workspace_groups: Vec<WorkspaceGroupInfo>,
+    #[serde(default)]
+    pub spaces: Vec<SpaceInfo>,
     pub workspace_layouts: Vec<WorkspaceLayoutInfo>,
     pub machine_stats: Vec<MachineStatsSnapshot>,
     pub control_leases: Vec<ControlLeaseSnapshot>,
@@ -2508,6 +2527,12 @@ pub enum BrowserEvent {
         machine_id: String,
         group_id: String,
     },
+    #[serde(rename = "space_created")]
+    SpaceCreated { space: SpaceInfo },
+    #[serde(rename = "space_updated")]
+    SpaceUpdated { space: SpaceInfo },
+    #[serde(rename = "space_deleted")]
+    SpaceDeleted { space_id: String },
     #[serde(rename = "workspace_layout_updated")]
     WorkspaceLayoutUpdated { layout: WorkspaceLayoutInfo },
     #[serde(rename = "machine_stats")]

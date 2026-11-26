@@ -17,6 +17,7 @@ export interface WorkspaceGroup {
   label: string;
   cwd: string;
   workspaceGroupId: string | null;
+  spaceId?: string | null;
   persistent: boolean;
   root: WorkspacePaneNode | null;
   paneCount: number;
@@ -761,6 +762,7 @@ function createGroups(
       label: group.name,
       cwd: "",
       workspaceGroupId: group.id,
+      spaceId: group.space_id ?? null,
       persistent: true,
       order: group.sort_order,
       terminals: [],
@@ -788,6 +790,7 @@ function createGroups(
         label: labelFromCwd(terminal.cwd),
         cwd: terminal.cwd,
         workspaceGroupId: null,
+        spaceId: null,
         persistent: false,
         order: sortedWorkspaceGroups.length + byGroup.size,
         terminals: [],
@@ -814,6 +817,7 @@ function createGroups(
         label: group.label,
         cwd,
         workspaceGroupId: group.workspaceGroupId,
+        spaceId: group.spaceId,
         persistent: group.persistent,
         root,
         paneCount: group.terminals.length,
@@ -827,6 +831,7 @@ interface CreatedWorkspaceGroup {
   label: string;
   cwd: string;
   workspaceGroupId: string | null;
+  spaceId: string | null;
   persistent: boolean;
   order: number;
   terminals: TerminalInfo[];

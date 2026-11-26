@@ -1,5 +1,6 @@
 use offdesk_protocol::{
-    AgentRunInfo, MachineInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
+    AgentRunInfo, MachineInfo, SpaceInfo, TerminalInfo, WorkspaceGroupInfo, WorkspaceLayoutInfo,
+    WorkspaceLayoutNode,
 };
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use reqwest::{Response, StatusCode};
@@ -27,6 +28,31 @@ pub struct CreateTerminalRequest<'a> {
     /// Who is opening it; the hub falls back to the API token's name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opened_by_label: Option<&'a str>,
+}
+
+/// Request body for POST /api/spaces.
+#[derive(Serialize)]
+pub struct CreateSpaceRequest<'a> {
+    pub name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_cwd: Option<&'a str>,
+}
+
+/// Request body for PATCH /api/spaces/{id}.
+#[derive(Serialize)]
+pub struct UpdateSpaceRequest<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_cwd: Option<&'a str>,
 }
 
 /// Response of `GET /api/machines/{m}/terminals/{t}/foreground-process`.
@@ -579,6 +605,58 @@ impl HubClient {
 
     pub async fn terminals(&self) -> Result<Vec<TerminalInfo>, CliError> {
         self.get("/terminals").await
+    }
+
+    pub async fn spaces(&self) -> Result<Vec<SpaceInfo>, CliError> {
+        self.get("/spaces").await
+    }
+
+    /// Spaces list; returns `Ok(None)` from older hubs that do not have `/api/spaces`.
+    pub async fn spaces_optional(&self) -> Result<Option<Vec<SpaceInfo>>, CliError> {
+        self.get_optional("/spaces", None).await
+    }
+
+    pub async fn create_space(
+        &self,
+        request: &CreateSpaceRequest<'_>,
+    ) -> Result<SpaceInfo, CliError> {
+        let response = self
+            .http
+            .post(self.url("/spaces"))
+            .json(request)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn update_space(
+        &self,
+        space_id: &str,
+        request: &UpdateSpaceRequest<'_>,
+    ) -> Result<SpaceInfo, CliError> {
+        let response = self
+            .http
+            .patch(self.url(&format!("/spaces/{space_id}")))
+            .json(request)
+            .send()
+            .await
+            .map_err(network_error)?;
+        parse_json(response).await
+    }
+
+    pub async fn delete_space(&self, space_id: &str) -> Result<(), CliError> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/spaces/{space_id}")))
+            .send()
+            .await
+            .map_err(network_error)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(status_error(response.status(), response).await)
+        }
     }
 
     pub async fn workspace_groups(

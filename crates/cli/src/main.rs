@@ -582,7 +582,54 @@ enum DbAction {
 }
 
 #[derive(Subcommand)]
+enum SpacesAction {
+    /// List spaces
+    Ls {
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a new space
+    Create {
+        /// Space name
+        name: String,
+        /// Default working directory for new terminals in this space
+        #[arg(long)]
+        cwd: Option<String>,
+        /// Accent color (e.g. #3b82f6)
+        #[arg(long)]
+        color: Option<String>,
+        /// Icon name or emoji
+        #[arg(long)]
+        icon: Option<String>,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Rename a space (by id, unique prefix, or name)
+    Rename {
+        /// Space id, unique prefix, or name
+        space: String,
+        /// New name for the space
+        new_name: String,
+        /// Machine-readable JSON on stdout
+        #[arg(long)]
+        json: bool,
+    },
+    /// Delete a space (unassigns its groups and drafts without deleting them)
+    Rm {
+        /// Space id, unique prefix, or name
+        space: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum Commands {
+    /// Manage Spaces (top-level project/context containers for groups and drafts)
+    Spaces {
+        #[command(subcommand)]
+        action: SpacesAction,
+    },
     /// Agent-to-agent communication bus (direct messages, project channels, threads)
     Msg {
         #[command(subcommand)]
@@ -1743,6 +1790,32 @@ async fn run(cli: Cli) -> Result<(), CliError> {
                 commands::browser::screenshot(&hub_client, &browser, output.as_deref(), full).await
             }
         },
+        Commands::Spaces { action } => match action {
+            SpacesAction::Ls { json } => commands::spaces::ls(&hub_client, json).await,
+            SpacesAction::Create {
+                name,
+                cwd,
+                color,
+                icon,
+                json,
+            } => {
+                commands::spaces::create(
+                    &hub_client,
+                    &name,
+                    cwd.as_deref(),
+                    color.as_deref(),
+                    icon.as_deref(),
+                    json,
+                )
+                .await
+            }
+            SpacesAction::Rename {
+                space,
+                new_name,
+                json,
+            } => commands::spaces::rename(&hub_client, &space, &new_name, json).await,
+            SpacesAction::Rm { space } => commands::spaces::rm(&hub_client, &space).await,
+        },
         Commands::Machines { action, json, all } => match action {
             Some(MachinesAction::Rm { machine, yes }) => {
                 commands::machines::rm(&hub_client, &machine, yes).await
@@ -2159,5 +2232,68 @@ mod tests {
         assert_eq!((cli.url, cli.token), (None, None));
         assert!(matches!(cli.command, Commands::Bridges { action: Some(BridgesAction::Add { ref target, ref code, .. }), .. }
             if target == "wss://bridge.example/hub" && code == "AB12-CD34"));
+    }
+
+    #[test]
+    fn spaces_subcommands_parse() {
+        let cli = parse(&["spaces", "ls"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Spaces {
+                action: SpacesAction::Ls { json: false }
+            }
+        ));
+        let cli = parse(&["spaces", "ls", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Spaces {
+                action: SpacesAction::Ls { json: true }
+            }
+        ));
+        let cli = parse(&[
+            "spaces",
+            "create",
+            "Work",
+            "--cwd",
+            "/home/dev/work",
+            "--color",
+            "#3b82f6",
+            "--icon",
+            "briefcase",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Spaces {
+                action: SpacesAction::Create {
+                    ref name,
+                    ref cwd,
+                    ref color,
+                    ref icon,
+                    json: false,
+                }
+            } if name == "Work"
+                && cwd.as_deref() == Some("/home/dev/work")
+                && color.as_deref() == Some("#3b82f6")
+                && icon.as_deref() == Some("briefcase")
+        ));
+        let cli = parse(&["spaces", "rename", "Work", "Client Work"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Spaces {
+                action: SpacesAction::Rename {
+                    ref space,
+                    ref new_name,
+                    json: false,
+                }
+            } if space == "Work" && new_name == "Client Work"
+        ));
+        let cli = parse(&["spaces", "rm", "Work"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Spaces {
+                action: SpacesAction::Rm { ref space }
+            } if space == "Work"
+        ));
     }
 }

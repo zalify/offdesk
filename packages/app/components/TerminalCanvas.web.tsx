@@ -12,8 +12,11 @@ import {
 import type { CSSProperties } from "react";
 import type {
   AgentBrowserInfo,
+  CreateSpaceRequest,
+  SpaceInfo,
   TerminalInfo,
   Bookmark,
+  UpdateSpaceRequest,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
@@ -21,6 +24,7 @@ import type {
 import { AppTitleBar } from "./AppTitleBar.web";
 import { DraftsDrawer } from "./DraftsDrawer.web";
 import { BotChatWorkspace } from "./BotChatWorkspace.web";
+import { SpaceModal } from "./SpaceModal.web";
 import { TabBar } from "./TabBar.web";
 import {
   CommandPalette,
@@ -33,9 +37,11 @@ import { HandoffBanner } from "./HandoffBanner";
 import { MachineOnboardingDialog, MobileAppDialog } from "./OnboardingView.web";
 import { Terminal as TerminalIcon } from "lucide-react";
 import {
+  createSpace,
   createTerminal,
   createWorkspaceGroup,
   deleteMachine,
+  deleteSpace,
   deleteWorkspaceGroup,
   destroyTerminal,
   checkForegroundProcess,
@@ -52,7 +58,10 @@ import {
   renameWorkspaceGroup,
   saveWorkspaceLayout,
   terminalWsUrl,
+  updateSpace,
+  updateWorkspaceGroup,
 } from "@/lib/api";
+import { readActiveSpaceId, writeActiveSpaceId } from "@/lib/spaces";
 import {
   estimateInitialTerminalDimensions,
   estimateMobileInitialTerminalDimensions,
@@ -413,10 +422,31 @@ function TerminalCanvasInner() {
 
   const machines = browserState.machines;
   const terminals = browserState.terminals;
+  const spaces = browserState.spaces;
   const workspaceGroups = browserState.workspaceGroups;
   const workspaceLayouts = browserState.workspaceLayouts;
   const machineStats = browserState.machineStats;
   const controlLeases = browserState.controlLeases;
+  const [activeSpaceId, setActiveSpaceIdState] = useState<string | null>(readActiveSpaceId);
+  const [spaceModalState, setSpaceModalState] = useState<{
+    open: boolean;
+    space: SpaceInfo | null;
+  }>({ open: false, space: null });
+  const setActiveSpaceId = useCallback((spaceId: string | null) => {
+    setActiveSpaceIdState(spaceId);
+    writeActiveSpaceId(spaceId);
+  }, []);
+  const activeSpace = useMemo(
+    () => (activeSpaceId ? spaces.find((s) => s.id === activeSpaceId) ?? null : null),
+    [activeSpaceId, spaces],
+  );
+  useEffect(() => {
+    if (!activeSpaceId) return;
+    if (browserState.lastSeq === 0 && spaces.length === 0) return;
+    if (!spaces.some((s) => s.id === activeSpaceId)) {
+      setActiveSpaceId(null);
+    }
+  }, [activeSpaceId, spaces, browserState.lastSeq, setActiveSpaceId]);
   const workspaceLayoutsRef = useRef(workspaceLayouts);
   useEffect(() => {
     workspaceLayoutsRef.current = workspaceLayouts;
@@ -1363,9 +1393,16 @@ function TerminalCanvasInner() {
   // to the first free "tab N" slot) and select it. The group also arrives via
   // workspace_group_created; selecting by the response id is safe either way.
   const createTab = useCallback(
-    async (machineId: string, preferredCwd?: string | null) => {
+    async (
+      machineId: string,
+      preferredCwd?: string | null,
+      spaceIdOverride?: string | null,
+    ) => {
       const taken = new Set(tabGroups.map((group) => group.label));
-      const trimmedCwd = preferredCwd?.trim().replace(/\/+$/, "") ?? "";
+      const targetSpaceId =
+        spaceIdOverride !== undefined ? spaceIdOverride : activeSpaceId;
+      const effectiveCwd = preferredCwd ?? activeSpace?.default_cwd ?? null;
+      const trimmedCwd = effectiveCwd?.trim().replace(/\/+$/, "") ?? "";
       const base =
         trimmedCwd && trimmedCwd !== "/" && trimmedCwd !== "~"
           ? trimmedCwd.slice(trimmedCwd.lastIndexOf("/") + 1)
@@ -1383,11 +1420,15 @@ function TerminalCanvasInner() {
         while (taken.has(`tab ${n}`)) n += 1;
         label = `tab ${n}`;
       }
-      const created = await createWorkspaceGroup(machineId, label);
+      const created = await createWorkspaceGroup(
+        machineId,
+        label,
+        targetSpaceId ?? undefined,
+      );
       workspaceCommandsRef.current.selectGroup?.(created.id);
       return created;
     },
-    [tabGroups],
+    [activeSpace?.default_cwd, activeSpaceId, tabGroups],
   );
 
   // Which tab a new terminal is created in; null hands the choice to the hub,
@@ -1398,12 +1439,16 @@ function TerminalCanvasInner() {
   // other way out); splits refuse instead — see TerminalWorkspace.handleSplit.
   const resolveNewTerminalGroupId = useCallback(
     async (machineId: string, cwd: string, tabId: string | null) => {
-      const placement = planNewTerminalPlacement(tabGroups, { tabId, cwd });
+      const candidateGroups =
+        tabId === null && activeSpaceId
+          ? tabGroups.filter((group) => group.spaceId === activeSpaceId)
+          : tabGroups;
+      const placement = planNewTerminalPlacement(candidateGroups, { tabId, cwd });
       if (!placement.needsNewTab) return placement.workspaceGroupId;
-      const created = await createTab(machineId, cwd);
+      const created = await createTab(machineId, cwd, activeSpaceId);
       return created.id;
     },
-    [createTab, tabGroups],
+    [activeSpaceId, createTab, tabGroups],
   );
 
   const handleSplitWorkspacePane = useCallback(
@@ -1438,10 +1483,15 @@ function TerminalCanvasInner() {
   // group's cwd (machine home when there is no group); chip close goes
   // through the shared destroy flow (running-process confirm included).
   const handleMobileNewTerminal = useCallback(
-    (group: WorkspaceGroup | null) => {
+    (group: WorkspaceGroup | null, options?: { cwd?: string }) => {
       if (!activeMachine) return;
       const machineId = activeMachine.id;
-      const cwd = group?.cwd || activeMachine.home_dir || "~";
+      const cwd =
+        options?.cwd ||
+        group?.cwd ||
+        activeSpace?.default_cwd ||
+        activeMachine.home_dir ||
+        "~";
       void (async () => {
         // Mobile shows one terminal at a time, so it never splits — but its
         // terminals are panes of the same tab on desktop. A full tab overflows
@@ -1457,7 +1507,7 @@ function TerminalCanvasInner() {
         console.error("Failed to create terminal", error);
       });
     },
-    [activeMachine, handleCreateWorkspacePane, resolveNewTerminalGroupId],
+    [activeMachine, activeSpace?.default_cwd, handleCreateWorkspacePane, resolveNewTerminalGroupId],
   );
 
   const handleMobileCloseTerminal = useCallback(
@@ -1637,9 +1687,10 @@ function TerminalCanvasInner() {
     if (!activeMachine || !deviceId) return;
     if (!isMachineController(activeMachine.id)) return;
     const cwd =
-      layout.selectedWorkpathId === "all" || !scopeBookmark
+      activeSpace?.default_cwd ||
+      (layout.selectedWorkpathId === "all" || !scopeBookmark
         ? activeMachine.home_dir || "~"
-        : scopeBookmark.path;
+        : scopeBookmark.path);
     // No tab in mind: the hub gives the terminal a fresh tab named after its
     // cwd, appended to the end of the strip.
     const workspaceGroupId = await resolveNewTerminalGroupId(
@@ -1665,6 +1716,7 @@ function TerminalCanvasInner() {
     }
   }, [
     activeMachine,
+    activeSpace?.default_cwd,
     deviceId,
     isCompact,
     isMachineController,
@@ -1742,6 +1794,76 @@ function TerminalCanvasInner() {
       setGroupRenameTarget(group);
     },
     [isActiveController],
+  );
+
+  const handleOpenSpaceModal = useCallback((space?: SpaceInfo | null) => {
+    setSpaceModalState({ open: true, space: space ?? null });
+  }, []);
+
+  const handleCreateSpace = useCallback(
+    async (payload: CreateSpaceRequest) => {
+      const created = await createSpace(payload);
+      setBrowserState((prev) => ({
+        ...prev,
+        spaces: prev.spaces.some((s) => s.id === created.id)
+          ? prev.spaces.map((s) => (s.id === created.id ? created : s))
+          : [...prev.spaces, created],
+      }));
+      setActiveSpaceId(created.id);
+    },
+    [setActiveSpaceId],
+  );
+
+  const handleUpdateSpace = useCallback(
+    async (spaceId: string, patch: UpdateSpaceRequest) => {
+      const updated = await updateSpace(spaceId, patch);
+      setBrowserState((prev) => ({
+        ...prev,
+        spaces: prev.spaces.map((s) => (s.id === updated.id ? updated : s)),
+      }));
+    },
+    [],
+  );
+
+  const handleDeleteSpace = useCallback(
+    async (spaceId: string) => {
+      await deleteSpace(spaceId);
+      setBrowserState((prev) => ({
+        ...prev,
+        spaces: prev.spaces.filter((s) => s.id !== spaceId),
+        workspaceGroups: prev.workspaceGroups.map((g) =>
+          g.space_id === spaceId ? { ...g, space_id: null } : g,
+        ),
+      }));
+      if (activeSpaceId === spaceId) {
+        setActiveSpaceId(null);
+      }
+    },
+    [activeSpaceId, setActiveSpaceId],
+  );
+
+  const handleMoveGroupToSpace = useCallback(
+    async (group: WorkspaceGroup, spaceId: string | null) => {
+      if (!activeMachineId || !group.workspaceGroupId) return;
+      try {
+        const updated = await updateWorkspaceGroup(
+          activeMachineId,
+          group.workspaceGroupId,
+          { space_id: spaceId },
+        );
+        setBrowserState((prev) => ({
+          ...prev,
+          workspaceGroups: prev.workspaceGroups.map((g) =>
+            g.id === updated.id ? updated : g,
+          ),
+        }));
+      } catch (err) {
+        showWorkspaceToast(
+          `Could not move tab to space: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    },
+    [],
   );
 
   const handleRenameTerminal = useCallback(
@@ -2435,6 +2557,11 @@ function TerminalCanvasInner() {
               onDeleteGroup={handleDeleteGroup}
               onReorderGroups={handleRequestWorkspaceGroupReorder}
               onMoveTerminal={handleMoveTerminalToWorkspace}
+              spaces={spaces}
+              activeSpaceId={activeSpaceId}
+              onSelectSpace={setActiveSpaceId}
+              onOpenSpaceModal={handleOpenSpaceModal}
+              onMoveGroupToSpace={handleMoveGroupToSpace}
               onSelectMachine={setActiveMachineId}
               onAddMachine={() => setAddMachineOpen(true)}
               onRemoveHost={handleRemoveHost}
@@ -2541,6 +2668,11 @@ function TerminalCanvasInner() {
                   onRenameTerminal={handleRenameTerminal}
                   shelvedTerminalIds={shelvedIds}
                   onShelfTerminal={handleShelfTerminal}
+                  spaces={spaces}
+                  activeSpaceId={activeSpaceId}
+                  onSelectSpace={setActiveSpaceId}
+                  onOpenSpaceModal={handleOpenSpaceModal}
+                  onMoveGroupToSpace={handleMoveGroupToSpace}
                 />
               )}
               <main
@@ -2992,6 +3124,8 @@ function TerminalCanvasInner() {
           activeTerminalLabel={
             workspaceTerminal ? displayTerminalTitle(workspaceTerminal) : null
           }
+          spaces={spaces}
+          activeSpaceId={activeSpaceId}
           onClose={() => setDraftsOpen(false)}
           onSendToTerminal={
             workspaceTerminal && canTypeOnMachine(workspaceTerminal.machine_id)
@@ -2999,6 +3133,15 @@ function TerminalCanvasInner() {
               : undefined
           }
           onCountChange={setDraftsCount}
+        />
+
+        <SpaceModal
+          open={spaceModalState.open}
+          space={spaceModalState.space}
+          onCreate={handleCreateSpace}
+          onUpdate={handleUpdateSpace}
+          onDelete={handleDeleteSpace}
+          onClose={() => setSpaceModalState({ open: false, space: null })}
         />
 
         <BotChatWorkspace

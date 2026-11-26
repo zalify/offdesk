@@ -554,7 +554,7 @@ mod tests {
                 &conn,
                 "u1",
                 &did,
-                DraftPatch { title: Some("T2"), content: Some("v2"), project_group: None, pinned: None, archived: None, tags: None },
+                DraftPatch { title: Some("T2"), content: Some("v2"), ..Default::default() },
             )
             .unwrap();
         }
@@ -621,7 +621,7 @@ mod tests {
             group_by: None,
             hidden_columns: Some(vec!["secret".into()]),
         }];
-        dd::patch_database(&mut conn, "u1", &db.id, DatabasePatch { name: None, columns: None, views: Some(views) }).unwrap();
+        dd::patch_database(&mut conn, "u1", &db.id, DatabasePatch { views: Some(views), ..Default::default() }).unwrap();
         let p = prepare_share(&conn, "u1", "database", &db.id, None, None).unwrap();
         let s = create_share(&mut conn, "u1", &p, None, &[]).unwrap();
         (s.row.token, db.id, res.rows.into_iter().map(|r| r.id).collect())

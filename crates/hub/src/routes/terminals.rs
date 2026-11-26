@@ -55,9 +55,19 @@ pub(crate) fn opener_for(
     })
 }
 
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 struct CreateWorkspaceGroupRequest {
     name: String,
+    #[serde(default)]
+    space_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -65,9 +75,12 @@ struct ReorderWorkspaceGroupsRequest {
     group_ids: Vec<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 struct RenameWorkspaceGroupRequest {
-    name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    space_id: Option<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -132,6 +145,7 @@ fn workspace_group_info(row: crate::db::types::WorkspaceGroupRow) -> WorkspaceGr
         machine_id: row.machine_id,
         name: row.name,
         sort_order: row.sort_order,
+        space_id: row.space_id,
     }
 }
 
@@ -692,6 +706,25 @@ async fn create_workspace_group(
             format!("DB error: {}", e),
         )
     })?;
+    let space_id = req
+        .space_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if let Some(sid) = space_id {
+        let valid_space =
+            crate::db::spaces::space_belongs_to_user(&conn, &auth_user.user_id, sid).map_err(
+                |e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("DB error: {}", e),
+                    )
+                },
+            )?;
+        if !valid_space {
+            return Err((StatusCode::BAD_REQUEST, "Invalid space_id".to_string()));
+        }
+    }
     let sort_order =
         crate::db::workspace_groups::next_sort_order(&conn, &auth_user.user_id, &machine_id)
             .map_err(|e| {
@@ -701,13 +734,14 @@ async fn create_workspace_group(
                 )
             })?;
     let id = uuid::Uuid::new_v4().to_string();
-    let row = crate::db::workspace_groups::create_workspace_group(
+    let row = crate::db::workspace_groups::create_workspace_group_in_space(
         &conn,
         &id,
         &auth_user.user_id,
         &machine_id,
         name,
         sort_order,
+        space_id,
     )
     .map_err(|e| {
         (
@@ -716,12 +750,7 @@ async fn create_workspace_group(
         )
     })?;
 
-    let group = WorkspaceGroupInfo {
-        id: row.id,
-        machine_id: row.machine_id,
-        name: row.name,
-        sort_order: row.sort_order,
-    };
+    let group = workspace_group_info(row);
     state
         .manager
         .publish_workspace_group_created(&auth_user.user_id, group.clone());
@@ -840,10 +869,23 @@ async fn rename_workspace_group(
 ) -> Result<Json<WorkspaceGroupInfo>, (StatusCode, String)> {
     ensure_machine_row(&state, &auth_user.user_id, &machine_id).await?;
 
-    let name = req.name.trim();
-    if name.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, "Name is required".to_string()));
+    if req.name.is_none() && req.space_id.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "At least one of name or space_id is required".to_string(),
+        ));
     }
+
+    let trimmed_name = match req.name.as_deref() {
+        Some(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                return Err((StatusCode::BAD_REQUEST, "Name is required".to_string()));
+            }
+            Some(trimmed)
+        }
+        None => None,
+    };
 
     let conn = state.db.get().map_err(|e| {
         (
@@ -851,20 +893,56 @@ async fn rename_workspace_group(
             format!("DB error: {}", e),
         )
     })?;
-    let updated = crate::db::workspace_groups::update_workspace_group_name(
-        &conn,
-        &auth_user.user_id,
-        &machine_id,
-        &group_id,
-        name,
-    )
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("DB error: {}", e),
+
+    if let Some(ref space_patch) = req.space_id {
+        if let Some(sid) = space_patch.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let valid_space =
+                crate::db::spaces::space_belongs_to_user(&conn, &auth_user.user_id, sid).map_err(
+                    |e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("DB error: {}", e),
+                        )
+                    },
+                )?;
+            if !valid_space {
+                return Err((StatusCode::BAD_REQUEST, "Invalid space_id".to_string()));
+            }
+        }
+    }
+
+    let mut total_updated = 0usize;
+    if let Some(name) = trimmed_name {
+        total_updated += crate::db::workspace_groups::update_workspace_group_name(
+            &conn,
+            &auth_user.user_id,
+            &machine_id,
+            &group_id,
+            name,
         )
-    })?;
-    if updated == 0 {
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })?;
+    }
+    if let Some(ref space_patch) = req.space_id {
+        total_updated += crate::db::workspace_groups::update_workspace_group_space(
+            &conn,
+            &auth_user.user_id,
+            &machine_id,
+            &group_id,
+            space_patch.as_deref(),
+        )
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })?;
+    }
+    if total_updated == 0 {
         return Err((StatusCode::NOT_FOUND, "Workspace tab not found".to_string()));
     }
 
@@ -3254,6 +3332,7 @@ mod tests {
             Path("machine-a".to_string()),
             Json(CreateWorkspaceGroupRequest {
                 name: "New".to_string(),
+                space_id: None,
             }),
         )
         .await
@@ -3394,7 +3473,8 @@ mod tests {
             },
             Path(("machine-a".to_string(), "group-a".to_string())),
             Json(RenameWorkspaceGroupRequest {
-                name: "  Renamed  ".to_string(),
+                name: Some("  Renamed  ".to_string()),
+                ..Default::default()
             }),
         )
         .await
@@ -3446,7 +3526,8 @@ mod tests {
             },
             Path(("machine-a".to_string(), "group-a".to_string())),
             Json(RenameWorkspaceGroupRequest {
-                name: "   ".to_string(),
+                name: Some("   ".to_string()),
+                ..Default::default()
             }),
         )
         .await
@@ -3462,11 +3543,80 @@ mod tests {
             },
             Path(("machine-a".to_string(), "group-missing".to_string())),
             Json(RenameWorkspaceGroupRequest {
-                name: "Renamed".to_string(),
+                name: Some("Renamed".to_string()),
+                ..Default::default()
             }),
         )
         .await
         .unwrap_err();
         assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn workspace_group_space_assignment_and_clearing() {
+        let state = test_state();
+        {
+            let conn = state.db.get().unwrap();
+            crate::db::machines::ensure_machine_for_user(
+                &conn,
+                "machine-a",
+                "user-a",
+                "Machine A",
+                Some("linux"),
+                Some("/tmp"),
+            )
+            .unwrap();
+            crate::db::spaces::create_space(
+                &conn,
+                "space-1",
+                "user-a",
+                "Work",
+                None,
+                Some("#3b82f6"),
+                Some("/work"),
+                0,
+            )
+            .unwrap();
+        }
+
+        let auth = || AuthUser {
+            user_id: "user-a".to_string(),
+            api_token_name: None,
+            ..Default::default()
+        };
+
+        // Create group directly inside space-1
+        let Json(group) = create_workspace_group(
+            State(state.clone()),
+            auth(),
+            Path("machine-a".to_string()),
+            Json(CreateWorkspaceGroupRequest {
+                name: "Backend".to_string(),
+                space_id: Some("space-1".to_string()),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(group.space_id.as_deref(), Some("space-1"));
+
+        // Clear space_id back to null via PATCH
+        let Json(cleared) = rename_workspace_group(
+            State(state.clone()),
+            auth(),
+            Path(("machine-a".to_string(), group.id.clone())),
+            Json(RenameWorkspaceGroupRequest {
+                name: None,
+                space_id: Some(None),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared.space_id, None);
+        assert_eq!(cleared.name, "Backend");
+
+        // Snapshot includes spaces
+        let snap = state.manager.snapshot_for_user("user-a").await;
+        assert_eq!(snap.spaces.len(), 1);
+        assert_eq!(snap.spaces[0].id, "space-1");
     }
 }

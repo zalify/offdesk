@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, disable_raw_mode, enable_raw_mode};
 use futures::{SinkExt, StreamExt};
-use offdesk_protocol::{MachineInfo, TerminalAttention, TerminalInfo};
+use offdesk_protocol::{MachineInfo, SpaceInfo, TerminalAttention, TerminalInfo};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use unicode_width::UnicodeWidthStr;
@@ -53,6 +53,8 @@ struct SessionItem {
     machine_name: String,
     display_title: String,
     short_cwd: String,
+    space_id: Option<String>,
+    space_name: Option<String>,
 }
 
 struct RawModeGuard;
@@ -161,12 +163,89 @@ fn truncate_width(s: &str, max_w: usize) -> String {
     out
 }
 
+/// Resolve a terminal's Space `(id, name)` via its workspace group.
+fn resolve_session_space(
+    terminal: &TerminalInfo,
+    group_spaces: &HashMap<String, String>,
+    space_names: &HashMap<String, String>,
+) -> (Option<String>, Option<String>) {
+    let Some(group_id) = terminal.workspace_group_id.as_deref() else {
+        return (None, None);
+    };
+    let Some(space_id) = group_spaces.get(group_id) else {
+        return (None, None);
+    };
+    let space_name = space_names.get(space_id).cloned();
+    (Some(space_id.clone()), space_name)
+}
+
+/// Cycle the active Space filter: `None` (All) -> Space 1 -> Space 2 -> ... -> `None`.
+fn cycle_space(current: Option<&str>, spaces: &[SpaceInfo], forward: bool) -> Option<String> {
+    if spaces.is_empty() {
+        return None;
+    }
+    match current {
+        None => {
+            if forward {
+                Some(spaces[0].id.clone())
+            } else {
+                spaces.last().map(|s| s.id.clone())
+            }
+        }
+        Some(active_id) => {
+            let Some(pos) = spaces.iter().position(|s| s.id == active_id) else {
+                return if forward {
+                    Some(spaces[0].id.clone())
+                } else {
+                    spaces.last().map(|s| s.id.clone())
+                };
+            };
+            if forward {
+                spaces.get(pos + 1).map(|s| s.id.clone())
+            } else if pos == 0 {
+                None
+            } else {
+                Some(spaces[pos - 1].id.clone())
+            }
+        }
+    }
+}
+
 async fn load_sessions(
     client: &HubClient,
     machine_filter: Option<&str>,
-) -> Result<(Vec<MachineInfo>, Vec<SessionItem>), CliError> {
+) -> Result<(Vec<MachineInfo>, Vec<SpaceInfo>, Vec<SessionItem>), CliError> {
     let machines = client.machines().await?;
     let terminals = client.terminals().await?;
+    let spaces = client
+        .spaces_optional()
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let space_names: HashMap<String, String> = spaces
+        .iter()
+        .map(|s| (s.id.clone(), s.name.clone()))
+        .collect();
+
+    let mut group_spaces: HashMap<String, String> = HashMap::new();
+    if !spaces.is_empty() {
+        let grouped_machines: HashSet<&str> = terminals
+            .iter()
+            .filter(|t| t.reachable && t.workspace_group_id.is_some())
+            .map(|t| t.machine_id.as_str())
+            .collect();
+        for machine_id in grouped_machines {
+            if let Ok(groups) = client.workspace_groups(machine_id).await {
+                for group in groups {
+                    if let Some(space_id) = group.space_id {
+                        group_spaces.insert(group.id, space_id);
+                    }
+                }
+            }
+        }
+    }
+
     let machine_names: HashMap<String, String> = machines
         .iter()
         .map(|m| (m.id.clone(), m.name.clone()))
@@ -194,11 +273,14 @@ async fn load_sessions(
                 .unwrap_or_else(|| short_id(&t.machine_id).to_string());
             let dt = display_title(&t);
             let sc = shorten_cwd(&t.cwd);
+            let (space_id, space_name) = resolve_session_space(&t, &group_spaces, &space_names);
             SessionItem {
                 terminal: t,
                 machine_name,
                 display_title: dt,
                 short_cwd: sc,
+                space_id,
+                space_name,
             }
         })
         .collect();
@@ -225,13 +307,14 @@ async fn load_sessions(
             .then_with(|| a.display_title.cmp(&b.display_title))
     });
 
-    Ok((machines, items))
+    Ok((machines, spaces, items))
 }
 
 fn filter_items<'a>(
     items: &'a [SessionItem],
     query: &str,
     mode: FilterMode,
+    active_space: Option<&str>,
     now: i64,
 ) -> Vec<&'a SessionItem> {
     let tokens: Vec<String> = query
@@ -240,6 +323,10 @@ fn filter_items<'a>(
         .collect();
     items
         .iter()
+        .filter(|item| match active_space {
+            None => true,
+            Some(space_id) => item.space_id.as_deref() == Some(space_id),
+        })
         .filter(|item| match mode {
             FilterMode::All => true,
             FilterMode::Waiting => is_waiting(&item.terminal),
@@ -250,11 +337,12 @@ fn filter_items<'a>(
                 return true;
             }
             let hay = format!(
-                "{} {} {} {}",
+                "{} {} {} {} {}",
                 item.display_title,
                 item.machine_name,
                 item.short_cwd,
-                short_id(&item.terminal.id)
+                short_id(&item.terminal.id),
+                item.space_name.as_deref().unwrap_or("")
             )
             .to_lowercase();
             tokens.iter().all(|tok| hay.contains(tok))
@@ -264,6 +352,8 @@ fn filter_items<'a>(
 
 fn draw_picker(
     items: &[SessionItem],
+    spaces: &[SpaceInfo],
+    active_space: Option<&str>,
     filtered: &[&SessionItem],
     selected: usize,
     scroll: usize,
@@ -277,8 +367,18 @@ fn draw_picker(
     let rows = rows.max(10) as usize;
     let now = now_ms();
 
-    let waiting_cnt = items.iter().filter(|i| is_waiting(&i.terminal)).count();
-    let working_cnt = items.iter().filter(|i| is_working(&i.terminal, now)).count();
+    let scoped_items: Vec<&SessionItem> = items
+        .iter()
+        .filter(|i| match active_space {
+            None => true,
+            Some(sid) => i.space_id.as_deref() == Some(sid),
+        })
+        .collect();
+    let waiting_cnt = scoped_items.iter().filter(|i| is_waiting(&i.terminal)).count();
+    let working_cnt = scoped_items
+        .iter()
+        .filter(|i| is_working(&i.terminal, now))
+        .count();
 
     let mut buf = String::with_capacity(cols * rows * 2);
     // Synchronized output + home + clear
@@ -287,12 +387,21 @@ fn draw_picker(
     // Line 1: Header
     let mode_badge = if watch_only { " [watch]" } else { "" };
     let header_left = format!(" offdesk tui{mode_badge}");
+    let space_badge = if !spaces.is_empty() {
+        let label = active_space
+            .and_then(|sid| spaces.iter().find(|s| s.id == sid))
+            .map(|s| s.name.as_str())
+            .unwrap_or("All Spaces");
+        format!("[{label}] ")
+    } else {
+        String::new()
+    };
     let header_right = format!(
-        "[{}]  {} wait · {} work · {} total ",
+        "{space_badge}[{}]  {} wait · {} work · {} total ",
         mode.label(),
         waiting_cnt,
         working_cnt,
-        items.len()
+        scoped_items.len()
     );
     let pad = cols.saturating_sub(header_left.width() + header_right.width());
     buf.push_str("\x1b[1;38;2;217;249;157m");
@@ -314,7 +423,7 @@ fn draw_picker(
     // Line 3: Search bar
     buf.push_str(" \x1b[1;38;2;163;230;53m❯\x1b[0m ");
     if query.is_empty() {
-        buf.push_str("\x1b[38;2;113;113;122mFilter by title, project, machine, or id…\x1b[0m");
+        buf.push_str("\x1b[38;2;113;113;122mFilter by title, space, project, machine, or id…\x1b[0m");
     } else {
         buf.push_str(query);
     }
@@ -330,7 +439,7 @@ fn draw_picker(
     // List rows (rows - 6 available)
     let list_height = rows.saturating_sub(6);
     if filtered.is_empty() {
-        buf.push_str("\r\n   \x1b[38;2;113;113;122mNo matching sessions. Press Tab to switch filter or Ctrl+N to open a new terminal.\x1b[0m\r\n");
+        buf.push_str("\r\n   \x1b[38;2;113;113;122mNo matching sessions. Press Tab or [/] to switch filter, or Ctrl+N to open a new terminal.\x1b[0m\r\n");
     } else {
         for (i, item) in filtered.iter().skip(scroll).take(list_height).enumerate() {
             let abs_idx = scroll + i;
@@ -350,14 +459,25 @@ fn draw_picker(
             };
             let max_meta = (cols / 2).min(46);
             let meta_disp = truncate_width(&meta, max_meta);
-            let title_avail = cols.saturating_sub(6 + meta_disp.width());
+            let space_tag = item
+                .space_name
+                .as_deref()
+                .map(|name| format!("[{}] ", truncate_width(name, 14)))
+                .unwrap_or_default();
+            let space_tag_w = space_tag.width();
+            let title_avail = cols.saturating_sub(6 + meta_disp.width() + space_tag_w);
             let title_disp = truncate_width(&item.display_title, title_avail);
-            let gap = cols.saturating_sub(5 + title_disp.width() + meta_disp.width());
+            let gap = cols.saturating_sub(5 + space_tag_w + title_disp.width() + meta_disp.width());
 
             if is_sel {
                 buf.push_str("\x1b[48;2;36;39;48m\x1b[38;2;163;230;53m▎\x1b[0m\x1b[48;2;36;39;48m ");
                 buf.push_str(dot);
-                buf.push_str("\x1b[48;2;36;39;48m\x1b[1;38;2;244;244;245m ");
+                buf.push_str("\x1b[48;2;36;39;48m ");
+                if !space_tag.is_empty() {
+                    buf.push_str("\x1b[38;2;125;211;252m");
+                    buf.push_str(&space_tag);
+                }
+                buf.push_str("\x1b[1;38;2;244;244;245m");
                 buf.push_str(&title_disp);
                 for _ in 0..gap {
                     buf.push(' ');
@@ -368,7 +488,12 @@ fn draw_picker(
             } else {
                 buf.push_str("  ");
                 buf.push_str(dot);
-                buf.push_str(" \x1b[38;2;228;228;231m");
+                buf.push(' ');
+                if !space_tag.is_empty() {
+                    buf.push_str("\x1b[38;2;96;165;250m");
+                    buf.push_str(&space_tag);
+                }
+                buf.push_str("\x1b[38;2;228;228;231m");
                 buf.push_str(&title_disp);
                 for _ in 0..gap {
                     buf.push(' ');
@@ -390,7 +515,7 @@ fn draw_picker(
     if let Some(msg) = status_msg {
         buf.push_str(&format!(" \x1b[38;2;250;204;21m{}\x1b[0m", truncate_width(msg, cols - 2)));
     } else {
-        let hints = " ↑↓ move · Enter attach · Tab filter · ^N new · ^R refresh · ^] detach · Esc quit";
+        let hints = " ↑↓ move · Enter attach · Tab filter · [/] space · ^N new · ^R refresh · ^] detach · Esc quit";
         buf.push_str(&format!("\x1b[38;2;148;163;184m{}\x1b[0m", truncate_width(hints, cols)));
     }
     buf.push_str("\x1b[?2026l");
@@ -537,7 +662,7 @@ pub async fn run_attach(
     target: &str,
     watch_only: bool,
 ) -> Result<(), CliError> {
-    let (_, items) = load_sessions(client, None).await?;
+    let (_, _, items) = load_sessions(client, None).await?;
     let q = target.to_lowercase();
     let matched = items
         .iter()
@@ -563,10 +688,12 @@ pub async fn run_tui(
     watch_only: bool,
 ) -> Result<(), CliError> {
     let _guard = RawModeGuard::enter()?;
-    let (mut machines, mut items) = load_sessions(client, machine_filter.as_deref()).await?;
+    let (mut machines, mut spaces, mut items) =
+        load_sessions(client, machine_filter.as_deref()).await?;
 
     let mut query = String::new();
     let mut mode = FilterMode::All;
+    let mut active_space: Option<String> = None;
     let mut selected: usize = 0;
     let mut scroll: usize = 0;
     let mut status_msg: Option<String> = None;
@@ -580,7 +707,7 @@ pub async fn run_tui(
 
     loop {
         let now = now_ms();
-        let filtered = filter_items(&items, &query, mode, now);
+        let filtered = filter_items(&items, &query, mode, active_space.as_deref(), now);
         if filtered.is_empty() {
             selected = 0;
             scroll = 0;
@@ -599,6 +726,8 @@ pub async fn run_tui(
 
         let _ = draw_picker(
             &items,
+            &spaces,
+            active_space.as_deref(),
             &filtered,
             selected,
             scroll,
@@ -649,11 +778,29 @@ pub async fn run_tui(
                         selected = 0;
                         scroll = 0;
                     }
+                    (KeyCode::Char(']'), KeyModifiers::NONE) => {
+                        active_space = cycle_space(active_space.as_deref(), &spaces, true);
+                        selected = 0;
+                        scroll = 0;
+                    }
+                    (KeyCode::Char('['), KeyModifiers::NONE) => {
+                        active_space = cycle_space(active_space.as_deref(), &spaces, false);
+                        selected = 0;
+                        scroll = 0;
+                    }
                     (KeyCode::Char('r'), KeyModifiers::CONTROL) => {
                         status_msg = Some("Refreshing sessions…".to_string());
-                        if let Ok((m, it)) = load_sessions(client, machine_filter.as_deref()).await {
+                        if let Ok((m, sp, it)) =
+                            load_sessions(client, machine_filter.as_deref()).await
+                        {
                             machines = m;
+                            spaces = sp;
                             items = it;
+                            if let Some(ref sid) = active_space {
+                                if !spaces.iter().any(|s| &s.id == sid) {
+                                    active_space = None;
+                                }
+                            }
                             status_msg = Some(format!("Refreshed ({} online)", items.len()));
                         }
                     }
@@ -672,8 +819,14 @@ pub async fn run_tui(
                             status_msg = Some(format!("Opening new terminal on {}…", m.name));
                             let (cols, rows) = terminal::size().unwrap_or((120, 36));
                             let _ = client.claim_control(&m.id).await;
+                            let default_cwd = active_space
+                                .as_deref()
+                                .and_then(|sid| spaces.iter().find(|s| s.id == sid))
+                                .and_then(|s| s.default_cwd.as_deref())
+                                .filter(|cwd| !cwd.trim().is_empty())
+                                .unwrap_or(&m.home_dir);
                             let req = CreateTerminalRequest {
-                                cwd: &m.home_dir,
+                                cwd: default_cwd,
                                 startup_command: None,
                                 cols: Some(cols),
                                 rows: Some(rows),
@@ -688,11 +841,17 @@ pub async fn run_tui(
                                     let mut out = io::stdout();
                                     let _ = out.write_all(b"\x1b[?1049h");
                                     let _ = out.flush();
-                                    if let Ok((m2, it2)) =
+                                    if let Ok((m2, sp2, it2)) =
                                         load_sessions(client, machine_filter.as_deref()).await
                                     {
                                         machines = m2;
+                                        spaces = sp2;
                                         items = it2;
+                                        if let Some(ref sid) = active_space {
+                                            if !spaces.iter().any(|s| &s.id == sid) {
+                                                active_space = None;
+                                            }
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -721,11 +880,17 @@ pub async fn run_tui(
                             let mut out = io::stdout();
                             let _ = out.write_all(b"\x1b[?1049h");
                             let _ = out.flush();
-                            if let Ok((m2, it2)) =
+                            if let Ok((m2, sp2, it2)) =
                                 load_sessions(client, machine_filter.as_deref()).await
                             {
                                 machines = m2;
+                                spaces = sp2;
                                 items = it2;
+                                if let Some(ref sid) = active_space {
+                                    if !spaces.iter().any(|s| &s.id == sid) {
+                                        active_space = None;
+                                    }
+                                }
                             }
                             status_msg = Some(format!("Detached from {}", display_title(&term)));
                         }
@@ -743,4 +908,138 @@ pub async fn run_tui(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cycle_space, filter_items, resolve_session_space, FilterMode, SessionItem};
+    use offdesk_protocol::{SpaceInfo, TerminalAttention, TerminalInfo};
+    use std::collections::HashMap;
+
+    fn space(id: &str, name: &str) -> SpaceInfo {
+        SpaceInfo {
+            id: id.to_string(),
+            name: name.to_string(),
+            icon: None,
+            color: None,
+            default_cwd: None,
+            sort_order: 0,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn session(
+        id: &str,
+        title: &str,
+        space_id: Option<&str>,
+        space_name: Option<&str>,
+        waiting: bool,
+        last_activity_ms: Option<i64>,
+    ) -> SessionItem {
+        SessionItem {
+            terminal: TerminalInfo {
+                id: id.to_string(),
+                machine_id: "m-1".to_string(),
+                title: title.to_string(),
+                cwd: "/home/dev/repo".to_string(),
+                title_source: Default::default(),
+                workspace_group_id: None,
+                cols: 120,
+                rows: 36,
+                attention: waiting.then_some(TerminalAttention::Confirmation),
+                opened_by: None,
+                last_activity_ms,
+                custom_title: None,
+                reachable: true,
+            },
+            machine_name: "devbox".to_string(),
+            display_title: title.to_string(),
+            short_cwd: "~/repo".to_string(),
+            space_id: space_id.map(str::to_string),
+            space_name: space_name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn cycle_space_wraps_forward_and_backward() {
+        let spaces = vec![space("s1", "Work"), space("s2", "Personal")];
+        assert_eq!(cycle_space(None, &spaces, true), Some("s1".to_string()));
+        assert_eq!(
+            cycle_space(Some("s1"), &spaces, true),
+            Some("s2".to_string())
+        );
+        assert_eq!(cycle_space(Some("s2"), &spaces, true), None);
+
+        assert_eq!(cycle_space(None, &spaces, false), Some("s2".to_string()));
+        assert_eq!(
+            cycle_space(Some("s2"), &spaces, false),
+            Some("s1".to_string())
+        );
+        assert_eq!(cycle_space(Some("s1"), &spaces, false), None);
+
+        assert_eq!(cycle_space(None, &[], true), None);
+        assert_eq!(cycle_space(Some("missing"), &spaces, true), Some("s1".to_string()));
+    }
+
+    #[test]
+    fn resolve_session_space_maps_group_to_space() {
+        let mut group_spaces = HashMap::new();
+        group_spaces.insert("g1".to_string(), "s1".to_string());
+        let mut space_names = HashMap::new();
+        space_names.insert("s1".to_string(), "Work".to_string());
+
+        let mut term = session("t1", "api", None, None, false, None).terminal;
+        assert_eq!(
+            resolve_session_space(&term, &group_spaces, &space_names),
+            (None, None)
+        );
+        term.workspace_group_id = Some("g1".to_string());
+        assert_eq!(
+            resolve_session_space(&term, &group_spaces, &space_names),
+            (Some("s1".to_string()), Some("Work".to_string()))
+        );
+    }
+
+    #[test]
+    fn filter_items_combines_space_status_and_fuzzy_query() {
+        let now = 100_000;
+        let items = vec![
+            session("t1", "api-server", Some("s1"), Some("Work"), true, Some(99_000)),
+            session("t2", "web-ui", Some("s1"), Some("Work"), false, Some(95_000)),
+            session("t3", "notes", Some("s2"), Some("Personal"), false, Some(1_000)),
+            session("t4", "scratch", None, None, false, Some(98_000)),
+        ];
+
+        // All spaces, all statuses
+        assert_eq!(filter_items(&items, "", FilterMode::All, None, now).len(), 4);
+
+        // Space s1 only
+        let s1_all = filter_items(&items, "", FilterMode::All, Some("s1"), now);
+        assert_eq!(
+            s1_all.iter().map(|i| i.terminal.id.as_str()).collect::<Vec<_>>(),
+            vec!["t1", "t2"]
+        );
+
+        // Space s1 + Waiting
+        let s1_wait = filter_items(&items, "", FilterMode::Waiting, Some("s1"), now);
+        assert_eq!(
+            s1_wait.iter().map(|i| i.terminal.id.as_str()).collect::<Vec<_>>(),
+            vec!["t1"]
+        );
+
+        // Space s1 + Working
+        let s1_work = filter_items(&items, "", FilterMode::Working, Some("s1"), now);
+        assert_eq!(
+            s1_work.iter().map(|i| i.terminal.id.as_str()).collect::<Vec<_>>(),
+            vec!["t2"]
+        );
+
+        // Fuzzy search matches space name across all spaces
+        let by_space_name = filter_items(&items, "personal", FilterMode::All, None, now);
+        assert_eq!(
+            by_space_name.iter().map(|i| i.terminal.id.as_str()).collect::<Vec<_>>(),
+            vec!["t3"]
+        );
+    }
 }

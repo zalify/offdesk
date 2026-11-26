@@ -51,9 +51,18 @@ where
     .map_err(to_api_err)
 }
 
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 struct ListQuery {
     project: Option<String>,
+    space_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +74,8 @@ struct CreateDatabaseRequest {
     columns: Vec<ColumnInput>,
     #[serde(default)]
     if_not_exists: bool,
+    #[serde(default)]
+    space_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +83,8 @@ struct PatchDatabaseRequest {
     name: Option<String>,
     columns: Option<Vec<ColumnInput>>,
     views: Option<Vec<View>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    space_id: Option<Option<String>>,
 }
 
 #[derive(Deserialize)]
@@ -99,7 +112,7 @@ async fn list_databases(
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Vec<Database>>, ApiErr> {
     let out = blocking(&state, move |c| {
-        dd::list_databases(c, &auth.user_id, q.project.as_deref())
+        dd::list_databases_in_space(c, &auth.user_id, q.project.as_deref(), q.space_id.as_deref())
     })
     .await?;
     Ok(Json(out))
@@ -111,13 +124,14 @@ async fn create_database(
     Json(req): Json<CreateDatabaseRequest>,
 ) -> Result<Json<Database>, ApiErr> {
     let (db, _created) = blocking(&state, move |c| {
-        dd::create_database(
+        dd::create_database_in_space(
             c,
             &auth.user_id,
             &req.name,
             req.project_group.as_deref(),
             &req.columns,
             req.if_not_exists,
+            req.space_id.as_deref(),
         )
     })
     .await?;
@@ -146,7 +160,12 @@ async fn patch_database(
                 c,
                 &auth.user_id,
                 &id,
-                DatabasePatch { name: req.name, columns: req.columns, views: req.views },
+                DatabasePatch {
+                    name: req.name,
+                    columns: req.columns,
+                    views: req.views,
+                    space_id: req.space_id,
+                },
             )
         })
         .await?,

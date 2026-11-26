@@ -377,6 +377,7 @@ mod tests {
             machine_id: "m".to_string(),
             name: name.to_string(),
             sort_order: 0,
+            space_id: None,
         }
     }
 

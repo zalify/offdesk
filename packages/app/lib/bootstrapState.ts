@@ -6,6 +6,7 @@ import type {
   BrowserStateSnapshot,
   MachineInfo,
   ResourceStats,
+  SpaceInfo,
   TerminalInfo,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
@@ -16,6 +17,7 @@ export interface BrowserSessionState {
   lastFocusedTerminalId: string | null;
   machines: MachineInfo[];
   terminals: TerminalInfo[];
+  spaces: SpaceInfo[];
   workspaceGroups: WorkspaceGroupInfo[];
   workspaceLayouts: WorkspaceLayoutInfo[];
   machineStats: Record<string, ResourceStats>;
@@ -30,6 +32,7 @@ export const EMPTY_BROWSER_SESSION_STATE: BrowserSessionState = {
   lastFocusedTerminalId: null,
   machines: [],
   terminals: [],
+  spaces: [],
   workspaceGroups: [],
   workspaceLayouts: [],
   machineStats: {},
@@ -46,6 +49,7 @@ export function applyBootstrapSnapshot(
     lastFocusedTerminalId: snapshot.last_focused_terminal_id ?? null,
     machines: snapshot.machines,
     terminals: snapshot.terminals,
+    spaces: sortSpaces(snapshot.spaces ?? []),
     workspaceGroups: snapshot.workspace_groups ?? [],
     workspaceLayouts: snapshot.workspace_layouts ?? [],
     machineStats: Object.fromEntries(
@@ -163,6 +167,20 @@ function applyBrowserEvent(
       return {
         ...state,
         terminals: upsertTerminal(state.terminals, event.terminal),
+      };
+    case "space_created":
+    case "space_updated":
+      return {
+        ...state,
+        spaces: upsertSpace(state.spaces, event.space),
+      };
+    case "space_deleted":
+      return {
+        ...state,
+        spaces: state.spaces.filter((space) => space.id !== event.space_id),
+        workspaceGroups: state.workspaceGroups.map((group) =>
+          group.space_id === event.space_id ? { ...group, space_id: null } : group,
+        ),
       };
     case "workspace_group_created":
     case "workspace_group_updated":
@@ -302,6 +320,24 @@ function upsertTerminal(
   const next = terminals.slice();
   next[existingIndex] = terminal;
   return next;
+}
+
+function sortSpaces(spaces: SpaceInfo[]): SpaceInfo[] {
+  return [...spaces].sort(
+    (a, b) =>
+      a.sort_order - b.sort_order ||
+      a.name.localeCompare(b.name) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+function upsertSpace(spaces: SpaceInfo[], space: SpaceInfo): SpaceInfo[] {
+  const existingIndex = spaces.findIndex((item) => item.id === space.id);
+  const next =
+    existingIndex === -1
+      ? [...spaces, space]
+      : spaces.map((item) => (item.id === space.id ? space : item));
+  return sortSpaces(next);
 }
 
 function upsertWorkspaceGroup(

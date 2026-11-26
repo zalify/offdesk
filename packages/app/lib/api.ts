@@ -3,10 +3,13 @@ import type {
   User,
   AgentRunInfo,
   BrowserStateSnapshot,
+  CreateSpaceRequest,
   MachineInfo,
+  SpaceInfo,
   TerminalInfo,
   DirEntry,
   Bookmark,
+  UpdateSpaceRequest,
   WorkspaceGroupInfo,
   WorkspaceLayoutInfo,
   WorkspaceLayoutNode,
@@ -74,6 +77,7 @@ export interface DraftInfo {
   content: string;
   project_group: string;
   source_terminal_id: string | null;
+  space_id?: string | null;
   pinned: boolean;
   archived: boolean;
   created_at: number;
@@ -84,9 +88,14 @@ export interface DraftInfo {
   inline_tags?: string[];
 }
 
-export const listDrafts = (options?: { project?: string; includeArchived?: boolean }) => {
+export const listDrafts = (options?: {
+  project?: string;
+  spaceId?: string | null;
+  includeArchived?: boolean;
+}) => {
   const qs = new URLSearchParams();
   if (options?.project) qs.set("project", options.project);
+  if (options?.spaceId) qs.set("space_id", options.spaceId);
   if (options?.includeArchived) qs.set("include_archived", "true");
   const suffix = qs.toString() ? `?${qs.toString()}` : "";
   return request<DraftInfo[]>("GET", `/api/drafts${suffix}`);
@@ -97,6 +106,7 @@ export const upsertDraft = (payload: {
   content: string;
   project_group?: string;
   source_terminal_id?: string | null;
+  space_id?: string | null;
   pinned?: boolean;
   force_new?: boolean;
   tags?: string[];
@@ -108,6 +118,7 @@ export const updateDraft = (
     title?: string;
     content?: string;
     project_group?: string;
+    space_id?: string | null;
     pinned?: boolean;
     archived?: boolean;
     /** Replaces the EXPLICIT tag set; omit to leave tags unchanged. */
@@ -259,6 +270,7 @@ export interface DraftDatabase {
   id: string;
   name: string;
   project_group: string;
+  space_id?: string | null;
   columns: DraftDbColumn[];
   views: DraftDbView[];
   row_count: number;
@@ -308,8 +320,12 @@ const dbPath = (id: string) => `/api/draft-databases/${encodeURIComponent(id)}`;
 /** Resolves to null when the hub predates draft databases (404). */
 export async function listDraftDatabases(
   project?: string,
+  spaceId?: string | null,
 ): Promise<DraftDatabase[] | null> {
-  const suffix = project ? `?project=${encodeURIComponent(project)}` : "";
+  const qs = new URLSearchParams();
+  if (project) qs.set("project", project);
+  if (spaceId) qs.set("space_id", spaceId);
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
   try {
     return await request<DraftDatabase[]>("GET", `/api/draft-databases${suffix}`);
   } catch (err) {
@@ -321,6 +337,7 @@ export async function listDraftDatabases(
 export const createDraftDatabase = (payload: {
   name: string;
   project_group?: string;
+  space_id?: string | null;
   columns?: DraftDbColumnInput[];
   if_not_exists?: boolean;
 }) => request<DraftDatabase>("POST", "/api/draft-databases", payload);
@@ -330,7 +347,12 @@ export const getDraftDatabase = (id: string) =>
 
 export const updateDraftDatabase = (
   id: string,
-  patch: { name?: string; columns?: DraftDbColumnInput[]; views?: DraftDbViewInput[] },
+  patch: {
+    name?: string;
+    space_id?: string | null;
+    columns?: DraftDbColumnInput[];
+    views?: DraftDbViewInput[];
+  },
 ) => request<DraftDatabase>("PATCH", dbPath(id), patch);
 
 export const deleteDraftDatabase = (id: string) =>
@@ -797,17 +819,33 @@ export const createBookmark = (
 export const deleteBookmark = (bookmarkId: string) =>
   request<void>("DELETE", `/api/bookmarks/${bookmarkId}`);
 
+// Spaces
+export const listSpaces = () => request<SpaceInfo[]>("GET", "/api/spaces");
+
+export const createSpace = (payload: CreateSpaceRequest) =>
+  request<SpaceInfo>("POST", "/api/spaces", payload);
+
+export const updateSpace = (spaceId: string, patch: UpdateSpaceRequest) =>
+  request<SpaceInfo>("PATCH", `/api/spaces/${encodeURIComponent(spaceId)}`, patch);
+
+export const deleteSpace = (spaceId: string) =>
+  request<void>("DELETE", `/api/spaces/${encodeURIComponent(spaceId)}`);
+
 // Workspace tabs
 export const listWorkspaceGroups = (machineId: string) =>
   request<WorkspaceGroupInfo[]>(
     "GET",
     `/api/machines/${machineId}/workspace-groups`,
   );
-export const createWorkspaceGroup = (machineId: string, name: string) =>
+export const createWorkspaceGroup = (
+  machineId: string,
+  name: string,
+  spaceId?: string | null,
+) =>
   request<WorkspaceGroupInfo>(
     "POST",
     `/api/machines/${machineId}/workspace-groups`,
-    { name },
+    spaceId !== undefined ? { name, space_id: spaceId } : { name },
   );
 export const reorderWorkspaceGroups = (machineId: string, groupIds: string[]) =>
   request<WorkspaceGroupInfo[]>(
@@ -829,6 +867,16 @@ export const renameWorkspaceGroup = (
     "PATCH",
     `/api/machines/${machineId}/workspace-groups/${groupId}`,
     { name },
+  );
+export const updateWorkspaceGroup = (
+  machineId: string,
+  groupId: string,
+  patch: { name?: string; space_id?: string | null },
+) =>
+  request<WorkspaceGroupInfo>(
+    "PATCH",
+    `/api/machines/${machineId}/workspace-groups/${groupId}`,
+    patch,
   );
 export const renameTerminal = (
   machineId: string,

@@ -15,6 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import type { SpaceInfo } from "@offdesk/shared";
 import { DraftArtifactPreview } from "./DraftArtifactPreview.web";
 import { DatabasesPane } from "./draftdb/DatabasesPane.web";
 import { useDraftDatabases } from "./draftdb/useDraftDatabases";
@@ -23,6 +24,7 @@ import { HistoryButton, VersionBanner } from "./draftdb/VersionHistory.web";
 import { DraftsBrowser } from "./drafts/DraftsBrowser.web";
 import { TagEditor } from "./drafts/TagEditor.web";
 import { buildTagTree, flattenTagPaths } from "@/lib/draftTags";
+import { DEFAULT_SPACE_COLOR } from "@/lib/spaces";
 import {
   deleteDraft,
   listDrafts,
@@ -39,6 +41,8 @@ interface DraftsDrawerProps {
   isCompact: boolean;
   defaultProjectGroup?: string;
   activeTerminalLabel?: string | null;
+  spaces?: SpaceInfo[];
+  activeSpaceId?: string | null;
   onClose: () => void;
   onSendToTerminal?: (content: string) => void;
   onCountChange?: (activeCount: number) => void;
@@ -49,6 +53,8 @@ export function DraftsDrawer({
   isCompact,
   defaultProjectGroup = "~",
   activeTerminalLabel = null,
+  spaces = [],
+  activeSpaceId = null,
   onClose,
   onSendToTerminal,
   onCountChange,
@@ -56,6 +62,7 @@ export function DraftsDrawer({
   const [drafts, setDrafts] = useState<DraftInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [viewAllSpaces, setViewAllSpaces] = useState(false);
   const [projectFilter, setProjectFilter] = useState<string>("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -129,13 +136,26 @@ export function DraftsDrawer({
   const [viewing, setViewing] = useState<DraftVersion | null>(null);
 
   useEffect(() => {
+    setViewAllSpaces(false);
+  }, [activeSpaceId]);
+
+  const activeSpace = useMemo(
+    () => (activeSpaceId ? spaces.find((s) => s.id === activeSpaceId) ?? null : null),
+    [activeSpaceId, spaces],
+  );
+  const effectiveSpaceId = activeSpaceId && !viewAllSpaces ? activeSpaceId : null;
+
+  useEffect(() => {
     setViewing(null);
   }, [selectedId]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await listDrafts({ includeArchived: true });
+      const rows = await listDrafts({
+        includeArchived: true,
+        spaceId: effectiveSpaceId,
+      });
       setDrafts(rows);
       onCountChange?.(rows.filter((d) => !d.archived).length);
     } catch {
@@ -143,7 +163,7 @@ export function DraftsDrawer({
     } finally {
       setLoading(false);
     }
-  }, [onCountChange]);
+  }, [onCountChange, effectiveSpaceId]);
 
   useEffect(() => {
     if (!open) return;
@@ -155,7 +175,10 @@ export function DraftsDrawer({
     let active = true;
     const poll = async () => {
       try {
-        const rows = await listDrafts({ includeArchived: false });
+        const rows = await listDrafts({
+          includeArchived: false,
+          spaceId: activeSpaceId ?? null,
+        });
         if (active) onCountChange?.(rows.length);
       } catch {
         /* ignore */
@@ -167,9 +190,13 @@ export function DraftsDrawer({
       active = false;
       window.clearInterval(timer);
     };
-  }, [onCountChange]);
+  }, [onCountChange, activeSpaceId]);
 
-  const dbs = useDraftDatabases(open, projectFilter !== "all" ? projectFilter : undefined);
+  const dbs = useDraftDatabases(
+    open,
+    projectFilter !== "all" ? projectFilter : undefined,
+    effectiveSpaceId,
+  );
   const dbAvailable = dbs.available !== false;
   const inDatabases = section === "databases" && dbAvailable;
 
@@ -219,6 +246,7 @@ export function DraftsDrawer({
           title,
           content: editContent,
           project_group: editProject.trim() || "~",
+          space_id: effectiveSpaceId,
           force_new: true,
         });
         setCreating(false);
@@ -491,6 +519,49 @@ export function DraftsDrawer({
                 ))}
               </div>
             )}
+            {activeSpace && (
+              <button
+                type="button"
+                data-testid="drafts-space-toggle"
+                onClick={() => setViewAllSpaces((cur) => !cur)}
+                title={
+                  viewAllSpaces
+                    ? `Showing all spaces · Click to filter to ${activeSpace.name}`
+                    : `Filtered to ${activeSpace.name} · Click to view all spaces`
+                }
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 5,
+                  padding: "3px 9px",
+                  borderRadius: 999,
+                  border: `1px solid ${!viewAllSpaces ? colors.accent : colors.line}`,
+                  background: !viewAllSpaces ? colorAlpha.accentSoft : "transparent",
+                  color: !viewAllSpaces ? colors.fg0 : colors.fg2,
+                  fontSize: rem(11.5),
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
+                }}
+              >
+                {!viewAllSpaces && (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: 999,
+                      background: activeSpace.color || DEFAULT_SPACE_COLOR,
+                    }}
+                  />
+                )}
+                <span>
+                  {viewAllSpaces
+                    ? "All Spaces"
+                    : `${activeSpace.icon ? `${activeSpace.icon} ` : ""}${activeSpace.name}`}
+                </span>
+              </button>
+            )}
             {!inDatabases && (
             <>
             <button
@@ -575,6 +646,7 @@ export function DraftsDrawer({
             loading={dbs.loading}
             error={dbs.error}
             defaultProject={projectFilter !== "all" ? projectFilter : defaultProjectGroup || "~"}
+            defaultSpaceId={effectiveSpaceId}
             compact={isCompact}
             onRefresh={dbs.refresh}
             openRequest={dbOpenRequest}

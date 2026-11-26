@@ -13,13 +13,14 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Bot, Ellipsis, Folder, FolderGit2, Globe, History, PanelLeft, Plus, Settings as SettingsIcon, Smartphone, X } from "lucide-react";
-import type { MachineInfo, ResourceStats, TerminalInfo } from "@offdesk/shared";
+import { Bot, Ellipsis, Folder, FolderGit2, Globe, History, PanelLeft, Pencil, Plus, Settings as SettingsIcon, Smartphone, X } from "lucide-react";
+import type { MachineInfo, ResourceStats, SpaceInfo, TerminalInfo } from "@offdesk/shared";
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { terminalOpenerDescription } from "@/lib/terminalOpener";
 import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
+import { countWaitingBySpace, DEFAULT_SPACE_COLOR, filterGroupsBySpace } from "@/lib/spaces";
 import {
   activityAge,
   groupWaitingCount,
@@ -94,6 +95,11 @@ interface SessionsSidebarProps {
   onRenameTerminal?: (terminal: TerminalInfo, title: string) => void;
   shelvedTerminalIds?: Set<string>;
   onShelfTerminal?: (terminal: TerminalInfo) => void;
+  spaces?: SpaceInfo[];
+  activeSpaceId?: string | null;
+  onSelectSpace?: (spaceId: string | null) => void;
+  onOpenSpaceModal?: (space?: SpaceInfo | null) => void;
+  onMoveGroupToSpace?: (group: WorkspaceGroup, spaceId: string | null) => void;
 }
 
 type Drag = { kind: "group"; groupId: string } | { kind: "row"; terminalId: string; groupId: string };
@@ -121,6 +127,11 @@ function SessionsSidebarComponent({
   onRenameTerminal,
   shelvedTerminalIds,
   onShelfTerminal,
+  spaces = [],
+  activeSpaceId = null,
+  onSelectSpace,
+  onOpenSpaceModal,
+  onMoveGroupToSpace,
 }: SessionsSidebarProps) {
   const [renamingTerminalId, setRenamingTerminalId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
@@ -249,6 +260,30 @@ function SessionsSidebarComponent({
       disabled: !canManage || !group.persistent,
       onClick: () => onRenameGroup(group),
     },
+    ...(onMoveGroupToSpace && spaces.length > 0
+      ? [
+          {
+            label: "move to space",
+            disabled: !canManage || !group.persistent,
+            onClick: () => {},
+            children: [
+              ...spaces.map((space) => ({
+                label: `${group.spaceId === space.id ? "✓ " : ""}${space.icon ? `${space.icon} ` : ""}${space.name}`,
+                disabled: group.spaceId === space.id,
+                onClick: () => onMoveGroupToSpace(group, space.id),
+              })),
+              ...(group.spaceId
+                ? [
+                    {
+                      label: "Unassigned",
+                      onClick: () => onMoveGroupToSpace(group, null),
+                    },
+                  ]
+                : []),
+            ],
+          },
+        ]
+      : []),
     { type: "separator" },
     {
       label: `close tab "${group.label}"…`,
@@ -502,20 +537,38 @@ function SessionsSidebarComponent({
     );
   };
 
+  const activeSpace = useMemo(
+    () => (activeSpaceId ? spaces.find((s) => s.id === activeSpaceId) ?? null : null),
+    [activeSpaceId, spaces],
+  );
+  const scopedGroups = useMemo(
+    () => filterGroupsBySpace(groups, activeSpaceId),
+    [groups, activeSpaceId],
+  );
+  const waitingBySpace = useMemo(
+    () => countWaitingBySpace(groups, terminalsById),
+    [groups, terminalsById],
+  );
+  const otherSpacesWaiting = useMemo(() => {
+    if (!activeSpaceId) return 0;
+    const activeCount = waitingBySpace.bySpace.get(activeSpaceId) ?? 0;
+    return Math.max(0, waitingBySpace.total - activeCount);
+  }, [activeSpaceId, waitingBySpace]);
+
   const recentRows = useMemo(
-    () => (order === "recent" ? sessionRows(groups, terminalsById, "recent") : []),
-    [order, groups, terminalsById],
+    () => (order === "recent" ? sessionRows(scopedGroups, terminalsById, "recent") : []),
+    [order, scopedGroups, terminalsById],
   );
   const allMachineTerminals = useMemo(() => {
     const result: TerminalInfo[] = [];
-    for (const group of groups) {
+    for (const group of scopedGroups) {
       for (const id of collectPaneTerminalIds(group.root)) {
         const terminal = terminalsById.get(id);
         if (terminal) result.push(terminal);
       }
     }
     return result;
-  }, [groups, terminalsById]);
+  }, [scopedGroups, terminalsById]);
   const hasTerminals = allMachineTerminals.length > 0;
   const waitingTotal = useMemo(
     () => allMachineTerminals.filter((t) => sessionState(t, now) === "waiting").length,
@@ -539,7 +592,7 @@ function SessionsSidebarComponent({
   );
 
   const visibleGroups = useMemo(() => {
-    return groups
+    return scopedGroups
       .map((group) => {
         const all = collectPaneTerminalIds(group.root)
           .map((id) => terminalsById.get(id))
@@ -551,12 +604,12 @@ function SessionsSidebarComponent({
         return { group, terminals, totalCount: all.length };
       })
       .filter(({ terminals }) => filter === "all" || terminals.length > 0);
-  }, [filter, groups, matchesFilter, terminalsById, shelvedTerminalIds]);
+  }, [filter, scopedGroups, matchesFilter, terminalsById, shelvedTerminalIds]);
 
   const projectGroups = useMemo(() => {
     if (!projectMode) return [];
     const byProject = new Map<string, { terminal: TerminalInfo; group: WorkspaceGroup }[]>();
-    for (const group of groups) {
+    for (const group of scopedGroups) {
       for (const id of collectPaneTerminalIds(group.root)) {
         const terminal = terminalsById.get(id);
         if (!terminal || shelvedTerminalIds?.has(terminal.id)) continue;
@@ -574,16 +627,27 @@ function SessionsSidebarComponent({
       }
     }
     return Array.from(byProject.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [projectMode, groups, terminalsById, shelvedTerminalIds, filter, matchesFilter]);
+  }, [projectMode, scopedGroups, terminalsById, shelvedTerminalIds, filter, matchesFilter]);
 
-  const list = !hasTerminals && groups.length === 0 ? (
+  const list = !hasTerminals && scopedGroups.length === 0 ? (
     <div data-testid="sessions-empty" className="odk-sessions-empty">
-      <span>No terminals on {machineName || "this machine"} yet.</span>
-      {canManage && (
-        <Button kind="primary" size="xs" onClick={onNewGroup}>
-          new tab
-        </Button>
-      )}
+      <span>
+        {activeSpace
+          ? `No terminals in ${activeSpace.name} yet.`
+          : `No terminals on ${machineName || "this machine"} yet.`}
+      </span>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {canManage && (
+          <Button kind="primary" size="xs" onClick={onNewGroup}>
+            new tab
+          </Button>
+        )}
+        {activeSpace && onSelectSpace && (
+          <Button kind="secondary" size="xs" onClick={() => onSelectSpace(null)}>
+            all spaces
+          </Button>
+        )}
+      </div>
     </div>
   ) : filter !== "all" &&
     ((order === "recent" && filteredRecentRows.length === 0) ||
@@ -742,6 +806,106 @@ function SessionsSidebarComponent({
           <Plus size={15} aria-hidden />
         </button>
       </div>
+
+      {(onSelectSpace || onOpenSpaceModal) && (
+        <div
+          className="odk-sessions-spaces"
+          role="tablist"
+          aria-label="Spaces"
+          data-testid="sessions-spaces-bar"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSpaceId === null}
+            data-testid="sessions-space-all"
+            className="odk-sessions-space-pill"
+            onClick={() => onSelectSpace?.(null)}
+          >
+            <span>All</span>
+            {otherSpacesWaiting > 0 && (
+              <span
+                data-testid="sessions-space-all-waiting"
+                className="odk-sessions-space-waiting"
+                title={`${otherSpacesWaiting} waiting in other spaces`}
+              >
+                {otherSpacesWaiting}
+              </span>
+            )}
+          </button>
+          {spaces.map((space) => {
+            const selected = activeSpaceId === space.id;
+            const waiting = waitingBySpace.bySpace.get(space.id) ?? 0;
+            return (
+              <button
+                key={space.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                data-testid={`sessions-space-${space.id}`}
+                title={
+                  space.default_cwd
+                    ? `${space.name} (${space.default_cwd}) · Right-click to edit`
+                    : `${space.name} · Right-click to edit`
+                }
+                className="odk-sessions-space-pill"
+                onClick={() => onSelectSpace?.(space.id)}
+                onDoubleClick={() => onOpenSpaceModal?.(space)}
+                onContextMenu={(event) => {
+                  if (!onOpenSpaceModal) return;
+                  event.preventDefault();
+                  onOpenSpaceModal(space);
+                }}
+              >
+                <span
+                  aria-hidden="true"
+                  className="odk-sessions-space-dot"
+                  style={{ background: space.color || DEFAULT_SPACE_COLOR }}
+                />
+                {space.icon && (
+                  <span aria-hidden="true" className="odk-sessions-space-icon">
+                    {space.icon}
+                  </span>
+                )}
+                <span className="odk-sessions-space-name">{space.name}</span>
+                {waiting > 0 && (
+                  <span
+                    data-testid={`sessions-space-waiting-${space.id}`}
+                    className="odk-sessions-space-waiting"
+                    title={`${waiting} waiting`}
+                  >
+                    {waiting}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {activeSpace && onOpenSpaceModal && (
+            <button
+              type="button"
+              data-testid="sessions-space-edit"
+              aria-label={`Edit space ${activeSpace.name}`}
+              title={`Edit ${activeSpace.name}`}
+              onClick={() => onOpenSpaceModal(activeSpace)}
+              className="odk-sessions-space-btn"
+            >
+              <Pencil size={11} aria-hidden />
+            </button>
+          )}
+          {onOpenSpaceModal && (
+            <button
+              type="button"
+              data-testid="sessions-space-add"
+              aria-label="New space"
+              title="New space"
+              onClick={() => onOpenSpaceModal(null)}
+              className="odk-sessions-space-btn"
+            >
+              <Plus size={12} aria-hidden />
+            </button>
+          )}
+        </div>
+      )}
 
       {panels?.onOpenChat && (
         <div

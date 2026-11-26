@@ -10,6 +10,7 @@ export function DatabasesPane({
   loading,
   error,
   defaultProject,
+  defaultSpaceId,
   compact,
   onRefresh,
   openRequest,
@@ -19,6 +20,7 @@ export function DatabasesPane({
   loading: boolean;
   error: string | null;
   defaultProject: string;
+  defaultSpaceId?: string | null;
   compact: boolean;
   onRefresh: () => void;
   /** Asks the pane to open a database (and view), e.g. from an embed in a draft. */
@@ -64,6 +66,7 @@ export function DatabasesPane({
       loading={loading}
       error={error}
       defaultProject={defaultProject}
+      defaultSpaceId={defaultSpaceId}
       compact={compact}
       onOpen={(id) => {
         setOpenViewId(undefined);

@@ -10,7 +10,8 @@ use offdesk_protocol::{
     AgentBrowserController, AgentBrowserHandoff, AgentBrowserInfo, AgentBrowserInputEvent,
     AgentBrowserReclaim, AgentSessionInfo, MouseAction, BrowserEvent, BrowserEventEnvelope, BrowserStateSnapshot,
     ControlLeaseSnapshot, DirEntry, HubToMachine, MachineInfo, MachineStatsSnapshot, MachineToHub,
-    TerminalInfo, TerminalOpener, WorkspaceGroupInfo, WorkspaceLayoutInfo, WorkspaceLayoutNode,
+    SpaceInfo, TerminalInfo, TerminalOpener, WorkspaceGroupInfo, WorkspaceLayoutInfo,
+    WorkspaceLayoutNode,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, watch, Mutex};
 
@@ -1194,6 +1195,29 @@ impl MachineManager {
             BrowserEvent::WorkspaceGroupDeleted {
                 machine_id: machine_id.to_string(),
                 group_id: group_id.to_string(),
+            },
+        );
+    }
+
+    pub fn publish_space_created(&self, user_id: &str, space: SpaceInfo) {
+        self.send_event(
+            Some(user_id.to_string()),
+            BrowserEvent::SpaceCreated { space },
+        );
+    }
+
+    pub fn publish_space_updated(&self, user_id: &str, space: SpaceInfo) {
+        self.send_event(
+            Some(user_id.to_string()),
+            BrowserEvent::SpaceUpdated { space },
+        );
+    }
+
+    pub fn publish_space_deleted(&self, user_id: &str, space_id: &str) {
+        self.send_event(
+            Some(user_id.to_string()),
+            BrowserEvent::SpaceDeleted {
+                space_id: space_id.to_string(),
             },
         );
     }
@@ -3771,7 +3795,17 @@ impl MachineManager {
                 machine_id: group.machine_id,
                 name: group.name,
                 sort_order: group.sort_order,
+                space_id: group.space_id,
             })
+            .collect();
+        let spaces: Vec<SpaceInfo> = self
+            .db
+            .get()
+            .ok()
+            .and_then(|conn| crate::db::spaces::list_spaces(&conn, user_id).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(crate::routes::spaces::space_info)
             .collect();
         let workspace_layouts: Vec<WorkspaceLayoutInfo> = self
             .db
@@ -3879,6 +3913,7 @@ impl MachineManager {
             machines: all_machines,
             terminals: all_terminals,
             workspace_groups,
+            spaces,
             workspace_layouts,
             machine_stats,
             control_leases: self

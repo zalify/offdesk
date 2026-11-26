@@ -38,11 +38,51 @@ export interface TerminalOpener {
   label?: string | null
 }
 
+export interface SpaceInfo {
+  id: string
+  name: string
+  icon?: string | null
+  color?: string | null
+  default_cwd?: string | null
+  sort_order: number
+  created_at: number
+  updated_at: number
+}
+
 export interface WorkspaceGroupInfo {
   id: string
   machine_id: string
   name: string
   sort_order: number
+  space_id?: string | null
+}
+
+export interface DraftInfo {
+  id: string
+  user_id: string
+  title: string
+  content: string
+  project_group: string
+  source_terminal_id: string | null
+  pinned: boolean
+  archived: boolean
+  created_at: number
+  updated_at: number
+  tags?: string[]
+  inline_tags?: string[]
+  space_id?: string | null
+}
+
+export interface DraftDatabaseInfo {
+  id: string
+  name: string
+  project_group: string
+  columns: unknown[]
+  views: unknown[]
+  row_count: number
+  created_at: number
+  updated_at: number
+  space_id?: string | null
 }
 
 export type WorkspaceSplitDirection = "horizontal" | "vertical"
@@ -197,6 +237,7 @@ export interface BrowserStateSnapshot {
   machines: MachineInfo[]
   terminals: TerminalInfo[]
   workspace_groups?: WorkspaceGroupInfo[]
+  spaces?: SpaceInfo[]
   workspace_layouts?: WorkspaceLayoutInfo[]
   machine_stats: MachineStatsSnapshot[]
   control_leases: ControlLeaseSnapshot[]
@@ -530,6 +571,9 @@ export type BrowserEvent =
   | BrowserEvent.WorkspaceGroupCreated
   | BrowserEvent.WorkspaceGroupUpdated
   | BrowserEvent.WorkspaceGroupDeleted
+  | BrowserEvent.SpaceCreated
+  | BrowserEvent.SpaceUpdated
+  | BrowserEvent.SpaceDeleted
   | BrowserEvent.WorkspaceLayoutUpdated
   | BrowserEvent.MachineStats
   | BrowserEvent.ModeChanged
@@ -601,6 +645,21 @@ export namespace BrowserEvent {
     type: 'workspace_group_deleted'
     machine_id: string
     group_id: string
+  }
+
+  export interface SpaceCreated {
+    type: 'space_created'
+    space: SpaceInfo
+  }
+
+  export interface SpaceUpdated {
+    type: 'space_updated'
+    space: SpaceInfo
+  }
+
+  export interface SpaceDeleted {
+    type: 'space_deleted'
+    space_id: string
   }
 
   export interface WorkspaceLayoutUpdated {

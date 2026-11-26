@@ -135,6 +135,8 @@ pub struct Database {
     pub row_count: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(default)]
+    pub space_id: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -231,6 +233,7 @@ pub struct DatabasePatch {
     pub name: Option<String>,
     pub columns: Option<Vec<ColumnInput>>,
     pub views: Option<Vec<View>>,
+    pub space_id: Option<Option<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -955,7 +958,7 @@ fn default_views() -> Vec<View> {
 // ---------------------------------------------------------------------------
 
 const DB_SELECT: &str = "id, name, project_group, columns, views, created_at, updated_at,
-    (SELECT COUNT(*) FROM drafts WHERE drafts.database_id = draft_databases.id)";
+    (SELECT COUNT(*) FROM drafts WHERE drafts.database_id = draft_databases.id), space_id";
 
 fn map_database(r: &rusqlite::Row<'_>) -> rusqlite::Result<Database> {
     let columns: String = r.get(3)?;
@@ -969,6 +972,7 @@ fn map_database(r: &rusqlite::Row<'_>) -> rusqlite::Result<Database> {
         created_at: r.get(5)?,
         updated_at: r.get(6)?,
         row_count: r.get(7)?,
+        space_id: r.get(8)?,
     })
 }
 
@@ -977,14 +981,26 @@ pub fn list_databases(
     user_id: &str,
     project: Option<&str>,
 ) -> R<Vec<Database>> {
+    list_databases_in_space(conn, user_id, project, None)
+}
+
+pub fn list_databases_in_space(
+    conn: &Connection,
+    user_id: &str,
+    project: Option<&str>,
+    space_id: Option<&str>,
+) -> R<Vec<Database>> {
     let project = project.map(str::trim).filter(|p| !p.is_empty());
+    let space = space_id.map(str::trim).filter(|s| !s.is_empty());
     let sql = format!(
         "SELECT {DB_SELECT} FROM draft_databases
-         WHERE user_id = ?1 AND (?2 IS NULL OR project_group = ?2)
+         WHERE user_id = ?1
+           AND (?2 IS NULL OR project_group = ?2)
+           AND (?3 IS NULL OR space_id = ?3)
          ORDER BY updated_at DESC, id"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![user_id, project], map_database)?;
+    let rows = stmt.query_map(params![user_id, project, space], map_database)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
@@ -1005,11 +1021,24 @@ pub fn create_database(
     columns: &[ColumnInput],
     if_not_exists: bool,
 ) -> R<(Database, bool)> {
+    create_database_in_space(conn, user_id, name, project_group, columns, if_not_exists, None)
+}
+
+pub fn create_database_in_space(
+    conn: &Connection,
+    user_id: &str,
+    name: &str,
+    project_group: Option<&str>,
+    columns: &[ColumnInput],
+    if_not_exists: bool,
+    space_id: Option<&str>,
+) -> R<(Database, bool)> {
     let name = name.trim();
     if name.is_empty() {
         return bad("name must not be empty");
     }
     let project = project_group.map(str::trim).filter(|p| !p.is_empty()).unwrap_or("~");
+    let space_id = space_id.map(str::trim).filter(|s| !s.is_empty());
     let existing: Option<String> = conn
         .query_row(
             "SELECT id FROM draft_databases WHERE user_id = ?1 AND project_group = ?2 AND name = ?3",
@@ -1030,8 +1059,8 @@ pub fn create_database(
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_ms();
     conn.execute(
-        "INSERT INTO draft_databases (id, user_id, name, project_group, columns, views, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        "INSERT INTO draft_databases (id, user_id, name, project_group, columns, views, created_at, updated_at, space_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8)",
         params![
             id,
             user_id,
@@ -1039,7 +1068,8 @@ pub fn create_database(
             project,
             serde_json::to_string(&cols).unwrap_or_else(|_| "[]".into()),
             serde_json::to_string(&default_views()).unwrap_or_else(|_| "[]".into()),
-            now
+            now,
+            space_id,
         ],
     )?;
     Ok((get_database(conn, user_id, &id)?, true))
@@ -1104,13 +1134,18 @@ pub fn patch_database(
     if views.is_empty() {
         views = default_views();
     }
+    let next_space_id = match patch.space_id {
+        Some(v) => v.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        None => db.space_id.clone(),
+    };
     tx.execute(
-        "UPDATE draft_databases SET name = ?1, columns = ?2, views = ?3, updated_at = ?4 WHERE id = ?5",
+        "UPDATE draft_databases SET name = ?1, columns = ?2, views = ?3, updated_at = ?4, space_id = ?5 WHERE id = ?6",
         params![
             name,
             serde_json::to_string(&columns).unwrap_or_else(|_| "[]".into()),
             serde_json::to_string(&views).unwrap_or_else(|_| "[]".into()),
             now_ms(),
+            next_space_id,
             id
         ],
     )?;

@@ -16,6 +16,7 @@ pub(crate) mod onboarding;
 mod registration;
 mod settings;
 pub(crate) mod share_public;
+pub(crate) mod spaces;
 mod terminals;
 mod vault;
 mod version;
@@ -44,6 +45,7 @@ pub fn router() -> Router<AppState> {
         .merge(api_tokens::router())
         .merge(mode::router())
         .merge(settings::router())
+        .merge(spaces::router())
         .merge(vault::router())
         .merge(version::router())
 }
