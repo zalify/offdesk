@@ -463,6 +463,16 @@ function TerminalWorkspaceComponent({
     compactFadingIdRef.current = null;
     rerenderAfterHold();
   }, []);
+  const compactHoldTargetId = compactHoldRef.current?.to ?? null;
+  useEffect(() => {
+    if (!compactHoldTargetId) return;
+    // Safety net: if an idle/silent terminal or slow attach never fires onReady,
+    // never leave the dimmed loading overlay stuck forever.
+    const timer = window.setTimeout(() => {
+      releaseCompactHold(compactHoldTargetId);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [compactHoldTargetId, releaseCompactHold]);
   const compactHeldTerminal = compactHoldRef.current
     ? terminalsById.get(compactHoldRef.current.from) ?? null
     : null;
@@ -1299,7 +1309,7 @@ function TerminalWorkspaceComponent({
                       onDestroy={handleDestroy}
                       onRequestControl={onRequestControl}
                       onReleaseControl={onReleaseControl}
-                      onReady={isActivePane ? releaseCompactHold : undefined}
+                      onReady={releaseCompactHold}
                     />
                     {isCoverPane && (
                       /* Frozen while fading, so the dim and bar leave with the
