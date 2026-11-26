@@ -436,6 +436,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const metricsRef = useRef<{ cellW: number; cellH: number }>({ cellW: 8.4, cellH: 18 });
     const readyFiredRef = useRef(false);
     const composingRef = useRef(false);
+    const compositionTextRef = useRef("");
+    const compositionEndAtRef = useRef(0);
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
@@ -741,6 +743,30 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             (hl.endCol - hl.startCol) * cellW,
             1.5,
           );
+        }
+
+        // 6. Live IME composition preedit overlay (e.g. Pinyin "weism" before candidate commit)
+        const preedit = compositionTextRef.current;
+        if (preedit && frame.cursor) {
+          const [cx, cy] = frame.cursor;
+          ctx.font = `${fontSize}px ${fontFamily}`;
+          const measuredW = Math.max(cellW, Math.ceil(ctx.measureText(preedit).width) + 4);
+          const preX = Math.min(
+            padX + cx * cellW,
+            Math.max(padX, rect.width - padX - measuredW),
+          );
+          const preY = padY + cy * cellH;
+          const textY = preY + Math.floor((cellH - fontSize) * 0.5);
+          ctx.fillStyle = bg;
+          ctx.fillRect(preX - 1, preY, measuredW + 2, cellH);
+          ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+          ctx.fillRect(preX - 1, preY, measuredW + 2, cellH);
+          ctx.fillStyle = fg;
+          ctx.textBaseline = "top";
+          ctx.fillText(preedit, preX + 1, textY);
+          // Underline preedit text (standard macOS / Ghostty / Alacritty IME indicator)
+          ctx.fillStyle = cursorCol;
+          ctx.fillRect(preX, preY + cellH - 2, measuredW, 1.5);
         }
 
         ctx.restore();
@@ -1954,15 +1980,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }}
           onCompositionStart={() => {
             composingRef.current = true;
+            compositionTextRef.current = "";
+          }}
+          onCompositionUpdate={(e) => {
+            composingRef.current = true;
+            compositionTextRef.current = e.data ?? e.currentTarget.value ?? "";
+            paintFrame(frameRef.current);
           }}
           onCompositionEnd={(e) => {
             composingRef.current = false;
-            const text = e.data;
+            compositionEndAtRef.current = performance.now();
+            compositionTextRef.current = "";
+            const text = e.data || e.currentTarget.value;
             if (text) sendRawInput(text);
             e.currentTarget.value = "";
+            paintFrame(frameRef.current);
           }}
           onInput={(e) => {
-            if (composingRef.current) return;
+            if (composingRef.current || (e.nativeEvent as InputEvent).isComposing) return;
             const text = e.currentTarget.value;
             if (text) {
               sendRawInput(text);
@@ -1970,6 +2005,26 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
           }}
           onKeyDown={(e) => {
+            const nativeKeyCode = (e.nativeEvent as KeyboardEvent).keyCode;
+            if (
+              composingRef.current ||
+              e.nativeEvent.isComposing ||
+              e.key === "Process" ||
+              nativeKeyCode === 229
+            ) {
+              return;
+            }
+            // macOS WKWebView / Safari fires compositionend BEFORE the keydown of the
+            // Enter/Escape/Backspace key that ended composition (WebKit #165004).
+            // Swallow that trailing keydown so pressing Enter to confirm Pinyin never
+            // submits the terminal prompt prematurely.
+            if (
+              (e.key === "Enter" || e.key === "Escape" || e.key === "Backspace") &&
+              performance.now() - compositionEndAtRef.current < 60
+            ) {
+              e.preventDefault();
+              return;
+            }
             if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
               e.preventDefault();
               openSearchBar();
