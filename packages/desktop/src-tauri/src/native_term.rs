@@ -100,6 +100,8 @@ pub struct NativeTermFrame {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clipboard_write: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub wrapped_rows: Vec<bool>,
 }
 
 fn is_false(v: &bool) -> bool {
@@ -164,9 +166,19 @@ impl TermInstance {
         let display_offset = grid.display_offset();
         let mut spans_by_row = Vec::with_capacity(rows);
         let mut bgs = Vec::new();
+        let mut wrapped_rows = Vec::with_capacity(rows);
+        let mut any_wrapped = false;
 
         for vis_row in 0..rows {
             let line = Line(vis_row as i32 - display_offset as i32);
+            let row_wrapped = cols > 0
+                && grid[line][Column(cols - 1)]
+                    .flags
+                    .contains(CellFlags::WRAPLINE);
+            if row_wrapped {
+                any_wrapped = true;
+            }
+            wrapped_rows.push(row_wrapped);
             let mut row_spans: Vec<NativeSpan> = Vec::new();
             let mut cur_span: Option<NativeSpan> = None;
             let mut cur_bg: Option<(usize, usize, String)> = None;
@@ -218,7 +230,7 @@ impl TermInstance {
                 }
 
                 let ch = cell.c;
-                if ch == ' ' || ch == '\0' {
+                if ch == ' ' || ch == '\0' || cell.flags.contains(CellFlags::HIDDEN) {
                     if let Some(sp) = cur_span.take() {
                         row_spans.push(sp);
                     }
@@ -323,6 +335,7 @@ impl TermInstance {
             app_cursor: mode.contains(TermMode::APP_CURSOR),
             title,
             clipboard_write,
+            wrapped_rows: if any_wrapped { wrapped_rows } else { Vec::new() },
         }
     }
 
@@ -330,14 +343,19 @@ impl TermInstance {
         let cols = self.cols as usize;
         let rows = self.rows as usize;
         let grid = self.term.grid();
-        let display_offset = grid.display_offset();
-        let mut out = Vec::with_capacity(rows);
-        for vis_row in 0..rows {
-            let line = Line(vis_row as i32 - display_offset as i32);
+        let history_size = grid.history_size();
+        let total = history_size + rows;
+        let mut out = Vec::with_capacity(total);
+        for idx in 0..total {
+            let line = Line(idx as i32 - history_size as i32);
             let mut s = String::with_capacity(cols);
             for col in 0..cols {
                 let cell = &grid[line][Column(col)];
                 if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if cell.flags.contains(CellFlags::HIDDEN) {
+                    s.push(' ');
                     continue;
                 }
                 s.push(if cell.c == '\0' { ' ' } else { cell.c });
