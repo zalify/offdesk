@@ -449,7 +449,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const compositionTextRef = useRef("");
     const compositionEndAtRef = useRef(0);
     const pendingInputRef = useRef("");
-    const mouseForwardBtnRef = useRef<number | null>(null);
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
@@ -1686,6 +1685,20 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }
         const isTokenChar = (ch: string) => ch !== "" && !/\s|['"()[\]{}<>,;`]/.test(ch);
+        const rowCells = (r: number): string[] => {
+          const out = new Array<string>(frame.cols).fill(" ");
+          for (const sp of frame.spans[r] ?? []) {
+            let c = sp.c;
+            for (const ch of sp.t) {
+              const cp = ch.codePointAt(0) ?? 0;
+              const w = isWideChar(cp) ? 2 : 1;
+              if (c < frame.cols) out[c] = ch;
+              if (w === 2 && c + 1 < frame.cols) out[c + 1] = "";
+              c += w;
+            }
+          }
+          return out;
+        };
         let c0 = Math.min(col, frame.cols - 1);
         if (c0 < 0) return null;
         if (cells[c0] === "" && c0 > 0) c0 -= 1;
@@ -1698,7 +1711,53 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         while (end < frame.cols && (cells[end] === "" || isTokenChar(cells[end]))) {
           end += 1;
         }
-        const token = cells.slice(start, end).join("").replace(/[.:]+$/, "");
+        let fullToken = cells.slice(start, end).join("");
+
+        // Join soft-wrapped continuation lines above (when token begins at col 0 or indented wrap)
+        // and below (when token reaches the right edge of the row).
+        let upRow = row;
+        let curStart = start;
+        for (let step = 0; step < 3 && upRow > 0; step++) {
+          const prevWrapped = Boolean(frame.wrapped_rows?.[upRow - 1]);
+          // Some TUIs (Claude Code) hard-indent wrapped lines by 2 spaces after a path wraps at col >= cols - 4.
+          const prevCells = rowCells(upRow - 1);
+          let prevLast = frame.cols - 1;
+          while (prevLast > 0 && prevCells[prevLast] === " ") prevLast -= 1;
+          const prevHitRight = prevWrapped || (prevLast >= frame.cols - 6 && isTokenChar(prevCells[prevLast]));
+          if (!prevHitRight) break;
+          if (curStart > 2) break;
+          if (curStart > 0 && cells.slice(0, curStart).some((ch) => ch !== " ")) break;
+          if (!isTokenChar(prevCells[prevLast])) break;
+          let pStart = prevLast;
+          while (pStart > 0 && (prevCells[pStart - 1] === "" || isTokenChar(prevCells[pStart - 1]))) {
+            pStart -= 1;
+          }
+          fullToken = prevCells.slice(pStart, prevLast + 1).join("") + fullToken;
+          upRow -= 1;
+          curStart = pStart;
+        }
+
+        let downRow = row;
+        let curEnd = end;
+        for (let step = 0; step < 3 && downRow + 1 < frame.spans.length; step++) {
+          const curWrapped = Boolean(frame.wrapped_rows?.[downRow]);
+          if (!curWrapped && curEnd < frame.cols - 5) break;
+          const nextCells = rowCells(downRow + 1);
+          let nStart = 0;
+          if (!curWrapped) {
+            while (nStart < 2 && nextCells[nStart] === " ") nStart += 1;
+          }
+          if (nStart >= frame.cols || !isTokenChar(nextCells[nStart])) break;
+          let nEnd = nStart + 1;
+          while (nEnd < frame.cols && (nextCells[nEnd] === "" || isTokenChar(nextCells[nEnd]))) {
+            nEnd += 1;
+          }
+          fullToken += nextCells.slice(nStart, nEnd).join("");
+          downRow += 1;
+          curEnd = nEnd;
+        }
+
+        const token = fullToken.replace(/[.:]+$/, "");
         if (!token) return null;
         return { token, startCol: start, endCol: end };
       },
@@ -1894,24 +1953,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             e.preventDefault();
           }
           inputRef.current?.focus({ preventScroll: true });
-          const cell = pointerToCell(e.clientX, e.clientY);
-          // When a TUI (vim, htop, Claude Code, lazygit) owns mouse reporting,
-          // forward normal clicks to it; hold Shift or Option to force local selection.
-          if (
-            frameRef.current?.wants_mouse &&
-            !e.shiftKey &&
-            !e.altKey &&
-            !e.metaKey &&
-            !e.ctrlKey &&
-            e.detail === 1 &&
-            (e.button === 0 || e.button === 1 || e.button === 2)
-          ) {
-            const btn = e.button === 0 ? 0 : e.button === 1 ? 1 : 2;
-            mouseForwardBtnRef.current = btn;
-            sendRawInput(`\x1b[<${btn};${cell.col + 1};${cell.row + 1}M`);
-            return;
-          }
           if (e.button !== 0) return;
+          const cell = pointerToCell(e.clientX, e.clientY);
           if (e.detail === 2) {
             const tok = tokenAtCell(cell.col, cell.row);
             if (tok) {
@@ -1956,54 +1999,42 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             paintFrame(frameRef.current);
             return;
           }
-          if (e.metaKey || e.ctrlKey) {
-            const cell = pointerToCell(e.clientX, e.clientY);
-            const rowSpans = frameRef.current?.spans[cell.row] ?? [];
-            let nextLink: { row: number; startCol: number; endCol: number } | null = null;
-            for (const sp of rowSpans) {
-              if (!sp.h) continue;
-              let spanEnd = sp.c;
-              for (const ch of sp.t) spanEnd += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
-              if (cell.col >= sp.c && cell.col < spanEnd) {
-                nextLink = { row: cell.row, startCol: sp.c, endCol: spanEnd };
-                break;
-              }
+          const cell = pointerToCell(e.clientX, e.clientY);
+          const rowSpans = frameRef.current?.spans[cell.row] ?? [];
+          let nextLink: { row: number; startCol: number; endCol: number } | null = null;
+          for (const sp of rowSpans) {
+            if (!sp.h) continue;
+            let spanEnd = sp.c;
+            for (const ch of sp.t) spanEnd += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
+            if (cell.col >= sp.c && cell.col < spanEnd) {
+              nextLink = { row: cell.row, startCol: sp.c, endCol: spanEnd };
+              break;
             }
-            if (!nextLink) {
-              const tok = tokenAtCell(cell.col, cell.row);
-              if (
-                tok &&
-                (/^https?:\/\//i.test(tok.token) ||
-                  tok.token.includes("/") ||
-                  /\.[a-z0-9]{1,8}$/i.test(tok.token.replace(/:\d+(?::\d+)?$/, "")))
-              ) {
-                nextLink = { row: cell.row, startCol: tok.startCol, endCol: tok.endCol };
-              }
+          }
+          if (!nextLink) {
+            const tok = tokenAtCell(cell.col, cell.row);
+            const looksLikeLink =
+              tok &&
+              (/^https?:\/\//i.test(tok.token) ||
+                /^file:\/\//i.test(tok.token) ||
+                /^(?:\/|~\/|\.\/|\.\.\/)/.test(tok.token) ||
+                (tok.token.includes("/") && /\.[a-z0-9]{1,8}$/i.test(tok.token.replace(/:\d+(?::\d+)?$/, ""))));
+            if (looksLikeLink && tok) {
+              nextLink = { row: cell.row, startCol: tok.startCol, endCol: tok.endCol };
             }
-            const prev = hoverLinkRef.current;
-            const changed =
-              prev?.row !== nextLink?.row ||
-              prev?.startCol !== nextLink?.startCol ||
-              prev?.endCol !== nextLink?.endCol;
-            if (changed) {
-              hoverLinkRef.current = nextLink;
-              setHoverPointer(Boolean(nextLink));
-              paintFrame(frameRef.current);
-            }
-          } else if (hoverLinkRef.current) {
-            hoverLinkRef.current = null;
-            setHoverPointer(false);
+          }
+          const prev = hoverLinkRef.current;
+          const changed =
+            prev?.row !== nextLink?.row ||
+            prev?.startCol !== nextLink?.startCol ||
+            prev?.endCol !== nextLink?.endCol;
+          if (changed) {
+            hoverLinkRef.current = nextLink;
+            setHoverPointer(Boolean(nextLink));
             paintFrame(frameRef.current);
           }
         }}
         onMouseUp={(e) => {
-          if (mouseForwardBtnRef.current !== null) {
-            const btn = mouseForwardBtnRef.current;
-            mouseForwardBtnRef.current = null;
-            const cell = pointerToCell(e.clientX, e.clientY);
-            sendRawInput(`\x1b[<${btn};${cell.col + 1};${cell.row + 1}m`);
-            return;
-          }
           if (!draggingRef.current) return;
           draggingRef.current = false;
           const text = getSelectionText();
@@ -2011,40 +2042,46 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             void copyToClipboard(text);
             return;
           }
-          if (e.metaKey || e.ctrlKey) {
-            const cell = pointerToCell(e.clientX, e.clientY);
-            const rowSpans = frameRef.current?.spans[cell.row] ?? [];
-            for (const sp of rowSpans) {
-              if (!sp.h) continue;
-              let spanEnd = sp.c;
-              for (const ch of sp.t) spanEnd += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
-              if (cell.col >= sp.c && cell.col < spanEnd) {
-                if (/^https?:\/\//i.test(sp.h)) {
-                  openExternalUrl(sp.h);
-                } else if (onOpenDirectory && machineId) {
-                  const cleaned = sp.h.replace(/^file:\/\/[^/]*/i, "").replace(/:\d+(?::\d+)?$/, "");
-                  const resolved = resolveRemotePath(cleaned, cwd) ?? cleaned;
-                  onOpenDirectory(machineId, resolved);
-                }
-                return;
-              }
-            }
-            const tok = tokenAtCell(cell.col, cell.row);
-            if (tok) {
-              if (/^https?:\/\//i.test(tok.token)) {
-                openExternalUrl(tok.token);
-                return;
-              }
-              const cleaned = tok.token.replace(/^file:\/\//i, "").replace(/:\d+(?::\d+)?$/, "");
-              if (
-                onOpenDirectory &&
-                machineId &&
-                (cleaned.includes("/") || /\.[a-z0-9]{1,8}$/i.test(cleaned))
-              ) {
+          const cell = pointerToCell(e.clientX, e.clientY);
+          // 1. Direct click on OSC 8 hyperlink, URL, or remote file path opens preview / browser.
+          const rowSpans = frameRef.current?.spans[cell.row] ?? [];
+          for (const sp of rowSpans) {
+            if (!sp.h) continue;
+            let spanEnd = sp.c;
+            for (const ch of sp.t) spanEnd += isWideChar(ch.codePointAt(0) ?? 0) ? 2 : 1;
+            if (cell.col >= sp.c && cell.col < spanEnd) {
+              if (/^https?:\/\//i.test(sp.h)) {
+                openExternalUrl(sp.h);
+              } else if (onOpenDirectory && machineId) {
+                const cleaned = sp.h.replace(/^file:\/\/[^/]*/i, "").replace(/:\d+(?::\d+)?$/, "");
                 const resolved = resolveRemotePath(cleaned, cwd) ?? cleaned;
                 onOpenDirectory(machineId, resolved);
               }
+              return;
             }
+          }
+          const tok = tokenAtCell(cell.col, cell.row);
+          if (tok) {
+            if (/^https?:\/\//i.test(tok.token)) {
+              openExternalUrl(tok.token);
+              return;
+            }
+            const cleaned = tok.token.replace(/^file:\/\//i, "").replace(/:\d+(?::\d+)?$/, "");
+            const isExplicitPath =
+              /^(?:\/|~\/|\.\/|\.\.\/)/.test(cleaned) ||
+              (cleaned.includes("/") && /\.[a-z0-9]{1,8}$/i.test(cleaned)) ||
+              ((e.metaKey || e.ctrlKey) && (cleaned.includes("/") || /\.[a-z0-9]{1,8}$/i.test(cleaned)));
+            if (onOpenDirectory && machineId && isExplicitPath) {
+              const resolved = resolveRemotePath(cleaned, cwd) ?? cleaned;
+              onOpenDirectory(machineId, resolved);
+              return;
+            }
+          }
+          // 2. Non-drag plain click in a mouse-aware TUI (e.g. Claude Code "Jump to bottom")
+          if (frameRef.current?.wants_mouse && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey) {
+            sendRawInput(
+              `\x1b[<0;${cell.col + 1};${cell.row + 1}M\x1b[<0;${cell.col + 1};${cell.row + 1}m`,
+            );
           }
         }}
         onWheel={(e) => {
