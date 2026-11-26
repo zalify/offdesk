@@ -26,6 +26,8 @@ pub struct DraftRow {
     /// The subset of `tags` that only comes from the body.
     #[serde(default)]
     pub inline_tags: Vec<String>,
+    #[serde(default)]
+    pub space_id: Option<String>,
 }
 
 fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
@@ -40,6 +42,7 @@ fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         let stored: String = row.get(11)?;
         draft_tags::merge(&draft_tags::parse_stored(&stored), &content)
     };
+    let space_id: Option<String> = row.get(12)?;
     let pinned = pinned_i != 0;
     let explicitly_archived = archived_i != 0;
     // Draft-database rows never auto-archive.
@@ -59,6 +62,7 @@ fn map_draft_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DraftRow> {
         updated_at,
         tags,
         inline_tags,
+        space_id,
     })
 }
 
@@ -68,31 +72,32 @@ pub fn list_drafts(
     project_group: Option<&str>,
     include_archived: bool,
 ) -> rusqlite::Result<Vec<DraftRow>> {
+    list_drafts_in_space(conn, user_id, project_group, None, include_archived)
+}
+
+pub fn list_drafts_in_space(
+    conn: &Connection,
+    user_id: &str,
+    project_group: Option<&str>,
+    space_id: Option<&str>,
+    include_archived: bool,
+) -> rusqlite::Result<Vec<DraftRow>> {
+    let proj = project_group.map(str::trim).filter(|p| !p.is_empty());
+    let space = space_id.map(str::trim).filter(|s| !s.is_empty());
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, title, content, project_group, source_terminal_id,
+                pinned, archived, created_at, updated_at, database_id, tags, space_id
+         FROM drafts
+         WHERE user_id = ?1
+           AND database_id IS NULL
+           AND (?2 IS NULL OR project_group = ?2)
+           AND (?3 IS NULL OR space_id = ?3)
+         ORDER BY pinned DESC, updated_at DESC",
+    )?;
+    let iter = stmt.query_map(params![user_id, proj, space], map_draft_row)?;
     let mut rows = Vec::new();
-    if let Some(proj) = project_group.filter(|p| !p.trim().is_empty()) {
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                    pinned, archived, created_at, updated_at, database_id, tags
-             FROM drafts
-             WHERE user_id = ?1 AND project_group = ?2 AND database_id IS NULL
-             ORDER BY pinned DESC, updated_at DESC",
-        )?;
-        let iter = stmt.query_map(params![user_id, proj.trim()], map_draft_row)?;
-        for r in iter {
-            rows.push(r?);
-        }
-    } else {
-        let mut stmt = conn.prepare(
-            "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                    pinned, archived, created_at, updated_at, database_id, tags
-             FROM drafts
-             WHERE user_id = ?1 AND database_id IS NULL
-             ORDER BY pinned DESC, updated_at DESC",
-        )?;
-        let iter = stmt.query_map(params![user_id], map_draft_row)?;
-        for r in iter {
-            rows.push(r?);
-        }
+    for r in iter {
+        rows.push(r?);
     }
     if !include_archived {
         rows.retain(|d| !d.archived);
@@ -107,7 +112,7 @@ pub fn get_draft(
 ) -> rusqlite::Result<Option<DraftRow>> {
     conn.query_row(
         "SELECT id, user_id, title, content, project_group, source_terminal_id,
-                pinned, archived, created_at, updated_at, database_id, tags
+                pinned, archived, created_at, updated_at, database_id, tags, space_id
          FROM drafts
          WHERE id = ?1 AND user_id = ?2",
         params![draft_id, user_id],
@@ -154,6 +159,37 @@ pub fn upsert_draft_with_tags(
     force_new: bool,
     tags: Option<&[String]>,
 ) -> rusqlite::Result<DraftRow> {
+    upsert_draft_with_tags_and_space(
+        conn,
+        user_id,
+        title,
+        content,
+        project_group,
+        source_terminal_id,
+        pinned,
+        force_new,
+        tags,
+        None,
+    )
+}
+
+/// Upsert a draft with optional explicit `space_id`. When `space_id` is `None`
+/// and `source_terminal_id` is provided, automatically resolves the terminal's
+/// `workspace_group_id -> space_id` so CLI `offdesk draft write` auto-files into
+/// the right Space.
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_draft_with_tags_and_space(
+    conn: &Connection,
+    user_id: &str,
+    title: &str,
+    content: &str,
+    project_group: &str,
+    source_terminal_id: Option<&str>,
+    pinned: bool,
+    force_new: bool,
+    tags: Option<&[String]>,
+    space_id: Option<&str>,
+) -> rusqlite::Result<DraftRow> {
     // IMMEDIATE: take the write lock up front so busy_timeout applies; the
     // version snapshot and the overwrite must be one atomic step.
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
@@ -164,6 +200,13 @@ pub fn upsert_draft_with_tags(
         "~"
     } else {
         project_group.trim()
+    };
+    let resolved_space_id: Option<String> = match space_id.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(sid) => Some(sid.to_string()),
+        None => match source_terminal_id.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(tid) => super::spaces::resolve_space_id_for_terminal(conn, user_id, tid)?,
+            None => None,
+        },
     };
 
     if !force_new {
@@ -189,7 +232,8 @@ pub fn upsert_draft_with_tags(
                      pinned = CASE WHEN ?3 != 0 THEN 1 ELSE pinned END,
                      archived = 0,
                      updated_at = ?4,
-                     tags = COALESCE(?7, tags)
+                     tags = COALESCE(?7, tags),
+                     space_id = COALESCE(?8, space_id)
                  WHERE id = ?5 AND user_id = ?6",
                 params![
                     content,
@@ -198,7 +242,8 @@ pub fn upsert_draft_with_tags(
                     now,
                     id,
                     user_id,
-                    tags.map(draft_tags::to_stored)
+                    tags.map(draft_tags::to_stored),
+                    resolved_space_id,
                 ],
             )?;
             let out = get_draft(conn, user_id, &id)?
@@ -212,8 +257,8 @@ pub fn upsert_draft_with_tags(
     conn.execute(
         "INSERT INTO drafts (
             id, user_id, title, content, project_group, source_terminal_id,
-            pinned, archived, created_at, updated_at, tags
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10)",
+            pinned, archived, created_at, updated_at, tags, space_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9, ?10, ?11)",
         params![
             id,
             user_id,
@@ -224,7 +269,8 @@ pub fn upsert_draft_with_tags(
             i64::from(pinned),
             now,
             now,
-            draft_tags::to_stored(tags.unwrap_or(&[]))
+            draft_tags::to_stored(tags.unwrap_or(&[])),
+            resolved_space_id,
         ],
     )?;
     let out = get_draft(conn, user_id, &id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
@@ -232,6 +278,7 @@ pub fn upsert_draft_with_tags(
     Ok(out)
 }
 
+#[derive(Default)]
 pub struct DraftPatch<'a> {
     pub title: Option<&'a str>,
     pub content: Option<&'a str>,
@@ -241,6 +288,8 @@ pub struct DraftPatch<'a> {
     /// Already-normalised explicit tags. `None` leaves them unchanged; `Some`
     /// replaces the set. Ignored for draft-database rows.
     pub tags: Option<&'a [String]>,
+    /// `None` leaves space_id unchanged; `Some(None)` clears it to NULL; `Some(Some(id))` sets it.
+    pub space_id: Option<Option<&'a str>>,
 }
 
 pub fn update_draft(
@@ -268,6 +317,10 @@ pub fn update_draft(
         .unwrap_or(&existing.project_group);
     let next_pinned = patch.pinned.unwrap_or(existing.pinned);
     let next_archived = patch.archived.unwrap_or(existing.archived);
+    let next_space_id: Option<String> = match patch.space_id {
+        Some(v) => v.map(str::trim).filter(|s| !s.is_empty()).map(str::to_string),
+        None => existing.space_id.clone(),
+    };
     let now = now_ms();
     // Tags are not part of versions: a tag-only change records none (below).
     let is_db_row: bool = conn.query_row(
@@ -295,7 +348,8 @@ pub fn update_draft(
         "UPDATE drafts
          SET title = ?1, content = ?2, project_group = ?3,
              pinned = ?4, archived = ?5, updated_at = ?6,
-             tags = COALESCE(?9, tags)
+             tags = COALESCE(?9, tags),
+             space_id = ?10
          WHERE id = ?7 AND user_id = ?8",
         params![
             next_title,
@@ -306,7 +360,8 @@ pub fn update_draft(
             now,
             draft_id,
             user_id,
-            new_tags
+            new_tags,
+            next_space_id,
         ],
     )?;
     let out = get_draft(conn, user_id, draft_id)?;
@@ -377,12 +432,8 @@ mod tests {
             "u1",
             &d1.id,
             DraftPatch {
-                title: None,
-                content: None,
-                project_group: None,
-                pinned: None,
                 archived: Some(true),
-                tags: None,
+                ..Default::default()
             },
         )
         .unwrap()
@@ -401,12 +452,9 @@ mod tests {
 
     fn patch_of<'a>(content: Option<&'a str>, tags: Option<&'a [String]>) -> DraftPatch<'a> {
         DraftPatch {
-            title: None,
             content,
-            project_group: None,
-            pinned: None,
-            archived: None,
             tags,
+            ..Default::default()
         }
     }
 

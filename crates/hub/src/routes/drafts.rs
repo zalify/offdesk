@@ -12,9 +12,18 @@ use crate::db;
 use crate::db::drafts::{DraftPatch, DraftRow};
 use crate::AppState;
 
+fn deserialize_double_option<'de, T, D>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: serde::Deserializer<'de>,
+{
+    Deserialize::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 struct ListDraftsQuery {
     project: Option<String>,
+    space_id: Option<String>,
     #[serde(default)]
     include_archived: bool,
 }
@@ -33,6 +42,8 @@ struct UpsertDraftRequest {
     force_new: bool,
     #[serde(default)]
     tags: Option<Vec<String>>,
+    #[serde(default)]
+    space_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +55,8 @@ struct UpdateDraftRequest {
     archived: Option<bool>,
     #[serde(default)]
     tags: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    space_id: Option<Option<String>>,
 }
 
 type ApiErr = (StatusCode, Json<serde_json::Value>);
@@ -72,10 +85,11 @@ async fn list_drafts(
     Query(query): Query<ListDraftsQuery>,
 ) -> Result<Json<Vec<DraftRow>>, ApiErr> {
     let conn = state.db.get().map_err(db_err)?;
-    let rows = db::drafts::list_drafts(
+    let rows = db::drafts::list_drafts_in_space(
         &conn,
         &auth_user.user_id,
         query.project.as_deref(),
+        query.space_id.as_deref(),
         query.include_archived,
     )
     .map_err(db_err)?;
@@ -95,7 +109,7 @@ async fn create_or_upsert_draft(
     }
     let tags = parse_tags(req.tags.as_deref())?;
     let conn = state.db.get().map_err(db_err)?;
-    let row = db::drafts::upsert_draft_with_tags(
+    let row = db::drafts::upsert_draft_with_tags_and_space(
         &conn,
         &auth_user.user_id,
         &req.title,
@@ -105,6 +119,7 @@ async fn create_or_upsert_draft(
         req.pinned,
         req.force_new,
         tags.as_deref(),
+        req.space_id.as_deref(),
     )
     .map_err(db_err)?;
     Ok(Json(row))
@@ -146,6 +161,7 @@ async fn update_draft(
             pinned: req.pinned,
             archived: req.archived,
             tags: tags.as_deref(),
+            space_id: req.space_id.as_ref().map(|v| v.as_deref()),
         },
     )
     .map_err(db_err)?

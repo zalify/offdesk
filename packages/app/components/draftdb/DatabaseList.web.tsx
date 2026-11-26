@@ -15,6 +15,7 @@ export function DatabaseList({
   loading,
   error,
   defaultProject,
+  defaultSpaceId,
   compact,
   onOpen,
   onCreated,
@@ -23,6 +24,7 @@ export function DatabaseList({
   loading: boolean;
   error: string | null;
   defaultProject: string;
+  defaultSpaceId?: string | null;
   compact: boolean;
   onOpen: (id: string) => void;
   onCreated: (db: DraftDatabase) => void;
@@ -38,7 +40,11 @@ export function DatabaseList({
     if (!n || busy) return;
     setBusy(true);
     try {
-      const db = await createDraftDatabase({ name: n, project_group: project.trim() || "~" });
+      const db = await createDraftDatabase({
+        name: n,
+        project_group: project.trim() || "~",
+        ...(defaultSpaceId ? { space_id: defaultSpaceId } : {}),
+      });
       setCreating(false);
       setName("");
       setFormError(null);

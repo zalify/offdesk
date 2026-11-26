@@ -769,7 +769,7 @@ mod tests {
     }
 
     fn patch<'a>(title: Option<&'a str>, content: Option<&'a str>) -> DraftPatch<'a> {
-        DraftPatch { title, content, project_group: None, pinned: None, archived: None, tags: None }
+        DraftPatch { title, content, ..Default::default() }
     }
 
     fn versions(conn: &Connection, id: &str) -> Vec<VersionSummary> {
@@ -798,7 +798,7 @@ mod tests {
             &conn,
             "u1",
             &d.id,
-            DraftPatch { title: None, content: None, project_group: None, pinned: Some(true), archived: None, tags: None },
+            DraftPatch { pinned: Some(true), ..Default::default() },
         )
         .unwrap();
         assert_eq!(versions(&conn, &d.id).len(), 1);
@@ -994,7 +994,7 @@ mod tests {
             conn,
             "u1",
             &db.id,
-            DatabasePatch { name: None, columns: None, views: Some(views) },
+            DatabasePatch { views: Some(views), ..Default::default() },
         )
         .unwrap();
         (db, res.rows.into_iter().map(|r| r.id).collect())
@@ -1053,8 +1053,6 @@ mod tests {
             "u1",
             &db.id,
             DatabasePatch {
-                name: None,
-                columns: None,
                 views: Some(vec![View {
                     id: "other".into(),
                     name: "Other".into(),
@@ -1064,6 +1062,7 @@ mod tests {
                     group_by: None,
                     hidden_columns: None,
                 }]),
+                ..Default::default()
             },
         )
         .unwrap();

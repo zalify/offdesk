@@ -53,6 +53,18 @@ pub struct BookmarkRow {
     pub created_at: i64,
 }
 
+pub struct SpaceRow {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub default_cwd: Option<String>,
+    pub sort_order: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 pub struct WorkspaceGroupRow {
     pub id: String,
     pub user_id: String,
@@ -60,6 +72,7 @@ pub struct WorkspaceGroupRow {
     pub name: String,
     pub sort_order: i64,
     pub created_at: i64,
+    pub space_id: Option<String>,
 }
 
 pub struct WorkspaceLayoutRow {

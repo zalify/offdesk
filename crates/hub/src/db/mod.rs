@@ -19,6 +19,7 @@ pub mod machines;
 pub mod messages;
 pub mod onboarding;
 pub mod settings;
+pub mod spaces;
 pub mod terminal_sessions;
 pub mod tokens;
 pub mod types;
@@ -599,6 +600,44 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             [],
         )?;
     }
+
+    // Spaces: top-level organizational containers for workspace groups, drafts, and draft databases.
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS spaces (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            icon TEXT,
+            color TEXT,
+            default_cwd TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_spaces_user_sort
+            ON spaces(user_id, sort_order, name);
+        ",
+    )?;
+    if !column_exists(conn, "workspace_groups", "space_id")? {
+        conn.execute("ALTER TABLE workspace_groups ADD COLUMN space_id TEXT", [])?;
+    }
+    if !column_exists(conn, "drafts", "space_id")? {
+        conn.execute("ALTER TABLE drafts ADD COLUMN space_id TEXT", [])?;
+    }
+    if !column_exists(conn, "draft_databases", "space_id")? {
+        conn.execute("ALTER TABLE draft_databases ADD COLUMN space_id TEXT", [])?;
+    }
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_workspace_groups_space
+            ON workspace_groups(user_id, space_id);
+        CREATE INDEX IF NOT EXISTS idx_drafts_space
+            ON drafts(user_id, space_id);
+        CREATE INDEX IF NOT EXISTS idx_draft_databases_space
+            ON draft_databases(user_id, space_id);
+        ",
+    )?;
 
     migrate_scrollable_workspace_layouts(conn)?;
     migrate_ungrouped_terminals_into_tabs(conn)?;

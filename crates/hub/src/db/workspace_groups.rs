@@ -8,7 +8,7 @@ pub fn find_workspace_groups_by_user(
     user_id: &str,
 ) -> rusqlite::Result<Vec<WorkspaceGroupRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, machine_id, name, sort_order, created_at
+        "SELECT id, user_id, machine_id, name, sort_order, created_at, space_id
          FROM workspace_groups WHERE user_id = ?1
          ORDER BY machine_id ASC, sort_order ASC, name ASC",
     )?;
@@ -22,11 +22,25 @@ pub fn find_workspace_groups_by_machine(
     machine_id: &str,
 ) -> rusqlite::Result<Vec<WorkspaceGroupRow>> {
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, machine_id, name, sort_order, created_at
+        "SELECT id, user_id, machine_id, name, sort_order, created_at, space_id
          FROM workspace_groups WHERE user_id = ?1 AND machine_id = ?2
          ORDER BY sort_order ASC, name ASC",
     )?;
     let rows = stmt.query_map(params![user_id, machine_id], workspace_group_from_row)?;
+    rows.collect()
+}
+
+pub fn find_workspace_groups_by_space(
+    conn: &Connection,
+    user_id: &str,
+    space_id: &str,
+) -> rusqlite::Result<Vec<WorkspaceGroupRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, machine_id, name, sort_order, created_at, space_id
+         FROM workspace_groups WHERE user_id = ?1 AND space_id = ?2
+         ORDER BY machine_id ASC, sort_order ASC, name ASC",
+    )?;
+    let rows = stmt.query_map(params![user_id, space_id], workspace_group_from_row)?;
     rows.collect()
 }
 
@@ -53,7 +67,19 @@ pub fn create_workspace_group(
     name: &str,
     sort_order: i64,
 ) -> rusqlite::Result<WorkspaceGroupRow> {
-    insert_workspace_group(conn, id, user_id, machine_id, name, sort_order, false)
+    insert_workspace_group(conn, id, user_id, machine_id, name, sort_order, false, None)
+}
+
+pub fn create_workspace_group_in_space(
+    conn: &Connection,
+    id: &str,
+    user_id: &str,
+    machine_id: &str,
+    name: &str,
+    sort_order: i64,
+    space_id: Option<&str>,
+) -> rusqlite::Result<WorkspaceGroupRow> {
+    insert_workspace_group(conn, id, user_id, machine_id, name, sort_order, false, space_id)
 }
 
 /// A tab the hub opened for a terminal created without one. It lives as long
@@ -68,9 +94,10 @@ pub fn create_auto_workspace_group(
     name: &str,
     sort_order: i64,
 ) -> rusqlite::Result<WorkspaceGroupRow> {
-    insert_workspace_group(conn, id, user_id, machine_id, name, sort_order, true)
+    insert_workspace_group(conn, id, user_id, machine_id, name, sort_order, true, None)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn insert_workspace_group(
     conn: &Connection,
     id: &str,
@@ -79,12 +106,14 @@ fn insert_workspace_group(
     name: &str,
     sort_order: i64,
     auto_created: bool,
+    space_id: Option<&str>,
 ) -> rusqlite::Result<WorkspaceGroupRow> {
     let created_at = now_ms();
+    let space_id = space_id.map(str::trim).filter(|s| !s.is_empty());
     conn.execute(
         "INSERT INTO workspace_groups
-             (id, user_id, machine_id, name, sort_order, created_at, auto_created)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             (id, user_id, machine_id, name, sort_order, created_at, auto_created, space_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             id,
             user_id,
@@ -92,7 +121,8 @@ fn insert_workspace_group(
             name,
             sort_order,
             created_at,
-            auto_created as i64
+            auto_created as i64,
+            space_id
         ],
     )?;
     Ok(WorkspaceGroupRow {
@@ -102,6 +132,7 @@ fn insert_workspace_group(
         name: name.to_string(),
         sort_order,
         created_at,
+        space_id: space_id.map(str::to_string),
     })
 }
 
@@ -132,6 +163,21 @@ pub fn update_workspace_group_name(
         "UPDATE workspace_groups SET name = ?1, auto_created = 0
          WHERE id = ?2 AND user_id = ?3 AND machine_id = ?4",
         params![name, group_id, user_id, machine_id],
+    )
+}
+
+pub fn update_workspace_group_space(
+    conn: &Connection,
+    user_id: &str,
+    machine_id: &str,
+    group_id: &str,
+    space_id: Option<&str>,
+) -> rusqlite::Result<usize> {
+    let space_id = space_id.map(str::trim).filter(|s| !s.is_empty());
+    conn.execute(
+        "UPDATE workspace_groups SET space_id = ?1
+         WHERE id = ?2 AND user_id = ?3 AND machine_id = ?4",
+        params![space_id, group_id, user_id, machine_id],
     )
 }
 
@@ -170,6 +216,7 @@ fn workspace_group_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Workspa
         name: row.get(3)?,
         sort_order: row.get(4)?,
         created_at: row.get(5)?,
+        space_id: row.get(6)?,
     })
 }
 

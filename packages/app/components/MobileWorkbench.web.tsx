@@ -24,10 +24,12 @@ import {
   useSyncExternalStore,
   useState,
 } from "react";
-import type { AgentRunInfo,
+import type {
+  AgentRunInfo,
   AgentBrowserInfo,
   MachineInfo,
   ResourceStats,
+  SpaceInfo,
   TerminalInfo,
 } from "@offdesk/shared";
 import {
@@ -99,6 +101,11 @@ interface MobileWorkbenchProps {
   // Session order: persistent groups by sort_order, then cwd fallback groups
   // (same grouping the desktop TabBar renders).
   groups: WorkspaceGroup[];
+  spaces?: SpaceInfo[];
+  activeSpaceId?: string | null;
+  onSelectSpace?: (spaceId: string | null) => void;
+  onOpenSpaceModal?: (space?: SpaceInfo | null) => void;
+  onMoveGroupToSpace?: (group: WorkspaceGroup, spaceId: string | null) => void;
   activeTerminalId: string | null;
   // The active machine's agent browsers. They are machine-wide, not sessions:
   // the title bar's Globe button opens a full-screen surface for them.
@@ -127,7 +134,7 @@ interface MobileWorkbenchProps {
   onPickTerminal: (id: string) => void;
   onSelectGroup: (groupId: string) => void;
   // null group = machine home directory (empty state / no active group).
-  onNewTerminal: (group: WorkspaceGroup | null) => void;
+  onNewTerminal: (group: WorkspaceGroup | null, options?: { cwd?: string }) => void;
   onCloseTerminal: (terminal: TerminalInfo) => void;
   onRenameTerminal?: (terminal: TerminalInfo, title: string) => void;
   onNewGroup: () => void;
@@ -153,6 +160,10 @@ interface MobileWorkbenchProps {
 
 const TITLE_BAR_FILES_MIN_WIDTH = 360;
 
+function getGroupSpaceId(group: WorkspaceGroup): string | null {
+  return group.spaceId ?? null;
+}
+
 function useMinViewportWidth(minWidth: number): boolean {
   const query = `(min-width: ${minWidth}px)`;
   return useSyncExternalStore(
@@ -176,6 +187,11 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     rttMs,
     terminals,
     groups,
+    spaces = [],
+    activeSpaceId = null,
+    onSelectSpace,
+    onOpenSpaceModal,
+    onMoveGroupToSpace,
     activeTerminalId,
     browsers,
     agentRuns,
@@ -275,6 +291,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   const [renameDraft, setRenameDraft] = useState("");
   // A tab's actions, from its header in the session switcher.
   const [groupSheet, setGroupSheet] = useState<WorkspaceGroup | null>(null);
+  const [moveGroupSpaceTarget, setMoveGroupSpaceTarget] = useState<WorkspaceGroup | null>(null);
   const sessionSwitcherScrollRef = useRef<HTMLDivElement | null>(null);
 
   // Center the active terminal's row when the switcher opens: with a dozen
@@ -340,14 +357,55 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     [scopedTerminals],
   );
 
-  const sessionGroups = useMemo(
+  const sortedSpaces = useMemo(
+    () => [...spaces].sort((a, b) => a.sort_order - b.sort_order || a.created_at - b.created_at),
+    [spaces],
+  );
+  const activeSpace = useMemo(
+    () => (activeSpaceId ? sortedSpaces.find((space) => space.id === activeSpaceId) ?? null : null),
+    [sortedSpaces, activeSpaceId],
+  );
+
+  const allSessionGroups = useMemo(
     () => buildMobileSessionGroups(groups, terminals),
     [groups, terminals],
+  );
+  const allChips = useMemo(
+    () => allSessionGroups.flatMap((sessionGroup) => sessionGroup.panes),
+    [allSessionGroups],
+  );
+
+  const spaceGroups = useMemo(
+    () => (activeSpaceId ? groups.filter((group) => getGroupSpaceId(group) === activeSpaceId) : groups),
+    [groups, activeSpaceId],
+  );
+  const sessionGroups = useMemo(
+    () =>
+      activeSpaceId
+        ? allSessionGroups.filter(({ group }) => getGroupSpaceId(group) === activeSpaceId)
+        : allSessionGroups,
+    [allSessionGroups, activeSpaceId],
   );
   const chips = useMemo(
     () => sessionGroups.flatMap((sessionGroup) => sessionGroup.panes),
     [sessionGroups],
   );
+
+  const spaceWaitingCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const { group, panes } of allSessionGroups) {
+      const sid = getGroupSpaceId(group);
+      if (!sid) continue;
+      let waiting = 0;
+      for (const { terminal } of panes) {
+        if (sessionState(terminal, now) === "waiting") waiting += 1;
+      }
+      if (waiting > 0) {
+        counts.set(sid, (counts.get(sid) ?? 0) + waiting);
+      }
+    }
+    return counts;
+  }, [allSessionGroups, now]);
 
   // The sheet's order: under each tab, or flat with the latest output first.
   // The same choice as the desktop sidebar's, kept per device.
@@ -403,12 +461,183 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     [sessionFilter, matchesMobileFilter, sessionGroups],
   );
 
+  // Resolve the active chip from allChips so switching Spaces in the sidebar/sheet
+  // does not blank out the currently displayed terminal's title bar.
   const activeChip =
-    chips.find((chip) => chip.terminal.id === activeTerminalId) ?? null;
+    allChips.find((chip) => chip.terminal.id === activeTerminalId) ?? null;
   const activeGroup = activeChip?.group ?? null;
   const activePosition = activeChip
+    ? allChips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
+    : 0;
+  const scopedActivePosition = activeChip
     ? chips.findIndex((chip) => chip.terminal.id === activeChip.terminal.id) + 1
     : 0;
+
+  const handleNewTerminalInActiveSpace = useCallback(() => {
+    const targetGroup = activeSpaceId
+      ? activeGroup && getGroupSpaceId(activeGroup) === activeSpaceId
+        ? activeGroup
+        : (spaceGroups[0] ?? null)
+      : activeGroup;
+    const options = activeSpace?.default_cwd
+      ? { cwd: activeSpace.default_cwd }
+      : undefined;
+    onNewTerminal(targetGroup, options);
+  }, [activeSpaceId, activeSpace, activeGroup, spaceGroups, onNewTerminal]);
+
+  const showSpaceStrip = Boolean(onSelectSpace || onOpenSpaceModal || sortedSpaces.length > 0);
+
+  const renderSpaceSwitcher = (testIdPrefix: string, compact: boolean) => {
+    if (!showSpaceStrip) return null;
+    const pillHeight = compact ? 24 : 30;
+    const pillFontSize = compact ? rem(11) : rem(12);
+    return (
+      <div
+        data-testid={`${testIdPrefix}-space-strip`}
+        role="tablist"
+        aria-label="Filter by space"
+        style={{
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: compact ? 4 : 6,
+          overflowX: "auto",
+          scrollbarWidth: "none",
+          padding: compact ? "6px 8px 4px" : "2px 0 8px",
+          borderBottom: compact ? `1px solid ${colors.lineSoft}` : undefined,
+        }}
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeSpaceId === null}
+          data-testid={`${testIdPrefix}-space-all`}
+          onClick={() => onSelectSpace?.(null)}
+          style={{
+            flexShrink: 0,
+            height: pillHeight,
+            padding: compact ? "0 8px" : "0 10px",
+            borderRadius: 999,
+            border: `1px solid ${activeSpaceId === null ? colors.accent : colors.lineSoft}`,
+            background: activeSpaceId === null ? colorAlpha.accentSoft : colors.bg2,
+            color: activeSpaceId === null ? colors.fg0 : colors.fg2,
+            fontFamily: fontDisplay,
+            fontSize: pillFontSize,
+            fontWeight: activeSpaceId === null ? 600 : 500,
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 5,
+            whiteSpace: "nowrap",
+          }}
+        >
+          <span>All</span>
+        </button>
+        {sortedSpaces.map((space) => {
+          const selected = activeSpaceId === space.id;
+          const waitingCount = spaceWaitingCounts.get(space.id) ?? 0;
+          const dotColor = space.color || colors.accent;
+          return (
+            <button
+              key={space.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              data-testid={`${testIdPrefix}-space-${space.id}`}
+              title={space.default_cwd ? `${space.name} (${space.default_cwd})` : space.name}
+              onClick={() => onSelectSpace?.(space.id)}
+              onContextMenu={(event) => {
+                if (!onOpenSpaceModal) return;
+                event.preventDefault();
+                onOpenSpaceModal(space);
+              }}
+              style={{
+                flexShrink: 0,
+                height: pillHeight,
+                padding: compact ? "0 8px" : "0 10px",
+                borderRadius: 999,
+                border: `1px solid ${selected ? dotColor : colors.lineSoft}`,
+                background: selected ? colors.bg3 : colors.bg2,
+                color: selected ? colors.fg0 : colors.fg2,
+                fontFamily: fontDisplay,
+                fontSize: pillFontSize,
+                fontWeight: selected ? 600 : 500,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 5,
+                maxWidth: compact ? 120 : 160,
+                whiteSpace: "nowrap",
+              }}
+            >
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 7,
+                  height: 7,
+                  borderRadius: 999,
+                  background: dotColor,
+                  flexShrink: 0,
+                }}
+              />
+              {space.icon && <span aria-hidden="true">{space.icon}</span>}
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+                {space.name}
+              </span>
+              {waitingCount > 0 && (
+                <span
+                  data-testid={`${testIdPrefix}-space-waiting-${space.id}`}
+                  aria-label={`${waitingCount} waiting`}
+                  style={{
+                    flexShrink: 0,
+                    minWidth: 15,
+                    height: 15,
+                    padding: "0 4px",
+                    borderRadius: 999,
+                    background: "rgb(var(--color-err) / 0.18)",
+                    color: colors.err,
+                    fontSize: rem(10),
+                    fontWeight: 700,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    lineHeight: 1,
+                  }}
+                >
+                  {waitingCount}
+                </span>
+              )}
+            </button>
+          );
+        })}
+        {onOpenSpaceModal && (
+          <button
+            type="button"
+            data-testid={`${testIdPrefix}-space-add`}
+            aria-label="Manage or create space"
+            title="New space"
+            onClick={() => onOpenSpaceModal(null)}
+            style={{
+              flexShrink: 0,
+              width: pillHeight,
+              height: pillHeight,
+              padding: 0,
+              borderRadius: 999,
+              border: `1px dashed ${colors.line}`,
+              background: "transparent",
+              color: colors.fg2,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Plus size={compact ? 12 : 14} aria-hidden />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   const renderSessionRow = (
     pane: MobileSessionPane,
@@ -478,13 +707,17 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   // Prev/next in strip order; no wraparound at either end.
   const switchTerminalByOffset = useCallback(
     (offset: number) => {
-      const ids = chips.map((chip) => chip.terminal.id);
+      const scopedIds = chips.map((chip) => chip.terminal.id);
+      const ids =
+        activeTerminalId && scopedIds.includes(activeTerminalId)
+          ? scopedIds
+          : allChips.map((chip) => chip.terminal.id);
       const index = ids.indexOf(activeTerminalId ?? "");
       if (index === -1) return;
       const next = ids[index + offset];
       if (next) onPickTerminal(next);
     },
-    [chips, activeTerminalId, onPickTerminal],
+    [chips, allChips, activeTerminalId, onPickTerminal],
   );
 
   const titleBarTimerRef = useRef<number | null>(null);
@@ -682,7 +915,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           data-testid="mobile-title-bar-label"
           aria-label="Open terminal switcher"
           aria-description={[
-            `Session ${activePosition} of ${chips.length}`,
+            `Session ${activePosition} of ${allChips.length}`,
             activeChip && terminalOpenerDescription(activeChip.terminal),
           ].filter(Boolean).join(". ")}
           aria-expanded={sessionSwitcherOpen}
@@ -929,7 +1162,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             : null
         }
         onPickBrowser={onOpenBrowser}
-        groupLabels={new Map(chips.map(({ terminal, group }) => [terminal.id, group.label]))}
+        groupLabels={new Map(allChips.map(({ terminal, group }) => [terminal.id, group.label]))}
         onPick={(id) => {
           const terminal = terminals.find(t => t.id === id);
           if (!terminal) return;
@@ -1029,6 +1262,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   <PanelLeftClose size={15} aria-hidden />
                 </button>
               </div>
+              {renderSpaceSwitcher("mobile-rail", true)}
               {chips.length > 0 && (
                 <div
                   className="odk-sessions-filters"
@@ -1065,7 +1299,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 className="odk-sessions-touch"
                 style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 4px 8px" }}
               >
-                {sessionOrder === "recent" ? (
+                {activeSpace && chips.length === 0 ? (
+                  <div className="odk-sessions-empty" style={{ padding: "16px 10px" }}>
+                    <span>No sessions in {activeSpace.name}.</span>
+                    <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
+                      show all spaces
+                    </Button>
+                  </div>
+                ) : sessionOrder === "recent" ? (
                   <section aria-label="Latest output first" className="odk-sessions-section">
                     {filteredRecentPanes.map((pane) => renderSessionRow(pane, true, "mobile-rail"))}
                   </section>
@@ -1131,9 +1372,9 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 <button
                   type="button"
                   aria-label="New terminal"
-                  title="New terminal"
+                  title={activeSpace?.default_cwd ? `New terminal in ${activeSpace.default_cwd}` : "New terminal"}
                   disabled={!canCreateTerminal}
-                  onClick={() => onNewTerminal(activeGroup)}
+                  onClick={handleNewTerminalInActiveSpace}
                   className="odk-btn odk-btn--primary"
                   style={{
                     width: 32,
@@ -1181,7 +1422,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 <span aria-hidden="true" className="odk-cursor" />
               </div>
               {canCreateTerminal && (
-                <Button testId="empty-new-terminal" onClick={() => onNewTerminal(null)} ariaLabel="Start terminal" style={{ height: 44 }}>
+                <Button
+                  testId="empty-new-terminal"
+                  onClick={() =>
+                    onNewTerminal(null, activeSpace?.default_cwd ? { cwd: activeSpace.default_cwd } : undefined)
+                  }
+                  ariaLabel="Start terminal"
+                  style={{ height: 44 }}
+                >
                   start terminal
                 </Button>
               )}
@@ -1229,7 +1477,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             >
               <h2 style={{ margin: 0, fontSize: rem(17), fontWeight: 600, letterSpacing: "-0.02em", color: colors.fg0 }}>sessions</h2>
               <span data-testid="mobile-session-position" style={{ fontSize: rem(11.5), color: colors.fg3 }}>
-                {activePosition}/{chips.length}
+                {scopedActivePosition}/{chips.length}
               </span>
               <button
                 type="button"
@@ -1287,7 +1535,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 disabled={!canCreateTerminal}
                 onClick={() => {
                   setSessionSwitcherOpen(false);
-                  onNewTerminal(activeGroup);
+                  handleNewTerminalInActiveSpace();
                 }}
                 style={{ height: 44, flexShrink: 0 }}
               >
@@ -1300,6 +1548,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           onClose={() => setSessionSwitcherOpen(false)}
         >
           <div className="odk-sessions-touch">
+            {renderSpaceSwitcher("mobile-switcher", false)}
             {chips.length > 0 && (
               <div
                 className="odk-sessions-filters"
@@ -1334,7 +1583,14 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 ))}
               </div>
             )}
-            {sessionFilter !== "all" &&
+            {activeSpace && chips.length === 0 ? (
+              <div className="odk-sessions-empty">
+                <span>No sessions in {activeSpace.name}.</span>
+                <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
+                  show all spaces
+                </Button>
+              </div>
+            ) : sessionFilter !== "all" &&
             ((sessionOrder === "recent" && filteredRecentPanes.length === 0) ||
               (sessionOrder !== "recent" && visibleSessionGroups.length === 0)) ? (
               <div className="odk-sessions-empty">
@@ -1411,6 +1667,26 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 onRenameGroup(groupSheet);
               }}
             />
+            {onMoveGroupToSpace && (
+              <MenuRow
+                label={(() => {
+                  const currentSid = getGroupSpaceId(groupSheet);
+                  const currentSpace = currentSid
+                    ? sortedSpaces.find((space) => space.id === currentSid)
+                    : null;
+                  return currentSpace
+                    ? `Move to Space (${currentSpace.name})`
+                    : "Move to Space";
+                })()}
+                testid="mobile-group-move-space"
+                disabled={!isController || !groupSheet.persistent}
+                onClick={() => {
+                  const target = groupSheet;
+                  close();
+                  setMoveGroupSpaceTarget(target);
+                }}
+              />
+            )}
             <MenuRow
               label="Move up"
               testid="mobile-group-up"
@@ -1440,6 +1716,64 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                 onDeleteGroup(groupSheet);
               }}
             />
+          </Sheet>
+        );
+      })()}
+
+      {moveGroupSpaceTarget && onMoveGroupToSpace && (() => {
+        const currentSid = getGroupSpaceId(moveGroupSpaceTarget);
+        const close = () => setMoveGroupSpaceTarget(null);
+        return (
+          <Sheet
+            title={`Move ${moveGroupSpaceTarget.label} to Space`}
+            backLabel="Back to tab actions"
+            onBack={() => {
+              const target = moveGroupSpaceTarget;
+              close();
+              setGroupSheet(target);
+            }}
+            testid="mobile-group-space-sheet"
+            onClose={close}
+          >
+            <MenuRow
+              label={currentSid === null ? "No Space (current)" : "No Space"}
+              testid="mobile-group-space-none"
+              disabled={!isController}
+              onClick={() => {
+                onMoveGroupToSpace(moveGroupSpaceTarget, null);
+                close();
+              }}
+            />
+            {sortedSpaces.map((space) => {
+              const isCurrent = currentSid === space.id;
+              return (
+                <MenuRow
+                  key={space.id}
+                  label={
+                    isCurrent
+                      ? `${space.icon ? `${space.icon} ` : ""}${space.name} (current)`
+                      : `${space.icon ? `${space.icon} ` : ""}${space.name}`
+                  }
+                  testid={`mobile-group-space-${space.id}`}
+                  disabled={!isController}
+                  onClick={() => {
+                    onMoveGroupToSpace(moveGroupSpaceTarget, space.id);
+                    close();
+                  }}
+                />
+              );
+            })}
+            {onOpenSpaceModal && (
+              <MenuRow
+                icon={<Plus size={17} />}
+                label="New space..."
+                testid="mobile-group-space-create"
+                onClick={() => {
+                  close();
+                  onOpenSpaceModal(null);
+                }}
+              />
+            )}
           </Sheet>
         );
       })()}
