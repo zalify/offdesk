@@ -17,6 +17,7 @@ pub mod runs;
 pub mod share;
 pub mod send;
 pub mod tokens;
+pub mod tui;
 pub mod vault;
 pub mod version;
 pub mod wait;

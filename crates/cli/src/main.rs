@@ -633,6 +633,23 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// Interactive TUI session picker + native raw-TTY terminal attach (great in Ghostty / Alacritty / iTerm2)
+    Tui {
+        /// Filter to one machine (id, prefix, or name)
+        #[arg(long)]
+        machine: Option<String>,
+        /// Read-only watch mode (do not claim control or resize remote PTY)
+        #[arg(long)]
+        watch: bool,
+    },
+    /// Attach directly to a remote terminal in native raw-TTY mode (Ctrl+] to detach)
+    Attach {
+        /// Terminal id, prefix, or fuzzy title match
+        target: String,
+        /// Read-only watch mode (do not claim control or resize remote PTY)
+        #[arg(long)]
+        watch: bool,
+    },
     /// Answer an agent run that waits on you (see `offdesk runs --waiting`): approve or
     /// decline, pick an option, or answer in words. Typed into its terminal for you
     Answer {
@@ -1698,6 +1715,12 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             None => commands::machines::run(&hub_client, json, all).await,
         },
         Commands::Ls { machine, json } => commands::ls::run(&hub_client, machine, json).await,
+        Commands::Tui { machine, watch } => {
+            commands::tui::run_tui(&resolved, &hub_client, machine, watch).await
+        }
+        Commands::Attach { target, watch } => {
+            commands::tui::run_attach(&resolved, &hub_client, &target, watch).await
+        }
         Commands::Answer { run, approve, decline, option, text } => {
             let approve = if approve { Some(true) } else if decline { Some(false) } else { None };
             commands::runs::answer(&hub_client, &run, approve, option, text).await
