@@ -75,6 +75,17 @@ export function DraftsDrawer({
   });
   const [resizing, setResizing] = useState(false);
   const [resizeHover, setResizeHover] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth : 1024,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  // Narrow phones use a bottom sheet; unfolded foldables (>= 680px) & desktop dock on the right.
+  const isBottomSheet = isCompact && viewportWidth < 680;
 
   const startResize = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -283,8 +294,8 @@ export function DraftsDrawer({
         zIndex: 90,
         background: "rgba(0, 0, 0, 0.48)",
         display: "flex",
-        justifyContent: isCompact ? "stretch" : "flex-end",
-        alignItems: isCompact ? "flex-end" : "stretch",
+        justifyContent: isBottomSheet ? "stretch" : "flex-end",
+        alignItems: isBottomSheet ? "flex-end" : "stretch",
       }}
     >
       <div
@@ -292,19 +303,21 @@ export function DraftsDrawer({
         onClick={(e) => e.stopPropagation()}
         style={{
           position: "relative",
-          width: isCompact
+          width: isBottomSheet
             ? "100%"
-            : customWidth !== null
-              ? `min(${customWidth}px, 95vw)`
-              : wide || (inDatabases && dbOpen)
-                ? "min(920px, 94vw)"
-                : "min(540px, 92vw)",
-          height: isCompact ? "86vh" : "100%",
+            : isCompact
+              ? "min(440px, 52vw)"
+              : customWidth !== null
+                ? `min(${customWidth}px, 95vw)`
+                : wide || (inDatabases && dbOpen)
+                  ? "min(920px, 94vw)"
+                  : "min(540px, 92vw)",
+          height: isBottomSheet ? "86vh" : "100%",
           transition: resizing ? "none" : "width 160ms ease",
           background: colors.bg1,
-          borderLeft: isCompact ? undefined : `1px solid ${colors.line}`,
-          borderTop: isCompact ? `1px solid ${colors.line}` : undefined,
-          borderRadius: isCompact ? "14px 14px 0 0" : 0,
+          borderLeft: isBottomSheet ? undefined : `1px solid ${colors.line}`,
+          borderTop: isBottomSheet ? `1px solid ${colors.line}` : undefined,
+          borderRadius: isBottomSheet ? "14px 14px 0 0" : 0,
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
