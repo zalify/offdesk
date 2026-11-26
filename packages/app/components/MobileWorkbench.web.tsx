@@ -930,7 +930,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         runs={agentRuns}
         activeBrowserId={
           browserSurfaceOpen
-            ? pickSelectedBrowserId(browsers, selectedBrowserId)
+            ? pickSelectedBrowserId(browsers, selectedBrowserId, null, activeTerminalId)
             : null
         }
         onPickBrowser={onOpenBrowser}
@@ -1212,6 +1212,8 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             browsers={browsers}
             selectedId={selectedBrowserId}
             deviceId={deviceId}
+            terminals={terminals}
+            activeTerminalId={activeTerminalId}
             onSelect={onSelectBrowser}
             onClose={onCloseBrowserSurface}
           />

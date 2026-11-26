@@ -10,7 +10,8 @@ machine's network (localhost dev servers, LAN hosts) and keeps its logins.
 - One Chromium per node, started on the first `open` and reused afterwards.
 - One persistent profile per machine at `<config dir>/agent-browser/profile`
   (cookies and logins survive restarts). `<config dir>` is the same directory
-  that holds `machine.json`.
+  that holds `machine.json`. `open --private` is the exception: that tab gets
+  a fresh isolated context instead (see [Private tabs](#private-tabs)).
 - One tab per agent browser. An agent browser is addressed by its id or a
   unique id prefix, like terminals.
 - Requests go CLI to hub to node, so the CLI needs the usual `OFFDESK_URL` and
@@ -19,8 +20,11 @@ machine's network (localhost dev servers, LAN hosts) and keeps its logins.
 Agent browsers belong to the machine, not to a terminal: they are never panes,
 tabs or sessions of the workspace, on the desktop or the phone. The desktop's top
 bar and the phone's title bar each have a **Browser** button (see below).
-`opener_terminal_id` (the terminal that ran `offdesk browser open`) is
-informational only.
+`opener_terminal_id` (the terminal that ran `offdesk browser open`) labels the tab
+and picks the default tab. The hub closes a browser when its opener terminal is
+closed or exits (popups share their opener tab's terminal, so they go with it, even
+while a person is controlling them). Tabs with no opener, opened from the web UI
+or from a CLI on another machine, stay until closed by hand.
 
 ### On the desktop
 
@@ -31,12 +35,16 @@ Clicking it opens a large floating panel over the workspace, with a light
 backdrop. The terminals underneath stay mounted and keep their connections.
 
 - **Tab strip.** One tab per agent browser of the machine, labelled with the page
-  title (or the host), a dot when the agent needs you and a "you" chip while this
-  device controls it. Click a tab to show it, its **x** to close that browser (the
+  title (or the host), the name of the terminal that opened it (as the workspace
+  shows that terminal; left out when unknown), a `[private]` marker for a tab in an
+  isolated private context, a dot when the agent needs you and a "you" chip while
+  this device controls it. Click a tab to show it, its **x** to close that browser (the
   control is handed back first when you hold it). The last tab you looked at on a
-  machine is remembered while the page stays open; if it goes away the first
-  remaining tab is shown. Opening the overlay lands on a tab that is asking for
-  help, if there is one.
+  machine is remembered while the page stays open. Opening the overlay lands on
+  the first of: a tab asking for help, a tab opened by the focused terminal, the
+  last tab you looked at, the first tab. If the shown tab goes away the same order
+  applies (minus "last looked at"). A change of terminal focus never moves the
+  tab you are looking at.
 - **New tab.** The **+** button shows an address field; Enter opens the page on the
   machine (`POST /api/machines/{machine}/agent-browser` with `{"type":"open","url":...}`)
   and selects the new tab. A bare host such as `aliyun.com` gets `https://`;
@@ -80,16 +88,18 @@ backdrop. The terminals underneath stay mounted and keep their connections.
 - **Minimising.** **[_]** in the corner shrinks the overlay to a small live
   window in the bottom-right corner, so you can watch the agent while you work in
   terminals. The mini window is read-only: it takes no focus, ignores Esc and
-  forwards no input, and shows the selected tab with its state (agent in control,
-  needs you, you in control). Click it, or the Browser button, to expand; **[x]**
+  forwards no input, and shows the selected tab with its opener terminal's name, a
+  `[private]` marker where it applies, and its state (agent in control, needs you,
+  you in control). Click it, or the Browser button, to expand; **[x]**
   closes it. Minimising keeps streaming and keeps control if this device holds
   it, so Auto-release does not start; **[hand back]** on the mini window releases
   control without expanding. A new handoff turns its border red, switches it to
   the tab that asks, and still shows the toast.
 - **Shortcuts.** Workspace shortcuts (including the Ctrl+B prefix) do not fire while
   you type in the address field or control a page.
-- **Handoffs while the overlay is closed.** A new handoff shows a toast, "The agent
-  needs you in <title>: <reason>", and the dot on the button.
+- **Handoffs while the overlay is closed.** A new handoff shows a toast, "<terminal name> needs
+  you in <title>: <reason>" ("The agent" when the opener terminal is unknown), and
+  the dot on the button.
 
 ### On the phone
 
@@ -103,11 +113,12 @@ Tapping it opens a full-screen surface over the terminal area (terminals stay
 mounted and connected underneath; tap the button again to close it):
 
 - **Top row.** A back button (returns to the terminal), a horizontally scrolling
-  tab strip with the same tabs as the desktop (page title or host, a dot when the
-  agent needs you, a "you" chip while this device controls it, an **x** that
+  tab strip with the same tabs as the desktop (page title or host, the opener
+  terminal's name, a `[private]` marker, a dot when the agent needs you, a "you" chip while this device controls it, an **x** that
   closes that browser and hands control back first) and a **+**. The last tab you
   looked at on a machine is remembered while the page stays open; the surface
-  lands on a tab that is asking for help, if there is one.
+  lands on a tab with the same order as the desktop: asking for help, opened by
+  the focused terminal, last looked at, first.
 - **New tab.** **+** shows an address field with the same rules as the desktop
   (bare hosts get `https://`, `localhost` and IPv4 get `http://`); the new tab is
   selected once the browser exists. With no tabs the field is shown with the
@@ -118,7 +129,8 @@ mounted and connected underneath; tap the button again to close it):
 - **Handoffs.** A handoff also shows in the bar of sessions needing attention at
   the top of the phone UI with its reason; tapping it opens the surface on that
   tab. While the surface is closed, a new handoff also raises the same toast as
-  on the desktop, and so does the agent taking control back from this phone.
+  on the desktop, and so does the agent taking control back from this phone (both
+  name the opener terminal when it is known).
 - The phone app has no back-gesture mapping for its sheets, so the Android back
   button does not close the surface; use the back button in its top row.
 
@@ -149,8 +161,8 @@ mounted and connected underneath; tap the button again to close it):
 ## Commands
 
 ```
-offdesk browser open [URL] [--machine M] [--json]   # prints the browser id
-offdesk browser ls [--machine M] [--json]           # ID, MACHINE, URL, TITLE
+offdesk browser open [URL] [--machine M] [--private] [--json]   # prints the browser id
+offdesk browser ls [--machine M] [--json]           # ID, MACHINE, URL, TITLE (private tabs marked)
 offdesk browser close <browser>
 offdesk browser goto <browser> <url> [--json]
 offdesk browser snapshot <browser>                  # the page as text
@@ -173,6 +185,24 @@ offdesk browser login <browser> --item ITEM [--submit]   # fill a 1Password logi
 `--machine` takes a machine id, unique id prefix, or name. Without it, `open`
 uses the only online machine, or else the machine the CLI runs on; `ls` lists
 every online machine.
+
+### Private tabs
+
+`open --private` (MCP: `browser_open` with `private: true`) opens the tab in a
+fresh, isolated browser context: no cookies, logins or storage from the
+machine's profile, and none shared with any other private tab, since every
+`open --private` gets a context of its own. Use it to test a site from a clean
+state, for example a sign-up flow or a logged-out view. Nothing is persisted:
+the context and everything in it is discarded when its last tab closes. Pages
+the tab opens (`window.open`, `target=_blank`) stay in the same context and are
+private too; the context goes away only after the last of them closes. `ls
+--json` and the MCP list show `"private": true`, and `ls` marks the tab
+`[private]`.
+
+Private tabs need an up-to-date node. An older node (or hub) ignores the flag
+and would open a normal tab that shares the profile's logins, so the CLI and
+the MCP tool check the reply: if it is not private, they close that tab and
+fail with an error saying the node or hub is too old.
 
 `wait` exits `0` when the condition matched, `1` on timeout (the reason is on
 stderr) and `2` on an error. `--timeout` defaults to 30 seconds. Give at least

@@ -2,7 +2,8 @@
 // button): which tab is selected, what a typed address means, and which
 // handoffs and reclaims are new.
 
-import type { AgentBrowserDialog, AgentBrowserInfo } from "@offdesk/shared";
+import type { AgentBrowserDialog, AgentBrowserInfo, TerminalInfo } from "@offdesk/shared";
+import { displayTerminalTitle } from "./displayTerminalTitle";
 
 /** What a tab or row calls a browser: its title, else the host of its URL. */
 export function browserLabel(browser: AgentBrowserInfo): string {
@@ -13,6 +14,33 @@ export function browserLabel(browser: AgentBrowserInfo): string {
   } catch {
     return browser.url || "browser";
   }
+}
+
+/**
+ * The name of the terminal whose agent opened this browser, as the workspace
+ * shows it. Null when the opener is unknown or its terminal is gone.
+ */
+export function browserOwnerLabel(
+  browser: AgentBrowserInfo,
+  terminals: readonly TerminalInfo[],
+): string | null {
+  if (!browser.opener_terminal_id) return null;
+  const owner = terminals.find((terminal) => terminal.id === browser.opener_terminal_id);
+  return owner ? displayTerminalTitle(owner) : null;
+}
+
+/** Opened in an isolated private context (no shared logins). */
+export function browserIsPrivate(browser: AgentBrowserInfo): boolean {
+  return browser.private === true;
+}
+
+/** Toast for a new handoff: names the asking session when it is known. */
+export function handoffToastText(
+  browser: AgentBrowserInfo,
+  terminals: readonly TerminalInfo[],
+): string {
+  const owner = browserOwnerLabel(browser, terminals);
+  return `${owner ?? "The agent"} needs you in ${browserLabel(browser)}: ${browser.handoff?.reason ?? ""}`;
 }
 
 /** The agent asked for help and nobody has taken over yet. */
@@ -66,31 +94,54 @@ export function miniBrowserStatus(
   return { text: "agent in control", tone: "agent" };
 }
 
+/** First tab asking for a person, else the first opened by `terminalId`, else null. */
+function preferredBrowser(
+  browsers: AgentBrowserInfo[],
+  terminalId: string | null | undefined,
+  remembered: string | null | undefined,
+): AgentBrowserInfo | null {
+  const asking = browsers.find(browserNeedsPerson);
+  if (asking) return asking;
+  if (!terminalId) return null;
+  const owned = browsers.filter((browser) => browser.opener_terminal_id === terminalId);
+  return owned.find((browser) => browser.id === remembered) ?? owned[0] ?? null;
+}
+
 /**
- * The tab to show: the remembered one while it still exists, else the first
- * remaining. `awaitingId` is a tab just opened whose browser event has not
- * arrived yet; nothing is selected until it does, so the first tab does not
- * flash in between.
+ * The tab to show: the remembered one while it still exists. When it is gone
+ * (or none was picked) the pick order applies: a tab asking for a person, a tab
+ * opened by `activeTerminalId`, else the first. `awaitingId` is a tab just
+ * opened whose browser event has not arrived yet; nothing is selected until it
+ * does, so another tab does not flash in between. Terminal focus changes never
+ * move an existing selection.
  */
 export function pickSelectedBrowserId(
   browsers: AgentBrowserInfo[],
   remembered: string | null | undefined,
   awaitingId: string | null = null,
+  activeTerminalId: string | null = null,
 ): string | null {
   if (remembered && browsers.some((browser) => browser.id === remembered)) {
     return remembered;
   }
   if (awaitingId !== null && remembered === awaitingId) return null;
-  return browsers[0]?.id ?? null;
+  return (
+    preferredBrowser(browsers, activeTerminalId, remembered)?.id ?? browsers[0]?.id ?? null
+  );
 }
 
-/** The tab to land on when the overlay opens: one asking for help wins. */
+/**
+ * The tab to land on when the overlay opens: (a) one asking for a person,
+ * (b) one opened by the active terminal, (c) the last one viewed on this
+ * machine, (d) the first.
+ */
 export function pickBrowserToOpen(
   browsers: AgentBrowserInfo[],
   remembered: string | null | undefined,
+  activeTerminalId: string | null = null,
 ): string | null {
-  const asking = browsers.find(browserNeedsPerson);
-  if (asking) return asking.id;
+  const preferred = preferredBrowser(browsers, activeTerminalId, remembered);
+  if (preferred) return preferred.id;
   return pickSelectedBrowserId(browsers, remembered);
 }
 

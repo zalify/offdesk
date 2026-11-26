@@ -537,9 +537,11 @@ test.describe("agent browser on the phone", () => {
 
     await requestAgentBrowserHandoffViaApi(page, opened.id, "Please log in");
     await expect(page.getByTestId("mobile-title-bar-browser-attention")).toBeVisible();
+    // The toast names the terminal that opened the browser, not "The agent".
     await expect(page.getByTestId("workspace-toast")).toContainText(
-      "The agent needs you in Needs help: Please log in",
+      "needs you in Needs help: Please log in",
     );
+    await expect(page.getByTestId("workspace-toast")).not.toContainText("The agent");
     const chip = page.getByTestId(`mobile-attention-browser-${opened.id}`);
     await expect(chip).toBeVisible();
     await expect(chip).toContainText("Please log in");

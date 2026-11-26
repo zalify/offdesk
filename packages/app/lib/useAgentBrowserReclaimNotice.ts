@@ -14,8 +14,12 @@ export interface ReclaimNotice {
   dismiss: () => void;
 }
 
-export function reclaimNoticeText(reason: string, fromYou: boolean): string {
-  return `The agent took control back${fromYou ? " from you" : ""}: ${reason}`;
+export function reclaimNoticeText(
+  reason: string,
+  fromYou: boolean,
+  owner: string | null = null,
+): string {
+  return `${owner ?? "The agent"} took control back${fromYou ? " from you" : ""}: ${reason}`;
 }
 
 export function useAgentBrowserReclaimNotice(

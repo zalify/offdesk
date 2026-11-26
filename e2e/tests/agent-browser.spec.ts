@@ -5,6 +5,8 @@ import {
   closeAgentBrowserViaApi,
   controlAgentBrowserViaApi,
   createTerminalViaApi,
+  createWorkspaceGroupViaApi,
+  destroyTerminalViaApi,
   getAgentBrowserViaApi,
   getDeviceId,
   gotoAgentBrowserViaApi,
@@ -364,6 +366,136 @@ test.describe("agent browser", () => {
     // Handed back: Esc closes the overlay again.
     await page.keyboard.press("Escape");
     await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+  });
+
+  test("tabs carry their opener terminal's name, and opening lands on the focused terminal's tab", async ({
+    page,
+  }) => {
+    // The hub API takes opener_terminal_id as the CLI sends it (the CLI reads
+    // its terminal id from the environment); the e2e drives that API directly.
+    const titled = (name: string) => `printf '\\033]0;${name}\\007'; exec sleep 3600`;
+    // One workspace tab with both terminals, so both panes are on screen.
+    const group = await createWorkspaceGroupViaApi(page, `Owners ${Date.now()}`);
+    const termA = await createTerminalViaApi(page, {
+      cwd: "/root",
+      startupCommand: titled("owner-alpha"),
+      workspaceGroupId: group.id,
+    });
+    const termB = await createTerminalViaApi(page, {
+      cwd: "/root",
+      startupCommand: titled("owner-beta"),
+      workspaceGroupId: group.id,
+    });
+    await expect(page.getByTestId(`pane-header-${termA}`)).toContainText("owner-alpha");
+    await expect(page.getByTestId(`pane-header-${termB}`)).toContainText("owner-beta");
+    const a = await openAgentBrowserViaApi(page, {
+      url: animatedPage("Owned A"),
+      openerTerminalId: termA,
+    });
+    const b = await openAgentBrowserViaApi(page, {
+      url: animatedPage("Owned B"),
+      openerTerminalId: termB,
+    });
+    const loose = await openAgentBrowserViaApi(page, { url: animatedPage("Owned none") });
+    const selected = (id: string) => page.getByTestId(`agent-browser-tab-${id}`);
+
+    // Focus terminal B, then open: B's tab wins over "last viewed" and "first" (A).
+    await page.getByTestId(`workspace-pane-${termB}`).click();
+    await openOverlay(page);
+    await expect(page.getByTestId(`agent-browser-tab-owner-${a.id}`)).toHaveText("owner-alpha");
+    await expect(page.getByTestId(`agent-browser-tab-owner-${b.id}`)).toHaveText("owner-beta");
+    await expect(page.getByTestId(`agent-browser-tab-owner-${loose.id}`)).toHaveCount(0);
+    await expect(page.getByTestId("agent-browser-tab-private")).toHaveCount(0);
+    await expect(selected(b.id)).toHaveAttribute("data-selected", "true");
+
+    // Looking at another tab sticks; closing and opening again with A focused lands on A.
+    await selected(loose.id).click();
+    await expect(selected(loose.id)).toHaveAttribute("data-selected", "true");
+    await page.getByTestId("agent-browser-overlay-close").click();
+    await expect(page.getByTestId("agent-browser-overlay")).toHaveCount(0);
+    await page.getByTestId(`workspace-pane-${termA}`).click();
+    await openOverlay(page);
+    await expect(selected(a.id)).toHaveAttribute("data-selected", "true");
+    await page.getByTestId("agent-browser-overlay-close").click();
+    await page.getByTestId(`workspace-pane-${termB}`).click();
+    await openOverlay(page);
+    await expect(selected(b.id)).toHaveAttribute("data-selected", "true");
+
+    // The mini window says whose tab it shows.
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    await expect(page.getByTestId("agent-browser-mini-owner")).toHaveText("owner-beta");
+
+    // Expanding the mini keeps its tab, whichever terminal is focused.
+    await page.getByTestId(`workspace-pane-${termA}`).click();
+    await page.getByTestId("agent-browser-mini-expand").click();
+    await expect(selected(b.id)).toHaveAttribute("data-selected", "true");
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+    await page.getByTestId(`workspace-pane-${termA}`).click();
+    await openOverlay(page);
+    await expect(selected(b.id)).toHaveAttribute("data-selected", "true");
+    await page.getByTestId("agent-browser-overlay-minimize").click();
+
+    // A handoff while the overlay is closed names the session that asks.
+    await page.getByTestId("agent-browser-mini-close").click();
+    await requestAgentBrowserHandoffViaApi(page, a.id, "Please log in");
+    await expect(page.getByTestId("workspace-toast")).toContainText(
+      "owner-alpha needs you in Owned A: Please log in",
+    );
+  });
+
+  test("a private tab is marked, and closing a terminal closes the tabs it opened", async ({
+    page,
+  }) => {
+    const owner = await createTerminalViaApi(page, { cwd: "/root" });
+    const other = await createTerminalViaApi(page, { cwd: "/root" });
+    const owned = await openAgentBrowserViaApi(page, {
+      url: animatedPage("Owned private"),
+      openerTerminalId: owner,
+      private: true,
+    });
+    const kept = await openAgentBrowserViaApi(page, {
+      url: animatedPage("Kept"),
+      openerTerminalId: other,
+    });
+    const loose = await openAgentBrowserViaApi(page, { url: animatedPage("Loose") });
+    expect((owned as { private?: boolean }).private).toBe(true);
+
+    await openOverlay(page);
+    const ownedTab = page.getByTestId(`agent-browser-tab-${owned.id}`);
+    await expect(ownedTab.getByTestId("agent-browser-tab-private")).toHaveText("[private]");
+    await expect(
+      page.getByTestId(`agent-browser-tab-${kept.id}`).getByTestId("agent-browser-tab-private"),
+    ).toHaveCount(0);
+    // A private tab streams like any other.
+    await ownedTab.click();
+    await expect.poll(() => frames(page, owned.id)).toBeGreaterThan(0);
+    await page.screenshot({ path: "e2e/artifacts/agent-browser-owner-private.png" });
+
+    await destroyTerminalViaApi(page, owner);
+    await expect(ownedTab).toHaveCount(0);
+    await expect
+      .poll(async () => (await listAgentBrowsersViaApi(page)).map((b) => b.id).sort())
+      .toEqual([kept.id, loose.id].sort());
+    await expect(page.getByTestId(`agent-browser-tab-${kept.id}`)).toBeVisible();
+  });
+
+  test("a terminal whose command exits by itself takes its tabs with it", async ({ page }) => {
+    const shortLived = await createTerminalViaApi(page, {
+      cwd: "/root",
+      startupCommand: "exec sleep 8",
+    });
+    const owned = await openAgentBrowserViaApi(page, {
+      url: animatedPage("Short lived"),
+      openerTerminalId: shortLived,
+    });
+    const loose = await openAgentBrowserViaApi(page, { url: animatedPage("Stays") });
+    expect((await listAgentBrowsersViaApi(page)).map((b) => b.id)).toContain(owned.id);
+    // The node notices the dead session within a few seconds.
+    await expect
+      .poll(async () => (await listAgentBrowsersViaApi(page)).map((b) => b.id), {
+        timeout: 40_000,
+      })
+      .toEqual([loose.id]);
   });
 
   test("minimising keeps the stream in a mini window that leaves the terminals alone", async ({

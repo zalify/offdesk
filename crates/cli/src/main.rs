@@ -981,6 +981,10 @@ enum BrowserAction {
         /// Machine id, unique id prefix, or name (default: the only online machine, or this one)
         #[arg(long)]
         machine: Option<String>,
+        /// Open in a fresh isolated context: no shared cookies or logins,
+        /// nothing persisted, gone when its last tab closes
+        #[arg(long)]
+        private: bool,
         /// Machine-readable JSON on stdout
         #[arg(long)]
         json: bool,
@@ -1584,12 +1588,21 @@ async fn run(cli: Cli) -> Result<(), CliError> {
             BrowserAction::Open {
                 page,
                 machine,
+                private,
                 json,
             } => {
                 let local =
                     local_machine::read_local_machine(&local_machine::local_machine_path());
                 let local_id = local.as_ref().map(|m| m.machine_id.as_str());
-                commands::browser::open(&hub_client, machine.as_deref(), local_id, page, json).await
+                commands::browser::open(
+                    &hub_client,
+                    machine.as_deref(),
+                    local_id,
+                    page,
+                    private,
+                    json,
+                )
+                .await
             }
             BrowserAction::Ls { machine, json } => {
                 commands::browser::ls(&hub_client, machine.as_deref(), json).await

@@ -119,6 +119,15 @@ export async function destroyAllTerminals(page: Page): Promise<void> {
   }
 }
 
+export async function destroyTerminalViaApi(page: Page, terminalId: string): Promise<void> {
+  const deviceId = await getDeviceId(page);
+  const response = await page.request.delete(
+    `/api/machines/${MACHINE_ID}/terminals/${terminalId}?device_id=${encodeURIComponent(deviceId)}`,
+    { headers: await getAuthHeaders(page) },
+  );
+  expect(response.ok()).toBeTruthy();
+}
+
 export interface AgentBrowserRecord {
   id: string;
   machine_id?: string;
@@ -148,10 +157,11 @@ async function agentBrowserCommand(
 
 export async function openAgentBrowserViaApi(
   page: Page,
-  opts: { url?: string; openerTerminalId?: string } = {},
+  opts: { url?: string; openerTerminalId?: string; private?: boolean } = {},
 ): Promise<AgentBrowserRecord> {
   return (await agentBrowserCommand(page, {
     type: "open",
+    ...(opts.private ? { private: true } : {}),
     ...(opts.url ? { url: opts.url } : {}),
     ...(opts.openerTerminalId
       ? { opener_terminal_id: opts.openerTerminalId }

@@ -1,10 +1,12 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
-import type { AgentBrowserInfo } from "@offdesk/shared";
+import type { AgentBrowserInfo, TerminalInfo } from "@offdesk/shared";
 import { AgentBrowserMobileView } from "./AgentBrowserMobileView.web";
 import {
   browserControlledBy,
+  browserIsPrivate,
   browserLabel,
   browserNeedsPerson,
+  browserOwnerLabel,
 } from "@/lib/agentBrowserOverlay";
 import { colors, colorAlpha } from "@/lib/colors";
 import { useAgentBrowserTabs } from "@/lib/useAgentBrowserTabs";
@@ -35,6 +37,8 @@ export function AgentBrowserMobileSurface({
   browsers,
   selectedId: rememberedId,
   deviceId,
+  terminals,
+  activeTerminalId = null,
   onSelect,
   onClose,
 }: {
@@ -43,6 +47,10 @@ export function AgentBrowserMobileSurface({
   /** The tab the person last picked on this machine; may be gone by now. */
   selectedId: string | null;
   deviceId: string | null;
+  /** Terminals of the workspace; an opener's name labels its tabs. */
+  terminals: readonly TerminalInfo[];
+  /** The focused terminal; its browser is picked when the shown tab goes away. */
+  activeTerminalId?: string | null;
   onSelect: (browserId: string) => void;
   onClose: () => void;
 }) {
@@ -65,6 +73,7 @@ export function AgentBrowserMobileSurface({
     browsers,
     rememberedId,
     deviceId,
+    activeTerminalId,
     onSelect,
   });
 
@@ -131,6 +140,7 @@ export function AgentBrowserMobileSurface({
             const active = browser.id === selectedBrowserId;
             const label = browserLabel(browser);
             const closing = closingIds.has(browser.id);
+            const owner = browserOwnerLabel(browser, terminals);
             return (
               <div
                 key={browser.id}
@@ -169,6 +179,32 @@ export function AgentBrowserMobileSurface({
                 >
                   {label}
                 </span>
+                {owner && (
+                  <span
+                    data-testid={`mobile-browser-tab-owner-${browser.id}`}
+                    title={`Opened by ${owner}`}
+                    style={{
+                      fontSize: rem(10.5),
+                      maxWidth: 80,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      opacity: 0.75,
+                      flexShrink: 1,
+                    }}
+                  >
+                    {owner}
+                  </span>
+                )}
+                {browserIsPrivate(browser) && (
+                  <span
+                    data-testid="agent-browser-tab-private"
+                    title="Private browser"
+                    style={{ fontSize: rem(10.5), opacity: 0.75, flexShrink: 0 }}
+                  >
+                    [private]
+                  </span>
+                )}
                 {browserNeedsPerson(browser) && (
                   <span
                     role="img"

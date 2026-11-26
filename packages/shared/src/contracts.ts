@@ -98,6 +98,8 @@ export interface AgentBrowserInfo {
   title: string
   /** Terminal the browser was opened from, when known. */
   opener_terminal_id?: string
+  /** Opened in an isolated private context (no shared logins). Hand-added; mirrors the Rust record. */
+  private?: boolean
   /** Who drives the page; owned by the hub. Absent from older Hubs (= agent). */
   controller?: AgentBrowserController
   /** While a person controls it: the viewer device that took control. */

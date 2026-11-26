@@ -1416,6 +1416,10 @@ pub struct AgentBrowserInfo {
     /// link). Set by the node.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opener_browser_id: Option<String>,
+    /// The tab lives in its own isolated browser context (opened with
+    /// `--private`). Set by the node; absent from older nodes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub private: bool,
     /// Back / forward / loading state for the toolbar. Set by the node;
     /// absent from older nodes, which cannot navigate for a person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1758,6 +1762,10 @@ pub enum AgentBrowserCommand {
         url: Option<String>,
         #[serde(default)]
         opener_terminal_id: Option<String>,
+        /// Open in a fresh, isolated browser context: no shared cookies or
+        /// logins, nothing persisted. Older nodes ignore this field.
+        #[serde(default)]
+        private: bool,
     },
     List,
     Close {
@@ -2725,6 +2733,36 @@ mod tests {
         TERMINAL_OPENER_LABEL_MAX,
     };
     use bytes::Bytes;
+
+    #[test]
+    fn agent_browser_private_flag_defaults_and_is_omitted_when_false() {
+        use super::AgentBrowserCommand;
+        let old: AgentBrowserInfo =
+            serde_json::from_str(r#"{"id":"b","url":"u","title":"t"}"#).unwrap();
+        assert!(!old.private);
+        assert!(serde_json::to_value(&old).unwrap().get("private").is_none());
+        let private: AgentBrowserInfo =
+            serde_json::from_str(r#"{"id":"b","url":"u","title":"t","private":true}"#).unwrap();
+        assert!(private.private);
+        assert_eq!(serde_json::to_value(&private).unwrap()["private"], true);
+        // An open request from an older client has no `private`.
+        let open: AgentBrowserCommand =
+            serde_json::from_str(r#"{"type":"open","url":"https://a.test"}"#).unwrap();
+        assert_eq!(
+            open,
+            AgentBrowserCommand::Open {
+                url: Some("https://a.test".into()),
+                opener_terminal_id: None,
+                private: false,
+            }
+        );
+        let open: AgentBrowserCommand =
+            serde_json::from_str(r#"{"type":"open","private":true}"#).unwrap();
+        assert!(matches!(
+            open,
+            AgentBrowserCommand::Open { private: true, .. }
+        ));
+    }
 
     #[test]
     fn agent_browser_info_control_fields_default_and_round_trip() {

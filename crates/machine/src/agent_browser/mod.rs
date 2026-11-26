@@ -90,6 +90,12 @@ impl Tabs {
     fn drain(&self) -> Vec<Arc<Tab>> {
         self.0.lock().unwrap().drain().map(|(_, t)| t).collect()
     }
+    /// Some live tab still lives in this browser context.
+    fn context_in_use(&self, context_id: &str) -> bool {
+        self.all()
+            .iter()
+            .any(|t| t.context_id.as_deref() == Some(context_id))
+    }
     fn by_target(&self, target_id: &str) -> Option<Arc<Tab>> {
         self.all().into_iter().find(|t| t.target_id == target_id)
     }
@@ -157,6 +163,9 @@ struct Tab {
     /// Out-of-process iframes of this tab by frame id.
     children: Mutex<HashMap<String, frames::ChildSession>>,
     opener_terminal_id: Option<String>,
+    /// The isolated browser context of a private tab (`None`: the shared
+    /// profile). Disposed when the last tab using it goes away.
+    context_id: Option<String>,
     /// The tab whose page opened this one (popups).
     opener_browser_id: Option<String>,
     events: Events,
@@ -323,8 +332,9 @@ impl AgentBrowserManager {
             C::Open {
                 url,
                 opener_terminal_id,
+                private,
             } => {
-                let info = self.open(url, opener_terminal_id).await?;
+                let info = self.open(url, opener_terminal_id, private).await?;
                 Ok(json!(info))
             }
             C::List => Ok(json!(self.list().await?)),
@@ -725,12 +735,21 @@ impl AgentBrowserManager {
         &self,
         url: Option<String>,
         opener_terminal_id: Option<String>,
+        private: bool,
     ) -> Result<AgentBrowserInfo, String> {
         let tab = {
             let mut state = self.state.lock().await;
             let client = self.ensure_running(&mut state).await?;
             let headed = state.headed;
-            match Tab::create(client, headed, opener_terminal_id, self.events.clone()).await {
+            match Tab::create(
+                client,
+                headed,
+                opener_terminal_id,
+                private,
+                self.events.clone(),
+            )
+            .await
+            {
                 Ok(tab) => {
                     let tab = Arc::new(tab);
                     self.tabs.insert(tab.clone());
@@ -775,6 +794,7 @@ impl AgentBrowserManager {
                 json!({"targetId": tab.target_id}),
             )
             .await;
+        dispose_context_if_unused(&tab.client, &self.tabs, tab.context_id.as_deref()).await;
         if self.tabs.is_empty() {
             self.teardown(&mut state).await;
         }
@@ -818,7 +838,7 @@ async fn probe_webgl(client: &CdpClient, new_window: bool) -> Result<Option<Stri
         .call(
             None,
             "Target.createTarget",
-            create_target_params(new_window),
+            create_target_params(new_window, None),
         )
         .await?;
     let target_id = created["targetId"]
@@ -1046,6 +1066,13 @@ async fn supervise(
                 {
                     tabs.remove(&tab.id);
                     tab.announce_destroyed();
+                    if let Some(context) = tab.context_id.clone() {
+                        // Not awaited: this loop must keep draining events.
+                        let (client, tabs) = (client.clone(), tabs.clone());
+                        tokio::spawn(async move {
+                            dispose_context_if_unused(&client, &tabs, Some(&context)).await;
+                        });
+                    }
                 }
             }
             cdp::CLOSED_EVENT => {
@@ -1108,6 +1135,8 @@ async fn adopt_popup(
         target_id,
         opener.opener_terminal_id.clone(),
         Some(opener.id.clone()),
+        // A popup lives in its opener's context, private or not.
+        opener.context_id.clone(),
         events,
     )
     .await;
@@ -1132,8 +1161,35 @@ async fn adopt_popup(
 /// Chromium starts with stays open and unlisted, since a headed Chromium
 /// quits when its last window closes (and the node stops Chromium itself when
 /// the last agent browser is closed).
-fn create_target_params(new_window: bool) -> Value {
-    json!({"url": "about:blank", "newWindow": new_window})
+fn create_target_params(new_window: bool, context_id: Option<&str>) -> Value {
+    // A fresh context has no browser window yet, and a headless Chromium
+    // refuses to add a tab to one ("no browser is open"): it needs a window.
+    let new_window = new_window || context_id.is_some();
+    let mut params = json!({"url": "about:blank", "newWindow": new_window});
+    if let Some(context) = context_id {
+        params["browserContextId"] = json!(context);
+    }
+    params
+}
+
+/// Dispose a private tab's browser context once no tab uses it any more
+/// (cookies and storage die with it). A no-op for the shared profile and
+/// while another tab, such as a popup, still lives in the context.
+async fn dispose_context_if_unused(client: &CdpClient, tabs: &Tabs, context_id: Option<&str>) {
+    let Some(context) = context_id else { return };
+    if tabs.context_in_use(context) {
+        return;
+    }
+    if let Err(error) = client
+        .call(
+            None,
+            "Target.disposeBrowserContext",
+            json!({"browserContextId": context}),
+        )
+        .await
+    {
+        tracing::debug!("agent-browser: dispose context: {error}");
+    }
 }
 
 impl Tab {
@@ -1141,20 +1197,65 @@ impl Tab {
         client: Arc<CdpClient>,
         new_window: bool,
         opener_terminal_id: Option<String>,
+        private: bool,
         events: Events,
     ) -> Result<Tab, String> {
-        let created = client
-            .call(
-                None,
-                "Target.createTarget",
-                create_target_params(new_window),
+        // A private tab gets a context of its own (never shared with another
+        // `open --private`); nothing outlives it.
+        let context_id = if private {
+            let created = client
+                .call(
+                    None,
+                    "Target.createBrowserContext",
+                    json!({"disposeOnDetach": false}),
+                )
+                .await?;
+            Some(
+                created["browserContextId"]
+                    .as_str()
+                    .ok_or("Target.createBrowserContext returned no browserContextId")?
+                    .to_string(),
             )
-            .await?;
-        let target_id = created["targetId"]
-            .as_str()
-            .ok_or("Target.createTarget returned no targetId")?
-            .to_string();
-        Self::attach(client, target_id, opener_terminal_id, None, events).await
+        } else {
+            None
+        };
+        let result = async {
+            let created = client
+                .call(
+                    None,
+                    "Target.createTarget",
+                    create_target_params(new_window, context_id.as_deref()),
+                )
+                .await?;
+            let target_id = created["targetId"]
+                .as_str()
+                .ok_or("Target.createTarget returned no targetId")?
+                .to_string();
+            Self::attach(
+                client.clone(),
+                target_id,
+                opener_terminal_id,
+                None,
+                context_id.clone(),
+                events,
+            )
+            .await
+        }
+        .await;
+        if result.is_err() {
+            // No tab owns the context yet: do not leak it (this also closes
+            // a page created in it).
+            if let Some(context) = &context_id {
+                let _ = client
+                    .call(
+                        None,
+                        "Target.disposeBrowserContext",
+                        json!({"browserContextId": context}),
+                    )
+                    .await;
+            }
+        }
+        result
     }
 
     /// Attach to a page target and set it up as an agent browser.
@@ -1163,6 +1264,7 @@ impl Tab {
         target_id: String,
         opener_terminal_id: Option<String>,
         opener_browser_id: Option<String>,
+        context_id: Option<String>,
         events: Events,
     ) -> Result<Tab, String> {
         let attached = client
@@ -1215,6 +1317,7 @@ impl Tab {
             frames: Mutex::new(HashMap::new()),
             children: Mutex::new(HashMap::new()),
             opener_terminal_id,
+            context_id,
             opener_browser_id,
             events,
             announced: AtomicBool::new(false),
@@ -1240,6 +1343,7 @@ impl Tab {
             title: page.title.clone(),
             opener_terminal_id: self.opener_terminal_id.clone(),
             opener_browser_id: self.opener_browser_id.clone(),
+            private: self.context_id.is_some(),
             nav: Some(page.nav),
             dialog: page.dialog.clone(),
             ..Default::default()
@@ -2067,6 +2171,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: Some("data:text/html,<title>CfT</title><button>Go</button>".to_string()),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -2112,6 +2217,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: Some(page.to_string()),
                 opener_terminal_id: Some("term-7".to_string()),
+                private: false,
             })
             .await
             .unwrap();
@@ -2395,6 +2501,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: None,
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -2454,6 +2561,7 @@ mod tests {
                     .execute(AgentBrowserCommand::Open {
                         url: Some(url),
                         opener_terminal_id: None,
+                        private: false,
                     })
                     .await
                     .unwrap();
@@ -2587,6 +2695,7 @@ mod tests {
                     .execute(AgentBrowserCommand::Open {
                         url: Some(page.to_string()),
                         opener_terminal_id: None,
+                        private: false,
                     })
                     .await
                     .unwrap();
@@ -2728,6 +2837,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: Some(page.to_string()),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -2777,6 +2887,7 @@ mod tests {
                         .to_string(),
                 ),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -2839,6 +2950,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: Some(page("One")),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -3086,6 +3198,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: Some(page.to_string()),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -3230,6 +3343,7 @@ mod tests {
             .execute(AgentBrowserCommand::Open {
                 url: Some(page.to_string()),
                 opener_terminal_id: None,
+                private: false,
             })
             .await
             .unwrap();
@@ -3362,6 +3476,300 @@ mod tests {
                 .unwrap(),
             long.as_str()
         );
+
+        mgr.shutdown().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Serves one page (a title, two ways to open a popup) on 127.0.0.1 so
+    /// the tabs share a cookie host. Returns its URL.
+    async fn serve_fixture() -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let mut buf = [0u8; 4096];
+                    let _ = socket.read(&mut buf).await;
+                    let body = "<title>Fixture</title><p>fixture ok</p>\
+                        <button onclick=\"window.open('/')\">openpop</button>\
+                        <a href=\"/\" target=_blank>blanklink</a>";
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = socket.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}/")
+    }
+
+    async fn browser_contexts(tab: &Tab) -> Vec<String> {
+        let r = tab
+            .client
+            .call(None, "Target.getBrowserContexts", json!({}))
+            .await
+            .unwrap();
+        r["browserContextIds"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    }
+
+    async fn wait_context_gone(tab: &Tab, context: &str) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while browser_contexts(tab).await.iter().any(|c| c == context) {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("context was not disposed");
+    }
+
+    /// Opens a page in a new tab and returns its id.
+    async fn open_at(mgr: &AgentBrowserManager, url: &str, private: bool) -> String {
+        let info = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some(url.to_string()),
+                opener_terminal_id: None,
+                private,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            info["private"].as_bool().unwrap_or(false),
+            private,
+            "{info}"
+        );
+        info["id"].as_str().unwrap().to_string()
+    }
+
+    async fn cookies(mgr: &AgentBrowserManager, id: &str) -> String {
+        let tab = mgr.tabs.get(id).unwrap();
+        tab.evaluate("document.cookie")
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// Private tabs: isolated cookies (from the normal profile and from each
+    /// other), snapshot, and popups that stay in their opener's context.
+    #[tokio::test]
+    #[ignore]
+    async fn private_tabs_are_isolated_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let mut events = mgr.subscribe();
+        let url = serve_fixture().await;
+        let set = |id: String, kv: &'static str| {
+            let tab = mgr.tabs.get(&id).unwrap();
+            async move {
+                tab.evaluate(&format!("document.cookie = '{kv}; path=/'; 1"))
+                    .await
+                    .unwrap();
+            }
+        };
+
+        // (a) normal vs private, both directions.
+        let normal = open_at(&mgr, &url, false).await;
+        set(normal.clone(), "n=1").await;
+        let p1 = open_at(&mgr, &url, true).await;
+        assert_eq!(
+            cookies(&mgr, &p1).await,
+            "",
+            "private saw the profile's cookie"
+        );
+        set(p1.clone(), "p=1").await;
+        assert_eq!(
+            cookies(&mgr, &normal).await,
+            "n=1",
+            "profile saw a private cookie"
+        );
+        let normal2 = open_at(&mgr, &url, false).await;
+        assert_eq!(cookies(&mgr, &normal2).await, "n=1");
+
+        // (b) two private tabs do not share state.
+        let p2 = open_at(&mgr, &url, true).await;
+        assert_eq!(cookies(&mgr, &p2).await, "", "private tabs shared cookies");
+        set(p2.clone(), "q=1").await;
+        assert_eq!(cookies(&mgr, &p1).await, "p=1");
+        assert_eq!(cookies(&mgr, &p2).await, "q=1");
+        let ctx1 = mgr.tabs.get(&p1).unwrap().context_id.clone().unwrap();
+        let ctx2 = mgr.tabs.get(&p2).unwrap().context_id.clone().unwrap();
+        assert_ne!(ctx1, ctx2);
+        assert!(mgr.tabs.get(&normal).unwrap().context_id.is_none());
+
+        // (c) snapshot works, and popups (window.open and target=_blank)
+        // stay in the private context.
+        let snap = mgr
+            .execute(AgentBrowserCommand::Snapshot {
+                browser_id: p1.clone(),
+            })
+            .await
+            .unwrap();
+        assert!(snap.to_string().contains("fixture ok"), "{snap}");
+        for text in ["openpop", "blanklink"] {
+            mgr.execute(AgentBrowserCommand::Click {
+                browser_id: p1.clone(),
+                r#ref: None,
+                text: Some(text.into()),
+                xy: None,
+            })
+            .await
+            .unwrap();
+            let popup = reported(&mut events, text, |i| {
+                i.opener_browser_id.as_deref() == Some(p1.as_str())
+                    && i.private
+                    && mgr
+                        .tabs
+                        .get(&i.id)
+                        .is_some_and(|t| !t.page.lock().unwrap().url.is_empty())
+            })
+            .await;
+            let popup_tab = mgr.tabs.get(&popup.id).unwrap();
+            assert_eq!(popup_tab.context_id.as_deref(), Some(ctx1.as_str()));
+            // Same context: it sees the opener's cookie.
+            assert_eq!(cookies(&mgr, &popup.id).await, "p=1");
+            let snap = mgr
+                .execute(AgentBrowserCommand::Snapshot {
+                    browser_id: popup.id.clone(),
+                })
+                .await
+                .unwrap();
+            assert!(snap.to_string().contains("fixture ok"), "{snap}");
+            let listed = mgr.execute(AgentBrowserCommand::List).await.unwrap();
+            let entry = listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|b| b["id"] == popup.id.as_str())
+                .unwrap();
+            assert_eq!(entry["private"], true, "{listed}");
+            mgr.execute(AgentBrowserCommand::Close {
+                browser_id: popup.id,
+            })
+            .await
+            .unwrap();
+        }
+        // Closing popups must not have disposed the context of p1.
+        assert!(browser_contexts(&mgr.tabs.get(&normal).unwrap())
+            .await
+            .contains(&ctx1));
+        assert_eq!(cookies(&mgr, &p1).await, "p=1");
+
+        mgr.shutdown().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A private context is disposed when its last tab goes away (closed or
+    /// closing itself), never while another tab shares it, and not leaked by
+    /// a failed open.
+    #[tokio::test]
+    #[ignore]
+    async fn private_context_is_disposed_with_its_last_tab_in_a_real_browser() {
+        if std::env::var_os("OFFDESK_CHROMIUM").is_none() {
+            eprintln!("OFFDESK_CHROMIUM not set; skipping");
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("offdesk-agent-browser-{}", uuid::Uuid::new_v4()));
+        let mgr = AgentBrowserManager::with_dir(dir.clone());
+        let mut events = mgr.subscribe();
+        let url = serve_fixture().await;
+        // A normal tab keeps Chromium alive while the contexts come and go.
+        let normal = open_at(&mgr, &url, false).await;
+        let probe = mgr.tabs.get(&normal).unwrap();
+        let baseline = browser_contexts(&probe).await;
+
+        // A sole tab: closing it disposes the context.
+        let solo = open_at(&mgr, &url, true).await;
+        let solo_ctx = mgr.tabs.get(&solo).unwrap().context_id.clone().unwrap();
+        assert!(browser_contexts(&probe).await.contains(&solo_ctx));
+        mgr.execute(AgentBrowserCommand::Close { browser_id: solo })
+            .await
+            .unwrap();
+        wait_context_gone(&probe, &solo_ctx).await;
+        assert_eq!(browser_contexts(&probe).await, baseline);
+
+        // Two tabs share a context (opener + popup): closing one keeps it,
+        // closing the other disposes it.
+        let opener = open_at(&mgr, &url, true).await;
+        let ctx = mgr.tabs.get(&opener).unwrap().context_id.clone().unwrap();
+        mgr.execute(AgentBrowserCommand::Click {
+            browser_id: opener.clone(),
+            r#ref: None,
+            text: Some("openpop".into()),
+            xy: None,
+        })
+        .await
+        .unwrap();
+        let popup = reported(&mut events, "popup", |i| {
+            i.opener_browser_id.as_deref() == Some(opener.as_str()) && i.private
+        })
+        .await;
+        mgr.execute(AgentBrowserCommand::Close {
+            browser_id: opener.clone(),
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(
+            browser_contexts(&probe).await.contains(&ctx),
+            "context disposed while the popup still used it"
+        );
+        assert!(mgr.tabs.get(&popup.id).is_some());
+        assert_eq!(
+            mgr.tabs
+                .get(&popup.id)
+                .unwrap()
+                .evaluate("1+1")
+                .await
+                .unwrap(),
+            2
+        );
+        // The last tab closes itself (the event path, not `close`).
+        mgr.tabs
+            .get(&popup.id)
+            .unwrap()
+            .evaluate("window.close(); 1")
+            .await
+            .unwrap();
+        wait_context_gone(&probe, &ctx).await;
+        assert!(mgr.tabs.get(&popup.id).is_none());
+        assert_eq!(browser_contexts(&probe).await, baseline);
+
+        // A failed private open leaks no context.
+        let failed = mgr
+            .execute(AgentBrowserCommand::Open {
+                url: Some("http://127.0.0.1:1/".to_string()),
+                opener_terminal_id: None,
+                private: true,
+            })
+            .await;
+        eprintln!("open of an unreachable url: {failed:?}");
+        if let Ok(info) = failed {
+            mgr.execute(AgentBrowserCommand::Close {
+                browser_id: info["id"].as_str().unwrap().to_string(),
+            })
+            .await
+            .unwrap();
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(browser_contexts(&probe).await, baseline);
 
         mgr.shutdown().await;
         let _ = std::fs::remove_dir_all(dir);

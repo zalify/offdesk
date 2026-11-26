@@ -137,11 +137,12 @@ pub fn tool_definitions() -> Vec<Value> {
     vec![
         tool(
             "browser_open",
-            "Open a new headless browser tab on a machine and return its record as JSON (use its `id` in every other browser_* tool). Starts on a blank page when url is omitted.",
+            "Open a new headless browser tab on a machine and return its record as JSON (use its `id` in every other browser_* tool). Starts on a blank page when url is omitted. With private=true the tab gets a fresh isolated context: no shared cookies or logins, nothing persisted, destroyed when its last tab closes (popups stay in it); use it to test a site from a clean state. Fails on a machine whose node is too old for private tabs.",
             schema(
                 json!({
                     "url": {"type": "string", "description": "URL to load (default: blank page)"},
                     "machine": machine_prop("Machine id, unique id prefix, or name (default: the only online machine, or the one this agent runs on)"),
+                    "private": {"type": "boolean", "description": "Open in a fresh isolated browser context (clean cookies and storage, nothing persisted). Default false: the shared persistent profile."},
                 }),
                 &[],
             ),
@@ -371,6 +372,8 @@ pub fn tool_definitions() -> Vec<Value> {
 struct OpenArgs {
     url: Option<String>,
     machine: Option<String>,
+    #[serde(default)]
+    private: bool,
 }
 
 #[derive(Deserialize)]
@@ -680,9 +683,14 @@ impl Server {
             "browser_open" => {
                 let a = args!(OpenArgs);
                 self.run(None, |client, local| async move {
-                    let info =
-                        browser::open_browser(&client, a.machine.as_deref(), local.as_deref(), a.url)
-                            .await?;
+                    let info = browser::open_browser(
+                        &client,
+                        a.machine.as_deref(),
+                        local.as_deref(),
+                        a.url,
+                        a.private,
+                    )
+                    .await?;
                     ToolResult::ok_json(&info)
                 })
                 .await
