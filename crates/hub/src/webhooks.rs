@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use base64::Engine;
-use offdesk_protocol::AgentRunInfo;
+use offdesk_protocol::{AgentRunInfo, RunAgent};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
@@ -155,7 +155,9 @@ fn event_id() -> String {
 pub enum HubUpdate {
     /// The run's owner, when the update named one (else its machine's owner).
     Run(Option<String>, AgentRunInfo),
-    Machine { machine_id: String, online: bool },
+    /// `agents`: the coding agents it found installed, once it reported them (bridges
+    /// offer only those).
+    Machine { machine_id: String, online: bool, agents: Option<Vec<RunAgent>> },
 }
 
 /// A run changed: an event per change for each enabled webhook that wants it (and every
@@ -209,9 +211,15 @@ pub fn on_run(conn: &rusqlite::Connection, user_id: &str, run: &AgentRunInfo) ->
     Ok(queued)
 }
 
-/// A machine came online or went away: an event for each enabled bridge that may see
-/// it (bridges show who's online; webhooks don't get these).
-pub fn on_machine(conn: &rusqlite::Connection, machine_id: &str, online: bool) -> rusqlite::Result<usize> {
+/// A machine came online or went away, or reported the agents it has: an event for each
+/// enabled bridge that may see it (bridges show who's online and offer what it can start;
+/// webhooks don't get these).
+pub fn on_machine(
+    conn: &rusqlite::Connection,
+    machine_id: &str,
+    online: bool,
+    agents: Option<&[RunAgent]>,
+) -> rusqlite::Result<usize> {
     let Some(machine) = db::machines::find_machine_by_id(conn, machine_id)? else {
         return Ok(0);
     };
@@ -219,7 +227,7 @@ pub fn on_machine(conn: &rusqlite::Connection, machine_id: &str, online: bool) -
     let body = serde_json::json!({
         "type": event_type,
         "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        "data": { "machine": { "id": machine.id, "name": machine.name, "online": online } },
+        "data": { "machine": machine_json(&machine.id, &machine.name, online, agents) },
     })
     .to_string();
     let mut queued = 0;
@@ -233,6 +241,16 @@ pub fn on_machine(conn: &rusqlite::Connection, machine_id: &str, online: bool) -
         crate::bridge::wake();
     }
     Ok(queued)
+}
+
+/// A machine as bridges see it; `agents` only when it reported some, so a server tells
+/// "not known" (an older node, or not probed yet) from what it can start.
+pub fn machine_json(id: &str, name: &str, online: bool, agents: Option<&[RunAgent]>) -> serde_json::Value {
+    let mut machine = serde_json::json!({ "id": id, "name": name, "online": online });
+    if let Some(agents) = agents.filter(|agents| !agents.is_empty()) {
+        machine["agents"] = serde_json::json!(agents);
+    }
+    machine
 }
 
 /// Queues a test event for one integration, whatever its filter.
@@ -350,9 +368,9 @@ pub fn spawn(pool: DbPool) -> mpsc::UnboundedSender<HubUpdate> {
                     let Some(update) = update else { break };
                     let (user_id, run) = match update {
                         HubUpdate::Run(user_id, run) => (user_id, run),
-                        HubUpdate::Machine { machine_id, online } => {
+                        HubUpdate::Machine { machine_id, online, agents } => {
                             if let Ok(conn) = pool.get() {
-                                if let Err(error) = on_machine(&conn, &machine_id, online) {
+                                if let Err(error) = on_machine(&conn, &machine_id, online, agents.as_deref()) {
                                     tracing::warn!("webhooks: {}", error);
                                 }
                             }

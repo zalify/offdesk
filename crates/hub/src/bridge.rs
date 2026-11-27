@@ -346,15 +346,26 @@ async fn snapshot(state: &AppState, bridge: &Integration) -> Result<Value, Strin
         })
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())?;
+    // The agents each connected machine found installed, once it reported them
+    let mut shown = Vec::with_capacity(machines.len());
+    for m in &machines {
+        let is_online = online.contains(&m.id);
+        let agents: Option<Vec<offdesk_protocol::RunAgent>> = match is_online {
+            true => state
+                .manager
+                .installed_agents(&m.id)
+                .await
+                .map(|installed| installed.iter().map(|a| a.agent).collect()),
+            false => None,
+        };
+        let mut machine = crate::webhooks::machine_json(&m.id, &m.name, is_online, agents.as_deref());
+        machine["os"] = json!(m.os);
+        machine["production"] = json!(m.production);
+        shown.push(machine);
+    }
     Ok(json!({
         "type": "snapshot",
-        "machines": machines.iter().map(|m| json!({
-            "id": m.id,
-            "name": m.name,
-            "os": m.os,
-            "production": m.production,
-            "online": online.contains(&m.id),
-        })).collect::<Vec<_>>(),
+        "machines": shown,
         "runs": runs,
     }))
 }

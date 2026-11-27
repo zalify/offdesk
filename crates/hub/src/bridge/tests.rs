@@ -125,6 +125,7 @@ async fn a_bridge_pairs_resumes_refuses_and_hangs_up_when_revoked() {
     let snapshot = next(&mut ws).await;
     assert_eq!(snapshot["type"], "snapshot");
     assert_eq!(snapshot["machines"][0]["name"], "studio");
+    assert!(snapshot["machines"][0].get("agents").is_none(), "not known while it's offline");
     let waiting = snapshot["runs"][0].clone();
     assert_eq!(waiting["request"]["prompt"], "Which plan?", "content level requests");
     assert!(status("bridge-1").unwrap().connected);
@@ -135,6 +136,17 @@ async fn a_bridge_pairs_resumes_refuses_and_hangs_up_when_revoked() {
     assert_eq!((event["type"].as_str(), event["event"]["type"].as_str()), (Some("event"), Some("run.started")));
     let first_seq = event["seq"].as_i64().unwrap();
     ws.send(Message::Text(json!({ "type": "ack", "seq": first_seq }).to_string().into())).await.unwrap();
+
+    // The agents a machine found installed, so the server offers only those
+    crate::webhooks::on_machine(&pool.get().unwrap(), "machine-a", true, Some(&[RunAgent::Claude, RunAgent::Antigravity])).unwrap();
+    let event = next(&mut ws).await;
+    assert_eq!(event["event"]["type"], "machine.online");
+    assert_eq!(event["event"]["data"]["machine"], json!({ "id": "machine-a", "name": "studio", "online": true, "agents": ["claude", "antigravity"] }));
+    ws.send(Message::Text(json!({ "type": "ack", "seq": event["seq"] }).to_string().into())).await.unwrap();
+    crate::webhooks::on_machine(&pool.get().unwrap(), "machine-a", false, None).unwrap();
+    let event = next(&mut ws).await;
+    assert_eq!(event["event"]["data"]["machine"], json!({ "id": "machine-a", "name": "studio", "online": false }));
+    ws.send(Message::Text(json!({ "type": "ack", "seq": event["seq"] }).to_string().into())).await.unwrap();
 
     // A command beyond its scopes: refused, recorded, and the same answer again on a repeat
     let request_id = waiting["request"]["id"].as_str().unwrap().to_string();
