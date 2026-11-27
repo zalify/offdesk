@@ -1774,7 +1774,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             c += w;
           }
         }
-        const isTokenChar = (ch: string) => ch !== "" && !/\s|['"()[\]{}<>,;`]/.test(ch);
+        const isTokenChar = (ch: string) =>
+          ch !== "" && !/[\s'"()[\]{}<>,;`：，。；！？（）【】「」『』《》、·—…“”‘’]/.test(ch);
         const rowCells = (r: number): string[] => {
           const out = new Array<string>(frame.cols).fill(" ");
           for (const sp of frame.spans[r] ?? []) {
