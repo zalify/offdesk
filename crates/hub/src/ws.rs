@@ -1276,21 +1276,24 @@ async fn handle_machine_ws(socket: WebSocket, state: AppState) {
         _ => return,
     };
 
-    // Machine disconnected — cleanup (only if this connection is still current)
-    if let Ok(conn) = state.db.get() {
-        let _ = db::machines::update_machine_status(&conn, &machine_id, "offline");
-    }
-    state
+    // Machine disconnected — cleanup ONLY if this connection is still current
+    // (a fast reconnect may already have replaced it with a newer conn_id).
+    let was_current = state
         .manager
         .unregister_machine(&machine_id, &conn_id)
         .await;
-    let dropped = state.router.drop_machine(&machine_id);
-    if !dropped.is_empty() {
-        tracing::info!(
-            "dropped {} attach routing entries for offline machine {}",
-            dropped.len(),
-            machine_id
-        );
+    if was_current {
+        if let Ok(conn) = state.db.get() {
+            let _ = db::machines::update_machine_status(&conn, &machine_id, "offline");
+        }
+        let dropped = state.router.drop_machine(&machine_id);
+        if !dropped.is_empty() {
+            tracing::info!(
+                "dropped {} attach routing entries for offline machine {}",
+                dropped.len(),
+                machine_id
+            );
+        }
     }
     tracing::info!(
         "Machine {} disconnected (conn={})",

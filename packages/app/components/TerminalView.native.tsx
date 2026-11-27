@@ -1283,12 +1283,15 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     }, [schedulePaint]);
 
-    // Immediately reconnect if the WebSocket went closed while sleeping or offline.
+    // Immediately reconnect if the WebSocket went closed, closing, or stuck connecting while sleeping/offline.
     useEffect(() => {
       const wakeCheck = () => {
         if (document.visibilityState === "hidden") return;
         const ws = wsRef.current;
-        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+          if (ws && ws.readyState === WebSocket.CONNECTING) {
+            try { ws.close(); } catch { /* ignore */ }
+          }
           setSessionGen((v) => v + 1);
         }
       };
@@ -1309,7 +1312,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       wsRef.current = ws;
 
       const compression = createDeflateRawV1Session({
-        onError: () => {},
+        onError: () => {
+          // A corrupted deflate stream cannot recover in-place; force a clean reconnect.
+          if (!disposed) {
+            try { ws.close(); } catch { /* ignore */ }
+          }
+        },
       });
       let pendingChunks: Uint8Array[] = [];
       let rafId: number | null = null;
@@ -1437,11 +1445,19 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
 
       ws.onclose = () => {
         if (disposed) return;
+        if (!readyFiredRef.current) {
+          readyFiredRef.current = true;
+          callbacksRef.current.onReady?.();
+        }
         callbacksRef.current.onReconnectingChange?.(true);
         reconnect.scheduleReconnect();
       };
       ws.onerror = () => {
         if (disposed) return;
+        if (!readyFiredRef.current) {
+          readyFiredRef.current = true;
+          callbacksRef.current.onReady?.();
+        }
         callbacksRef.current.onReconnectingChange?.(true);
       };
 

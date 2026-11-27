@@ -496,11 +496,10 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
         style={{
           flexShrink: 0,
           display: "flex",
+          flexWrap: "wrap",
           alignItems: "center",
           gap: compact ? 4 : 6,
-          overflowX: "auto",
-          scrollbarWidth: "none",
-          padding: compact ? "6px 8px 4px" : "2px 0 8px",
+          padding: compact ? "6px 8px 5px" : "2px 0 8px",
           borderBottom: compact ? `1px solid ${colors.lineSoft}` : undefined,
         }}
       >

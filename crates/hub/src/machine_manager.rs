@@ -688,15 +688,16 @@ impl MachineManager {
     }
 
     /// Unregister a machine when it disconnects. Only removes if conn_id matches.
+    /// Returns true if this connection was the active one and was removed.
     /// Terminals are preserved as unreachable (moved to persisted_terminals) instead of being destroyed.
-    pub async fn unregister_machine(&self, machine_id: &str, conn_id: &str) {
+    pub async fn unregister_machine(&self, machine_id: &str, conn_id: &str) -> bool {
         let mut machines = self.machines.lock().await;
         let should_remove = machines
             .get(machine_id)
             .map(|c| c.conn_id == conn_id)
             .unwrap_or(false);
         if !should_remove {
-            return;
+            return false;
         }
         if let Some(conn) = machines.remove(machine_id) {
             conn.preview_lifetime.cancel();
@@ -768,7 +769,9 @@ impl MachineManager {
                     machine_id: machine_id.to_string(),
                 },
             );
+            return true;
         }
+        false
     }
 
     /// Terminals were destroyed: close the agent browsers they opened.
