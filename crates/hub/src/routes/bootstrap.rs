@@ -1,5 +1,6 @@
 use axum::{
     extract::{Query, State},
+    http::HeaderMap,
     response::Json,
     routing::get,
     Router,
@@ -17,9 +18,16 @@ struct BootstrapQuery {
 async fn get_bootstrap(
     auth_user: AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<BootstrapQuery>,
 ) -> Json<BrowserStateSnapshot> {
-    if let Some(device_id) = query.device_id.as_deref() {
+    let device_id = headers
+        .get("x-offdesk-device-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(query.device_id.as_deref());
+    if let Some(device_id) = device_id {
         state
             .manager
             .restore_released_leases_for_device(&auth_user.user_id, device_id);

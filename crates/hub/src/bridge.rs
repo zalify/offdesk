@@ -268,11 +268,18 @@ async fn connect_and_serve(
     loop {
         // What's queued and not sent on this connection yet
         loop {
-            let pending = state
-                .db
-                .get()
-                .map_err(|e| e.to_string())
-                .and_then(|conn| integrations::unacked(&conn, &bridge.id, last_sent, 100).map_err(|e| e.to_string()))?;
+            let db = state.db.clone();
+            let bridge_id = bridge.id.clone();
+            let pending = tokio::task::spawn_blocking(move || {
+                db.get()
+                    .map_err(|e| e.to_string())
+                    .and_then(|conn| {
+                        integrations::unacked(&conn, &bridge_id, last_sent, 100)
+                            .map_err(|e| e.to_string())
+                    })
+            })
+            .await
+            .map_err(|e| e.to_string())??;
             if pending.is_empty() {
                 break;
             }
@@ -473,10 +480,19 @@ async fn handle(state: &AppState, bridge: &Integration, text: &str) -> Option<Va
     };
     let command_id = match &message {
         ServerMessage::Ack { seq } => {
-            if let Ok(conn) = state.db.get() {
-                if let Err(error) = integrations::ack(&conn, &bridge.id, *seq) {
-                    tracing::warn!("bridge ack: {}", error);
-                }
+            let db = state.db.clone();
+            let bridge_id = bridge.id.clone();
+            let seq = *seq;
+            match tokio::task::spawn_blocking(move || {
+                db.get()
+                    .map_err(|e| e.to_string())
+                    .and_then(|conn| integrations::ack(&conn, &bridge_id, seq).map_err(|e| e.to_string()))
+            })
+            .await
+            {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => tracing::warn!("bridge ack: {}", error),
+                Err(error) => tracing::warn!("bridge ack task: {}", error),
             }
             return None;
         }

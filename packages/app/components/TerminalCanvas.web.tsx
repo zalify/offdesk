@@ -784,7 +784,9 @@ function TerminalCanvasInner() {
         ) {
           deleteLiveMachineStat(envelope.event.machine_id);
         }
-        setBrowserState((prev) => applyBrowserEventEnvelope(prev, envelope));
+        setBrowserState((prev) =>
+          applyBrowserEventEnvelope(prev, envelope, { skipGapCheck: true }),
+        );
         if (envelope.event?.type === "terminal_destroyed") {
           const keepWorkspaceOpen =
             keepWorkspaceOpenDestroyedTerminalIdsRef.current.delete(

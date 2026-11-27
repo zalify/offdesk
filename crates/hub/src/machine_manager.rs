@@ -2226,13 +2226,18 @@ impl MachineManager {
             })
         };
         if let Some((target_user_id, terminal)) = updated {
-            if let Ok(db_conn) = self.db.get() {
-                if let Err(e) =
-                    crate::db::terminal_sessions::update_size(&db_conn, terminal_id, cols, rows)
-                {
-                    tracing::warn!("Failed to persist terminal size update: {}", e);
+            let db = self.db.clone();
+            let tid = terminal_id.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                if let Ok(db_conn) = db.get() {
+                    if let Err(e) =
+                        crate::db::terminal_sessions::update_size(&db_conn, &tid, cols, rows)
+                    {
+                        tracing::warn!("Failed to persist terminal size update: {}", e);
+                    }
                 }
-            }
+            })
+            .await;
             self.send_event(target_user_id, BrowserEvent::TerminalResized { terminal });
         }
     }
@@ -2725,16 +2730,21 @@ impl MachineManager {
                 title,
                 source,
             } => {
-                let outcome = match self.db.get() {
+                let db = self.db.clone();
+                let tid = terminal_id.clone();
+                let title_for_db = title.clone();
+                let outcome = tokio::task::spawn_blocking(move || match db.get() {
                     Ok(db_conn) => crate::db::terminal_sessions::apply_title_update(
                         &db_conn,
-                        &terminal_id,
-                        &title,
+                        &tid,
+                        &title_for_db,
                         source,
                     )
                     .map_err(|error| error.to_string()),
                     Err(error) => Err(error.to_string()),
-                };
+                })
+                .await
+                .unwrap_or_else(|error| Err(error.to_string()));
                 match outcome {
                     Ok(crate::db::terminal_sessions::TitleUpdateOutcome::Updated) => {
                         let mut machines = self.machines.lock().await;
@@ -3310,16 +3320,21 @@ impl MachineManager {
                     })
                 };
                 if let Some((target_user_id, terminal)) = updated {
-                    if let Ok(db_conn) = self.db.get() {
-                        if let Err(e) = crate::db::terminal_sessions::update_size(
-                            &db_conn,
-                            &terminal_id,
-                            cols,
-                            rows,
-                        ) {
-                            tracing::warn!("Failed to persist terminal size update: {}", e);
+                    let db = self.db.clone();
+                    let tid = terminal_id.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        if let Ok(db_conn) = db.get() {
+                            if let Err(e) = crate::db::terminal_sessions::update_size(
+                                &db_conn,
+                                &tid,
+                                cols,
+                                rows,
+                            ) {
+                                tracing::warn!("Failed to persist terminal size update: {}", e);
+                            }
                         }
-                    }
+                    })
+                    .await;
                     self.send_event(target_user_id, BrowserEvent::TerminalResized { terminal });
                 }
             }
@@ -4052,7 +4067,8 @@ impl MachineManager {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             loop {
                 interval.tick().await;
-                manager.flush_event_seq();
+                let m = Arc::clone(&manager);
+                let _ = tokio::task::spawn_blocking(move || m.flush_event_seq()).await;
             }
         });
     }

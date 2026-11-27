@@ -32,12 +32,19 @@ pub mod workspace_layouts;
 pub type DbPool = Pool<SqliteConnectionManager>;
 
 pub fn create_pool(path: &str) -> Result<DbPool, Box<dyn std::error::Error>> {
-    // busy_timeout is per-connection, so set it on every pooled connection.
-    let manager = SqliteConnectionManager::file(path)
-        .with_init(|c| c.execute_batch("PRAGMA busy_timeout=5000;"));
+    // busy_timeout, synchronous, foreign_keys, and temp_store are per-connection,
+    // so configure them on every pooled connection via with_init.
+    let manager = SqliteConnectionManager::file(path).with_init(|c| {
+        c.execute_batch(
+            "PRAGMA busy_timeout = 5000;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;",
+        )
+    });
     let pool = Pool::builder().max_size(8).build(manager)?;
     let conn = pool.get()?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    conn.execute_batch("PRAGMA journal_mode = WAL;")?;
     Ok(pool)
 }
 
@@ -404,6 +411,8 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due
             ON webhook_outbox(next_attempt_at) WHERE delivered_at IS NULL AND failed_at IS NULL;
         CREATE INDEX IF NOT EXISTS idx_webhook_outbox_integration ON webhook_outbox(integration_id, id);
+        CREATE INDEX IF NOT EXISTS idx_webhook_outbox_pending
+            ON webhook_outbox(integration_id, id) WHERE delivered_at IS NULL;
         CREATE TABLE IF NOT EXISTS webhook_run_state (
             run_id TEXT PRIMARY KEY,
             seq INTEGER NOT NULL,
@@ -415,6 +424,8 @@ pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
             ended INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL
         );
+        CREATE INDEX IF NOT EXISTS idx_webhook_run_state_ended_updated
+            ON webhook_run_state(ended, updated_at);
     ",
     )?;
 

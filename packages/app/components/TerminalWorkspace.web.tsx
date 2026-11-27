@@ -626,7 +626,7 @@ function TerminalWorkspaceComponent({
   );
 
   const activateTerminal = useCallback(
-    (terminalId: string) => {
+    (terminalId: string, options?: { skipSameGroupFit?: boolean }) => {
       const changedTerminal = terminalId !== workspaceRef.current.activeTerminalId;
       const targetGroup =
         workspaceRef.current.groups.find((candidate) =>
@@ -653,8 +653,8 @@ function TerminalWorkspaceComponent({
         // zoomed pane shrank back to its rect and needs a refit too (panes
         // no longer remount on zoom changes). A terminal in another tab (a
         // sidebar row) brings that tab's panes into view, sized while hidden,
-        // so all of them get the refit a tab click gives. Moving focus between
-        // already-visible panes in the same unzoomed group needs no refit.
+        // so all of them get the refit a tab click gives. Hover-to-focus
+        // skips same-group refit while explicit clicks still refit.
         const previouslyZoomed = maximizedTerminalIdRef.current;
         if (changedGroup) {
           requestPaneFit([terminalId, ...collectIds(targetGroup.root)], {
@@ -664,6 +664,8 @@ function TerminalWorkspaceComponent({
           requestPaneFit([terminalId, previouslyZoomed], {
             focusTerminalId: terminalId,
           });
+        } else if (!options?.skipSameGroupFit) {
+          requestPaneFit(terminalId, { focusTerminalId: terminalId });
         }
       }
     },
@@ -1667,7 +1669,7 @@ const WorkspacePaneTree = memo(function WorkspacePaneTree({
   fitRequest: WorkspaceFitRequest | null;
   onActiveRef: (ref: TerminalCardRef | null) => void;
   onFitRequestHandled: (nonce: number, terminalId: string) => void;
-  onFocus: (id: string) => void;
+  onFocus: (id: string, options?: { skipSameGroupFit?: boolean }) => void;
   /** A pane's first screen is up, or its attach failed. */
   onReady?: (terminalId: string) => void;
   onDestroy: (terminal: TerminalInfo) => void;
@@ -1806,7 +1808,7 @@ export const WorkspacePaneLeaf = memo(function WorkspacePaneLeaf({
   fitRequestShouldFocus: boolean;
   onActiveRef: (ref: TerminalCardRef | null) => void;
   onFitRequestHandled: (nonce: number, terminalId: string) => void;
-  onFocus: (id: string) => void;
+  onFocus: (id: string, options?: { skipSameGroupFit?: boolean }) => void;
   onDestroy: (terminal: TerminalInfo) => void;
   isMaximized?: boolean;
   canMaximize?: boolean;
@@ -1903,7 +1905,7 @@ export const WorkspacePaneLeaf = memo(function WorkspacePaneLeaf({
         if (isTouch || isActive) return;
         const target = event.target;
         if (target instanceof Element && target.closest("button")) return;
-        onFocus(terminal.id);
+        onFocus(terminal.id, { skipSameGroupFit: true });
       }}
       onContextMenu={(event) => onPaneContextMenu?.(terminal.id, event)}
       onPointerDown={(event) => {

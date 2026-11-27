@@ -19,6 +19,7 @@ import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
 import { useLiveMachineStats, useLiveRttMs } from "@/lib/liveMetricsStore";
+import { useSidebarHoverPreferences } from "@/lib/sidebarHoverPreferences";
 import { terminalOpenerDescription } from "@/lib/terminalOpener";
 import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { countWaitingBySpace, DEFAULT_SPACE_COLOR, filterGroupsBySpace } from "@/lib/spaces";
@@ -42,6 +43,16 @@ export type SessionsDropPlacement = "before" | "after";
 
 // Distance (px) a press must travel before it becomes a drag.
 const DRAG_THRESHOLD_PX = 4;
+// Short dwell before hover-switching Space or Terminal so accidental pointer
+// sweeps across the sidebar don't thrash the active selection.
+const HOVER_SWITCH_DELAY_MS = 90;
+
+function isFineMousePointer(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return true;
+  }
+  return !window.matchMedia("(pointer: coarse)").matches;
+}
 
 /** The machine row: the switcher, its load and the round trip. */
 export interface SessionsSidebarMachine {
@@ -145,6 +156,15 @@ function SessionsSidebarComponent({
     onRenameTerminal?.(terminal, renameDraft.trim());
   };
   const isDrawer = placement === "drawer";
+  const { hoverSwitchSpace, hoverSwitchTerminal } = useSidebarHoverPreferences();
+  const hoverTimerRef = useRef<number | null>(null);
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+  useEffect(() => clearHoverTimer, [clearHoverTimer]);
 
   const [order, setOrder] = useState<SessionOrder>(readSessionOrder);
   const [projectMode, setProjectMode] = useState(false);
@@ -225,10 +245,23 @@ function SessionsSidebarComponent({
   }, [isDrawer, onHide]);
 
   const selectTerminal = (terminalId: string) => {
+    clearHoverTimer();
     if (suppressClickRef.current) return;
     onSelectTerminal(terminalId);
     if (isDrawer) onHide();
   };
+
+  const scheduleHoverSwitch = useCallback(
+    (action: () => void) => {
+      clearHoverTimer();
+      if (!isFineMousePointer()) return;
+      hoverTimerRef.current = window.setTimeout(() => {
+        hoverTimerRef.current = null;
+        action();
+      }, HOVER_SWITCH_DELAY_MS);
+    },
+    [clearHoverTimer],
+  );
 
   // Where a terminal can move: another tab with a row of its own and room.
   const moveTargets = useCallback(
@@ -495,6 +528,20 @@ function SessionsSidebarComponent({
           aria-current={current ? "true" : undefined}
           title={terminal.cwd}
           onClick={() => selectTerminal(terminal.id)}
+          onMouseEnter={() => {
+            if (
+              !hoverSwitchTerminal ||
+              current ||
+              drag !== null ||
+              menu !== null ||
+              renamingTerminalId !== null
+            ) {
+              return;
+            }
+            scheduleHoverSwitch(() => onSelectTerminal(terminal.id));
+          }}
+          onMouseLeave={clearHoverTimer}
+          onMouseDown={clearHoverTimer}
           onDoubleClick={(event) => {
             if (!onRenameTerminal) return;
             event.preventDefault();
@@ -822,7 +869,24 @@ function SessionsSidebarComponent({
             aria-selected={activeSpaceId === null}
             data-testid="sessions-space-all"
             className="odk-sessions-space-pill"
-            onClick={() => onSelectSpace?.(null)}
+            onClick={() => {
+              clearHoverTimer();
+              onSelectSpace?.(null);
+            }}
+            onMouseEnter={() => {
+              if (
+                !hoverSwitchSpace ||
+                !onSelectSpace ||
+                activeSpaceId === null ||
+                drag !== null ||
+                menu !== null ||
+                renamingTerminalId !== null
+              ) {
+                return;
+              }
+              scheduleHoverSwitch(() => onSelectSpace(null));
+            }}
+            onMouseLeave={clearHoverTimer}
           >
             <span>Default</span>
             {defaultSpaceWaiting > 0 && activeSpaceId !== null && (
@@ -851,7 +915,24 @@ function SessionsSidebarComponent({
                     : `${space.name} · Right-click to edit`
                 }
                 className="odk-sessions-space-pill"
-                onClick={() => onSelectSpace?.(space.id)}
+                onClick={() => {
+                  clearHoverTimer();
+                  onSelectSpace?.(space.id);
+                }}
+                onMouseEnter={() => {
+                  if (
+                    !hoverSwitchSpace ||
+                    !onSelectSpace ||
+                    selected ||
+                    drag !== null ||
+                    menu !== null ||
+                    renamingTerminalId !== null
+                  ) {
+                    return;
+                  }
+                  scheduleHoverSwitch(() => onSelectSpace(space.id));
+                }}
+                onMouseLeave={clearHoverTimer}
                 onDoubleClick={() => onOpenSpaceModal?.(space)}
                 onContextMenu={(event) => {
                   if (!onOpenSpaceModal) return;

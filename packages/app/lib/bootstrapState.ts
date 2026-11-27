@@ -91,8 +91,9 @@ export function upsertAgentBrowser(
 export function applyBrowserEventEnvelope(
   state: BrowserSessionState,
   envelope: BrowserEventEnvelope,
+  options?: { skipGapCheck?: boolean },
 ): BrowserSessionState {
-  if (shouldResyncForEnvelope(state, envelope)) {
+  if (!options?.skipGapCheck && shouldResyncForEnvelope(state, envelope)) {
     return state;
   }
 

@@ -1399,18 +1399,39 @@ async fn handle_events(
     let mut rx = subscription.receiver;
     let event_user_id = session_user_id.clone();
     let lag_device_id = device_id.clone();
-    let (out_tx, mut out_rx) = mpsc::channel::<Message>(64);
+    let (event_out_tx, mut event_out_rx) = mpsc::channel::<Message>(64);
+    let (pong_out_tx, mut pong_out_rx) = mpsc::channel::<Message>(16);
 
     let mut writer_task = tokio::spawn(async move {
-        while let Some(message) = out_rx.recv().await {
-            if sender.send(message).await.is_err() {
-                break;
+        let mut events_open = true;
+        let mut pongs_open = true;
+        while events_open || pongs_open {
+            let next = tokio::select! {
+                biased;
+                msg = pong_out_rx.recv(), if pongs_open => match msg {
+                    Some(message) => Some(message),
+                    None => {
+                        pongs_open = false;
+                        None
+                    }
+                },
+                msg = event_out_rx.recv(), if events_open => match msg {
+                    Some(message) => Some(message),
+                    None => {
+                        events_open = false;
+                        None
+                    }
+                },
+            };
+            if let Some(message) = next {
+                if sender.send(message).await.is_err() {
+                    break;
+                }
             }
         }
     });
 
     // Task: forward events to browser
-    let event_out_tx = out_tx.clone();
     let mut send_task = tokio::spawn(async move {
         for envelope in replay {
             let msg = serde_json::to_string(&envelope).unwrap();
@@ -1453,8 +1474,7 @@ async fn handle_events(
         }
     });
 
-    // Task: respond to per-connection pings and detect client disconnect.
-    let recv_out_tx = out_tx.clone();
+    // Task: respond to per-connection pings (prioritized over queued events) and detect client disconnect.
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
@@ -1465,7 +1485,7 @@ async fn handle_events(
                         continue;
                     };
                     let pong = serde_json::to_string(&BrowserEventsPong { t }).unwrap();
-                    if recv_out_tx.send(Message::Text(pong.into())).await.is_err() {
+                    if pong_out_tx.send(Message::Text(pong.into())).await.is_err() {
                         break;
                     }
                 }
@@ -1474,7 +1494,6 @@ async fn handle_events(
             }
         }
     });
-    drop(out_tx);
 
     tokio::select! {
         _ = &mut writer_task => {},

@@ -19,12 +19,25 @@ use offdesk_secure::{
     messages::{Authenticate, AuthenticationResult, Request, Response},
     Channel, Identity, MAX_MESSAGE, MAX_RECORD,
 };
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::{
-    sync::{mpsc, Mutex, Semaphore},
+    sync::{mpsc, Mutex, Notify, Semaphore},
     task::JoinSet,
 };
 use tower::ServiceExt;
+
+/// Bumped whenever a device is revoked so active secure connections wake up
+/// and re-check SQLite immediately instead of polling every second.
+static REVOCATION_EPOCH: AtomicU64 = AtomicU64::new(0);
+static REVOCATION_NOTIFY: Notify = Notify::const_new();
+const REVOCATION_RECHECK_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct SecureState {
@@ -67,13 +80,18 @@ async fn revoke_device(
     user: AuthUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, StatusCode> {
-    let conn = state
-        .db
-        .get()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let revoked = store::revoke(&conn, &user.user_id, &id, crate::db::now_ms())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let db = state.db.clone();
+    let user_id = user.user_id;
+    let revoked = tokio::task::spawn_blocking(move || {
+        let conn = db.get().map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        store::revoke(&conn, &user_id, &id, crate::db::now_ms())
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)??;
     if revoked {
+        REVOCATION_EPOCH.fetch_add(1, Ordering::Release);
+        REVOCATION_NOTIFY.notify_waiters();
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(StatusCode::NOT_FOUND)
@@ -200,12 +218,40 @@ async fn serve(
     let sockets: Sockets = Arc::new(Mutex::new(HashMap::new()));
     let http_slots = Arc::new(Semaphore::new(16));
     let mut tasks = JoinSet::new();
-    let mut revocations = tokio::time::interval(Duration::from_secs(1));
+    let mut checked_epoch = REVOCATION_EPOCH.load(Ordering::Acquire);
+    let mut revocations = tokio::time::interval(REVOCATION_RECHECK_INTERVAL);
+    revocations.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // First tick fires immediately; skip it since `authenticate()` just verified the device.
+    revocations.reset();
     loop {
+        let current_epoch = REVOCATION_EPOCH.load(Ordering::Acquire);
+        if current_epoch != checked_epoch {
+            checked_epoch = current_epoch;
+            let db = state.app.db.clone();
+            let active = tokio::task::spawn_blocking(move || {
+                db.get().ok().and_then(|conn| store::active(&conn, &key).ok()).flatten()
+            })
+            .await
+            .ok()
+            .flatten();
+            if active.is_none() {
+                break;
+            }
+        }
         tokio::select! {
             _ = &mut write_task => break,
+            _ = REVOCATION_NOTIFY.notified() => {
+                // Epoch check at top of loop will verify this device against SQLite.
+            }
             _ = revocations.tick() => {
-                let active = state.app.db.get().ok().and_then(|conn| store::active(&conn, &key).ok()).flatten();
+                checked_epoch = REVOCATION_EPOCH.load(Ordering::Acquire);
+                let db = state.app.db.clone();
+                let active = tokio::task::spawn_blocking(move || {
+                    db.get().ok().and_then(|conn| store::active(&conn, &key).ok()).flatten()
+                })
+                .await
+                .ok()
+                .flatten();
                 if active.is_none() { break; }
             }
             Some(_) = tasks.join_next() => {},
