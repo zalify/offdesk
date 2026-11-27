@@ -52,15 +52,21 @@ describe('mobile container fitting',()=>{
       cancelSettle:clearTimeout,
     });
     scheduler.observe({width:390,height:700});
-    // Discrete resize fires on next frame (16ms).
+    // Discrete resize fires after 2 frames (32ms) when settleDebounceMs is enabled.
     scheduler.observe({width:390,height:500});
     vi.advanceTimersByTime(16);
+    expect(fit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(16);
     expect(fit).toHaveBeenCalledTimes(1);
-    // Rapid multi-frame burst (every 16ms) coalesces into a single trailing fit.
+    // Rapid multi-frame burst (every 16ms) coalesces into a single trailing fit,
+    // without firing a mid-animation resize on frame 1.
+    vi.advanceTimersByTime(100);
     scheduler.observe({width:390,height:460});
     vi.advanceTimersByTime(16);
+    expect(fit).toHaveBeenCalledTimes(1);
     scheduler.observe({width:390,height:420});
     vi.advanceTimersByTime(16);
+    expect(fit).toHaveBeenCalledTimes(1);
     scheduler.observe({width:390,height:380});
     vi.advanceTimersByTime(89);
     expect(fit).toHaveBeenCalledTimes(1);

@@ -69,6 +69,19 @@ export function createMobileViewportFitScheduler<Timer, SettleTimer = Timer>(opt
         }, settleDebounceMs);
         return;
       }
+      if (settleDebounceMs > 0 && options.scheduleSettle && options.cancelSettle) {
+        // Wait one extra animation frame before firing so an animated soft
+        // keyboard (which emits consecutive ResizeObserver frames ~16ms apart)
+        // enters the burst settle path instead of firing a mid-animation resize
+        // on frame 1. A single discrete resize still lands within 2 frames.
+        timer = options.schedule(() => {
+          timer = options.schedule(() => {
+            timer = null;
+            if (!disposed && options.canFit()) options.fit();
+          });
+        });
+        return;
+      }
       timer = options.schedule(() => {
         timer = null;
         if (!disposed && options.canFit()) options.fit();

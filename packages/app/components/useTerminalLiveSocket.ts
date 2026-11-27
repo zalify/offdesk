@@ -4,6 +4,7 @@ import type { Terminal } from "@xterm/xterm";
 
 import { createDeflateRawV1Session } from "@/lib/attachCompression";
 import { createOrderedBinaryOutputQueue } from "@/lib/orderedBinaryOutput.mjs";
+import { scanSyncUpdateMarkers } from "@/lib/syncOutputScanner";
 import { createTerminalReconnectController } from "@/lib/terminalReconnect";
 
 interface UseTerminalLiveSocketOptions {
@@ -39,6 +40,13 @@ interface UseTerminalLiveSocketOptions {
 export type OutputPaintWatcher = () => () => void;
 
 const MAX_PENDING_OUTPUT_BYTES = 128 * 1024;
+// While inside a DEC 2026 synchronized output block (\x1b[?2026h ... \x1b[?2026l),
+// allow larger atomic redraws (e.g. agy / Claude Code full-screen SIGWINCH redraws)
+// to buffer until ESU so xterm.js paints the final screen in one frame instead of
+// visibly scrolling from way up in history down to the bottom.
+const MAX_SYNC_OUTPUT_BYTES = 512 * 1024;
+const SYNC_IDLE_GUARD_MS = 150;
+const SYNC_MAX_GUARD_MS = 450;
 const HIDDEN_FLUSH_INTERVAL_MS = 250;
 // Output arriving later than this after an input send is stream output, not
 // the echo of that input.
@@ -109,6 +117,17 @@ export function useTerminalLiveSocket({
     let pendingBytes = 0;
     let rafId = 0;
     let hiddenFlushTimer: number | null = null;
+    let inSyncUpdate = false;
+    let syncTail: Uint8Array = new Uint8Array(0);
+    let syncGuardTimer: number | null = null;
+    let syncStartAt = 0;
+
+    const clearSyncGuard = () => {
+      if (syncGuardTimer !== null) {
+        window.clearTimeout(syncGuardTimer);
+        syncGuardTimer = null;
+      }
+    };
 
     const cancelScheduledFlush = () => {
       if (rafId) {
@@ -188,6 +207,35 @@ export function useTerminalLiveSocket({
     const enqueueOutput = (chunk: Uint8Array) => {
       recordEchoProbeSample();
       onOutputChunk?.(chunk);
+      const scanned = scanSyncUpdateMarkers(syncTail, chunk, inSyncUpdate);
+      syncTail = scanned.nextTail;
+      inSyncUpdate = scanned.inSync;
+      if (inSyncUpdate) {
+        pendingChunks.push(chunk);
+        pendingBytes += chunk.length;
+        if (pendingBytes >= MAX_SYNC_OUTPUT_BYTES) {
+          clearSyncGuard();
+          syncStartAt = 0;
+          inSyncUpdate = false;
+          flushPending();
+          return;
+        }
+        cancelScheduledFlush();
+        const now = performance.now();
+        if (syncStartAt === 0) syncStartAt = now;
+        const remaining = Math.max(0, SYNC_MAX_GUARD_MS - (now - syncStartAt));
+        const delay = Math.min(SYNC_IDLE_GUARD_MS, remaining);
+        clearSyncGuard();
+        syncGuardTimer = window.setTimeout(() => {
+          syncGuardTimer = null;
+          syncStartAt = 0;
+          inSyncUpdate = false;
+          if (!disposed) flushPending();
+        }, delay);
+        return;
+      }
+      clearSyncGuard();
+      syncStartAt = 0;
       if (isActiveRef.current && !rafId && hiddenFlushTimer === null && pendingBytes === 0) {
         // Interactive path: nothing queued this frame — write immediately so
         // a keystroke echo doesn't wait for the next animation frame. The rAF
@@ -315,6 +363,7 @@ export function useTerminalLiveSocket({
         flushNowRef.current = null;
       }
       onSocketClose?.();
+      clearSyncGuard();
       reconnectController.cancelReconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
