@@ -13,7 +13,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { Bot, Ellipsis, Folder, FolderGit2, Globe, History, PanelLeft, Pencil, Plus, Settings as SettingsIcon, Smartphone, X } from "lucide-react";
+import { Bot, Ellipsis, Folder, FolderGit2, Globe, History, Home, PanelLeft, Pencil, Plus, Settings as SettingsIcon, Smartphone, X } from "lucide-react";
 import type { MachineInfo, ResourceStats, SpaceInfo, TerminalInfo } from "@offdesk/shared";
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 
@@ -786,12 +786,24 @@ function SessionsSidebarComponent({
                   data-testid={`sessions-group-menu-${group.id}`}
                   aria-label={`${group.label} menu`}
                   aria-haspopup="menu"
-                  title="Rename, close"
+                  title="Rename, move, close"
                   onClick={(event) => openMenuUnder(event, groupMenuItems(group))}
                   className="odk-sessions-mini"
                 >
                   <Ellipsis size={13} strokeWidth={2} aria-hidden />
                 </button>
+                {isEmpty && canManage && (
+                  <button
+                    type="button"
+                    data-testid={`sessions-group-close-${group.id}`}
+                    aria-label={`Close empty group ${group.label}`}
+                    title="Close empty group"
+                    onClick={() => onDeleteGroup(group)}
+                    className="odk-sessions-mini"
+                  >
+                    <X size={13} strokeWidth={2} aria-hidden />
+                  </button>
+                )}
               </span>
             </span>
           </div>
@@ -801,342 +813,388 @@ function SessionsSidebarComponent({
     })
   );
 
+  const handlePrimaryNew = useCallback(() => {
+    // Default `+` opens a terminal directly in the active (or first non-full) group
+    // of the current Space instead of spawning an empty group.
+    const activeGroupInSpace = activeTerminalId
+      ? scopedGroups.find(
+          (g) =>
+            g.paneCount < MAX_PANES_PER_TAB &&
+            collectPaneTerminalIds(g.root).includes(activeTerminalId),
+        )
+      : undefined;
+    const fallbackGroup = scopedGroups.find((g) => g.paneCount < MAX_PANES_PER_TAB);
+    const target = activeGroupInSpace ?? fallbackGroup ?? null;
+    if (target) {
+      onNewTerminal(target);
+    } else {
+      onNewGroup();
+    }
+  }, [scopedGroups, activeTerminalId, onNewTerminal, onNewGroup]);
+
+  const showSpaceRail = Boolean(onSelectSpace || onOpenSpaceModal || panels);
+
   const panel = (
     <nav
       data-testid="sessions-sidebar"
       data-placement={placement}
       aria-label="Sessions"
-      className={`odk-sessions${isDrawer ? " odk-sessions--drawer" : ""}`}
+      className={`odk-sessions${isDrawer ? " odk-sessions--drawer" : ""}${showSpaceRail ? " odk-sessions--with-rail" : ""}`}
       onClick={(event) => event.stopPropagation()}
     >
-      <div className="odk-sessions-top">
-        <span className="odk-sessions-top-label">{isDrawer ? machineName : null}</span>
-        <button
-          type="button"
-          data-testid="sessions-sidebar-hide"
-          aria-label={isDrawer ? "Close the sessions list" : "Hide the sidebar"}
-          title={isDrawer ? "Close" : "Hide the sidebar"}
-          onClick={onHide}
-          className="odk-sessions-icon"
-        >
-          {isDrawer ? <X size={15} aria-hidden /> : <PanelLeft size={15} aria-hidden />}
-        </button>
-        <button
-          type="button"
-          data-testid="sessions-sidebar-project-mode"
-          aria-label="Group by project"
-          title={projectMode ? "Grouped by project (click for tabs)" : "Group by project (collapse worktrees)"}
-          aria-pressed={projectMode}
-          onClick={() => setProjectMode((v) => !v)}
-          className="odk-sessions-icon"
-        >
-          <FolderGit2 size={15} aria-hidden />
-        </button>
-        <button
-          type="button"
-          data-testid="sessions-sidebar-order"
-          aria-label="Latest output first"
-          title={order === "recent" ? "Latest output first (on)" : "Latest output first"}
-          aria-pressed={order === "recent"}
-          onClick={toggleOrder}
-          className="odk-sessions-icon"
-        >
-          <History size={15} aria-hidden />
-        </button>
-        <button
-          type="button"
-          data-testid="sessions-sidebar-new"
-          aria-label="New tab"
-          title={canManage ? "New tab" : "Take control to create a terminal"}
-          disabled={!canManage}
-          onClick={onNewGroup}
-          className="odk-sessions-icon"
-        >
-          <Plus size={15} aria-hidden />
-        </button>
-      </div>
-
-      {(onSelectSpace || onOpenSpaceModal) && (
-        <div
-          className="odk-sessions-spaces"
-          role="tablist"
-          aria-label="Spaces"
-          data-testid="sessions-spaces-bar"
-        >
-          <button
-            type="button"
-            role="tab"
-            aria-selected={activeSpaceId === null}
-            data-testid="sessions-space-all"
-            className="odk-sessions-space-pill"
-            onClick={() => {
-              clearHoverTimer();
-              onSelectSpace?.(null);
-            }}
-            onMouseEnter={() => {
-              if (
-                !hoverSwitchSpace ||
-                !onSelectSpace ||
-                activeSpaceId === null ||
-                drag !== null ||
-                menu !== null ||
-                renamingTerminalId !== null
-              ) {
-                return;
-              }
-              scheduleHoverSwitch(() => onSelectSpace(null));
-            }}
-            onMouseLeave={clearHoverTimer}
-          >
-            <span>Default</span>
-            {defaultSpaceWaiting > 0 && activeSpaceId !== null && (
-              <span
-                data-testid="sessions-space-all-waiting"
-                className="odk-sessions-space-waiting"
-                title={`${defaultSpaceWaiting} waiting in Default`}
-              >
-                {defaultSpaceWaiting}
-              </span>
-            )}
-          </button>
-          {spaces.map((space) => {
-            const selected = activeSpaceId === space.id;
-            const waiting = waitingBySpace.bySpace.get(space.id) ?? 0;
-            return (
+      {showSpaceRail && (
+        <aside className="odk-sessions-rail" aria-label="Spaces and tools">
+          {(onSelectSpace || onOpenSpaceModal) && (
+            <div
+              className="odk-sessions-rail-spaces"
+              role="tablist"
+              aria-orientation="vertical"
+              aria-label="Spaces"
+              data-testid="sessions-spaces-bar"
+            >
               <button
-                key={space.id}
                 type="button"
                 role="tab"
-                aria-selected={selected}
-                data-testid={`sessions-space-${space.id}`}
-                title={
-                  space.default_cwd
-                    ? `${space.name} (${space.default_cwd}) · Right-click to edit`
-                    : `${space.name} · Right-click to edit`
-                }
-                className="odk-sessions-space-pill"
+                aria-selected={activeSpaceId === null}
+                data-testid="sessions-space-all"
+                title="Default"
+                className="odk-sessions-rail-item"
                 onClick={() => {
                   clearHoverTimer();
-                  onSelectSpace?.(space.id);
+                  onSelectSpace?.(null);
                 }}
                 onMouseEnter={() => {
                   if (
                     !hoverSwitchSpace ||
                     !onSelectSpace ||
-                    selected ||
+                    activeSpaceId === null ||
                     drag !== null ||
                     menu !== null ||
                     renamingTerminalId !== null
                   ) {
                     return;
                   }
-                  scheduleHoverSwitch(() => onSelectSpace(space.id));
+                  scheduleHoverSwitch(() => onSelectSpace(null));
                 }}
                 onMouseLeave={clearHoverTimer}
-                onDoubleClick={() => onOpenSpaceModal?.(space)}
-                onContextMenu={(event) => {
-                  if (!onOpenSpaceModal) return;
-                  event.preventDefault();
-                  onOpenSpaceModal(space);
-                }}
               >
-                <span
-                  aria-hidden="true"
-                  className="odk-sessions-space-dot"
-                  style={{ background: space.color || DEFAULT_SPACE_COLOR }}
-                />
-                {space.icon && (
-                  <span aria-hidden="true" className="odk-sessions-space-icon">
-                    {space.icon}
-                  </span>
-                )}
-                <span className="odk-sessions-space-name">{space.name}</span>
-                {waiting > 0 && (
+                <Home size={16} aria-hidden />
+                {defaultSpaceWaiting > 0 && activeSpaceId !== null && (
                   <span
-                    data-testid={`sessions-space-waiting-${space.id}`}
-                    className="odk-sessions-space-waiting"
-                    title={`${waiting} waiting`}
+                    data-testid="sessions-space-all-waiting"
+                    className="odk-sessions-rail-badge"
+                    title={`${defaultSpaceWaiting} waiting in Default`}
                   >
-                    {waiting}
+                    {defaultSpaceWaiting > 9 ? "9+" : defaultSpaceWaiting}
                   </span>
                 )}
               </button>
-            );
-          })}
-          {activeSpace && onOpenSpaceModal && (
-            <button
-              type="button"
-              data-testid="sessions-space-edit"
-              aria-label={`Edit space ${activeSpace.name}`}
-              title={`Edit ${activeSpace.name}`}
-              onClick={() => onOpenSpaceModal(activeSpace)}
-              className="odk-sessions-space-btn"
-            >
-              <Pencil size={11} aria-hidden />
-            </button>
+              {spaces.map((space) => {
+                const selected = activeSpaceId === space.id;
+                const waiting = waitingBySpace.bySpace.get(space.id) ?? 0;
+                const spaceColor = space.color || DEFAULT_SPACE_COLOR;
+                const glyph = space.icon || space.name.trim().slice(0, 1).toUpperCase() || "•";
+                return (
+                  <button
+                    key={space.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    data-testid={`sessions-space-${space.id}`}
+                    title={
+                      space.default_cwd
+                        ? `${space.name} (${space.default_cwd}) · Right-click to edit`
+                        : `${space.name} · Right-click to edit`
+                    }
+                    className="odk-sessions-rail-item"
+                    style={
+                      selected
+                        ? {
+                            borderColor: spaceColor,
+                            boxShadow: `inset 2px 0 0 ${spaceColor}`,
+                          }
+                        : undefined
+                    }
+                    onClick={() => {
+                      clearHoverTimer();
+                      onSelectSpace?.(space.id);
+                    }}
+                    onMouseEnter={() => {
+                      if (
+                        !hoverSwitchSpace ||
+                        !onSelectSpace ||
+                        selected ||
+                        drag !== null ||
+                        menu !== null ||
+                        renamingTerminalId !== null
+                      ) {
+                        return;
+                      }
+                      scheduleHoverSwitch(() => onSelectSpace(space.id));
+                    }}
+                    onMouseLeave={clearHoverTimer}
+                    onDoubleClick={() => onOpenSpaceModal?.(space)}
+                    onContextMenu={(event) => {
+                      if (!onOpenSpaceModal) return;
+                      event.preventDefault();
+                      onOpenSpaceModal(space);
+                    }}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="odk-sessions-rail-glyph"
+                      style={!space.icon ? { color: spaceColor } : undefined}
+                    >
+                      {glyph}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className="odk-sessions-rail-dot"
+                      style={{ background: spaceColor }}
+                    />
+                    {waiting > 0 && (
+                      <span
+                        data-testid={`sessions-space-waiting-${space.id}`}
+                        className="odk-sessions-rail-badge"
+                        title={`${waiting} waiting`}
+                      >
+                        {waiting > 9 ? "9+" : waiting}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+              {onOpenSpaceModal && (
+                <button
+                  type="button"
+                  data-testid="sessions-space-add"
+                  aria-label="New space"
+                  title="New space"
+                  onClick={() => onOpenSpaceModal(null)}
+                  className="odk-sessions-rail-item odk-sessions-rail-add"
+                >
+                  <Plus size={14} aria-hidden />
+                </button>
+              )}
+            </div>
           )}
-          {onOpenSpaceModal && (
-            <button
-              type="button"
-              data-testid="sessions-space-add"
-              aria-label="New space"
-              title="New space"
-              onClick={() => onOpenSpaceModal(null)}
-              className="odk-sessions-space-btn"
-            >
-              <Plus size={12} aria-hidden />
-            </button>
+
+          {panels && (
+            <div className="odk-sessions-rail-utils">
+              {panels.onOpenChat && (
+                <button
+                  type="button"
+                  data-testid="sessions-sidebar-bots"
+                  aria-label="Bots & Chat"
+                  title="Bots & Chat"
+                  onClick={panels.onOpenChat}
+                  className="odk-sessions-rail-util"
+                >
+                  <Bot size={15} aria-hidden />
+                </button>
+              )}
+              {panels.filesButton && panels.onToggleFiles && (
+                <button
+                  type="button"
+                  data-testid="sessions-sidebar-files"
+                  aria-label="Files"
+                  title="Files"
+                  aria-pressed={panels.filesButton.open}
+                  data-open={panels.filesButton.open ? "true" : "false"}
+                  onClick={panels.onToggleFiles}
+                  className="odk-sessions-rail-util"
+                >
+                  <Folder size={15} aria-hidden />
+                </button>
+              )}
+              {panels.browserButton && panels.onToggleBrowser && (
+                <button
+                  type="button"
+                  data-testid="sessions-sidebar-browser"
+                  aria-label={panels.browserButton.needsPerson ? "Browser, the agent needs you" : "Browser"}
+                  title={panels.browserButton.needsPerson ? "The agent needs you" : "Browser"}
+                  aria-pressed={panels.browserButton.open}
+                  data-open={panels.browserButton.open ? "true" : "false"}
+                  onClick={panels.onToggleBrowser}
+                  className="odk-sessions-rail-util"
+                >
+                  <Globe size={15} aria-hidden />
+                  {panels.browserButton.count > 0 && (
+                    <span aria-hidden="true" className="odk-sessions-rail-count">
+                      {panels.browserButton.count > 9 ? "9+" : panels.browserButton.count}
+                    </span>
+                  )}
+                  {panels.browserButton.needsPerson && (
+                    <span aria-hidden="true" className="odk-sessions-rail-badge">!</span>
+                  )}
+                </button>
+              )}
+              {panels.onOpenPhone && (
+                <button
+                  type="button"
+                  data-testid="sessions-sidebar-phone"
+                  aria-label="Open this hub on your phone"
+                  title="Phone"
+                  onClick={panels.onOpenPhone}
+                  className="odk-sessions-rail-util"
+                >
+                  <Smartphone size={15} aria-hidden />
+                </button>
+              )}
+              <button
+                type="button"
+                data-testid="sessions-sidebar-settings"
+                aria-label="Settings"
+                title="Settings"
+                onClick={panels.onOpenSettings}
+                className="odk-sessions-rail-util"
+              >
+                <SettingsIcon size={15} aria-hidden />
+              </button>
+            </div>
           )}
-        </div>
+        </aside>
       )}
 
-      {panels?.onOpenChat && (
-        <div
-          style={{
-            display: "flex",
-            gap: 4,
-            padding: "4px 10px 6px",
-          }}
-        >
-          <span
-            style={{
-              flex: 1,
-              textAlign: "center",
-              padding: "4px 6px",
-              borderRadius: 6,
-              fontSize: 11.5,
-              fontWeight: 600,
-              background: "rgb(var(--color-accent) / 0.14)",
-              color: "rgb(var(--color-fg-0))",
+      <div className="odk-sessions-main">
+        <div className="odk-sessions-top">
+          <div
+            className="odk-sessions-top-space"
+            onDoubleClick={() => {
+              if (activeSpace && onOpenSpaceModal) onOpenSpaceModal(activeSpace);
             }}
+            onContextMenu={(event) => {
+              if (!activeSpace || !onOpenSpaceModal) return;
+              event.preventDefault();
+              onOpenSpaceModal(activeSpace);
+            }}
+            title={
+              activeSpace
+                ? `${activeSpace.name}${activeSpace.default_cwd ? ` (${activeSpace.default_cwd})` : ""} · Click pencil or right-click to edit`
+                : isDrawer
+                  ? machineName
+                  : "Default workspace"
+            }
           >
-            Terminals
-          </span>
+            {activeSpace && (
+              <span
+                aria-hidden="true"
+                className="odk-sessions-space-dot"
+                style={{ background: activeSpace.color || DEFAULT_SPACE_COLOR }}
+              />
+            )}
+            <span className="odk-sessions-top-label">
+              {activeSpace ? activeSpace.name : isDrawer ? machineName : "Default"}
+            </span>
+            {activeSpace && onOpenSpaceModal && (
+              <button
+                type="button"
+                data-testid="sessions-space-edit"
+                aria-label={`Edit space ${activeSpace.name}`}
+                title={`Edit ${activeSpace.name}`}
+                onClick={() => onOpenSpaceModal(activeSpace)}
+                className="odk-sessions-top-edit"
+              >
+                <Pencil size={11} aria-hidden />
+              </button>
+            )}
+          </div>
           <button
             type="button"
-            data-testid="sessions-sidebar-bots"
-            onClick={panels.onOpenChat}
-            style={{
-              flex: 1,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 5,
-              padding: "4px 6px",
-              borderRadius: 6,
-              border: "1px solid rgb(var(--color-border))",
-              background: "transparent",
-              color: "rgb(var(--color-fg-2))",
-              fontSize: 11.5,
-              cursor: "pointer",
-            }}
-          >
-            <Bot size={12} aria-hidden />
-            <span>Bots &amp; Chat</span>
-          </button>
-        </div>
-      )}
-
-      {machine && <SessionsSidebarMachineRow machine={machine} />}
-
-      {(hasTerminals || groups.length > 0) && (
-        <div
-          className="odk-sessions-filters"
-          role="tablist"
-          aria-label="Filter terminals"
-          data-testid="sessions-filter-bar"
-        >
-          {(
-            [
-              { id: "all", label: "All", count: allMachineTerminals.length },
-              { id: "waiting", label: "Waiting", count: waitingTotal },
-              { id: "working", label: "Working", count: workingTotal },
-            ] as const
-          ).map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              aria-selected={filter === item.id}
-              data-testid={`sessions-filter-${item.id}`}
-              data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
-              className="odk-sessions-filter-pill"
-              onClick={() => setFilter(item.id)}
-            >
-              <span>{item.label}</span>
-              {item.count > 0 && item.id !== "all" && (
-                <span className="odk-sessions-filter-count">{item.count}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <div className="odk-sessions-list">{list}</div>
-
-      {panels && (
-        <div className="odk-sessions-foot">
-          {panels.filesButton && panels.onToggleFiles && (
-            <button
-              type="button"
-              data-testid="sessions-sidebar-files"
-              aria-label="Files"
-              title="Files"
-              aria-pressed={panels.filesButton.open}
-              data-open={panels.filesButton.open ? "true" : "false"}
-              onClick={panels.onToggleFiles}
-              className="odk-sessions-icon"
-            >
-              <Folder size={15} aria-hidden />
-            </button>
-          )}
-          {panels.browserButton && panels.onToggleBrowser && (
-            <button
-              type="button"
-              data-testid="sessions-sidebar-browser"
-              aria-label={panels.browserButton.needsPerson ? "Browser, the agent needs you" : "Browser"}
-              title={panels.browserButton.needsPerson ? "The agent needs you" : "Browser"}
-              aria-pressed={panels.browserButton.open}
-              data-open={panels.browserButton.open ? "true" : "false"}
-              onClick={panels.onToggleBrowser}
-              className="odk-sessions-icon"
-            >
-              <Globe size={15} aria-hidden />
-              {panels.browserButton.count > 0 && (
-                <span aria-hidden="true">
-                  {panels.browserButton.count > 99 ? "99+" : panels.browserButton.count}
-                </span>
-              )}
-              {panels.browserButton.needsPerson && (
-                <span aria-hidden="true" className="odk-sessions-alert">!</span>
-              )}
-            </button>
-          )}
-          {panels.onOpenPhone && (
-            <button
-              type="button"
-              data-testid="sessions-sidebar-phone"
-              aria-label="Open this hub on your phone"
-              title="Phone"
-              onClick={panels.onOpenPhone}
-              className="odk-sessions-icon"
-            >
-              <Smartphone size={15} aria-hidden />
-            </button>
-          )}
-          <span className="odk-sessions-foot-fill" />
-          <button
-            type="button"
-            data-testid="sessions-sidebar-settings"
-            aria-label="Settings"
-            title="Settings"
-            onClick={panels.onOpenSettings}
+            data-testid="sessions-sidebar-hide"
+            aria-label={isDrawer ? "Close the sessions list" : "Hide the sidebar"}
+            title={isDrawer ? "Close" : "Hide the sidebar"}
+            onClick={onHide}
             className="odk-sessions-icon"
           >
-            <SettingsIcon size={15} aria-hidden />
+            {isDrawer ? <X size={15} aria-hidden /> : <PanelLeft size={15} aria-hidden />}
+          </button>
+          <button
+            type="button"
+            data-testid="sessions-sidebar-new"
+            aria-label="New terminal"
+            title={canManage ? "New terminal (right-click for New group / Space)" : "Take control to create a terminal"}
+            disabled={!canManage}
+            onClick={handlePrimaryNew}
+            onContextMenu={(event) => {
+              if (!canManage) return;
+              openMenuAt(event, [
+                { label: "New terminal", onClick: handlePrimaryNew },
+                { label: "New group (tab)", onClick: onNewGroup },
+                ...(onOpenSpaceModal
+                  ? [{ label: "New space", onClick: () => onOpenSpaceModal(null) }]
+                  : []),
+              ]);
+            }}
+            className="odk-sessions-icon odk-sessions-new-btn"
+          >
+            <Plus size={15} aria-hidden />
           </button>
         </div>
-      )}
+
+        <div className="odk-sessions-subbar">
+          {machine && <SessionsSidebarMachineRow machine={machine} />}
+          <div className="odk-sessions-subbar-tools">
+            <button
+              type="button"
+              data-testid="sessions-sidebar-project-mode"
+              aria-label="Group by project"
+              title={projectMode ? "Grouped by project (click for tabs)" : "Group by project"}
+              aria-pressed={projectMode}
+              onClick={() => setProjectMode((v) => !v)}
+              className="odk-sessions-mini"
+            >
+              <FolderGit2 size={13} aria-hidden />
+            </button>
+            <button
+              type="button"
+              data-testid="sessions-sidebar-order"
+              aria-label="Latest output first"
+              title={order === "recent" ? "Latest output first (on)" : "Latest output first"}
+              aria-pressed={order === "recent"}
+              onClick={toggleOrder}
+              className="odk-sessions-mini"
+            >
+              <History size={13} aria-hidden />
+            </button>
+          </div>
+        </div>
+
+        {(hasTerminals || groups.length > 0) && (
+          <div
+            className="odk-sessions-filters"
+            role="tablist"
+            aria-label="Filter terminals"
+            data-testid="sessions-filter-bar"
+          >
+            {(
+              [
+                { id: "all", label: "All", count: allMachineTerminals.length },
+                { id: "waiting", label: "Waiting", count: waitingTotal },
+                { id: "working", label: "Working", count: workingTotal },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={filter === item.id}
+                data-testid={`sessions-filter-${item.id}`}
+                data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
+                className="odk-sessions-filter-pill"
+                onClick={() => setFilter(item.id)}
+              >
+                <span>{item.label}</span>
+                {item.count > 0 && item.id !== "all" && (
+                  <span className="odk-sessions-filter-count">{item.count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="odk-sessions-list">{list}</div>
+      </div>
 
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
     </nav>
