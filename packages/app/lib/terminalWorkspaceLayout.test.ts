@@ -21,6 +21,7 @@ import {
   nextCompactSwitchHold,
   planNewTerminalPlacement,
   reconcileTerminalWorkspace,
+  reorderWorkspacePane,
   rotateWorkspaceLayout,
   selectWorkspaceGroup,
   splitWorkspacePane,
@@ -686,6 +687,28 @@ describe("terminalWorkspaceLayout", () => {
     });
     expect(collectPaneTerminalIds(getActiveWorkspaceGroup(next)?.root ?? null))
       .toEqual(["bottom", "top", "left"]);
+  });
+
+  it("reorders panes within a group before and after a target while keeping tree shape", () => {
+    const base = createTerminalWorkspace(
+      [
+        terminal("a", "/repo"),
+        terminal("b", "/repo"),
+        terminal("c", "/repo"),
+      ],
+      "c",
+    );
+    const groupId = base.groups[0].id;
+    expect(collectPaneTerminalIds(base.groups[0].root)).toEqual(["a", "b", "c"]);
+
+    const movedBefore = reorderWorkspacePane(base, groupId, "c", "a", "before");
+    expect(collectPaneTerminalIds(movedBefore.groups[0].root)).toEqual(["c", "a", "b"]);
+
+    const movedAfter = reorderWorkspacePane(movedBefore, groupId, "c", "a", "after");
+    expect(collectPaneTerminalIds(movedAfter.groups[0].root)).toEqual(["a", "c", "b"]);
+
+    const noop = reorderWorkspacePane(movedAfter, groupId, "a", "c", "before");
+    expect(noop).toBe(movedAfter);
   });
 
   it("rotates a two-pane stacked layout to side-by-side", () => {

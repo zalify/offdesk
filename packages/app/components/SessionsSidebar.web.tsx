@@ -102,6 +102,12 @@ interface SessionsSidebarProps {
     targetGroupId: string,
     placement: SessionsDropPlacement,
   ) => void;
+  onReorderTerminal?: (
+    groupId: string,
+    sourceTerminalId: string,
+    targetTerminalId: string,
+    placement: SessionsDropPlacement,
+  ) => void;
   onMoveTerminal: (terminal: TerminalInfo, targetGroup: WorkspaceGroup) => void;
   onCloseTerminal: (terminal: TerminalInfo) => void;
   onRenameTerminal?: (terminal: TerminalInfo, title: string) => void;
@@ -114,9 +120,33 @@ interface SessionsSidebarProps {
   onMoveGroupToSpace?: (group: WorkspaceGroup, spaceId: string | null) => void;
 }
 
-type Drag = { kind: "group"; groupId: string } | { kind: "row"; terminalId: string; groupId: string };
-type DropTarget = { groupId: string; placement: SessionsDropPlacement | "into" };
+type Drag =
+  | { kind: "group"; groupId: string; label: string }
+  | { kind: "row"; terminalId: string; groupId: string; label: string };
+type DropTarget =
+  | { kind: "group"; groupId: string; placement: SessionsDropPlacement | "into" }
+  | { kind: "row"; groupId: string; terminalId: string; placement: SessionsDropPlacement }
+  | { kind: "space"; spaceId: string | null };
 type SessionFilter = "all" | "waiting" | "working";
+
+function sameDropTarget(a: DropTarget | null, b: DropTarget | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === "group" && b.kind === "group") {
+    return a.groupId === b.groupId && a.placement === b.placement;
+  }
+  if (a.kind === "row" && b.kind === "row") {
+    return (
+      a.groupId === b.groupId &&
+      a.terminalId === b.terminalId &&
+      a.placement === b.placement
+    );
+  }
+  if (a.kind === "space" && b.kind === "space") {
+    return a.spaceId === b.spaceId;
+  }
+  return false;
+}
 
 function SessionsSidebarComponent({
   placement,
@@ -134,6 +164,7 @@ function SessionsSidebarComponent({
   onRenameGroup,
   onDeleteGroup,
   onReorderGroups,
+  onReorderTerminal,
   onMoveTerminal,
   onCloseTerminal,
   onRenameTerminal,
@@ -373,31 +404,82 @@ function SessionsSidebarComponent({
     setMenu({ x: rect.left, y: rect.bottom + 4, items });
   };
 
-  /* ---------- drag: reorder tabs, move terminals ---------- */
+  /* ---------- drag: reorder tabs, reorder/move terminals, move group to space ---------- */
 
   const [drag, setDrag] = useState<Drag | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const dragCleanupRef = useRef<(() => void) | null>(null);
   const suppressClickRef = useRef(false);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  const ghostPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   useEffect(() => () => dragCleanupRef.current?.(), []);
 
+  useEffect(() => {
+    if (drag && ghostRef.current) {
+      const { x, y } = ghostPosRef.current;
+      ghostRef.current.style.transform = `translate3d(${x + 12}px, ${y - 14}px, 0)`;
+    }
+  }, [drag]);
+
   const targetAt = useCallback(
     (source: Drag, x: number, y: number): DropTarget | null => {
-      const section = document
-        .elementFromPoint(x, y)
-        ?.closest<HTMLElement>("[data-sessions-group-id]");
+      const el = document.elementFromPoint(x, y);
+      if (!el) return null;
+
+      if (source.kind === "group") {
+        // Dropping a group onto a Space icon in the left rail moves it to that Space.
+        const spaceEl = el.closest<HTMLElement>("[data-sessions-space-id]");
+        if (spaceEl && onMoveGroupToSpace) {
+          const rawSpaceId = spaceEl.dataset.sessionsSpaceId ?? "";
+          const targetSpaceId = rawSpaceId === "" ? null : rawSpaceId;
+          const srcGroup = groups.find((g) => g.id === source.groupId);
+          if (srcGroup?.persistent && (srcGroup.spaceId ?? null) !== targetSpaceId) {
+            return { kind: "space", spaceId: targetSpaceId };
+          }
+          return null;
+        }
+        const section = el.closest<HTMLElement>("[data-sessions-group-id]");
+        const groupId = section?.dataset.sessionsGroupId;
+        if (!section || !groupId || groupId === source.groupId) return null;
+        const rect = section.getBoundingClientRect();
+        return {
+          kind: "group",
+          groupId,
+          placement: y < rect.top + rect.height / 2 ? "before" : "after",
+        };
+      }
+
+      // Dragging a terminal row:
+      // 1) Over another row in the same group -> reorder within the group.
+      const rowEl = el.closest<HTMLElement>("[data-sessions-row-id]");
+      const rowId = rowEl?.dataset.sessionsRowId;
+      const rowGroupId = rowEl?.dataset.sessionsRowGroupId;
+      if (
+        rowEl &&
+        rowId &&
+        rowGroupId === source.groupId &&
+        rowId !== source.terminalId &&
+        onReorderTerminal
+      ) {
+        const rect = rowEl.getBoundingClientRect();
+        return {
+          kind: "row",
+          groupId: source.groupId,
+          terminalId: rowId,
+          placement: y < rect.top + rect.height / 2 ? "before" : "after",
+        };
+      }
+
+      // 2) Over another group -> move terminal into that group.
+      const section = el.closest<HTMLElement>("[data-sessions-group-id]");
       const groupId = section?.dataset.sessionsGroupId;
       if (!section || !groupId || groupId === source.groupId) return null;
-      if (source.kind === "group") {
-        const rect = section.getBoundingClientRect();
-        return { groupId, placement: y < rect.top + rect.height / 2 ? "before" : "after" };
-      }
       return moveTargets(source.groupId).some((group) => group.id === groupId)
-        ? { groupId, placement: "into" }
+        ? { kind: "group", groupId, placement: "into" }
         : null;
     },
-    [moveTargets],
+    [groups, moveTargets, onMoveGroupToSpace, onReorderTerminal],
   );
 
   // Pressing a tab's header or a row arms a drag; past a few pixels it
@@ -406,6 +488,7 @@ function SessionsSidebarComponent({
   // HTML drag and drop is unreliable inside the desktop app's webview.
   const armDrag = (source: Drag, event: ReactMouseEvent) => {
     if (event.button !== 0 || !canManage) return;
+    if ((event.target as HTMLElement | null)?.closest("button.odk-sessions-mini")) return;
     dragCleanupRef.current?.();
     const startX = event.clientX;
     const startY = event.clientY;
@@ -421,14 +504,17 @@ function SessionsSidebarComponent({
           return;
         }
         active = true;
+        clearHoverTimer();
+        ghostPosRef.current = { x: moveEvent.clientX, y: moveEvent.clientY };
         setDrag(source);
       }
+      moveEvent.preventDefault();
+      ghostPosRef.current = { x: moveEvent.clientX, y: moveEvent.clientY };
+      if (ghostRef.current) {
+        ghostRef.current.style.transform = `translate3d(${moveEvent.clientX + 12}px, ${moveEvent.clientY - 14}px, 0)`;
+      }
       const nextTarget = targetAt(source, moveEvent.clientX, moveEvent.clientY);
-      setDropTarget((prev) =>
-        prev?.groupId === nextTarget?.groupId && prev?.placement === nextTarget?.placement
-          ? prev
-          : nextTarget,
-      );
+      setDropTarget((prev) => (sameDropTarget(prev, nextTarget) ? prev : nextTarget));
     };
     const handleUp = (upEvent: MouseEvent) => {
       finish();
@@ -440,9 +526,19 @@ function SessionsSidebarComponent({
       }, 0);
       const target = targetAt(source, upEvent.clientX, upEvent.clientY);
       if (!target) return;
-      if (source.kind === "group" && target.placement !== "into") {
+      if (source.kind === "group" && target.kind === "group" && target.placement !== "into") {
         onReorderGroups(source.groupId, target.groupId, target.placement);
-      } else if (source.kind === "row") {
+      } else if (source.kind === "group" && target.kind === "space" && onMoveGroupToSpace) {
+        const group = groups.find((candidate) => candidate.id === source.groupId);
+        if (group) onMoveGroupToSpace(group, target.spaceId);
+      } else if (source.kind === "row" && target.kind === "row" && onReorderTerminal) {
+        onReorderTerminal(
+          source.groupId,
+          source.terminalId,
+          target.terminalId,
+          target.placement,
+        );
+      } else if (source.kind === "row" && target.kind === "group") {
         const terminal = terminalsById.get(source.terminalId);
         const group = groups.find((candidate) => candidate.id === target.groupId);
         if (terminal && group) onMoveTerminal(terminal, group);
@@ -472,14 +568,24 @@ function SessionsSidebarComponent({
       <div
         key={terminal.id}
         data-testid={`sessions-row-${terminal.id}`}
+        data-sessions-row-id={terminal.id}
+        data-sessions-row-group-id={group.id}
         data-state={state}
         data-current={current ? "true" : undefined}
         data-unread={unread ? "true" : undefined}
+        data-dragging={drag?.kind === "row" && drag.terminalId === terminal.id ? "true" : undefined}
+        data-row-drop={
+          dropTarget?.kind === "row" &&
+          dropTarget.groupId === group.id &&
+          dropTarget.terminalId === terminal.id
+            ? dropTarget.placement
+            : undefined
+        }
         className="odk-sessions-row"
         onContextMenu={(event) => openMenuAt(event, rowMenuItems(terminal, group))}
         onMouseDown={(event) => {
           if (renamingTerminalId === terminal.id) return;
-          armDrag({ kind: "row", terminalId: terminal.id, groupId: group.id }, event);
+          armDrag({ kind: "row", terminalId: terminal.id, groupId: group.id, label: title }, event);
         }}
       >
         {renamingTerminalId === terminal.id ? (
@@ -737,7 +843,11 @@ function SessionsSidebarComponent({
           key={group.id}
           data-testid={`sessions-group-${group.id}`}
           data-sessions-group-id={group.id}
-          data-drop={dropTarget?.groupId === group.id ? dropTarget.placement : undefined}
+          data-drop={
+            dropTarget?.kind === "group" && dropTarget.groupId === group.id
+              ? dropTarget.placement
+              : undefined
+          }
           data-dragging={drag?.kind === "group" && drag.groupId === group.id ? "true" : undefined}
           aria-label={group.label}
           className="odk-sessions-section"
@@ -745,7 +855,9 @@ function SessionsSidebarComponent({
           <div
             className={`odk-sessions-group${isEmpty ? " odk-sessions-group--empty" : ""}`}
             onContextMenu={(event) => openMenuAt(event, groupMenuItems(group))}
-            onMouseDown={(event) => armDrag({ kind: "group", groupId: group.id }, event)}
+            onMouseDown={(event) =>
+              armDrag({ kind: "group", groupId: group.id, label: group.label }, event)
+            }
           >
             <button
               type="button"
@@ -838,6 +950,7 @@ function SessionsSidebarComponent({
     <nav
       data-testid="sessions-sidebar"
       data-placement={placement}
+      data-dragging-active={drag ? "true" : undefined}
       aria-label="Sessions"
       className={`odk-sessions${isDrawer ? " odk-sessions--drawer" : ""}${showSpaceRail ? " odk-sessions--with-rail" : ""}`}
       onClick={(event) => event.stopPropagation()}
@@ -857,6 +970,12 @@ function SessionsSidebarComponent({
                 role="tab"
                 aria-selected={activeSpaceId === null}
                 data-testid="sessions-space-all"
+                data-sessions-space-id=""
+                data-drop={
+                  dropTarget?.kind === "space" && dropTarget.spaceId === null
+                    ? "into"
+                    : undefined
+                }
                 title="Default"
                 className="odk-sessions-rail-item"
                 onClick={() => {
@@ -901,6 +1020,12 @@ function SessionsSidebarComponent({
                     role="tab"
                     aria-selected={selected}
                     data-testid={`sessions-space-${space.id}`}
+                    data-sessions-space-id={space.id}
+                    data-drop={
+                      dropTarget?.kind === "space" && dropTarget.spaceId === space.id
+                        ? "into"
+                        : undefined
+                    }
                     title={
                       space.default_cwd
                         ? `${space.name} (${space.default_cwd}) · Right-click to edit`
@@ -1196,6 +1321,15 @@ function SessionsSidebarComponent({
         <div className="odk-sessions-list">{list}</div>
       </div>
 
+      {drag && (
+        <div
+          ref={ghostRef}
+          aria-hidden="true"
+          className="odk-sessions-drag-ghost"
+        >
+          {drag.label}
+        </div>
+      )}
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={closeMenu} />}
     </nav>
   );

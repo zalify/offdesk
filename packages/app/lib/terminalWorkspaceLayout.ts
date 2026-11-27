@@ -230,6 +230,63 @@ export function swapWorkspacePanes(
   };
 }
 
+function replaceLeafTerminalIds(
+  node: WorkspacePaneNode,
+  nextIds: string[],
+  cursor: { index: number },
+): WorkspacePaneNode {
+  if (node.type === "leaf") {
+    const terminalId = nextIds[cursor.index++] ?? node.terminalId;
+    return terminalId === node.terminalId ? node : { ...node, terminalId };
+  }
+  const first = replaceLeafTerminalIds(node.first, nextIds, cursor);
+  const second = replaceLeafTerminalIds(node.second, nextIds, cursor);
+  return first === node.first && second === node.second
+    ? node
+    : { ...node, first, second };
+}
+
+/**
+ * Reorders a terminal within its group's layout tree (preserving split shape
+ * and ratios while changing the left-to-right leaf order shown in the sidebar
+ * and split panes).
+ */
+export function reorderWorkspacePane(
+  workspace: TerminalWorkspace,
+  groupId: string,
+  sourceTerminalId: string,
+  targetTerminalId: string,
+  placement: "before" | "after",
+): TerminalWorkspace {
+  if (sourceTerminalId === targetTerminalId) return workspace;
+  const group = workspace.groups.find((candidate) => candidate.id === groupId);
+  if (!group || !group.root) return workspace;
+
+  const ids = collectPaneTerminalIds(group.root);
+  if (!ids.includes(sourceTerminalId) || !ids.includes(targetTerminalId)) {
+    return workspace;
+  }
+
+  const remaining = ids.filter((id) => id !== sourceTerminalId);
+  const targetIndex = remaining.indexOf(targetTerminalId);
+  if (targetIndex < 0) return workspace;
+  const insertAt = placement === "before" ? targetIndex : targetIndex + 1;
+  const nextIds = [
+    ...remaining.slice(0, insertAt),
+    sourceTerminalId,
+    ...remaining.slice(insertAt),
+  ];
+  if (nextIds.every((id, idx) => id === ids[idx])) return workspace;
+
+  const root = replaceLeafTerminalIds(group.root, nextIds, { index: 0 });
+  const groups = workspace.groups.map((candidate) =>
+    candidate.id === group.id
+      ? { ...candidate, root, paneCount: nextIds.length }
+      : candidate,
+  );
+  return { ...workspace, groups };
+}
+
 export function rotateWorkspaceLayout(
   workspace: TerminalWorkspace,
 ): TerminalWorkspace {

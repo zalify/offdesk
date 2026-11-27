@@ -1657,6 +1657,23 @@ function TerminalCanvasInner() {
     [activeMachineId, handleReorderWorkspaceGroups, tabGroups],
   );
 
+  const handleRequestReorderPane = useCallback(
+    (
+      groupId: string,
+      sourceTerminalId: string,
+      targetTerminalId: string,
+      placement: "before" | "after",
+    ) => {
+      workspaceCommandsRef.current.reorderPane?.(
+        groupId,
+        sourceTerminalId,
+        targetTerminalId,
+        placement,
+      );
+    },
+    [],
+  );
+
   const handleSaveWorkspaceLayout = useCallback(
     async (
       machineId: string,
@@ -2779,6 +2796,7 @@ function TerminalCanvasInner() {
                   onRenameGroup={handleRenameGroup}
                   onDeleteGroup={handleDeleteGroup}
                   onReorderGroups={handleRequestWorkspaceGroupReorder}
+                  onReorderTerminal={handleRequestReorderPane}
                   onMoveTerminal={handleMoveTerminalToWorkspace}
                   onCloseTerminal={handleMobileCloseTerminal}
                   onRenameTerminal={handleRenameTerminal}

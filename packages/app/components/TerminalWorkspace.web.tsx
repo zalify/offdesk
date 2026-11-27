@@ -47,6 +47,7 @@ import {
   mountedWorkspaceGroupIds,
   nextCompactSwitchHold,
   reconcileTerminalWorkspace,
+  reorderWorkspacePane,
   rotateWorkspaceLayout,
   selectWorkspaceGroup,
   splitWorkspacePane,
@@ -124,6 +125,12 @@ export interface WorkspaceCommandChannel {
   reorderGroups?: (
     sourceGroupId: string,
     targetGroupId: string,
+    placement: GroupDropPlacement,
+  ) => void;
+  reorderPane?: (
+    groupId: string,
+    sourceTerminalId: string,
+    targetTerminalId: string,
     placement: GroupDropPlacement,
   ) => void;
   runPrefixAction?: (action: PrefixActionId) => void;
@@ -947,6 +954,36 @@ function TerminalWorkspaceComponent({
     ],
   );
 
+  const handleReorderPane = useCallback(
+    (
+      groupId: string,
+      sourceTerminalId: string,
+      targetTerminalId: string,
+      placement: GroupDropPlacement,
+    ) => {
+      if (!isController) return;
+      const before = workspaceRef.current;
+      const nextWorkspace = updateWorkspace((current) =>
+        reorderWorkspacePane(
+          current,
+          groupId,
+          sourceTerminalId,
+          targetTerminalId,
+          placement,
+        ),
+      );
+      if (nextWorkspace === before) return;
+      if (nextWorkspace.activeGroupId === groupId) {
+        requestPaneFit(
+          collectIds(getActiveWorkspaceGroup(nextWorkspace)?.root ?? null),
+          { focus: false },
+        );
+      }
+      void persistGroupLayout(nextWorkspace, groupId);
+    },
+    [isController, persistGroupLayout, requestPaneFit, updateWorkspace],
+  );
+
   const focusPaneByDirection = useCallback(
     (direction: WorkspacePaneFocusDirection) => {
       if (maximizedTerminalId) return;
@@ -1145,6 +1182,8 @@ function TerminalWorkspaceComponent({
       fitVisiblePanes,
       reorderGroups: (sourceGroupId, targetGroupId, placement) =>
         void handleReorderGroups(sourceGroupId, targetGroupId, placement),
+      reorderPane: (groupId, sourceTerminalId, targetTerminalId, placement) =>
+        handleReorderPane(groupId, sourceTerminalId, targetTerminalId, placement),
       runPrefixAction: (action) =>
         workspacePrefixActionsRef.current[action]?.(),
     };
