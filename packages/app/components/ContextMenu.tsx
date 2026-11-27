@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { colors } from "@/lib/colors";
+import { computeSubmenuPosition } from "@/lib/contextMenuPosition";
 import { rem } from "@/lib/rem";
 
 export interface ContextMenuItem {
@@ -35,18 +36,20 @@ function isSeparator(entry: ContextMenuEntry): entry is ContextMenuSeparator {
 
 export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
+  const triggerRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const [openSubmenu, setOpenSubmenu] = useState<number | null>(null);
 
   const adjustedPosition = useCallback(() => {
     const menu = menuRef.current;
     if (!menu) return { left: x, top: y };
     const rect = menu.getBoundingClientRect();
-    const left = Math.min(x, window.innerWidth - rect.width - 4);
-    const top = Math.min(y, window.innerHeight - rect.height - 4);
-    return { left: Math.max(0, left), top: Math.max(0, top) };
+    const left = Math.min(x, window.innerWidth - rect.width - 8);
+    const top = Math.min(y, window.innerHeight - rect.height - 8);
+    return { left: Math.max(8, left), top: Math.max(8, top) };
   }, [x, y]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const menu = menuRef.current;
     if (menu) {
       const pos = adjustedPosition();
@@ -54,6 +57,24 @@ export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: C
       menu.style.top = `${pos.top}px`;
     }
   }, [adjustedPosition]);
+
+  useLayoutEffect(() => {
+    if (openSubmenu === null) return;
+    const anchor = triggerRefs.current.get(openSubmenu);
+    const submenu = submenuRef.current;
+    if (!anchor || !submenu) return;
+    const anchorRect = anchor.getBoundingClientRect();
+    const submenuRect = submenu.getBoundingClientRect();
+    const pos = computeSubmenuPosition(
+      anchorRect,
+      { width: submenuRect.width, height: submenuRect.height },
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    submenu.style.left = `${pos.left}px`;
+    submenu.style.top = `${pos.top}px`;
+    submenu.style.maxHeight = `${pos.maxHeight}px`;
+    submenu.style.visibility = "visible";
+  }, [openSubmenu, items]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -139,7 +160,16 @@ export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: C
           e.currentTarget.style.background = "none";
         }}
       >
-        <span>{entry.label}</span>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {entry.label}
+        </span>
         <span
           style={{
             display: "inline-flex",
@@ -167,6 +197,11 @@ export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: C
     return (
       <div
         key={key}
+        ref={(node) => {
+          if (submenuIndex === null) return;
+          if (node) triggerRefs.current.set(submenuIndex, node);
+          else triggerRefs.current.delete(submenuIndex);
+        }}
         style={{ position: "relative" }}
         onMouseEnter={() => {
           if (submenuIndex !== null && !entry.disabled) {
@@ -184,10 +219,13 @@ export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: C
         {button}
         {submenuIndex !== null && openSubmenu === submenuIndex && (
           <div
+            ref={submenuRef}
+            role="menu"
             style={{
-              position: "absolute",
-              left: "calc(100% - 4px)",
-              top: -4,
+              position: "fixed",
+              left: 0,
+              top: 0,
+              visibility: "hidden",
               zIndex: 10000,
               background: colors.bg2,
               border: `1px solid ${colors.line}`,
@@ -195,6 +233,9 @@ export function ContextMenu({ x, y, items, onClose, testId = "context-menu" }: C
               padding: 4,
               boxShadow: "0 24px 64px rgb(0 0 0 / 0.45)",
               minWidth: 160,
+              maxWidth: "min(280px, calc(100vw - 16px))",
+              overflowY: "auto",
+              scrollbarWidth: "thin",
             }}
           >
             {entry.children!.map((child, childIndex) => (
