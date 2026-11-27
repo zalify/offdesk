@@ -79,7 +79,7 @@ import {
   type LocalEchoController,
   type LocalEchoSnapshot,
 } from "@/lib/localEcho";
-import { activateGpuRenderer } from "@/lib/terminalGpuRenderer";
+import { activateGpuRenderer, type GpuRendererHandle } from "@/lib/terminalGpuRenderer";
 import { readTerminalFontPreferences, subscribeFontPreferences } from "@/lib/fontPreferences";
 
 const TERM_COLS = 120;
@@ -320,6 +320,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     rows,
     displayMode = "immersive",
     isController,
+    isActive = true,
     canType,
     canResizeTerminal,
     onTitleChange,
@@ -389,6 +390,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const wsRef = useRef<WebSocket | null>(null);
     const fitRef = useRef<FitAddon | null>(null);
     const isControllerRef = useRef(isController ?? true);
+    const isActiveRef = useRef(isActive);
+    isActiveRef.current = isActive;
+    const gpuRendererRef = useRef<GpuRendererHandle | null>(null);
     const canTypeRef = useRef(canType ?? isController ?? true);
 
     const canResizeTerminalRef = useRef(canResizeTerminal ?? false);
@@ -446,9 +450,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, []);
     const handleLocalEchoOutput = useCallback(
       (chunk: Uint8Array) => {
-        if (chunk.byteLength > 0) {
-          setCachedSnapshot((prev) => (prev ? null : prev));
-        }
         const snap = localEchoRef.current?.onOutput(chunk);
         if (snap) renderLocalEcho(snap);
       },
@@ -1055,6 +1056,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // periodically to stay clear of the upstream atlas-corruption bug
       // that got WebGL removed in PR #230. See lib/terminalGpuRenderer.ts.
       const gpuRenderer = activateGpuRenderer(term);
+      gpuRendererRef.current = gpuRenderer;
       const restoreMouseCoordinates = patchScaledMouseCoordinates(term);
       const restoreCompositionHelper = patchCompositionHelperSendRace(term);
       scheduleMeasure();
@@ -1303,6 +1305,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         readXtermCellMetrics(term)?.height ??
         (term.options.fontSize ?? 14) * (term.options.lineHeight ?? 1);
       const cachedViewport = container.querySelector(".xterm-viewport");
+      let cachedLineHeight = getLineHeight();
       let lastTouchY = 0;
       let accumulatedDelta = 0;
       let tapStart: { x: number; y: number; at: number } | null = null;
@@ -1329,7 +1332,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       // Convert vertical pixel travel into per-line synthetic wheel events on
       // the xterm viewport (xterm turns them into SGR reports for tmux).
       const scrollByPixels = (dy: number, clientX: number, clientY: number) => {
-        const lineHeight = getLineHeight();
+        const lineHeight = cachedLineHeight;
         accumulatedDelta += dy;
         const lines = Math.trunc(accumulatedDelta / lineHeight);
         if (lines === 0) return;
@@ -1398,6 +1401,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           // whatever link happens to slide under the finger.
           tapInterruptedMomentum = momentumRaf !== 0;
           stopMomentum();
+          cachedLineHeight = getLineHeight();
           lastTouchY = touch.clientY;
           accumulatedDelta = 0;
           velocitySamples = [{ t: e.timeStamp, y: touch.clientY }];
@@ -1472,6 +1476,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const viewport = viewportRef.current;
       const viewportFit = createMobileViewportFitScheduler({
         canFit: () =>
+          isActiveRef.current &&
           prefixKeyRef.current.isCompact &&
           isControllerRef.current &&
           canResizeTerminalRef.current,
@@ -1483,8 +1488,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         },
         schedule: (callback) => requestAnimationFrame(callback),
         cancel: (frame) => cancelAnimationFrame(frame),
+        settleDebounceMs: 90,
+        burstWindowMs: 60,
+        scheduleSettle: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        cancelSettle: (timerId) => window.clearTimeout(timerId),
       });
       const resizeObserver = new ResizeObserver(() => {
+        if (!isActiveRef.current) return;
         scheduleMeasure();
         if (viewport) {
           viewportFit.observe({
@@ -1534,6 +1544,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         restoreCompositionHelper();
         captureTerminalSnapshot(terminalId, term);
         gpuRenderer.dispose();
+        if (gpuRendererRef.current === gpuRenderer) {
+          gpuRendererRef.current = null;
+        }
         term.dispose();
         if (termRef.current === term) {
           termRef.current = null;
@@ -1544,6 +1557,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Terminal created once on mount
     }, []);
+
+    // Recover WebGL if a mobile WebView evicted the context while this
+    // keep-alive pane was hidden, and refresh layout measurement on return.
+    useEffect(() => {
+      if (!isActive) return;
+      gpuRendererRef.current?.ensureActive();
+      scheduleMeasure();
+    }, [isActive, scheduleMeasure]);
 
     // A theme change recolours the live terminal; nothing reconnects.
     useEffect(() => {
@@ -1564,15 +1585,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const current = ++revision;
         const { fontFamily, fontSize } = readTerminalFontPreferences();
         const changed = fontFamily !== applied.fontFamily || fontSize !== applied.fontSize;
+        const fontsApi = typeof document !== "undefined" ? document.fonts : undefined;
+        const alreadyLoaded =
+          !allowFit &&
+          !changed &&
+          typeof fontsApi?.check === "function" &&
+          fontsApi.check(`${fontSize}px ${fontFamily}`) &&
+          fontsApi.check(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`) &&
+          fontsApi.check(`${fontSize}px "${TERMINAL_SYMBOL_FONT}"`, "⏵");
+        if (alreadyLoaded) return;
         // Load before measuring. Otherwise a newly downloaded webfont retains
         // the fallback font's cell metrics and clips/overlaps terminal output.
         try {
           await Promise.allSettled([
-            document.fonts?.load(`${fontSize}px ${fontFamily}`),
+            fontsApi?.load(`${fontSize}px ${fontFamily}`),
             // Load both fallbacks even when a custom face handles ordinary text.
             // Redraw only after the symbol subset has settled too.
-            document.fonts?.load(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`),
-            document.fonts?.load(`${fontSize}px "${TERMINAL_SYMBOL_FONT}"`, "⏵"),
+            fontsApi?.load(`${fontSize}px "${DEFAULT_TERMINAL_FONT}"`),
+            fontsApi?.load(`${fontSize}px "${TERMINAL_SYMBOL_FONT}"`, "⏵"),
           ]);
         } catch { /* use system fallback if a bundled font cannot load */ }
         if (disposed || current !== revision || termRef.current !== term) return;
@@ -1611,6 +1641,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       onSocketOpen: handleSocketOpen,
       onOutputChunk: handleLocalEchoOutput,
       outputPaintWatcherRef,
+      isActive,
     });
 
     useEffect(() => {
@@ -1704,7 +1735,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
                   margin: 0,
                   fontFamily: cachedSnapshot.fontFamily,
                   fontSize: cachedSnapshot.fontSize,
-                  lineHeight: 1.2,
+                  lineHeight: 1,
                   whiteSpace: "pre",
                   opacity: 0.92,
                 }}

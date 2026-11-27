@@ -239,6 +239,9 @@ function TerminalWorkspaceComponent({
     [commitWorkspace],
   );
   const activeCardRef = useRef<TerminalCardRef | null>(null);
+  const handleActiveCardRef = useCallback((ref: TerminalCardRef | null) => {
+    activeCardRef.current = ref;
+  }, []);
   const pendingGroupSelectionRef = useRef<string | null>(null);
   const fitRequestCounterRef = useRef(0);
   const [fitRequest, setFitRequest] = useState<WorkspaceFitRequest | null>(
@@ -380,7 +383,18 @@ function TerminalWorkspaceComponent({
   // Rendering both would mount two xterm + WS instances for one terminal, so
   // hidden trees skip every pane the active tree claims; the next reconcile
   // cleans the state up.
-  const activePaneIds = new Set(collectIds(activeGroup?.root ?? null));
+  const activePaneIds = useMemo(
+    () => new Set(collectIds(activeGroup?.root ?? null)),
+    [activeGroup?.root],
+  );
+  const hiddenTerminalsById = useMemo(() => {
+    if (activePaneIds.size === 0) return terminalsById;
+    const next = new Map<string, TerminalInfo>();
+    for (const [id, item] of terminalsById) {
+      if (!activePaneIds.has(id)) next.set(id, item);
+    }
+    return next;
+  }, [terminalsById, activePaneIds]);
   const activeTerminal = workspace.activeTerminalId
     ? terminalsById.get(workspace.activeTerminalId) ?? null
     : null;
@@ -612,7 +626,7 @@ function TerminalWorkspaceComponent({
   );
 
   const activateTerminal = useCallback(
-    (terminalId: string) => {
+    (terminalId: string, options?: { skipSameGroupFit?: boolean }) => {
       const changedTerminal = terminalId !== workspaceRef.current.activeTerminalId;
       const targetGroup =
         workspaceRef.current.groups.find((candidate) =>
@@ -639,16 +653,20 @@ function TerminalWorkspaceComponent({
         // zoomed pane shrank back to its rect and needs a refit too (panes
         // no longer remount on zoom changes). A terminal in another tab (a
         // sidebar row) brings that tab's panes into view, sized while hidden,
-        // so all of them get the refit a tab click gives.
+        // so all of them get the refit a tab click gives. Hover-to-focus
+        // skips same-group refit while explicit clicks still refit.
         const previouslyZoomed = maximizedTerminalIdRef.current;
-        requestPaneFit(
-          changedGroup
-            ? [terminalId, ...collectIds(targetGroup.root)]
-            : previouslyZoomed && previouslyZoomed !== terminalId
-              ? [terminalId, previouslyZoomed]
-              : terminalId,
-          { focusTerminalId: terminalId },
-        );
+        if (changedGroup) {
+          requestPaneFit([terminalId, ...collectIds(targetGroup.root)], {
+            focusTerminalId: terminalId,
+          });
+        } else if (previouslyZoomed && previouslyZoomed !== terminalId) {
+          requestPaneFit([terminalId, previouslyZoomed], {
+            focusTerminalId: terminalId,
+          });
+        } else if (!options?.skipSameGroupFit) {
+          requestPaneFit(terminalId, { focusTerminalId: terminalId });
+        }
       }
     },
     [
@@ -797,6 +815,10 @@ function TerminalWorkspaceComponent({
       updateWorkspace,
     ],
   );
+
+  const handleSplitRight = useCallback(() => {
+    void handleSplit("right");
+  }, [handleSplit]);
 
   const handleFit = useCallback(() => {
     activeCardRef.current?.fitToContainer();
@@ -1312,9 +1334,7 @@ function TerminalWorkspaceComponent({
                       }
                       onActiveRef={
                         isActivePane
-                          ? (ref) => {
-                              activeCardRef.current = ref;
-                            }
+                          ? handleActiveCardRef
                           : NOOP_ACTIVE_REF
                       }
                       onFitRequestHandled={handleFitRequestHandled}
@@ -1513,11 +1533,7 @@ function TerminalWorkspaceComponent({
                       terminalsById={
                         isActiveGroup
                           ? terminalsById
-                          : new Map(
-                              [...terminalsById].filter(
-                                ([id]) => !activePaneIds.has(id),
-                              ),
-                            )
+                          : hiddenTerminalsById
                       }
                       activeTerminalId={
                         isActiveGroup ? activeTerminal?.id ?? null : null
@@ -1529,9 +1545,7 @@ function TerminalWorkspaceComponent({
                       isTouch={isTouch}
                       focusRing={collectIds(group.root).length > 1}
                       fitRequest={isActiveGroup ? fitRequest : null}
-                      onActiveRef={(ref) => {
-                        activeCardRef.current = ref;
-                      }}
+                      onActiveRef={handleActiveCardRef}
                       onFitRequestHandled={handleFitRequestHandled}
                       onFocus={activateTerminal}
                       onReady={markGroupPaneReady}
@@ -1539,7 +1553,7 @@ function TerminalWorkspaceComponent({
                       onToggleMaximize={toggleMaximizePane}
                       onSplitRight={
                         isController && !activeGroupFull
-                          ? () => void handleSplit("right")
+                          ? handleSplitRight
                           : undefined
                       }
                       onPaneContextMenu={handlePaneContextMenu}
@@ -1576,9 +1590,7 @@ function TerminalWorkspaceComponent({
             fitRequestShouldFocus={
               fitRequest?.focusTerminalId === maximizedTerminalId
             }
-            onActiveRef={(ref) => {
-              activeCardRef.current = ref;
-            }}
+            onActiveRef={handleActiveCardRef}
             onFitRequestHandled={handleFitRequestHandled}
             onFocus={activateTerminal}
             onDestroy={handleDestroy}
@@ -1621,7 +1633,7 @@ export const TerminalWorkspace = memo(TerminalWorkspaceComponent);
 // each, too narrow to read. Only the rendering is overridden — the split
 // direction persisted on the hub is untouched, so the same group keeps its
 // saved side-by-side arrangement on desktop clients.
-function WorkspacePaneTree({
+const WorkspacePaneTree = memo(function WorkspacePaneTree({
   node,
   maximizedTerminalId,
   terminalsById,
@@ -1657,7 +1669,7 @@ function WorkspacePaneTree({
   fitRequest: WorkspaceFitRequest | null;
   onActiveRef: (ref: TerminalCardRef | null) => void;
   onFitRequestHandled: (nonce: number, terminalId: string) => void;
-  onFocus: (id: string) => void;
+  onFocus: (id: string, options?: { skipSameGroupFit?: boolean }) => void;
   /** A pane's first screen is up, or its attach failed. */
   onReady?: (terminalId: string) => void;
   onDestroy: (terminal: TerminalInfo) => void;
@@ -1752,9 +1764,9 @@ function WorkspacePaneTree({
       })}
     </div>
   );
-}
+});
 
-export function WorkspacePaneLeaf({
+export const WorkspacePaneLeaf = memo(function WorkspacePaneLeaf({
   terminal,
   isActive,
   testIdOverride,
@@ -1796,7 +1808,7 @@ export function WorkspacePaneLeaf({
   fitRequestShouldFocus: boolean;
   onActiveRef: (ref: TerminalCardRef | null) => void;
   onFitRequestHandled: (nonce: number, terminalId: string) => void;
-  onFocus: (id: string) => void;
+  onFocus: (id: string, options?: { skipSameGroupFit?: boolean }) => void;
   onDestroy: (terminal: TerminalInfo) => void;
   isMaximized?: boolean;
   canMaximize?: boolean;
@@ -1815,6 +1827,14 @@ export function WorkspacePaneLeaf({
   const handleReady = useCallback(
     () => onReady?.(terminalId),
     [onReady, terminalId],
+  );
+  const handleToggleMaximize = useCallback(
+    () => onToggleMaximize?.(terminalId),
+    [onToggleMaximize, terminalId],
+  );
+  const handleClose = useCallback(
+    () => onDestroy(terminal),
+    [onDestroy, terminal],
   );
 
   // A compact pane only goes inactive while it is held over its successor
@@ -1885,7 +1905,7 @@ export function WorkspacePaneLeaf({
         if (isTouch || isActive) return;
         const target = event.target;
         if (target instanceof Element && target.closest("button")) return;
-        onFocus(terminal.id);
+        onFocus(terminal.id, { skipSameGroupFit: true });
       }}
       onContextMenu={(event) => onPaneContextMenu?.(terminal.id, event)}
       onPointerDown={(event) => {
@@ -1929,10 +1949,10 @@ export function WorkspacePaneLeaf({
           isMaximized={isMaximized}
           canMaximize={canMaximize}
           onToggleMaximize={
-            onToggleMaximize ? () => onToggleMaximize(terminal.id) : undefined
+            onToggleMaximize ? handleToggleMaximize : undefined
           }
           onSplitRight={onSplitRight}
-          onClose={() => onDestroy(terminal)}
+          onClose={handleClose}
         />
       )}
       <TerminalCard
@@ -1955,7 +1975,7 @@ export function WorkspacePaneLeaf({
       />
     </div>
   );
-}
+});
 
 // Over the held pane of a compact switch: the screen dims under a progress
 // bar. Both fade in only after a moment, so a switch that is ready at once
@@ -1993,7 +2013,7 @@ function CompactSwitchProgress({ paused }: { paused: boolean }) {
 // robot `agent` marker. 30px under the tab bar; with the sessions sidebar
 // pinned instead it is the top row, as tall as the sidebar's (40px, set as
 // --pane-header-height by TerminalCanvas).
-function PaneHeader({
+const PaneHeader = memo(function PaneHeader({
   terminal,
   active,
   isController,
@@ -2110,7 +2130,7 @@ function PaneHeader({
       </span>
     </div>
   );
-}
+});
 
 function EmptyWorkspaceGroup({
   group,

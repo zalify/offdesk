@@ -6,7 +6,7 @@ import {
 } from "./terminalViewModel";
 
 describe("getTerminalFitResizeDecision", () => {
-  it("suppresses only the remote resize frame when auto-fit dimensions are unchanged", () => {
+  it("suppresses remote resize and local surface refresh when auto-fit dimensions are unchanged", () => {
     expect(
       getTerminalFitResizeDecision({
         currentCols: 52,
@@ -17,7 +17,7 @@ describe("getTerminalFitResizeDecision", () => {
       }),
     ).toEqual({
       sendResizeFrame: false,
-      refreshLocalSurface: true,
+      refreshLocalSurface: false,
     });
   });
 });

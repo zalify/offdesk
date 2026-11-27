@@ -1,12 +1,37 @@
-use axum::{extract::State, response::Json, routing::get, Router};
+use axum::{
+    extract::{Query, State},
+    http::HeaderMap,
+    response::Json,
+    routing::get,
+    Router,
+};
 use offdesk_protocol::BrowserStateSnapshot;
+use serde::Deserialize;
 
 use crate::{auth::AuthUser, AppState};
+
+#[derive(Deserialize, Default)]
+struct BootstrapQuery {
+    device_id: Option<String>,
+}
 
 async fn get_bootstrap(
     auth_user: AuthUser,
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<BootstrapQuery>,
 ) -> Json<BrowserStateSnapshot> {
+    let device_id = headers
+        .get("x-offdesk-device-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or(query.device_id.as_deref());
+    if let Some(device_id) = device_id {
+        state
+            .manager
+            .restore_released_leases_for_device(&auth_user.user_id, device_id);
+    }
     Json(state.manager.snapshot_for_user(&auth_user.user_id).await)
 }
 

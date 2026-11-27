@@ -1,6 +1,7 @@
 import { openSocket } from "@/lib/secureTransport";
 import {
   lazy,
+  memo,
   Suspense,
   useCallback,
   useEffect,
@@ -9,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { CSSProperties } from "react";
+import type { ComponentProps, CSSProperties } from "react";
 import type {
   AgentBrowserInfo,
   CreateSpaceRequest,
@@ -140,6 +141,15 @@ import { BootScreen } from "./BootScreen.web";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { rem } from "@/lib/rem";
 import { readSidebarShown, useSidebarFits, writeSidebarShown } from "@/lib/sessionList";
+import {
+  deleteLiveMachineStat,
+  recordLiveRttSample,
+  setLiveMachineStat,
+  setLiveMachineStatsSnapshot,
+  useLiveMachineStats,
+  useLiveMachineStatsPresence,
+  useLiveRttMs,
+} from "@/lib/liveMetricsStore";
 import { SessionsSidebar } from "./SessionsSidebar.web";
 
 const EmptyMachinesView = lazy(() =>
@@ -186,6 +196,7 @@ interface DestroyTerminalOptions {
 type DestroyTerminalRequestResult = "accepted" | "pending";
 
 const NO_AGENT_BROWSERS: AgentBrowserInfo[] = [];
+const EMPTY_PALETTE_ROWS: PaletteRow[] = [];
 const LAST_FOCUS_PUT_KEY = "offdesk:last-focus-put";
 const SAME_SESSION_FOCUS_WINDOW_MS = 2 * 60_000;
 
@@ -326,7 +337,6 @@ function TerminalCanvasInner() {
     setBootCover((state) => (state === "shown" ? "leaving" : state));
   }, []);
   const [eventsReconnecting, setEventsReconnecting] = useState(false);
-  const [rttMs, setRttMs] = useState<number | null>(null);
   const [viewOnlyLocked, setViewOnlyLocked] = useState(() =>
     typeof window === "undefined"
       ? false
@@ -425,7 +435,7 @@ function TerminalCanvasInner() {
   const spaces = browserState.spaces;
   const workspaceGroups = browserState.workspaceGroups;
   const workspaceLayouts = browserState.workspaceLayouts;
-  const machineStats = browserState.machineStats;
+  const machineStatsPresence = useLiveMachineStatsPresence();
   const controlLeases = browserState.controlLeases;
   const [activeSpaceId, setActiveSpaceIdState] = useState<string | null>(readActiveSpaceId);
   const [spaceModalState, setSpaceModalState] = useState<{
@@ -452,10 +462,26 @@ function TerminalCanvasInner() {
     workspaceLayoutsRef.current = workspaceLayouts;
   }, [workspaceLayouts]);
 
+  const lastControlledMachinesRef = useRef<Set<string>>(new Set());
   const isMachineController = useCallback(
-    (machineId: string) =>
-      deviceId !== null && controlLeases[machineId] === deviceId,
-    [controlLeases, deviceId],
+    (machineId: string) => {
+      if (deviceId === null) return false;
+      const controller = controlLeases[machineId];
+      if (controller === deviceId) {
+        lastControlledMachinesRef.current.add(machineId);
+        return true;
+      }
+      if (controller && controller !== deviceId) {
+        lastControlledMachinesRef.current.delete(machineId);
+        return false;
+      }
+      if (eventsReconnecting && lastControlledMachinesRef.current.has(machineId)) {
+        return true;
+      }
+      lastControlledMachinesRef.current.delete(machineId);
+      return false;
+    },
+    [controlLeases, deviceId, eventsReconnecting],
   );
   const canTypeOnMachine = useCallback(
     (machineId: string) =>
@@ -473,19 +499,28 @@ function TerminalCanvasInner() {
     ? isMachineController(activeMachineId)
     : false;
 
-  const machineOnline = useMemo(
-    () =>
-      Object.fromEntries(
-        machines.map((machine) => [
-          machine.id,
-          Boolean(machineStats[machine.id]) ||
-            terminals.some((terminal) =>
-              terminal.machine_id === machine.id && terminal.reachable,
-            ),
-        ]),
-      ),
-    [machines, machineStats, terminals],
-  );
+  const machineOnlineRef = useRef<Record<string, boolean>>({});
+  const machineOnline = useMemo(() => {
+    const next: Record<string, boolean> = {};
+    for (const machine of machines) {
+      next[machine.id] =
+        Boolean(machineStatsPresence[machine.id]) ||
+        terminals.some(
+          (terminal) => terminal.machine_id === machine.id && terminal.reachable,
+        );
+    }
+    const prev = machineOnlineRef.current;
+    const prevKeys = Object.keys(prev);
+    const nextKeys = Object.keys(next);
+    if (
+      prevKeys.length === nextKeys.length &&
+      nextKeys.every((key) => prev[key] === next[key])
+    ) {
+      return prev;
+    }
+    machineOnlineRef.current = next;
+    return next;
+  }, [machines, machineStatsPresence, terminals]);
   const handleRemoveHost = useCallback(
     (machineId: string) => {
       const machine = machines.find((item) => item.id === machineId);
@@ -569,7 +604,7 @@ function TerminalCanvasInner() {
     return () => {
       cancelled = true;
     };
-  }, [machines, terminals.length]);
+  }, [machines]);
 
   // URL hash <-> zoom-state sync.
   useEffect(() => {
@@ -603,11 +638,13 @@ function TerminalCanvasInner() {
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setBootstrapReady(false);
 
-    getBootstrap()
+    getBootstrap(deviceId)
       .then((snapshot) => {
         if (cancelled) return;
         lastSeqRef.current = snapshot.snapshot_seq;
-        setBrowserState(applyBootstrapSnapshot(snapshot));
+        const applied = applyBootstrapSnapshot(snapshot);
+        setLiveMachineStatsSnapshot(applied.machineStats);
+        setBrowserState(applied);
         setBootstrapReady(true);
         setFirstBootstrapSettled(true);
       })
@@ -720,9 +757,7 @@ function TerminalCanvasInner() {
         if (envelope?.type === "pong" && typeof envelope.t === "number") {
           const sample = performance.now() - envelope.t;
           if (Number.isFinite(sample) && sample >= 0) {
-            setRttMs((current) =>
-              current === null ? sample : current * 0.7 + sample * 0.3,
-            );
+            recordLiveRttSample(sample);
           }
           return;
         }
@@ -738,7 +773,20 @@ function TerminalCanvasInner() {
         }
         if (envelope.seq <= receivedSeq) return;
         receivedSeq = envelope.seq;
-        setBrowserState((prev) => applyBrowserEventEnvelope(prev, envelope));
+        lastSeqRef.current = envelope.seq;
+        if (envelope.event.type === "machine_stats") {
+          setLiveMachineStat(envelope.event.machine_id, envelope.event.stats);
+          return;
+        }
+        if (
+          envelope.event.type === "machine_offline" ||
+          envelope.event.type === "machine_removed"
+        ) {
+          deleteLiveMachineStat(envelope.event.machine_id);
+        }
+        setBrowserState((prev) =>
+          applyBrowserEventEnvelope(prev, envelope, { skipGapCheck: true }),
+        );
         if (envelope.event?.type === "terminal_destroyed") {
           const keepWorkspaceOpen =
             keepWorkspaceOpenDestroyedTerminalIdsRef.current.delete(
@@ -810,7 +858,6 @@ function TerminalCanvasInner() {
   const activeMachine = activeMachineId
     ? machines.find((m) => m.id === activeMachineId) ?? null
     : machines[0] ?? null;
-  const activeStats = activeMachine ? machineStats[activeMachine.id] : undefined;
 
   const scopeBookmark =
     layout.selectedWorkpathId === "all" || !activeMachine
@@ -1099,6 +1146,7 @@ function TerminalCanvasInner() {
   const handleReleaseControl = useCallback(
     async (machineId: string) => {
       if (!deviceId) return;
+      lastControlledMachinesRef.current.delete(machineId);
       const next = await releaseControl(machineId, deviceId);
       setBrowserState((prev) => ({
         ...prev,
@@ -1342,10 +1390,30 @@ function TerminalCanvasInner() {
       .map((t) => t.cwd);
     return [...new Set(cwds)];
   }, [terminals, filesMachine]);
-  const filesButtonProps =
-    activeMachine && machineOnline[activeMachine.id]
-      ? { open: filesState !== null }
-      : undefined;
+  const activeMachineOnline = activeMachine
+    ? Boolean(machineOnline[activeMachine.id])
+    : false;
+  const filesOpen = filesState !== null;
+  const filesButtonProps = useMemo(
+    () => (activeMachineOnline ? { open: filesOpen } : undefined),
+    [activeMachineOnline, filesOpen],
+  );
+  const browserButtonProps = useMemo(
+    () =>
+      activeMachineOnline
+        ? {
+            count: scopedAgentBrowsers.length,
+            needsPerson: browserNeedsYou,
+            open: browserOverlayOpen,
+          }
+        : undefined,
+    [
+      activeMachineOnline,
+      scopedAgentBrowsers.length,
+      browserNeedsYou,
+      browserOverlayOpen,
+    ],
+  );
 
   // A browser that starts asking for help while the overlay is closed is easy
   // to miss: say so (the top-bar button also shows a dot).
@@ -2227,12 +2295,11 @@ function TerminalCanvasInner() {
   // Command palette rows, in the spec's fixed order. Workspace-owned actions
   // (splits, tab selection) go through the workspace command channel.
   const paletteRows = useMemo<PaletteRow[]>(() => {
+    if (!paletteState.open) return EMPTY_PALETTE_ROWS;
     const bindings = loadPrefixBindings();
     const otherOnlineMachines = machines.filter(
       (machine) =>
-        machine.id !== activeMachine?.id &&
-        (Boolean(machineStats[machine.id]) ||
-          terminals.some((t) => t.machine_id === machine.id && t.reachable)),
+        machine.id !== activeMachine?.id && Boolean(machineOnline[machine.id]),
     );
     const machinesById = new Map(machines.map((m) => [m.id, m]));
     const groupByTerminalId = new Map<string, string>();
@@ -2423,9 +2490,9 @@ function TerminalCanvasInner() {
       },
     ];
   }, [
+    paletteState.open,
     machines,
     activeMachine,
-    machineStats,
     terminals,
     tabGroups,
     isActiveController,
@@ -2438,6 +2505,98 @@ function TerminalCanvasInner() {
     workspaceTerminal?.id,
     machineOnline,
     logout,
+  ]);
+
+  const handleOpenAddMachine = useCallback(() => setAddMachineOpen(true), []);
+  const handleOpenPhone = useCallback(() => setPhoneOpen(true), []);
+  const handleOpenChat = useCallback(() => setChatOpen(true), []);
+  const handleOpenSettings = useCallback(() => setShowSettings(true), []);
+  const handleOpenDrafts = useCallback(() => setDraftsOpen(true), []);
+  const handleCloseBrowserSurface = useCallback(
+    () => setBrowserOverlayOpen(false),
+    [setBrowserOverlayOpen],
+  );
+  const handleSelectGroupFromChrome = useCallback(
+    (groupId: string) => workspaceCommandsRef.current.selectGroup?.(groupId),
+    [],
+  );
+  const shelvedIdsRef = useRef(shelvedIds);
+  shelvedIdsRef.current = shelvedIds;
+  const handleSelectSidebarTerminal = useCallback(
+    (id: string) => {
+      if (shelvedIdsRef.current.has(id)) {
+        handleUnshelfTerminal(id);
+      } else {
+        handleSelectSessionTerminal(id);
+      }
+    },
+    [handleUnshelfTerminal, handleSelectSessionTerminal],
+  );
+  const sidebarMachineProps = useMemo(
+    () => ({
+      machines,
+      activeMachineId,
+      controlLeases,
+      deviceId,
+      terminals,
+      onSelectMachine: setActiveMachineId,
+      onAddMachine: handleOpenAddMachine,
+      onRemoveHost: handleRemoveHost,
+    }),
+    [
+      machines,
+      activeMachineId,
+      controlLeases,
+      deviceId,
+      terminals,
+      handleOpenAddMachine,
+      handleRemoveHost,
+    ],
+  );
+  const sidebarPanelsProps = useMemo(
+    () => ({
+      filesButton: filesButtonProps,
+      onToggleFiles: handleToggleFiles,
+      browserButton: browserButtonProps,
+      onToggleBrowser: handleToggleBrowserOverlay,
+      onOpenPhone: handleOpenPhone,
+      onOpenChat: handleOpenChat,
+      onOpenSettings: handleOpenSettings,
+    }),
+    [
+      filesButtonProps,
+      handleToggleFiles,
+      browserButtonProps,
+      handleToggleBrowserOverlay,
+      handleOpenPhone,
+      handleOpenChat,
+      handleOpenSettings,
+    ],
+  );
+  const mountedDesktopMachineSlices = useMemo(() => {
+    if (mountedDesktopMachineIds.length <= 1) return [];
+    return mountedDesktopMachineIds.map((machineId) => {
+      const isCurrent = machineId === activeMachine?.id;
+      const mTerminals = isCurrent
+        ? scopedTerminals
+        : terminals.filter((t) => t.machine_id === machineId);
+      const mGroups = isCurrent
+        ? activeMachineWorkspaceGroups
+        : workspaceGroups.filter((g) => g.machine_id === machineId);
+      const mLayouts = isCurrent
+        ? activeMachineWorkspaceLayouts
+        : workspaceLayouts.filter((l) => l.machine_id === machineId);
+      return { machineId, isCurrent, mTerminals, mGroups, mLayouts };
+    });
+  }, [
+    mountedDesktopMachineIds,
+    activeMachine?.id,
+    scopedTerminals,
+    terminals,
+    activeMachineWorkspaceGroups,
+    workspaceGroups,
+    activeMachineWorkspaceLayouts,
+    workspaceLayouts,
   ]);
 
   return (
@@ -2482,28 +2641,18 @@ function TerminalCanvasInner() {
               <EmptyMachinesView onOpenSettings={() => setShowSettings(true)} />
             </Suspense>
           ) : isCompact ? (
-            <MobileWorkbench
+            <LiveMobileWorkbench
               resumeNotice={showHandoffBanner ? <HandoffBanner isMobile inline onDone={hideHandoffBanner} /> : null}
               machines={machines}
               activeMachineId={activeMachineId}
               controlLeases={controlLeases}
               deviceId={deviceId}
-              machineStats={machineStats}
-              rttMs={rttMs}
               terminals={terminals}
               groups={tabGroups}
               activeTerminalId={workspaceTerminal?.id ?? null}
               browsers={scopedAgentBrowsers}
               agentRuns={browserState.agentRuns}
-              browserButton={
-                activeMachine && machineOnline[activeMachine.id]
-                  ? {
-                      count: scopedAgentBrowsers.length,
-                      needsPerson: browserNeedsYou,
-                      open: browserOverlayOpen,
-                    }
-                  : undefined
-              }
+              browserButton={browserButtonProps}
               browserSurfaceOpen={browserOverlayOpen}
               selectedBrowserId={
                 activeMachine
@@ -2513,11 +2662,11 @@ function TerminalCanvasInner() {
               onToggleBrowser={handleToggleBrowserOverlay}
               onOpenBrowser={handleOpenBrowserTab}
               onSelectBrowser={handleSelectOverlayBrowser}
-              onCloseBrowserSurface={() => setBrowserOverlayOpen(false)}
+              onCloseBrowserSurface={handleCloseBrowserSurface}
               filesButton={filesButtonProps}
               onToggleFiles={handleToggleFiles}
-              onOpenDrafts={() => setDraftsOpen(true)}
-              onOpenChat={() => setChatOpen(true)}
+              onOpenDrafts={handleOpenDrafts}
+              onOpenChat={handleOpenChat}
               draftsCount={draftsCount}
               filesSurface={
                 filesState && filesMachine ? (
@@ -2609,7 +2758,7 @@ function TerminalCanvasInner() {
                   }
                 />
               ) : null}
-            </MobileWorkbench>
+            </LiveMobileWorkbench>
           ) : (
             <KeyBarSlotProvider>
               <div style={{ flex: 1, display: "flex", minWidth: 0, minHeight: 0 }}>
@@ -2621,43 +2770,10 @@ function TerminalCanvasInner() {
                   terminalsById={scopedTerminalsById}
                   activeTerminalId={workspaceTerminal?.id ?? null}
                   canManage={isActiveController}
-                  machine={{
-                    machines,
-                    activeMachineId,
-                    controlLeases,
-                    deviceId,
-                    machineStats,
-                    terminals,
-                    stats: activeStats,
-                    rttMs,
-                    onSelectMachine: setActiveMachineId,
-                    onAddMachine: () => setAddMachineOpen(true),
-                    onRemoveHost: handleRemoveHost,
-                  }}
-                  panels={{
-                    filesButton: filesButtonProps,
-                    onToggleFiles: handleToggleFiles,
-                    browserButton:
-                      activeMachine && machineOnline[activeMachine.id]
-                        ? {
-                            count: scopedAgentBrowsers.length,
-                            needsPerson: browserNeedsYou,
-                            open: browserOverlayOpen,
-                          }
-                        : undefined,
-                    onToggleBrowser: handleToggleBrowserOverlay,
-                    onOpenPhone: () => setPhoneOpen(true),
-                    onOpenChat: () => setChatOpen(true),
-                    onOpenSettings: () => setShowSettings(true),
-                  }}
+                  machine={sidebarMachineProps}
+                  panels={sidebarPanelsProps}
                   onHide={toggleSidebar}
-                  onSelectTerminal={(id) => {
-                    if (shelvedIds.has(id)) {
-                      handleUnshelfTerminal(id);
-                    } else {
-                      handleSelectSessionTerminal(id);
-                    }
-                  }}
+                  onSelectTerminal={handleSelectSidebarTerminal}
                   onNewGroup={handleNewGroupClick}
                   onNewTerminal={handleMobileNewTerminal}
                   onRenameGroup={handleRenameGroup}
@@ -2690,7 +2806,7 @@ function TerminalCanvasInner() {
                 }}
               >
               {!sessionsSidebar?.shown && (
-              <TabBar
+              <LiveTabBar
                 groups={tabGroups}
                 activeGroupId={activeGroupId}
                 activeTerminalId={workspaceTerminal?.id ?? null}
@@ -2700,13 +2816,9 @@ function TerminalCanvasInner() {
                 activeMachineId={activeMachineId}
                 controlLeases={controlLeases}
                 deviceId={deviceId}
-                machineStats={machineStats}
-                stats={activeStats}
                 isController={isActiveController}
                 isTouch={isTouch}
-                onSelectGroup={(groupId) =>
-                  workspaceCommandsRef.current.selectGroup?.(groupId)
-                }
+                onSelectGroup={handleSelectGroupFromChrome}
                 onSelectTerminal={handleSelectSessionTerminal}
                 onNewGroup={handleNewGroupClick}
                 onNewTerminal={handleMobileNewTerminal}
@@ -2716,18 +2828,10 @@ function TerminalCanvasInner() {
                 onDeleteGroup={handleDeleteGroup}
                 onReorderGroups={handleRequestWorkspaceGroupReorder}
                 onSelectMachine={setActiveMachineId}
-                onAddMachine={() => setAddMachineOpen(true)}
-                onOpenPhone={() => setPhoneOpen(true)}
-                onOpenSettings={() => setShowSettings(true)}
-                browserButton={
-                  activeMachine && machineOnline[activeMachine.id]
-                    ? {
-                        count: scopedAgentBrowsers.length,
-                        needsPerson: browserNeedsYou,
-                        open: browserOverlayOpen,
-                      }
-                    : undefined
-                }
+                onAddMachine={handleOpenAddMachine}
+                onOpenPhone={handleOpenPhone}
+                onOpenSettings={handleOpenSettings}
+                browserButton={browserButtonProps}
                 onToggleBrowser={handleToggleBrowserOverlay}
                 filesButton={filesButtonProps}
                 onToggleFiles={handleToggleFiles}
@@ -2802,21 +2906,11 @@ function TerminalCanvasInner() {
                   onActiveGroupChange={setActiveGroupId}
                 />
               ) : (
-                mountedDesktopMachineIds.map((machineId) => {
-                  const isCurrent = machineId === activeMachine?.id;
-                  const mTerminals = isCurrent
-                    ? scopedTerminals
-                    : terminals.filter((t) => t.machine_id === machineId);
+                mountedDesktopMachineSlices.map(({ machineId, isCurrent, mTerminals, mGroups, mLayouts }) => {
                   const mTerminal = isCurrent
                     ? workspaceTerminal!
                     : mTerminals[0];
                   if (!mTerminal) return null;
-                  const mGroups = isCurrent
-                    ? activeMachineWorkspaceGroups
-                    : workspaceGroups.filter((g) => g.machine_id === machineId);
-                  const mLayouts = isCurrent
-                    ? activeMachineWorkspaceLayouts
-                    : workspaceLayouts.filter((l) => l.machine_id === machineId);
                   return (
                     <div
                       key={machineId}
@@ -2980,13 +3074,12 @@ function TerminalCanvasInner() {
                 );
               })()}
               <WorkspaceKeyBarSlot />
-              <WorkspaceStatusLine
+              <LiveWorkspaceStatusLine
                 terminals={terminals}
                 machines={machines}
                 activeMachine={activeMachine ?? null}
                 machineOnline={machineOnline}
                 groups={tabGroups}
-                rttMs={rttMs}
                 isController={isActiveController}
                 viewOnlyLocked={viewOnlyLocked}
                 prefixArmed={prefixKey.armed}
@@ -3290,3 +3383,27 @@ function EmptyState({
     </div>
   );
 }
+
+const LiveMobileWorkbench = memo(function LiveMobileWorkbench(
+  props: Omit<ComponentProps<typeof MobileWorkbench>, "machineStats" | "rttMs">,
+) {
+  const machineStats = useLiveMachineStats();
+  const rttMs = useLiveRttMs();
+  return <MobileWorkbench {...props} machineStats={machineStats} rttMs={rttMs} />;
+});
+
+const LiveTabBar = memo(function LiveTabBar(
+  props: Omit<ComponentProps<typeof TabBar>, "machineStats" | "stats">,
+) {
+  const machineStats = useLiveMachineStats();
+  const statsMachineId = props.activeMachineId ?? props.machines[0]?.id ?? null;
+  const stats = statsMachineId ? machineStats[statsMachineId] : undefined;
+  return <TabBar {...props} machineStats={machineStats} stats={stats} />;
+});
+
+const LiveWorkspaceStatusLine = memo(function LiveWorkspaceStatusLine(
+  props: Omit<ComponentProps<typeof WorkspaceStatusLine>, "rttMs">,
+) {
+  const rttMs = useLiveRttMs(!props.rttShownElsewhere);
+  return <WorkspaceStatusLine {...props} rttMs={rttMs} />;
+});

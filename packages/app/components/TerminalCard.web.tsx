@@ -156,14 +156,21 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   const [paneSize, setPaneSize] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
     const node = contentRef.current;
-    if (!node || !isTab || isCompact || typeof ResizeObserver === "undefined") return;
+    if (!node || !isTab || isCompact || !isActive || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
-      if (rect) setPaneSize({ width: rect.width, height: rect.height });
+      if (!rect) return;
+      const width = Math.round(rect.width);
+      const height = Math.round(rect.height);
+      setPaneSize((prev) =>
+        prev && prev.width === width && prev.height === height
+          ? prev
+          : { width, height },
+      );
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [isTab, isCompact]);
+  }, [isTab, isCompact, isActive]);
   const sizedElsewhere =
     isTab &&
     !isCompact &&
@@ -314,12 +321,14 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
   const wsUrl = terminal.reachable
     ? terminalWsUrl(terminal.machine_id, terminal.id, deviceId)
     : null;
-  const handleMobileViewportRefit = useCallback(() => {
-    fitToContainer({
-      skipIfUnchanged: true,
-      focusAfterFit: false,
-    });
-  }, [fitToContainer]);
+  const handlePasteText = useCallback((text: string) => {
+    const view = termViewRef.current;
+    if (!view) throw new Error("Reconnect to the terminal before pasting.");
+    view.pasteText(text);
+  }, []);
+  const handleTakeControl = useCallback(() => {
+    onRequestControl?.(terminal.machine_id);
+  }, [onRequestControl, terminal.machine_id]);
   const handleMobileViewportScroll = useCallback(() => {
     termViewRef.current?.scrollToBottom();
   }, []);
@@ -358,11 +367,10 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
           e.currentTarget.style.borderColor = colors.border;
       }}
     >
-      {isTouch && isTab && (
+      {isTouch && isTab && isActive && !isController && (
         <MobileViewportTerminalSync
           isActive={isActive}
           isController={isController}
-          onRefit={handleMobileViewportRefit}
           onScrollToBottom={handleMobileViewportScroll}
         />
       )}
@@ -573,8 +581,9 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
                   rows={terminal.rows}
                   displayMode={isTab ? "immersive" : "card"}
                   isController={isController}
+                  isActive={!isCompact || isActive}
                   canType={canType}
-                  canResizeTerminal={isTab && isController}
+                  canResizeTerminal={isTab && isController && (!isCompact || isActive)}
                   onReconnectingChange={setTerminalReconnecting}
                   onReady={onReady}
                   inputTransformRef={inputTransformRef}
@@ -651,15 +660,11 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
         {isTab && (isCompact || isTouch) && (
           <TerminalKeyBarPortal target={!isCompact && isActive ? keyBarSlot : null} hidden={!isCompact && !isActive}>
             <ExtendedKeyBar onKey={handleToolbarKey} onToggleKeyboard={handleToggleKeyboard}
-              onPasteText={text => {
-                const view = termViewRef.current;
-                if (!view) throw new Error("Reconnect to the terminal before pasting.");
-                view.pasteText(text);
-              }} onAttachFile={handleAttachFile}
+              onPasteText={handlePasteText} onAttachFile={handleAttachFile}
               onEnterSelectMode={handleEnterSelectMode} onExitSelectMode={handleExitSelectMode} onCopySelection={handleCopySelection}
               selectMode={selectMode} keyboardVisible={keyboardVisible} isController={canType}
               hasControl={isController}
-              onTakeControl={onRequestControl ? () => onRequestControl(terminal.machine_id) : undefined}
+              onTakeControl={onRequestControl ? handleTakeControl : undefined}
               onUnlockViewOnly={unlockViewOnly ?? undefined}
               ctrlArmed={modifiers.ctrlArmed} onToggleCtrl={modifiers.toggleCtrl}
               shiftArmed={modifiers.shiftArmed} onToggleShift={modifiers.toggleShift}
@@ -691,12 +696,10 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
 function MobileViewportTerminalSync({
   isActive,
   isController,
-  onRefit,
   onScrollToBottom,
 }: {
   isActive: boolean;
   isController: boolean;
-  onRefit: () => void;
   onScrollToBottom: () => void;
 }) {
   const viewportHeight = useVisualViewportHeight();
@@ -712,16 +715,15 @@ function MobileViewportTerminalSync({
       previousHeight,
       nextHeight: viewportHeight,
     });
-    if (!action) return;
+    if (action !== "scroll-to-bottom") return;
 
-    // On the next frame, once layout has the new height: until then the old
-    // grid stays up, clipped by the opening keyboard or half blank as it closes.
+    // On the next frame, once layout has the new height: keep viewer scrolled
+    // to the bottom when the soft keyboard or browser chrome shifts.
     const frame = requestAnimationFrame(() => {
-      if (action === "refit") onRefit();
-      else onScrollToBottom();
+      onScrollToBottom();
     });
     return () => cancelAnimationFrame(frame);
-  }, [isActive, isController, onRefit, onScrollToBottom, viewportHeight]);
+  }, [isActive, isController, onScrollToBottom, viewportHeight]);
 
   return null;
 }

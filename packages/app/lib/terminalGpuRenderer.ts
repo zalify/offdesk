@@ -42,6 +42,9 @@ interface TerminalLike {
 export interface GpuRendererHandle {
   /** True while the WebGL addon is driving rendering. */
   isActive(): boolean;
+  /** Re-attempt WebGL activation after a context loss (no-op if already active,
+   * disposed, or opted out via offdesk:renderer=dom). */
+  ensureActive(): boolean;
   dispose(): void;
 }
 
@@ -56,6 +59,7 @@ export interface ActivateGpuRendererOptions {
 
 const INERT_HANDLE: GpuRendererHandle = {
   isActive: () => false,
+  ensureActive: () => false,
   dispose: () => {},
 };
 
@@ -86,6 +90,8 @@ export function activateGpuRenderer(
   let contextLossSubscription: { dispose(): void } | null = null;
   let atlasTimer: ReturnType<typeof setInterval> | null = null;
   let active = false;
+  let permanentlyDisposed = false;
+  let lostContext = false;
 
   const deactivate = () => {
     if (!active) return;
@@ -101,40 +107,62 @@ export function activateGpuRenderer(
     } catch {
       // Already disposed by xterm (e.g. terminal teardown raced us).
     }
+    addon = null;
   };
 
-  try {
-    addon = options.createAddon
-      ? options.createAddon()
-      : (new WebglAddon() as WebglAddonLike);
-    // Subscribe before loadAddon: a context lost during activation must
-    // still trigger the fallback.
-    contextLossSubscription = addon.onContextLoss(() => {
-      // Disposing the addon makes xterm fall back to the DOM renderer.
-      deactivate();
-    });
-    (term as TerminalLike).loadAddon(addon);
-    active = true;
-  } catch (error) {
-    contextLossSubscription?.dispose();
-    // Silent fallback is the contract, but a construct/load miss has to
-    // be visible in e2e/browser consoles or the canvas canary is the
-    // only signal that we dropped to the DOM renderer.
-    console.warn("[offdesk] WebGL renderer unavailable, using DOM", error);
+  const tryActivate = (): boolean => {
+    if (permanentlyDisposed || active) return active;
+    try {
+      addon = options.createAddon
+        ? options.createAddon()
+        : (new WebglAddon() as WebglAddonLike);
+      // Subscribe before loadAddon: a context lost during activation must
+      // still trigger the fallback.
+      contextLossSubscription = addon.onContextLoss(() => {
+        // Disposing the addon makes xterm fall back to the DOM renderer.
+        // Mark lostContext so the pane can recover WebGL when re-focused.
+        lostContext = true;
+        deactivate();
+      });
+      (term as TerminalLike).loadAddon(addon);
+      active = true;
+      lostContext = false;
+    } catch (error) {
+      contextLossSubscription?.dispose();
+      contextLossSubscription = null;
+      addon = null;
+      // Silent fallback is the contract, but a construct/load miss has to
+      // be visible in e2e/browser consoles or the canvas canary is the
+      // only signal that we dropped to the DOM renderer.
+      console.warn("[offdesk] WebGL renderer unavailable, using DOM", error);
+      return false;
+    }
+
+    atlasTimer = setInterval(() => {
+      try {
+        (term as TerminalLike).clearTextureAtlas();
+      } catch {
+        // A disposed terminal can't clear an atlas; stop trying.
+        deactivate();
+      }
+    }, options.atlasClearIntervalMs ?? ATLAS_CLEAR_INTERVAL_MS);
+
+    return true;
+  };
+
+  if (!tryActivate()) {
     return INERT_HANDLE;
   }
 
-  atlasTimer = setInterval(() => {
-    try {
-      (term as TerminalLike).clearTextureAtlas();
-    } catch {
-      // A disposed terminal can't clear an atlas; stop trying.
-      deactivate();
-    }
-  }, options.atlasClearIntervalMs ?? ATLAS_CLEAR_INTERVAL_MS);
-
   return {
     isActive: () => active,
-    dispose: deactivate,
+    ensureActive: () => {
+      if (permanentlyDisposed || active || !lostContext) return active;
+      return tryActivate();
+    },
+    dispose: () => {
+      permanentlyDisposed = true;
+      deactivate();
+    },
   };
 }

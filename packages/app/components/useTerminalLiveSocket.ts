@@ -1,5 +1,5 @@
 import { openSocket } from "@/lib/secureTransport";
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 
 import { createDeflateRawV1Session } from "@/lib/attachCompression";
@@ -31,11 +31,15 @@ interface UseTerminalLiveSocketOptions {
   // returns runs once that write is parsed and painted. TerminalView sets it
   // only until its first screen is up, so streaming output pays nothing.
   outputPaintWatcherRef?: RefObject<OutputPaintWatcher | null>;
+  // False for hidden keep-alive panes: throttle output flushes so background
+  // streaming terminals don't steal 60fps frames from the active terminal.
+  isActive?: boolean;
 }
 
 export type OutputPaintWatcher = () => () => void;
 
 const MAX_PENDING_OUTPUT_BYTES = 128 * 1024;
+const HIDDEN_FLUSH_INTERVAL_MS = 250;
 // Output arriving later than this after an input send is stream output, not
 // the echo of that input.
 const ECHO_PROBE_WINDOW_MS = 2000;
@@ -62,7 +66,20 @@ export function useTerminalLiveSocket({
   onSocketOpen,
   onOutputChunk,
   outputPaintWatcherRef,
+  isActive = true,
 }: UseTerminalLiveSocketOptions) {
+  const isActiveRef = useRef(isActive);
+  isActiveRef.current = isActive;
+  const flushNowRef = useRef<(() => void) | null>(null);
+
+  // When a hidden keep-alive pane becomes active, immediately drain any
+  // throttled background output so the visible screen is up-to-date in 0ms.
+  useEffect(() => {
+    if (isActive) {
+      flushNowRef.current?.();
+    }
+  }, [isActive]);
+
   useEffect(() => {
     const term = termRef.current;
     if (!term || !wsUrl) return;
@@ -91,6 +108,18 @@ export function useTerminalLiveSocket({
     let pendingChunks: Uint8Array[] = [];
     let pendingBytes = 0;
     let rafId = 0;
+    let hiddenFlushTimer: number | null = null;
+
+    const cancelScheduledFlush = () => {
+      if (rafId) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      if (hiddenFlushTimer !== null) {
+        window.clearTimeout(hiddenFlushTimer);
+        hiddenFlushTimer = null;
+      }
+    };
 
     // xterm parses a write asynchronously and paints it on its next render
     // frame, so two frames after the parse callback the write is on screen.
@@ -110,6 +139,7 @@ export function useTerminalLiveSocket({
     };
 
     const flushPending = () => {
+      cancelScheduledFlush();
       if (pendingBytes > 0) {
         const merged = new Uint8Array(pendingBytes);
         let offset = 0;
@@ -121,8 +151,8 @@ export function useTerminalLiveSocket({
         pendingChunks = [];
         pendingBytes = 0;
       }
-      rafId = 0;
     };
+    flushNowRef.current = flushPending;
 
     // Passive echo-latency probe: the first output chunk after an input
     // send approximates the keystroke echo round trip. Samples land on
@@ -158,7 +188,7 @@ export function useTerminalLiveSocket({
     const enqueueOutput = (chunk: Uint8Array) => {
       recordEchoProbeSample();
       onOutputChunk?.(chunk);
-      if (!rafId && pendingBytes === 0) {
+      if (isActiveRef.current && !rafId && hiddenFlushTimer === null && pendingBytes === 0) {
         // Interactive path: nothing queued this frame — write immediately so
         // a keystroke echo doesn't wait for the next animation frame. The rAF
         // is a burst marker: chunks arriving before it fires get batched.
@@ -170,12 +200,16 @@ export function useTerminalLiveSocket({
       pendingBytes += chunk.length;
 
       if (pendingBytes >= MAX_PENDING_OUTPUT_BYTES) {
-        if (rafId) {
-          cancelAnimationFrame(rafId);
-          rafId = 0;
-        }
         flushPending();
+      } else if (!isActiveRef.current) {
+        if (hiddenFlushTimer === null && !rafId) {
+          hiddenFlushTimer = window.setTimeout(flushPending, HIDDEN_FLUSH_INTERVAL_MS);
+        }
       } else if (!rafId) {
+        if (hiddenFlushTimer !== null) {
+          window.clearTimeout(hiddenFlushTimer);
+          hiddenFlushTimer = null;
+        }
         rafId = requestAnimationFrame(flushPending);
       }
     };
@@ -236,20 +270,24 @@ export function useTerminalLiveSocket({
     };
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        refreshTerminalSurface();
-      }
       reconnectController.handleVisibilityChange(
         document.visibilityState,
         ws.readyState,
       );
-      onReconnectingChange?.(reconnectController.hasPendingReconnect());
+      const pendingReconnect = reconnectController.hasPendingReconnect();
+      onReconnectingChange?.(pendingReconnect);
+      if (document.visibilityState === "visible" && isActiveRef.current && !pendingReconnect) {
+        refreshTerminalSurface();
+      }
     };
 
     const handlePageShow = () => {
-      refreshTerminalSurface();
       reconnectController.handleVisibilityChange("visible", ws.readyState);
-      onReconnectingChange?.(reconnectController.hasPendingReconnect());
+      const pendingReconnect = reconnectController.hasPendingReconnect();
+      onReconnectingChange?.(pendingReconnect);
+      if (isActiveRef.current && !pendingReconnect) {
+        refreshTerminalSurface();
+      }
     };
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -259,7 +297,9 @@ export function useTerminalLiveSocket({
       onSocketOpen?.();
       reconnectController.handleSocketOpen();
       onReconnectingChange?.(false);
-      refreshTerminalSurface();
+      if (isActiveRef.current) {
+        refreshTerminalSurface();
+      }
     };
 
     ws.onclose = () => {
@@ -271,11 +311,14 @@ export function useTerminalLiveSocket({
 
     return () => {
       disposed = true;
+      if (flushNowRef.current === flushPending) {
+        flushNowRef.current = null;
+      }
       onSocketClose?.();
       reconnectController.cancelReconnect();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("pageshow", handlePageShow);
-      if (rafId) cancelAnimationFrame(rafId);
+      cancelScheduledFlush();
       if (wsRef.current === ws) {
         wsRef.current = null;
       }

@@ -109,7 +109,15 @@ export function useVisualViewport(): VisualViewportBounds | null {
       return;
     }
     const vv = window.visualViewport;
-    const update = () => setBounds({ height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale });
+    const update = () =>
+      setBounds((prev) =>
+        prev &&
+        prev.height === vv.height &&
+        prev.offsetTop === vv.offsetTop &&
+        prev.scale === vv.scale
+          ? prev
+          : { height: vv.height, offsetTop: vv.offsetTop, scale: vv.scale },
+      );
     update();
     vv.addEventListener("resize", update);
     // iOS Safari fires `scroll` — not `resize` — when the keyboard shifts.

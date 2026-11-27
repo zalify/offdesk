@@ -310,7 +310,15 @@ async fn post(client: &reqwest::Client, hook: &Integration, delivery: &Delivery)
 
 /// Delivers what's due now; returns how many it tried.
 pub async fn deliver_due(pool: &DbPool, client: &reqwest::Client) -> usize {
-    let due = match pool.get().map(|conn| integrations::due(&conn, db::now_ms(), 20)) {
+    let pool_clone = pool.clone();
+    let due = match tokio::task::spawn_blocking(move || {
+        pool_clone
+            .get()
+            .map_err(|e| e.to_string())
+            .and_then(|conn| integrations::due(&conn, db::now_ms(), 20).map_err(|e| e.to_string()))
+    })
+    .await
+    {
         Ok(Ok(due)) => due,
         Ok(Err(error)) => {
             tracing::warn!("webhooks: {}", error);
@@ -324,22 +332,78 @@ pub async fn deliver_due(pool: &DbPool, client: &reqwest::Client) -> usize {
     let tried = due.len();
     for (delivery, hook) in due {
         let result = post(client, &hook, &delivery).await;
-        let Ok(conn) = pool.get() else { continue };
-        let saved = match result {
-            Ok(()) => integrations::mark_delivered(&conn, &delivery),
-            Err(error) => {
-                let retry = retry_at(&delivery, db::now_ms());
-                if retry.is_none() {
-                    tracing::warn!("webhook {} gave up on {}: {}", hook.name, delivery.event_id, error);
+        let pool_clone = pool.clone();
+        let hook_name = hook.name.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            let conn = pool_clone.get().map_err(|e| e.to_string())?;
+            match result {
+                Ok(()) => integrations::mark_delivered(&conn, &delivery).map_err(|e| e.to_string()),
+                Err(error) => {
+                    let retry = retry_at(&delivery, db::now_ms());
+                    if retry.is_none() {
+                        tracing::warn!(
+                            "webhook {} gave up on {}: {}",
+                            hook_name,
+                            delivery.event_id,
+                            error
+                        );
+                    }
+                    integrations::mark_failed(&conn, &delivery, &error, retry)
+                        .map_err(|e| e.to_string())
                 }
-                integrations::mark_failed(&conn, &delivery, &error, retry)
             }
-        };
-        if let Err(error) = saved {
-            tracing::warn!("webhooks: {}", error);
+        })
+        .await;
+        match saved {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!("webhooks: {}", error),
+            Err(error) => tracing::warn!("webhooks: {}", error),
         }
     }
     tried
+}
+
+const PRUNE_INTERVAL: Duration = Duration::from_secs(3600);
+const PRUNE_BATCH_SIZE: i64 = 1000;
+const PRUNE_MAX_BATCHES_PER_TICK: usize = 20;
+
+async fn prune_outbox_batched(pool: &DbPool) {
+    let cutoff = db::now_ms() - integrations::RETENTION_MS;
+    let mut total_outbox = 0usize;
+    let mut total_run_state = 0usize;
+    for _ in 0..PRUNE_MAX_BATCHES_PER_TICK {
+        let pool_clone = pool.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let conn = pool_clone.get().map_err(|e| e.to_string())?;
+            integrations::prune_old(&conn, cutoff, PRUNE_BATCH_SIZE).map_err(|e| e.to_string())
+        })
+        .await;
+        match res {
+            Ok(Ok((outbox, run_state))) => {
+                total_outbox += outbox;
+                total_run_state += run_state;
+                if (outbox as i64) < PRUNE_BATCH_SIZE && (run_state as i64) < PRUNE_BATCH_SIZE {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+            Ok(Err(error)) => {
+                tracing::warn!("webhooks prune: {}", error);
+                break;
+            }
+            Err(error) => {
+                tracing::warn!("webhooks prune: {}", error);
+                break;
+            }
+        }
+    }
+    if total_outbox > 0 || total_run_state > 0 {
+        tracing::info!(
+            "webhooks prune: removed {} outbox rows and {} ended run states",
+            total_outbox,
+            total_run_state
+        );
+    }
 }
 
 /// Runs the webhook worker: turns run updates (from the returned sender) into outbox
@@ -354,44 +418,60 @@ pub fn spawn(pool: DbPool) -> mpsc::UnboundedSender<HubUpdate> {
             .user_agent(concat!("offdesk-hub/", env!("CARGO_PKG_VERSION")))
             .build()
             .expect("webhook client");
+        let mut prune_interval = tokio::time::interval(PRUNE_INTERVAL);
+        prune_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             deliver_due(&pool, &client).await;
-            let wait = pool
-                .get()
-                .ok()
-                .and_then(|conn| integrations::next_due(&conn).ok().flatten())
-                .map_or(Duration::from_secs(30), |at| {
-                    Duration::from_millis((at - db::now_ms()).clamp(200, 30_000) as u64)
-                });
+            let pool_for_due = pool.clone();
+            let next_due_at = tokio::task::spawn_blocking(move || {
+                pool_for_due
+                    .get()
+                    .ok()
+                    .and_then(|conn| integrations::next_due(&conn).ok().flatten())
+            })
+            .await
+            .ok()
+            .flatten();
+            let wait = next_due_at.map_or(Duration::from_secs(30), |at| {
+                Duration::from_millis((at - db::now_ms()).clamp(200, 30_000) as u64)
+            });
             tokio::select! {
                 update = rx.recv() => {
                     let Some(update) = update else { break };
-                    let (user_id, run) = match update {
-                        HubUpdate::Run(user_id, run) => (user_id, run),
-                        HubUpdate::Machine { machine_id, online, agents } => {
-                            if let Ok(conn) = pool.get() {
-                                if let Err(error) = on_machine(&conn, &machine_id, online, agents.as_deref()) {
-                                    tracing::warn!("webhooks: {}", error);
-                                }
+                    let pool_clone = pool.clone();
+                    let res = tokio::task::spawn_blocking(move || {
+                        let conn = pool_clone.get().map_err(|e| e.to_string())?;
+                        match update {
+                            HubUpdate::Machine { machine_id, online, agents } => {
+                                on_machine(&conn, &machine_id, online, agents.as_deref())
+                                    .map(|_| ())
+                                    .map_err(|e| e.to_string())
                             }
-                            continue;
+                            HubUpdate::Run(user_id, run) => {
+                                // A run belongs to its machine's owner
+                                let owner = match user_id {
+                                    Some(user_id) => Ok(Some(user_id)),
+                                    None => db::machines::find_machine_by_id(&conn, &run.machine_id)
+                                        .map(|machine| machine.map(|m| m.user_id)),
+                                };
+                                owner
+                                    .and_then(|owner| match owner {
+                                        Some(owner) => on_run(&conn, &owner, &run).map(|_| ()),
+                                        None => Ok(()),
+                                    })
+                                    .map_err(|e| e.to_string())
+                            }
                         }
-                    };
-                    if let Ok(conn) = pool.get() {
-                        // A run belongs to its machine's owner
-                        let owner = match user_id {
-                            Some(user_id) => Ok(Some(user_id)),
-                            None => db::machines::find_machine_by_id(&conn, &run.machine_id)
-                                .map(|machine| machine.map(|m| m.user_id)),
-                        };
-                        let result = owner.and_then(|owner| match owner {
-                            Some(owner) => on_run(&conn, &owner, &run).map(|_| ()),
-                            None => Ok(()),
-                        });
-                        if let Err(error) = result {
-                            tracing::warn!("webhooks: {}", error);
-                        }
+                    })
+                    .await;
+                    match res {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!("webhooks: {}", error),
+                        Err(error) => tracing::warn!("webhooks: {}", error),
                     }
+                }
+                _ = prune_interval.tick() => {
+                    prune_outbox_batched(&pool).await;
                 }
                 _ = WAKE.notified() => {}
                 _ = tokio::time::sleep(wait) => {}

@@ -1,7 +1,7 @@
 import { useKeyBarLayout, type KeyBarKey, type KeyBarLayout } from "@/lib/keyBarPreferences";
 import { readClipboardText } from "@/lib/readClipboardText";
 import { AttachmentPicker, AttachmentReview, formatAttachmentSize } from "./AttachmentPicker";
-import { useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
+import { memo, useEffect, useRef, useState, type ReactNode, type CSSProperties } from "react";
 import { LoaderCircle } from "lucide-react";
 import "./ExtendedKeyBar.css";
 
@@ -34,7 +34,7 @@ export interface ExtendedKeyBarProps {
 const KEY_GAP = 6;
 const MIN_KEY_WIDTH = 48;
 
-export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
+export const ExtendedKeyBar = memo(function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard, onPasteText, onAttachFile,
   onEnterSelectMode, onExitSelectMode, onCopySelection, selectMode = false, keyboardVisible, isController,
   hasControl = true, onTakeControl,
   onUnlockViewOnly, ctrlArmed = false, onToggleCtrl, shiftArmed = false, onToggleShift, onShiftPress, onShiftRelease }: ExtendedKeyBarProps) {
@@ -84,23 +84,29 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
   const selection = selectMode && selectionAvailable;
   const updateEdges = () => {
     const el = scroller.current;
-    if (el) setEdges({ left: el.scrollLeft > 1, right: el.scrollWidth - el.clientWidth - el.scrollLeft > 1 });
+    if (!el) return;
+    const left = el.scrollLeft > 1;
+    const right = el.scrollWidth - el.clientWidth - el.scrollLeft > 1;
+    setEdges((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
   };
   useEffect(() => {
     const update = () => {
       // Every key is one grid column wide, so the two rows line up and ↑
       // sits above ↓. Phones get seven columns; wider screens fit more.
       const el = bar.current;
-      if (el) {
+      if (el && el.clientWidth > 0) {
         const style = getComputedStyle(el);
         const width = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-        const columns = Math.max(7, Math.floor((width + KEY_GAP) / (MIN_KEY_WIDTH + KEY_GAP)));
-        setKeyWidth((width - (columns - 1) * KEY_GAP) / columns);
+        if (width > 0) {
+          const columns = Math.max(7, Math.floor((width + KEY_GAP) / (MIN_KEY_WIDTH + KEY_GAP)));
+          const nextWidth = Math.round(((width - (columns - 1) * KEY_GAP) / columns) * 100) / 100;
+          setKeyWidth((prev) => (prev === nextWidth ? prev : nextWidth));
+        }
       }
       updateEdges();
     };
     const observer = new ResizeObserver(update);
-    [bar.current, scroller.current, track.current].forEach(el => { if (el) observer.observe(el); });
+    [bar.current, scroller.current].forEach(el => { if (el) observer.observe(el); });
     update();
     return () => observer.disconnect();
   }, [selection]);
@@ -238,7 +244,7 @@ export function ExtendedKeyBar({ layout: layoutOverride, onKey, onToggleKeyboard
       onCancel={() => { if (!uploadPending.current) { setPendingFiles([]); setReviewingAttachments(false); setUploadError(null); } }} />}
     {choosingAttachment && <AttachmentPicker onPhotos={() => fileInput.current?.click()} onFiles={() => documentInput.current?.click()} onClose={() => setChoosingAttachment(false)} />}
   </div>;
-}
+});
 
 function KeyButton({ label, children, onPress, testid, disabled = false, repeat = false, accent = false, pressed }: {
   label: string; children?: ReactNode; onPress: () => void; testid?: string; disabled?: boolean; repeat?: boolean | "hold"; accent?: boolean; pressed?: boolean;

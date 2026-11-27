@@ -7,6 +7,10 @@ import { UiUpdateNotification } from "./UiUpdateNotification";
 import { KeyBarSettings } from "./KeyBarSettings";
 import { HubPickerPanel } from "./HubPickerPanel";
 import { notifyFontPreferencesChanged } from "@/lib/fontPreferences";
+import {
+  useSidebarHoverPreferences,
+  writeSidebarHoverPreferences,
+} from "@/lib/sidebarHoverPreferences";
 import { BUNDLED_TERMINAL_FONTS, BUNDLED_UI_FONTS, DEFAULT_TERMINAL_FONT, availableTerminalFonts, availableUiFonts, resolveTerminalFontFamily } from "@/lib/terminalFonts";
 import { SecureDevicesPanel } from "./SecureConnectionPanel";
 import { WebhooksPanel } from "./WebhooksPanel";
@@ -826,6 +830,8 @@ export function SettingsPage({ onClose }: SettingsPageProps) {
               px
             </label>
           </SettingRow>
+
+          <SidebarHoverSettingRows />
         </section>
 
         {/* Terminal Section */}
@@ -1745,6 +1751,107 @@ const pxInput: React.CSSProperties = {
   outline: "none",
 };
 
+
+function SidebarHoverToggle({
+  checked,
+  label,
+  testId,
+  onToggle,
+}: {
+  checked: boolean;
+  label: string;
+  testId: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      data-testid={testId}
+      onClick={onToggle}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        height: 30,
+        padding: "0 10px",
+        borderRadius: 999,
+        border: `1px solid ${checked ? colors.accent : colors.line}`,
+        background: checked ? colorAlpha.accentSoft : colors.bg1,
+        color: checked ? colors.fg0 : colors.fg2,
+        fontFamily: "var(--font-display)",
+        fontSize: rem(12),
+        fontWeight: 500,
+        cursor: "pointer",
+      }}
+    >
+      <span
+        aria-hidden="true"
+        style={{
+          width: 24,
+          height: 14,
+          borderRadius: 999,
+          background: checked ? colors.accent : colors.line,
+          position: "relative",
+          transition: "background 120ms ease",
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: 2,
+            left: checked ? 12 : 2,
+            width: 10,
+            height: 10,
+            borderRadius: 999,
+            background: colors.bg0,
+            transition: "left 120ms ease",
+          }}
+        />
+      </span>
+      <span>{checked ? "on" : "off"}</span>
+    </button>
+  );
+}
+
+function SidebarHoverSettingRows() {
+  const { hoverSwitchSpace, hoverSwitchTerminal } = useSidebarHoverPreferences();
+  return (
+    <>
+      <SettingRow
+        label="Hover to switch Space"
+        description="Switch spaces in the sidebar by hovering over a space pill instead of clicking."
+      >
+        <SidebarHoverToggle
+          checked={hoverSwitchSpace}
+          label="Hover to switch Space"
+          testId="settings-hover-switch-space"
+          onToggle={() =>
+            writeSidebarHoverPreferences({ hoverSwitchSpace: !hoverSwitchSpace })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        label="Hover to switch Terminal"
+        description="Switch terminals in the sidebar by hovering over a terminal row instead of clicking."
+      >
+        <SidebarHoverToggle
+          checked={hoverSwitchTerminal}
+          label="Hover to switch Terminal"
+          testId="settings-hover-switch-terminal"
+          onToggle={() =>
+            writeSidebarHoverPreferences({
+              hoverSwitchTerminal: !hoverSwitchTerminal,
+            })
+          }
+        />
+      </SettingRow>
+    </>
+  );
+}
 
 function TerminalEngineSettingRow() {
   const probe = useNativeTerminalProbeStatus();

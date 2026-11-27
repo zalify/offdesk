@@ -271,12 +271,40 @@ pub fn save_run_state(conn: &Connection, run_id: &str, state: &RunState) -> rusq
             state.title
         ],
     )?;
-    // Runs that ended a week ago won't change again
-    conn.execute(
-        "DELETE FROM webhook_run_state WHERE ended = 1 AND updated_at < ?1",
-        params![now_ms() - 7 * 24 * 3600 * 1000],
-    )?;
     Ok(())
+}
+
+/// Retention window for delivered/failed outbox entries and ended run states (7 days).
+pub const RETENTION_MS: i64 = 7 * 24 * 3600 * 1000;
+
+/// Deletes up to `batch_limit` delivered/failed `webhook_outbox` rows and up to
+/// `batch_limit` ended `webhook_run_state` rows older than `older_than_ms`.
+/// Returns `(outbox_deleted, run_state_deleted)`.
+pub fn prune_old(
+    conn: &Connection,
+    older_than_ms: i64,
+    batch_limit: i64,
+) -> rusqlite::Result<(usize, usize)> {
+    let outbox = conn.execute(
+        "DELETE FROM webhook_outbox
+         WHERE id IN (
+             SELECT id FROM webhook_outbox
+             WHERE (delivered_at IS NOT NULL OR failed_at IS NOT NULL)
+               AND created_at < ?1
+             LIMIT ?2
+         )",
+        params![older_than_ms, batch_limit],
+    )?;
+    let run_state = conn.execute(
+        "DELETE FROM webhook_run_state
+         WHERE run_id IN (
+             SELECT run_id FROM webhook_run_state
+             WHERE ended = 1 AND updated_at < ?1
+             LIMIT ?2
+         )",
+        params![older_than_ms, batch_limit],
+    )?;
+    Ok((outbox, run_state))
 }
 
 // ── The outbox ──
@@ -416,4 +444,156 @@ pub fn recent_deliveries(
     ))?;
     let rows = stmt.query_map(params![integration_id, limit], map_delivery)?;
     rows.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        db::init_db(&conn).unwrap();
+        db::users::create_user(&conn, "u1", "test", "u1", "u1", None, "admin").unwrap();
+        let integration = Integration {
+            id: "int-1".into(),
+            user_id: "u1".into(),
+            kind: "bridge".into(),
+            name: "b".into(),
+            url: "wss://example.com".into(),
+            secret: "sec".into(),
+            events: vec![],
+            access: Default::default(),
+            enabled: true,
+            created_at: 0,
+            last_delivery_at: None,
+            last_error: None,
+            pairing_code: None,
+        };
+        insert(&conn, &integration).unwrap();
+        conn
+    }
+
+    #[test]
+    fn ack_and_unacked_use_partial_pending_index() {
+        let conn = test_conn();
+
+        let unacked_plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 SELECT id, integration_id, event_id, event_type, body, attempts, created_at,
+                        next_attempt_at, delivered_at, failed_at, last_error
+                 FROM webhook_outbox
+                 WHERE integration_id = ?1 AND delivered_at IS NULL AND failed_at IS NULL AND id > ?2
+                 ORDER BY id LIMIT ?3",
+            )
+            .unwrap()
+            .query_map(params!["int-1", 0i64, 100i64], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            unacked_plan
+                .iter()
+                .any(|line| line.contains("idx_webhook_outbox_pending")),
+            "expected unacked() to use idx_webhook_outbox_pending, got: {unacked_plan:?}"
+        );
+
+        let ack_plan: Vec<String> = conn
+            .prepare(
+                "EXPLAIN QUERY PLAN
+                 UPDATE webhook_outbox SET delivered_at = ?1, attempts = attempts + 1
+                 WHERE integration_id = ?2 AND id <= ?3 AND delivered_at IS NULL",
+            )
+            .unwrap()
+            .query_map(params![100i64, "int-1", 50i64], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            ack_plan
+                .iter()
+                .any(|line| line.contains("idx_webhook_outbox_pending")),
+            "expected ack() to use idx_webhook_outbox_pending, got: {ack_plan:?}"
+        );
+    }
+
+    #[test]
+    fn prune_old_deletes_delivered_failed_and_ended_in_batches_without_touching_pending() {
+        let conn = test_conn();
+        let now = now_ms();
+        let old = now - RETENTION_MS - 10_000;
+        let fresh = now - 10_000;
+
+        // 3 old delivered, 1 old failed, 1 old still pending (must keep), 1 fresh delivered (must keep)
+        for i in 0..3 {
+            conn.execute(
+                "INSERT INTO webhook_outbox (integration_id, event_id, event_type, body, attempts, created_at, next_attempt_at, delivered_at)
+                 VALUES ('int-1', ?1, 'run.status', '{}', 1, ?2, ?2, ?2)",
+                params![format!("old-del-{i}"), old],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO webhook_outbox (integration_id, event_id, event_type, body, attempts, created_at, next_attempt_at, failed_at)
+             VALUES ('int-1', 'old-fail', 'run.status', '{}', 5, ?1, ?1, ?1)",
+            params![old],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO webhook_outbox (integration_id, event_id, event_type, body, attempts, created_at, next_attempt_at)
+             VALUES ('int-1', 'old-pending', 'run.status', '{}', 0, ?1, ?1)",
+            params![old],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO webhook_outbox (integration_id, event_id, event_type, body, attempts, created_at, next_attempt_at, delivered_at)
+             VALUES ('int-1', 'fresh-del', 'run.status', '{}', 1, ?1, ?1, ?1)",
+            params![fresh],
+        )
+        .unwrap();
+
+        // 2 old ended run states, 1 old active run state (must keep), 1 fresh ended run state (must keep)
+        for (id, ended, ts) in [
+            ("run-old-ended-1", 1, old),
+            ("run-old-ended-2", 1, old),
+            ("run-old-active", 0, old),
+            ("run-fresh-ended", 1, fresh),
+        ] {
+            conn.execute(
+                "INSERT INTO webhook_run_state (run_id, seq, status, ended, updated_at)
+                 VALUES (?1, 1, 'done', ?2, ?3)",
+                params![id, ended, ts],
+            )
+            .unwrap();
+        }
+
+        let cutoff = now - RETENTION_MS;
+        // First batch with limit 2 deletes at most 2 per table
+        let (d1, r1) = prune_old(&conn, cutoff, 2).unwrap();
+        assert_eq!((d1, r1), (2, 2));
+        // Second batch finishes remaining 2 old outbox rows and 0 run_state rows
+        let (d2, r2) = prune_old(&conn, cutoff, 2).unwrap();
+        assert_eq!((d2, r2), (2, 0));
+        // Third batch is a no-op
+        assert_eq!(prune_old(&conn, cutoff, 2).unwrap(), (0, 0));
+
+        let remaining_outbox: Vec<String> = conn
+            .prepare("SELECT event_id FROM webhook_outbox ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(remaining_outbox, vec!["old-pending", "fresh-del"]);
+
+        let remaining_runs: Vec<String> = conn
+            .prepare("SELECT run_id FROM webhook_run_state ORDER BY run_id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(remaining_runs, vec!["run-fresh-ended", "run-old-active"]);
+    }
 }

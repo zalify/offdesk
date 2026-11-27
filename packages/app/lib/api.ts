@@ -40,9 +40,11 @@ async function request<T>(
   path: string,
   body?: unknown,
   signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
+    ...extraHeaders,
   };
   if (_token) headers["Authorization"] = `Bearer ${_token}`;
 
@@ -550,8 +552,21 @@ export const listMachines = () =>
   request<MachineInfo[]>("GET", "/api/machines");
 export const deleteMachine = (machineId: string) =>
   request<void>("DELETE", `/api/machines/${machineId}`);
-export const getBootstrap = () =>
-  request<BrowserStateSnapshot>("GET", "/api/bootstrap");
+export const getBootstrap = (deviceId?: string | null) => {
+  if (deviceId && isSecureConnection()) {
+    return request<BrowserStateSnapshot>(
+      "GET",
+      `/api/bootstrap?device_id=${encodeURIComponent(deviceId)}`,
+    );
+  }
+  return request<BrowserStateSnapshot>(
+    "GET",
+    "/api/bootstrap",
+    undefined,
+    undefined,
+    deviceId ? { "X-Offdesk-Device-Id": deviceId } : undefined,
+  );
+};
 export const putFocus = (terminalId: string, machineId: string) =>
   request<void>("PUT", "/api/focus", {
     terminal_id: terminalId,

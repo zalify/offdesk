@@ -695,6 +695,11 @@ mod unix_impl {
         Some(if is_bg { base + 10 } else { base })
     }
 
+    struct Subscriber {
+        tx: std_mpsc::SyncSender<Bytes>,
+        needs_resync: Arc<AtomicBool>,
+    }
+
     struct LiveSession {
         id: String,
         initial_cwd: String,
@@ -707,7 +712,7 @@ mod unix_impl {
         rows: AtomicU16,
         activity_ms: AtomicI64,
         alive: AtomicBool,
-        subscribers: Mutex<HashMap<u64, std_mpsc::SyncSender<Bytes>>>,
+        subscribers: Mutex<HashMap<u64, Subscriber>>,
     }
 
     impl LiveSession {
@@ -957,11 +962,13 @@ mod unix_impl {
                                 let chunk = Bytes::from(forward_bytes);
                                 if let Ok(mut subs) = session_ref.subscribers.lock() {
                                     let mut dead = Vec::new();
-                                    for (&sub_id, tx) in subs.iter() {
-                                        match tx.try_send(chunk.clone()) {
+                                    for (&sub_id, sub) in subs.iter() {
+                                        match sub.tx.try_send(chunk.clone()) {
                                             Ok(()) => {}
                                             Err(std_mpsc::TrySendError::Full(_)) => {
-                                                // Drop chunk for lagging subscriber rather than stalling PTY.
+                                                // Mark lagging subscriber for a clean full-screen resync
+                                                // rather than stalling PTY or leaving torn ANSI state.
+                                                sub.needs_resync.store(true, Ordering::Release);
                                             }
                                             Err(std_mpsc::TrySendError::Disconnected(_)) => {
                                                 dead.push(sub_id);
@@ -1134,8 +1141,15 @@ mod unix_impl {
                 // are missed between snapshot capture and live streaming.
                 let sub_id = state.next_sub_id.fetch_add(1, Ordering::Relaxed);
                 let (tx, rx) = std_mpsc::sync_channel::<Bytes>(SUBSCRIBER_QUEUE_CAP);
+                let needs_resync = Arc::new(AtomicBool::new(false));
                 if let Ok(mut subs) = session.subscribers.lock() {
-                    subs.insert(sub_id, tx);
+                    subs.insert(
+                        sub_id,
+                        Subscriber {
+                            tx,
+                            needs_resync: Arc::clone(&needs_resync),
+                        },
+                    );
                 }
 
                 // Resize if requested dimensions differ from current session size.
@@ -1281,14 +1295,53 @@ mod unix_impl {
                 // Outbound loop: live PTY output -> binary frames.
                 // Pause live output streaming while this client is scrolled up
                 // into scrollback (just like tmux copy-mode).
-                while let Ok(chunk) = rx.recv() {
+                const MAX_COALESCE_BYTES: usize = 64 * 1024;
+                while let Ok(first_chunk) = rx.recv() {
                     if scrollback_offset.load(Ordering::Relaxed) > 0 {
+                        while rx.try_recv().is_ok() {}
                         continue;
                     }
-                    let send_ok = write_stream
-                        .lock()
-                        .map(|mut ws| write_bin_frame(&mut *ws, TAG_OUTPUT, &chunk).is_ok())
-                        .unwrap_or(false);
+                    if needs_resync.swap(false, Ordering::AcqRel) {
+                        while rx.try_recv().is_ok() {}
+                        let snap = session.state_formatted();
+                        let send_ok = write_stream
+                            .lock()
+                            .map(|mut ws| write_bin_frame(&mut *ws, TAG_OUTPUT, &snap).is_ok())
+                            .unwrap_or(false);
+                        if !send_ok {
+                            break;
+                        }
+                        continue;
+                    }
+                    let send_ok = if let Ok(second) = rx.try_recv() {
+                        let mut merged = Vec::with_capacity(first_chunk.len() + second.len());
+                        merged.extend_from_slice(&first_chunk);
+                        merged.extend_from_slice(&second);
+                        while merged.len() < MAX_COALESCE_BYTES {
+                            match rx.try_recv() {
+                                Ok(more) => merged.extend_from_slice(&more),
+                                Err(_) => break,
+                            }
+                        }
+                        if needs_resync.swap(false, Ordering::AcqRel) {
+                            while rx.try_recv().is_ok() {}
+                            let snap = session.state_formatted();
+                            write_stream
+                                .lock()
+                                .map(|mut ws| write_bin_frame(&mut *ws, TAG_OUTPUT, &snap).is_ok())
+                                .unwrap_or(false)
+                        } else {
+                            write_stream
+                                .lock()
+                                .map(|mut ws| write_bin_frame(&mut *ws, TAG_OUTPUT, &merged).is_ok())
+                                .unwrap_or(false)
+                        }
+                    } else {
+                        write_stream
+                            .lock()
+                            .map(|mut ws| write_bin_frame(&mut *ws, TAG_OUTPUT, &first_chunk).is_ok())
+                            .unwrap_or(false)
+                    };
                     if !send_ok {
                         break;
                     }
