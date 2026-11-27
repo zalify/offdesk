@@ -1350,18 +1350,56 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     // Exact container ResizeObserver (zero setTimeout hacks!).
     // Always repaint on container resize so canvas backing-store dimensions stay
     // 1:1 with CSS size even while watching (e.g. mobile keyboard open/close).
+    // On touch/mobile devices, NEVER send a remote PTY resize when only height
+    // changes while the soft keyboard is open or dismissing: paintFrame already
+    // anchors the active bottom & cursor above the keyboard via yOffset, avoiding
+    // SIGWINCH redraws that make Ink/agy TUIs scroll from way up in history.
     useEffect(() => {
       const el = containerRef.current;
       if (!el) return;
+      let lastWidth = el.getBoundingClientRect().width;
+      let nativeKeyboardOpen = false;
+      let keyboardDismissGraceUntil = 0;
+      const isMobileTouch =
+        typeof window !== "undefined" &&
+        (window.matchMedia?.("(pointer: coarse)").matches ||
+          "ontouchstart" in window);
+
+      const onNativeKeyboard = (event: Event) => {
+        const visible = (event as CustomEvent).detail;
+        if (typeof visible !== "boolean") return;
+        nativeKeyboardOpen = visible;
+        if (!visible) {
+          keyboardDismissGraceUntil = performance.now() + 600;
+        }
+      };
+      const onFocusOut = () => {
+        if (isMobileTouch) {
+          keyboardDismissGraceUntil = performance.now() + 600;
+        }
+      };
+      window.addEventListener("offdesk:keyboard-visibility", onNativeKeyboard);
+      el.addEventListener("focusout", onFocusOut);
+
       const syncContainerSize = () => {
         const rect = el.getBoundingClientRect();
         if (rect.width >= 10 && rect.height >= 10) {
           containerSizeRef.current = { width: rect.width, height: rect.height };
         }
+        return rect;
       };
       const handleResize = () => {
-        syncContainerSize();
-        fitToContainer({ skipIfUnchanged: true });
+        const rect = syncContainerSize();
+        const widthUnchanged = lastWidth > 0 && Math.abs(rect.width - lastWidth) < 2;
+        if (rect.width >= 10) lastWidth = rect.width;
+        const softKeyboardTransition =
+          widthUnchanged &&
+          (nativeKeyboardOpen ||
+            (isMobileTouch && focusedRef.current) ||
+            performance.now() < keyboardDismissGraceUntil);
+        if (!softKeyboardTransition) {
+          fitToContainer({ skipIfUnchanged: true });
+        }
         schedulePaint();
       };
       const ro = new ResizeObserver(handleResize);
@@ -1374,6 +1412,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       return () => {
         ro.disconnect();
         vv?.removeEventListener("resize", handleResize);
+        window.removeEventListener("offdesk:keyboard-visibility", onNativeKeyboard);
+        el.removeEventListener("focusout", onFocusOut);
       };
     }, [fitToContainer, schedulePaint]);
 

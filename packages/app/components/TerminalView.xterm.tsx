@@ -500,6 +500,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
     const [surfaceSize, setSurfaceSize] = useState({ width: 0, height: 0 });
     const [sessionGeneration, setSessionGeneration] = useState(0);
+    const [, setKeyboardAnchorTick] = useState(0);
+    const lastAnchoredRowRef = useRef(-1);
     const viewportSizeRef = useRef(viewportSize);
 
     // Prefix engine access for the xterm key handler below. The handler is
@@ -1474,6 +1476,39 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       container.addEventListener("touchend", onTouchEnd, { passive: false });
 
       const viewport = viewportRef.current;
+      let lastViewportWidth = viewport?.clientWidth ?? 0;
+      let nativeKeyboardOpen = false;
+      let terminalFocused = false;
+      let keyboardDismissGraceUntil = 0;
+      const isSoftKeyboardHeightChange = (nextWidth: number) => {
+        const widthUnchanged =
+          lastViewportWidth > 0 && Math.abs(nextWidth - lastViewportWidth) < 2;
+        if (!widthUnchanged) return false;
+        return (
+          nativeKeyboardOpen ||
+          terminalFocused ||
+          performance.now() < keyboardDismissGraceUntil
+        );
+      };
+      const onNativeKeyboard = (event: Event) => {
+        const visible = (event as CustomEvent).detail;
+        if (typeof visible !== "boolean") return;
+        nativeKeyboardOpen = visible;
+        if (!visible) {
+          keyboardDismissGraceUntil = performance.now() + 600;
+        }
+      };
+      const onContainerFocusIn = () => {
+        terminalFocused = true;
+      };
+      const onContainerFocusOut = () => {
+        terminalFocused = false;
+        keyboardDismissGraceUntil = performance.now() + 600;
+      };
+      window.addEventListener("offdesk:keyboard-visibility", onNativeKeyboard);
+      container.addEventListener("focusin", onContainerFocusIn);
+      container.addEventListener("focusout", onContainerFocusOut);
+
       const viewportFit = createMobileViewportFitScheduler({
         canFit: () =>
           isActiveRef.current &&
@@ -1497,15 +1532,41 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (!isActiveRef.current) return;
         scheduleMeasure();
         if (viewport) {
-          viewportFit.observe({
-            width: viewport.clientWidth,
-            height: viewport.clientHeight,
-          });
+          const w = viewport.clientWidth;
+          const h = viewport.clientHeight;
+          // Freeze remote PTY resize when only height changes due to soft keyboard
+          // open/close: xterm visually pans its active bottom above the keyboard
+          // instead of sending SIGWINCH (which makes Ink/agy reprint history).
+          const skipForSoftKeyboard = isSoftKeyboardHeightChange(w);
+          if (w > 0) lastViewportWidth = w;
+          if (!skipForSoftKeyboard) {
+            viewportFit.observe({ width: w, height: h });
+          }
         }
       });
       if (viewport) {
         resizeObserver.observe(viewport);
       }
+
+      const writeParsedDisposable = term.onWriteParsed(() => {
+        const vp = viewportSizeRef.current;
+        const c = containerRef.current;
+        if (vp.height > 0 && c && c.offsetHeight > vp.height) {
+          const buf = term.buffer.active;
+          let lastRow = buf.cursorY;
+          for (let r = term.rows - 1; r > lastRow; r--) {
+            const line = buf.getLine(buf.baseY + r);
+            if (line && line.translateToString(true).length > 0) {
+              lastRow = r;
+              break;
+            }
+          }
+          if (lastRow !== lastAnchoredRowRef.current) {
+            lastAnchoredRowRef.current = lastRow;
+            setKeyboardAnchorTick((n) => n + 1);
+          }
+        }
+      });
 
       return () => {
         batcher.flush();
@@ -1516,6 +1577,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         pendingInputRef.current?.clear();
         resizeObserver.disconnect();
         viewportFit.dispose();
+        writeParsedDisposable.dispose();
+        window.removeEventListener("offdesk:keyboard-visibility", onNativeKeyboard);
+        container.removeEventListener("focusin", onContainerFocusIn);
+        container.removeEventListener("focusout", onContainerFocusOut);
         if (measureRafRef.current) {
           cancelAnimationFrame(measureRafRef.current);
           measureRafRef.current = null;
@@ -1670,6 +1735,42 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ? `${surfaceSize.height}px`
         : "100%";
 
+    // When the soft keyboard shrinks the viewport below the terminal surface
+    // height (without resizing the remote PTY), pan the surface upward so the
+    // active prompt & bottom status bar stay visible right above the keybar.
+    let keyboardOffsetY = 0;
+    if (
+      isCompact &&
+      displayMode === "immersive" &&
+      surfaceSize.height > viewportSize.height &&
+      viewportSize.height > 0 &&
+      termRef.current
+    ) {
+      const term = termRef.current;
+      const metrics = readXtermCellMetrics(term);
+      if (metrics && metrics.height > 0) {
+        const buf = term.buffer.active;
+        let lastContentRow = buf.cursorY;
+        for (let r = term.rows - 1; r > lastContentRow; r--) {
+          const line = buf.getLine(buf.baseY + r);
+          if (line && line.translateToString(true).length > 0) {
+            lastContentRow = r;
+            break;
+          }
+        }
+        const contentBottom = Math.min(
+          surfaceSize.height,
+          (lastContentRow + 1) * metrics.height,
+        );
+        if (contentBottom > viewportSize.height) {
+          keyboardOffsetY = Math.max(
+            viewportSize.height - surfaceSize.height,
+            viewportSize.height - contentBottom,
+          );
+        }
+      }
+    }
+
     return (
       <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
       {uploadStatus && <div role="status" data-testid="terminal-upload-status" style={{ flexShrink: 0, padding: "8px 12px", background: colors.surface, color: colors.foreground }}>
@@ -1705,6 +1806,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             width: frameWidth,
             height: frameHeight,
             flex: "0 0 auto",
+            transform: keyboardOffsetY !== 0 ? `translateY(${keyboardOffsetY}px)` : undefined,
           }}
         >
           <div
