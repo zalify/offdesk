@@ -556,43 +556,43 @@ async fn handle_terminal_ws(
                                 })
                             }
                             ClientMessage::Resize { cols, rows } => {
-                                // Optimistically update the hub-side terminal
-                                // record + emit TerminalResized so any
-                                // listTerminals call right after a resize
-                                // sees the new size without waiting for the
-                                // machine round-trip. The machine's actual
-                                // TerminalResized reply (after tmux applies
-                                // it) will reaffirm or correct this.
-                                manager
+                                // Skip no-op same-size resizes: forwarding them to the machine
+                                // triggers spurious SIGWINCH in pty-daemon / Ink TUIs (causing
+                                // duplicated lines and torn status bars during streaming).
+                                let changed = manager
                                     .apply_optimistic_resize(&mid, &tid_for_in, cols, rows)
                                     .await;
-                                // The window follows this client; every other
-                                // full view of the terminal follows the window.
-                                // Their own resizes are dropped (they are not
-                                // the controller), and a client left at its
-                                // old size is painted the window in one corner
-                                // and dots everywhere else — which a view set
-                                // to the window's size sees as only dots.
-                                for other in router_for_in.main_attaches_of(&mid, &tid_for_in) {
-                                    if other == aid_for_in {
-                                        continue;
+                                if !changed {
+                                    None
+                                } else {
+                                    // The window follows this client; every other
+                                    // full view of the terminal follows the window.
+                                    // Their own resizes are dropped (they are not
+                                    // the controller), and a client left at its
+                                    // old size is painted the window in one corner
+                                    // and dots everywhere else — which a view set
+                                    // to the window's size sees as only dots.
+                                    for other in router_for_in.main_attaches_of(&mid, &tid_for_in) {
+                                        if other == aid_for_in {
+                                            continue;
+                                        }
+                                        let _ = manager
+                                            .send_to_machine(
+                                                &mid,
+                                                HubToMachine::AttachResize {
+                                                    attach_id: other,
+                                                    cols,
+                                                    rows,
+                                                },
+                                            )
+                                            .await;
                                     }
-                                    let _ = manager
-                                        .send_to_machine(
-                                            &mid,
-                                            HubToMachine::AttachResize {
-                                                attach_id: other,
-                                                cols,
-                                                rows,
-                                            },
-                                        )
-                                        .await;
+                                    Some(HubToMachine::AttachResize {
+                                        attach_id: aid_for_in.clone(),
+                                        cols,
+                                        rows,
+                                    })
                                 }
-                                Some(HubToMachine::AttachResize {
-                                    attach_id: aid_for_in.clone(),
-                                    cols,
-                                    rows,
-                                })
                             }
                             ClientMessage::ImagePaste {
                                 data,

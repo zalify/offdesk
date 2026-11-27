@@ -774,6 +774,14 @@ mod unix_impl {
         fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
             let cols = cols.max(1);
             let rows = rows.max(1);
+            // Never call ioctl(TIOCSWINSZ) when dimensions are unchanged — on Linux
+            // it still delivers SIGWINCH to the foreground process group, causing
+            // Ink/Claude/agy TUIs to re-render and duplicate lines mid-stream.
+            if self.cols.load(Ordering::Relaxed) == cols
+                && self.rows.load(Ordering::Relaxed) == rows
+            {
+                return Ok(());
+            }
             if let Ok(master) = self.master.lock() {
                 master
                     .resize(PtySize {
