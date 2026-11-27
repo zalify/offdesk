@@ -2207,21 +2207,26 @@ impl MachineManager {
     /// when forwarding a controller's Resize so listTerminals callers right
     /// after a resize see the new size; the machine's eventual TerminalResized
     /// will re-affirm (and may correct, if tmux clamped).
+    /// Returns `true` if the terminal's size actually changed (and was persisted/broadcast),
+    /// or `false` if it was already `(cols, rows)` or not found.
     pub async fn apply_optimistic_resize(
         &self,
         machine_id: &str,
         terminal_id: &str,
         cols: u16,
         rows: u16,
-    ) {
+    ) -> bool {
         let updated = {
             let mut machines = self.machines.lock().await;
             machines.get_mut(machine_id).and_then(|conn| {
                 let target_user_id = conn.user_id.clone();
-                conn.terminals.get_mut(terminal_id).map(|terminal| {
+                conn.terminals.get_mut(terminal_id).and_then(|terminal| {
+                    if terminal.cols == cols && terminal.rows == rows {
+                        return None;
+                    }
                     terminal.cols = cols;
                     terminal.rows = rows;
-                    (target_user_id, terminal.clone())
+                    Some((target_user_id, terminal.clone()))
                 })
             })
         };
@@ -2239,6 +2244,9 @@ impl MachineManager {
             })
             .await;
             self.send_event(target_user_id, BrowserEvent::TerminalResized { terminal });
+            true
+        } else {
+            false
         }
     }
 

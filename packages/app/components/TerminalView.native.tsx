@@ -1219,6 +1219,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           if (!callbacksRef.current.canResizeTerminal) return;
           const ws = wsRef.current;
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          // Never send a no-op resize when the remote PTY is already at (cols, rows):
+          // Linux ioctl(TIOCSWINSZ) delivers SIGWINCH even on same-size resizes, which
+          // causes Ink/Claude/agy TUIs to duplicate lines and tear mid-stream.
+          if (ptyDimsRef.current.cols === cols && ptyDimsRef.current.rows === rows) {
+            lastSentResizeRef.current = { cols, rows };
+            return;
+          }
           const prevSent = lastSentResizeRef.current;
           if (opts?.skipIfUnchanged && prevSent && prevSent.cols === cols && prevSent.rows === rows) {
             return;
