@@ -1488,7 +1488,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         },
         schedule: (callback) => requestAnimationFrame(callback),
         cancel: (frame) => cancelAnimationFrame(frame),
-        settleDebounceMs: 90,
+        settleDebounceMs: 120,
         burstWindowMs: 60,
         scheduleSettle: (callback, delayMs) => window.setTimeout(callback, delayMs),
         cancelSettle: (timerId) => window.clearTimeout(timerId),

@@ -85,7 +85,12 @@ export function useTerminalFitController({
         return;
       }
       try {
+        const wasAtBottom =
+          term.buffer.active.viewportY >= term.buffer.active.baseY;
         term.resize(nextCols, nextRows);
+        if (wasAtBottom) {
+          term.scrollToBottom();
+        }
         stabilizeTerminalSurface(term);
       } catch {
         /* ignore */
