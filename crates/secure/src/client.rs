@@ -139,6 +139,8 @@ impl Client {
         let mut heartbeat_stop = inner.stop.subscribe();
         tokio::spawn(async move {
             let mut timer = tokio::time::interval(Duration::from_secs(5));
+            let mut last_wall = std::time::SystemTime::now();
+            let mut last_mono = Instant::now();
             loop {
                 if heartbeat.is_closed() {
                     break;
@@ -146,6 +148,19 @@ impl Client {
                 tokio::select! {
                     _ = heartbeat_stop.changed() => break,
                     _ = timer.tick() => {},
+                }
+                // Detect OS suspend/sleep: Instant pauses during sleep on macOS/Linux/Android
+                // while wall clock jumps forward, so a half-open zombie tunnel is torn down
+                // immediately on wake instead of stalling requests for 40-65s.
+                let now_wall = std::time::SystemTime::now();
+                let now_mono = Instant::now();
+                let wall_gap = now_wall.duration_since(last_wall).unwrap_or_default();
+                let mono_gap = now_mono.duration_since(last_mono);
+                last_wall = now_wall;
+                last_mono = now_mono;
+                if wall_gap > mono_gap + Duration::from_secs(15) {
+                    heartbeat.close();
+                    break;
                 }
                 // Only authenticated Noise records update this clock. A relay
                 // cannot keep a dead session alive with outer WS Ping/Pong.
@@ -155,7 +170,7 @@ impl Client {
                     .elapsed()
                     .as_secs()
                     .saturating_sub(heartbeat.inner.last_received.load(Ordering::Relaxed));
-                if idle > 60 {
+                if idle > 25 {
                     heartbeat.close();
                     break;
                 }
@@ -297,7 +312,7 @@ impl Client {
     ) -> Result<mpsc::Receiver<Response>, String> {
         let (tx, rx) = mpsc::channel(32);
         let mut sockets = self.inner.sockets.lock().await;
-        if sockets.contains_key(&id) || sockets.len() >= 32 {
+        if sockets.contains_key(&id) || sockets.len() >= 128 {
             return Err("Invalid or duplicate socket".into());
         }
         sockets.insert(id.clone(), tx);

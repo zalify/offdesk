@@ -184,9 +184,22 @@ class SecureSocket extends EventTarget {
   private readonly id = crypto.randomUUID();
   private opened: Promise<void>;
   private sends = Promise.resolve();
+  private connectTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(url: string) {
     super(); this.url = url; sockets.add(this);
+    // Bound CONNECTING state so a dropped handshake or zombie tunnel never
+    // leaves a terminal socket stuck loading forever.
+    this.connectTimer = setTimeout(() => {
+      this.connectTimer = null;
+      if (this.readyState === 0) this.fail("Encrypted socket handshake timed out");
+    }, 10_000);
     this.opened = this.open(url).catch((error: unknown) => { this.fail(error); });
+  }
+  private clearConnectTimer() {
+    if (this.connectTimer !== null) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
   }
   private async open(raw: string) {
     if (changingHub) throw new Error("Switching Hubs");
@@ -219,6 +232,7 @@ class SecureSocket extends EventTarget {
   private receive(message: WireResponse) {
     if (message.id !== this.id || this.readyState >= 2) return;
     if (message.type === "opened") {
+      this.clearConnectTimer();
       this.readyState = 1;
       const event = new Event("open"); this.dispatchEvent(event); this.onopen?.(event);
     } else if (message.type === "text" || message.type === "binary") {
@@ -239,6 +253,7 @@ class SecureSocket extends EventTarget {
     void invoke("secure_socket_close", { id: this.id }).catch(() => {});
   }
   private finish(code: number) {
+    this.clearConnectTimer();
     if (this.readyState === 3) return;
     this.readyState = 3; sockets.delete(this);
     const event = new CloseEvent("close", { code, wasClean: code === 1000 }); this.dispatchEvent(event); this.onclose?.(event);

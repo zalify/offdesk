@@ -402,6 +402,19 @@ function TerminalWorkspaceComponent({
   // rather than vanishing (instantly under reduced motion). A new switch
   // drops a fading pane at once.
   const [, rerenderAfterHold] = useReducer((count: number) => count + 1, 0);
+  const groupHoldTargetId = groupHoldRef.current?.to ?? null;
+  useEffect(() => {
+    if (!groupHoldTargetId) return;
+    // Safety net: never keep the previous desktop group stuck over the target
+    // group if a pane's reconnect or first paint stalls.
+    const timer = window.setTimeout(() => {
+      if (groupHoldRef.current?.to === groupHoldTargetId) {
+        groupHoldRef.current = null;
+        rerenderAfterHold();
+      }
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [groupHoldTargetId]);
   const markGroupPaneReady = useCallback((terminalId: string) => {
     groupReadyRef.current.add(terminalId);
     if (groupHoldRef.current) rerenderAfterHold();

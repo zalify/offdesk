@@ -231,10 +231,12 @@ async fn serve(
 }
 
 async fn error(out: &offdesk_secure::outbound::Sender, id: String, message: &str) {
-    let _ = out.try_send(Response::Error {
-        id,
-        message: message.into(),
-    });
+    let _ = out
+        .send(Response::Error {
+            id,
+            message: message.into(),
+        })
+        .await;
 }
 fn api_path(path: &str) -> bool {
     path.starts_with("/api/") && !path.contains('#') && !path.contains('\\') && path.len() < 8192
@@ -347,7 +349,7 @@ async fn dispatch(
                 }
             };
             let mut entries = sockets.lock().await;
-            if id.len() > 64 || entries.len() >= 32 || entries.contains_key(&id) {
+            if id.len() > 64 || entries.len() >= 128 || entries.contains_key(&id) {
                 drop(entries);
                 error(out, id, "Invalid or duplicate socket").await;
                 return;

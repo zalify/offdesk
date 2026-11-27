@@ -60,7 +60,10 @@ impl WireMessage for Response {
         self.id().to_owned()
     }
     fn control(&self) -> bool {
-        matches!(self, Self::Pong { .. })
+        matches!(
+            self,
+            Self::Pong { .. } | Self::Error { .. } | Self::Closed { .. }
+        )
     }
     fn encode(self) -> Result<Vec<u8>, Error> {
         match self {
