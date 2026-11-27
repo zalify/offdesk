@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
-import { ChevronLeft, ChevronRight, FolderPlus, LayoutGrid, List, MapPin, Pin, Plus, Upload } from "lucide-react";
+import { ChevronLeft, ChevronRight, CornerDownLeft, FolderPlus, LayoutGrid, List, MapPin, Pencil, Pin, Plus, Upload } from "lucide-react";
 import { colors } from "@/lib/colors";
+import { resolveInputPath } from "@/lib/fileBrowser";
 import type { Crumb } from "@/lib/fileBrowser";
 import { rem } from "@/lib/rem";
 import { SPIN, toolButtonStyle } from "./FileBrowserShared.web";
@@ -17,10 +18,11 @@ export interface ToolbarProps {
   onForward: () => void;
   onGo: (path: string) => void;
   onRefresh: () => void;
-  /** Desktop: the breadcrumb is an editable path field while true. */
+  /** The breadcrumb becomes an editable path field while true. */
   editingPath: boolean;
   onEditingPathChange: (editing: boolean) => void;
   currentPath: string;
+  homeDir?: string;
   pinned: boolean;
   onTogglePin: () => void;
   view: "list" | "icons";
@@ -101,11 +103,15 @@ export function FileFilterControls({
 
 /** Editable path: Enter navigates, Escape or blur cancels. */
 function PathInput({
+  touch,
   initial,
+  homeDir,
   onSubmit,
   onCancel,
 }: {
+  touch: boolean;
   initial: string;
+  homeDir?: string;
   onSubmit: (path: string) => void;
   onCancel: () => void;
 }) {
@@ -115,50 +121,97 @@ function PathInput({
     ref.current?.focus();
     ref.current?.select();
   }, []);
+
+  const commit = () => {
+    const resolved = resolveInputPath(draft, initial, homeDir);
+    if (resolved) onSubmit(resolved);
+    else onCancel();
+  };
+
   return (
-    <input
-      ref={ref}
-      data-testid="file-browser-path-input"
-      aria-label="Path"
-      value={draft}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={onCancel}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          const next = draft.trim();
-          if (next) onSubmit(next);
-          else onCancel();
-        } else if (event.key === "Escape") {
-          // Prevented so the overlay's window-level Escape leaves it open.
-          event.preventDefault();
-          onCancel();
-        }
-      }}
-      autoCapitalize="none"
-      autoCorrect="off"
-      spellCheck={false}
+    <div
       style={{
         flex: 1,
         minWidth: 0,
-        height: 32,
-        padding: "0 10px",
-        fontFamily: "var(--font-display)",
-        fontSize: rem(13),
-        color: colors.fg0,
+        height: touch ? 40 : 32,
+        display: "flex",
+        alignItems: "center",
         background: colors.bg0,
         border: `1px solid ${colors.primary}`,
         borderRadius: 4,
-        outline: "none",
+        padding: "0 4px 0 10px",
+        gap: 4,
       }}
-    />
+    >
+      <input
+        ref={ref}
+        data-testid="file-browser-path-input"
+        aria-label="Path"
+        placeholder="Type a path (e.g. ~/projects or /tmp)"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={onCancel}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            event.stopPropagation();
+            commit();
+          } else if (event.key === "Escape") {
+            // Prevented so the overlay's window-level Escape leaves it open.
+            event.preventDefault();
+            event.stopPropagation();
+            onCancel();
+          }
+        }}
+        autoCapitalize="none"
+        autoCorrect="off"
+        spellCheck={false}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          height: "100%",
+          padding: 0,
+          fontFamily: "var(--font-display)",
+          fontSize: rem(touch ? 16 : 13),
+          color: colors.fg0,
+          background: "transparent",
+          border: "none",
+          outline: "none",
+        }}
+      />
+      <button
+        type="button"
+        data-testid="file-browser-path-submit"
+        aria-label="Go to path"
+        title="Go (Enter)"
+        className="odk-fb-path-btn"
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={commit}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: touch ? 32 : 24,
+          height: touch ? 32 : 24,
+          padding: 0,
+          border: "none",
+          borderRadius: 3,
+          background: "transparent",
+          color: colors.fg2,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        <CornerDownLeft size={14} aria-hidden />
+      </button>
+    </div>
   );
 }
 
 export function FileBrowserToolbar(props: ToolbarProps) {
   const { touch, crumbs, up, loading, onGo, onRefresh } = props;
   // Keep the deepest crumb in view when the path outgrows the bar.
-  const crumbsRef = useRef<HTMLElement | null>(null);
+  const crumbsRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const nav = crumbsRef.current;
     if (nav) nav.scrollLeft = nav.scrollWidth;
@@ -179,9 +232,11 @@ export function FileBrowserToolbar(props: ToolbarProps) {
     </button>
   );
 
-  const breadcrumb = props.editingPath && !touch ? (
+  const breadcrumb = props.editingPath ? (
     <PathInput
+      touch={touch}
       initial={props.currentPath}
+      homeDir={props.homeDir}
       onSubmit={(next) => {
         props.onEditingPathChange(false);
         onGo(next);
@@ -190,59 +245,102 @@ export function FileBrowserToolbar(props: ToolbarProps) {
     />
   ) : (
     <nav
-      ref={crumbsRef}
       aria-label="Path"
       data-testid="file-browser-breadcrumb"
-      title={touch ? undefined : "Click to type a path (⌘⇧G)"}
-      onClick={(event) => {
-        // Empty space after the last crumb turns the path into a text field.
-        if (!touch && event.target === event.currentTarget) props.onEditingPathChange(true);
-      }}
+      className="odk-fb-pathbar"
+      title={touch ? "Tap to type a path" : "Click to type a path (⌘L)"}
+      onClick={() => props.onEditingPathChange(true)}
       style={{
         flex: 1,
         minWidth: 0,
         display: "flex",
         alignItems: "center",
-        overflowX: "auto",
-        whiteSpace: "nowrap",
-        padding: "0 6px",
-        minHeight: 32,
-        fontSize: rem(13),
-        scrollbarWidth: "none",
-        cursor: touch ? undefined : "text",
+        gap: 4,
+        height: touch ? 40 : 32,
+        padding: "0 4px 0 8px",
+        background: colors.bg0,
+        border: `1px solid ${colors.line}`,
+        borderRadius: 4,
+        cursor: "text",
       }}
     >
-      {crumbs.map((crumb, index) => {
-        const last = index === crumbs.length - 1;
-        return (
-          <span key={crumb.path} style={{ display: "inline-flex", alignItems: "center" }}>
-            {/* No separator after the "/" root crumb: "/ tmp", not "/ / tmp". */}
-            {index > 0 && crumbs[index - 1].path !== "/" && (
-              <span aria-hidden style={{ color: colors.fg3 }}>/</span>
-            )}
-            <button
-              type="button"
-              data-testid="file-browser-crumb"
-              data-path={crumb.path}
-              aria-current={last ? "page" : undefined}
-              onClick={() => onGo(crumb.path)}
-              style={{
-                border: "none",
-                background: "transparent",
-                padding: touch ? "10px 2px" : "3px 2px",
-                borderRadius: 3,
-                cursor: "pointer",
-                fontFamily: "var(--font-display)",
-                fontSize: rem(13),
-                fontWeight: 400,
-                color: last ? colors.fg0 : colors.fg3,
-              }}
-            >
-              {crumb.label}
-            </button>
-          </span>
-        );
-      })}
+      <div
+        ref={crumbsRef}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          display: "flex",
+          alignItems: "center",
+          overflowX: "auto",
+          whiteSpace: "nowrap",
+          fontSize: rem(13),
+          scrollbarWidth: "none",
+        }}
+      >
+        {crumbs.map((crumb, index) => {
+          const last = index === crumbs.length - 1;
+          return (
+            <span key={crumb.path} style={{ display: "inline-flex", alignItems: "center" }}>
+              {/* No separator after the "/" root crumb: "/ tmp", not "/ / tmp". */}
+              {index > 0 && crumbs[index - 1].path !== "/" && (
+                <span aria-hidden style={{ color: colors.fg3, padding: "0 1px" }}>/</span>
+              )}
+              <button
+                type="button"
+                data-testid="file-browser-crumb"
+                data-path={crumb.path}
+                aria-current={last ? "page" : undefined}
+                className="odk-fb-crumb"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  if (last) props.onEditingPathChange(true);
+                  else onGo(crumb.path);
+                }}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  padding: touch ? "6px 4px" : "2px 4px",
+                  borderRadius: 3,
+                  cursor: last ? "text" : "pointer",
+                  fontFamily: "var(--font-display)",
+                  fontSize: rem(13),
+                  fontWeight: 400,
+                  color: last ? colors.fg0 : colors.fg3,
+                }}
+              >
+                {crumb.label}
+              </button>
+            </span>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        data-testid="file-browser-edit-path"
+        aria-label="Edit path"
+        title={touch ? "Edit path" : "Edit path (⌘L)"}
+        className="odk-fb-path-btn"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onEditingPathChange(true);
+        }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          width: touch ? 32 : 24,
+          height: touch ? 32 : 24,
+          padding: 0,
+          border: "none",
+          borderRadius: 3,
+          background: "transparent",
+          color: colors.fg3,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        <Pencil size={13} aria-hidden />
+      </button>
     </nav>
   );
 
