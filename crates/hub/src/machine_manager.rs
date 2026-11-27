@@ -2804,8 +2804,21 @@ impl MachineManager {
                 self.on_terminal_agent(machine_id, &terminal_id, agent).await;
             }
             MachineToHub::InstalledAgents { agents } => {
-                if let Some(conn) = self.machines.lock().await.get_mut(machine_id) {
-                    conn.installed_agents = agents;
+                let kinds: Vec<offdesk_protocol::RunAgent> = agents.iter().map(|installed| installed.agent).collect();
+                let known = match self.machines.lock().await.get_mut(machine_id) {
+                    Some(conn) => {
+                        conn.installed_agents = agents;
+                        true
+                    }
+                    None => false,
+                };
+                // Bridges offer only the agents it has (Antigravity isn't everywhere)
+                if let (true, Some(sink)) = (known, self.webhook_sink.get()) {
+                    let _ = sink.send(crate::webhooks::HubUpdate::Machine {
+                        machine_id: machine_id.to_string(),
+                        online: true,
+                        agents: Some(kinds),
+                    });
                 }
             }
             MachineToHub::AgentSignal {
@@ -3947,10 +3960,12 @@ impl MachineManager {
                 BrowserEvent::MachineOnline { machine } => Some(crate::webhooks::HubUpdate::Machine {
                     machine_id: machine.id.clone(),
                     online: true,
+                    agents: None,
                 }),
                 BrowserEvent::MachineOffline { machine_id } => Some(crate::webhooks::HubUpdate::Machine {
                     machine_id: machine_id.clone(),
                     online: false,
+                    agents: None,
                 }),
                 _ => None,
             };
@@ -5486,11 +5501,17 @@ mod tests {
         old.machine_id = "machine-old".into();
         assert!(matches!(manager.start_agent_run("user-a", old, None, None).await, Err(StartError::Unavailable(_))));
 
-        // What a node found installed
+        // What a node found installed, passed on to bridges
+        let (sink, mut updates) = tokio::sync::mpsc::unbounded_channel();
+        manager.set_webhook_sink(sink);
         assert_eq!(manager.installed_agents("machine-a").await, Some(vec![]));
         let installed = vec![offdesk_protocol::InstalledAgent { agent: RunAgent::Codex, version: Some("codex-cli 0.159.2".into()) }];
         manager.handle_machine_message("machine-a", MachineToHub::InstalledAgents { agents: installed.clone() }).await;
         assert_eq!(manager.installed_agents("machine-a").await, Some(installed));
+        assert!(matches!(
+            updates.try_recv(),
+            Ok(crate::webhooks::HubUpdate::Machine { machine_id, online: true, agents: Some(agents) }) if machine_id == "machine-a" && agents == [RunAgent::Codex]
+        ));
         assert_eq!(manager.installed_agents("machine-gone").await, None);
     }
 

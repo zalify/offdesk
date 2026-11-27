@@ -58,7 +58,8 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   "access": { "scopes": ["runs:read", "runs:answer"], "content": "requests", … } }
 
 { "type": "snapshot",
-  "machines": [{ "id": "…", "name": "studio", "os": "macos", "production": false, "online": true }],
+  "machines": [{ "id": "…", "name": "studio", "os": "macos", "production": false, "online": true,
+                 "agents": ["claude", "codex", "antigravity"] }],   // installed, once known
   "runs": [ /* runs on those machines, open or ended in the last day */ ] }
 
 { "type": "event", "seq": 1042,
@@ -77,6 +78,9 @@ shows the error and keeps retrying with backoff. Messages are JSON text frames w
   `run.request_resolved`, `run.status`, `run.progress`, `run.report`, `run.title`, `run.ended`,
   plus `machine.online` / `machine.offline` (`data.machine`). Runs are the objects of
   `GET /api/agent-runs`, cut to the bridge's content level.
+- A machine's `agents` are the coding agents it found installed (`claude`, `codex`,
+  `antigravity`). It's left out while that isn't known (offline, an older node, or not
+  probed yet); when the node reports them, a `machine.online` event carries them.
 - `ping` every 30 s; the hub reconnects when it hears nothing for 90 s.
 
 ## Server → hub

@@ -570,12 +570,12 @@ pub const MAX_START_LABEL_CHARS: usize = 200;
 #[serde(rename_all = "snake_case")]
 pub enum AgentPermissionMode {
     /// It asks before edits and commands (Claude `default`; Codex in a read-only
-    /// sandbox, asking for anything more).
+    /// sandbox, asking for anything more; Antigravity's Default agent mode).
     Ask,
     /// Edits in its folder go ahead, commands still ask (Claude `acceptEdits`; Codex in
     /// a workspace-write sandbox, asking for anything more).
     AcceptEdits,
-    /// It plans and changes nothing until you agree (Claude only).
+    /// It plans and changes nothing until you agree (Claude and Antigravity).
     Plan,
     /// It goes ahead without asking: Claude `auto` (its classifier asks before anything
     /// risky); Codex `--yolo` (no approvals and no sandbox at all).
@@ -600,7 +600,11 @@ impl AgentPermissionMode {
             }
             (RunAgent::Codex, AgentPermissionMode::Plan) => Err("Codex has no plan mode"),
             (RunAgent::Codex, AgentPermissionMode::Auto) => Ok(&["--yolo"]),
-            (RunAgent::Antigravity, AgentPermissionMode::Ask) => Ok(&[]),
+            // agy starts in its Auto mode when nothing is chosen (since 1.5), and `--mode`
+            // has no value for its Default mode: only a session setting asks for it
+            (RunAgent::Antigravity, AgentPermissionMode::Ask) => {
+                Ok(&["--settings", r#"{"agentMode":""}"#])
+            }
             (RunAgent::Antigravity, AgentPermissionMode::AcceptEdits) => {
                 Ok(&["--mode", "accept-edits"])
             }
@@ -3876,7 +3880,7 @@ mod tests {
         assert!(AgentPermissionMode::Plan.args(RunAgent::Codex).is_err());
         assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Claude).unwrap(), ["--permission-mode", "auto"]);
         assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Codex).unwrap(), ["--yolo"]);
-        assert_eq!(AgentPermissionMode::Ask.args(RunAgent::Antigravity).unwrap(), [] as [&str; 0]);
+        assert_eq!(AgentPermissionMode::Ask.args(RunAgent::Antigravity).unwrap(), ["--settings", r#"{"agentMode":""}"#]);
         assert_eq!(AgentPermissionMode::AcceptEdits.args(RunAgent::Antigravity).unwrap(), ["--mode", "accept-edits"]);
         assert_eq!(AgentPermissionMode::Plan.args(RunAgent::Antigravity).unwrap(), ["--mode", "plan"]);
         assert_eq!(AgentPermissionMode::Auto.args(RunAgent::Antigravity).unwrap(), ["--mode", "auto"]);
