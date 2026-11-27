@@ -1806,7 +1806,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             width: frameWidth,
             height: frameHeight,
             flex: "0 0 auto",
-            transform: keyboardOffsetY !== 0 ? `translateY(${keyboardOffsetY}px)` : undefined,
+            marginTop: keyboardOffsetY !== 0 ? keyboardOffsetY : undefined,
           }}
         >
           <div
