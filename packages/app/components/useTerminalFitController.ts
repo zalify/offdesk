@@ -44,6 +44,7 @@ export function useTerminalFitController({
   onResizeSent,
 }: UseTerminalFitControllerOptions) {
   const fitRetryTimerRef = useRef<number | null>(null);
+  const stabilizeRafRef = useRef<number | null>(null);
   // A fit requested before the socket opened, run by runFitAwaitingOpen.
   const fitAwaitingOpenRef = useRef<{ skipIfUnchanged: boolean } | null>(null);
   const onResizeSentRef = useRef(onResizeSent);
@@ -54,26 +55,22 @@ export function useTerminalFitController({
       window.clearTimeout(fitRetryTimerRef.current);
       fitRetryTimerRef.current = null;
     }
+    if (stabilizeRafRef.current !== null) {
+      cancelAnimationFrame(stabilizeRafRef.current);
+      stabilizeRafRef.current = null;
+    }
   }, []);
 
   const stabilizeTerminalSurface = useCallback(
     (term: Terminal) => {
-      try {
-        term.clearTextureAtlas();
-      } catch {
-        /* ignore */
+      if (stabilizeRafRef.current !== null) {
+        cancelAnimationFrame(stabilizeRafRef.current);
       }
-
-      const refresh = () => {
+      stabilizeRafRef.current = requestAnimationFrame(() => {
+        stabilizeRafRef.current = null;
         if (termRef.current !== term) return;
         term.refresh(0, Math.max(term.rows - 1, 0));
         scheduleMeasure();
-      };
-
-      refresh();
-      requestAnimationFrame(() => {
-        refresh();
-        requestAnimationFrame(refresh);
       });
     },
     [scheduleMeasure, termRef],

@@ -140,4 +140,26 @@ describe("activateGpuRenderer", () => {
     handle.dispose();
     expect(handle.isActive()).toBe(false);
   });
+
+  it("recovers WebGL via ensureActive after context loss, but not after dispose", () => {
+    const term = makeFakeTerminal();
+    const first = makeFakeAddon();
+    const second = makeFakeAddon();
+    let count = 0;
+    const handle = activateGpuRenderer(term, {
+      createAddon: () => (++count === 1 ? first : second),
+      storage: null,
+    });
+    expect(handle.isActive()).toBe(true);
+    first.loseContext();
+    expect(handle.isActive()).toBe(false);
+
+    expect(handle.ensureActive()).toBe(true);
+    expect(handle.isActive()).toBe(true);
+    expect(term.loadedAddons).toEqual([first, second]);
+
+    handle.dispose();
+    expect(handle.ensureActive()).toBe(false);
+    expect(handle.isActive()).toBe(false);
+  });
 });

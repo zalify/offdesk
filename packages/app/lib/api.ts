@@ -550,8 +550,10 @@ export const listMachines = () =>
   request<MachineInfo[]>("GET", "/api/machines");
 export const deleteMachine = (machineId: string) =>
   request<void>("DELETE", `/api/machines/${machineId}`);
-export const getBootstrap = () =>
-  request<BrowserStateSnapshot>("GET", "/api/bootstrap");
+export const getBootstrap = (deviceId?: string | null) => {
+  const query = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+  return request<BrowserStateSnapshot>("GET", `/api/bootstrap${query}`);
+};
 export const putFocus = (terminalId: string, machineId: string) =>
   request<void>("PUT", "/api/focus", {
     terminal_id: terminalId,

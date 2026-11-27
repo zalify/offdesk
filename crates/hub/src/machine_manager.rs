@@ -3606,6 +3606,41 @@ impl MachineManager {
         }
     }
 
+    /// Restore any control leases stashed in `released_leases` for `device_id`
+    /// on machines that currently have no controller. Called from
+    /// `GET /api/bootstrap?device_id=...` so reconnecting clients receive their
+    /// restored leases in the initial snapshot instead of flashing a transient
+    /// `watching | take control` state before `/ws/events` opens.
+    pub fn restore_released_leases_for_device(&self, user_id: &str, device_id: &str) {
+        if device_id.is_empty() {
+            return;
+        }
+        let mut mode_by_user = self.mode.lock().unwrap();
+        let mut restored_machines = Vec::new();
+        if let Some(mode) = mode_by_user.get_mut(user_id) {
+            if let Some(machines) = mode.released_leases.remove(device_id) {
+                for machine_id in machines {
+                    if !mode.control_leases.contains_key(&machine_id) {
+                        mode.control_leases
+                            .insert(machine_id.clone(), device_id.to_string());
+                        restored_machines.push(machine_id);
+                    }
+                }
+            }
+        }
+        drop(mode_by_user);
+
+        for machine_id in restored_machines {
+            self.send_event(
+                Some(user_id.to_string()),
+                BrowserEvent::ModeChanged {
+                    machine_id,
+                    controller_device_id: Some(device_id.to_string()),
+                },
+            );
+        }
+    }
+
     pub fn unregister_device(&self, user_id: &str, device_id: &str) {
         let mut mode_by_user = self.mode.lock().unwrap();
         if let Some(mode) = mode_by_user.get_mut(user_id) {
@@ -6781,6 +6816,47 @@ mod tests {
             manager.get_controller("user-a", "machine-a"),
             Some("device-b".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn bootstrap_restore_released_leases_populates_snapshot_before_ws_connect() {
+        let manager = Arc::new(MachineManager::new(test_db()));
+        let _rx_a = manager
+            .register_machine(machine("machine-a"), Some("user-a".to_string()))
+            .await;
+        let _rx_b = manager
+            .register_machine(machine("machine-b"), Some("user-a".to_string()))
+            .await;
+
+        manager.register_device("user-a", "device-a");
+        manager.request_control("user-a", "machine-a", "device-a");
+        manager.request_control("user-a", "machine-b", "device-a");
+
+        // Grace period expires -> leases move to released_leases
+        manager.schedule_unregister_device(
+            "user-a".to_string(),
+            "device-a".to_string(),
+            Duration::from_millis(10),
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert_eq!(manager.get_controller("user-a", "machine-a"), None);
+
+        // Another device claims machine-b while device-a is away
+        manager.register_device("user-a", "device-b");
+        manager.request_control("user-a", "machine-b", "device-b");
+
+        // Reconnecting client calls GET /api/bootstrap?device_id=device-a before /ws/events opens
+        manager.restore_released_leases_for_device("user-a", "device-a");
+        let snapshot = manager.snapshot_for_user("user-a").await;
+        let lease_for = |machine_id: &str| {
+            snapshot
+                .control_leases
+                .iter()
+                .find(|l| l.machine_id == machine_id)
+                .and_then(|l| l.controller_device_id.clone())
+        };
+        assert_eq!(lease_for("machine-a"), Some("device-a".to_string()));
+        assert_eq!(lease_for("machine-b"), Some("device-b".to_string()));
     }
 
     #[tokio::test]

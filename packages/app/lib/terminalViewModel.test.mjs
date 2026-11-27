@@ -121,7 +121,7 @@ test("fit dimensions clamp to a sensible minimum when viewport is tiny", () => {
   );
 });
 
-test("unchanged auto-fit suppresses only the remote resize frame, not local refresh", () => {
+test("unchanged auto-fit suppresses both remote resize frame and redundant local refresh", () => {
   assert.deepEqual(
     getTerminalFitResizeDecision({
       currentCols: 52,
@@ -132,7 +132,7 @@ test("unchanged auto-fit suppresses only the remote resize frame, not local refr
     }),
     {
       sendResizeFrame: false,
-      refreshLocalSurface: true,
+      refreshLocalSurface: false,
     },
   );
 });

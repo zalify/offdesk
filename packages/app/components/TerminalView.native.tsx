@@ -451,25 +451,37 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const resizeConfirmTimerRef = useRef<number | null>(null);
     const resizeDebounceTimerRef = useRef<number | null>(null);
     const resizeHudTimerRef = useRef<number | null>(null);
-    const resizeSettleTimerRef = useRef<number | null>(null);
     const hasInitialFitRef = useRef(false);
     const [resizeHud, setResizeHud] = useState<{ cols: number; rows: number; visible: boolean }>({
       cols: Math.max(20, initialCols || 80),
       rows: Math.max(6, initialRows || 24),
       visible: false,
     });
-    const [isResizingVisual, setIsResizingVisual] = useState(false);
+    const containerSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
+    const taStyleCacheRef = useRef<{
+      left: number;
+      top: number;
+      height: number;
+      fontSize: number;
+      lineHeight: number;
+    } | null>(null);
+    const lastHoverCellRef = useRef<{ col: number; row: number } | null>(null);
     const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
     const metricsRef = useRef<{ cellW: number; cellH: number }>({ cellW: 8.4, cellH: 18 });
     const readyFiredRef = useRef(false);
     const composingRef = useRef(false);
     const compositionTextRef = useRef("");
+    const pendingCommitTextRef = useRef("");
+    const pendingCommitTimerRef = useRef<number | null>(null);
     const compositionEndAtRef = useRef(0);
     const pendingInputRef = useRef("");
     const [sessionGen, setSessionGen] = useState(0);
     const [fontPrefs, setFontPrefs] = useState(() => readTerminalFontPreferences());
     const [scrollbackOffset, setScrollbackOffset] = useState(0);
     const [historySize, setHistorySize] = useState(0);
+    const committedScrollbackOffsetRef = useRef(0);
+    const committedHistorySizeRef = useRef(0);
+    const scrollbarShownRef = useRef(false);
     const [scrollbarVisible, setScrollbarVisible] = useState(false);
     const [scrollbarHover, setScrollbarHover] = useState(false);
     const maxObservedOffsetRef = useRef(0);
@@ -596,12 +608,20 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const canvas = canvasRef.current;
         const container = containerRef.current;
         if (!canvas || !container) return;
-        const rect = container.getBoundingClientRect();
-        if (rect.width < 10 || rect.height < 10) return;
+        let { width: rectW, height: rectH } = containerSizeRef.current;
+        if (rectW < 10 || rectH < 10) {
+          const rect = container.getBoundingClientRect();
+          rectW = rect.width;
+          rectH = rect.height;
+          if (rectW >= 10 && rectH >= 10) {
+            containerSizeRef.current = { width: rectW, height: rectH };
+          }
+        }
+        if (rectW < 10 || rectH < 10) return;
 
         const dpr = window.devicePixelRatio || 1;
-        const targetW = Math.round(rect.width * dpr);
-        const targetH = Math.round(rect.height * dpr);
+        const targetW = Math.round(rectW * dpr);
+        const targetH = Math.round(rectH * dpr);
         if (canvas.width !== targetW || canvas.height !== targetH) {
           canvas.width = targetW;
           canvas.height = targetH;
@@ -617,11 +637,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const cursorCol = theme.cursor ?? "#d9c773";
 
         ctx.fillStyle = bg;
-        ctx.fillRect(0, 0, rect.width, rect.height);
+        ctx.fillRect(0, 0, rectW, rectH);
 
         const padX = 8;
         const padY = 6;
-        const { cellW, cellH } = measureCellMetrics();
+        const { cellW, cellH } = metricsRef.current;
 
         if (!frame) {
           paintOffsetYRef.current = 0;
@@ -633,7 +653,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         // keyboard open while watching a desktop terminal), keep the active bottom
         // content & cursor anchored inside the visible viewport instead of clipping.
         let yOffset = 0;
-        const availH = rect.height - padY * 2;
+        const availH = rectH - padY * 2;
         if (frame.display_offset === 0 && availH > cellH) {
           let lastContentRow = frame.cursor ? frame.cursor[1] : 0;
           for (let r = frame.spans.length - 1; r > lastContentRow; r--) {
@@ -704,11 +724,31 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           ctx.globalAlpha = 1;
           const ta = inputRef.current;
           if (ta) {
-            ta.style.left = `${Math.round(cursorX)}px`;
-            ta.style.top = `${Math.round(cursorY + yOffset)}px`;
-            ta.style.height = `${Math.round(cellH)}px`;
-            ta.style.fontSize = `${fontSize}px`;
-            ta.style.lineHeight = `${cellH}px`;
+            const nextLeft = Math.round(cursorX);
+            const nextTop = Math.round(cursorY + yOffset);
+            const nextHeight = Math.round(cellH);
+            const prevTa = taStyleCacheRef.current;
+            if (
+              !prevTa ||
+              prevTa.left !== nextLeft ||
+              prevTa.top !== nextTop ||
+              prevTa.height !== nextHeight ||
+              prevTa.fontSize !== fontSize ||
+              prevTa.lineHeight !== cellH
+            ) {
+              taStyleCacheRef.current = {
+                left: nextLeft,
+                top: nextTop,
+                height: nextHeight,
+                fontSize,
+                lineHeight: cellH,
+              };
+              ta.style.left = `${nextLeft}px`;
+              ta.style.top = `${nextTop}px`;
+              ta.style.height = `${nextHeight}px`;
+              ta.style.fontSize = `${fontSize}px`;
+              ta.style.lineHeight = `${cellH}px`;
+            }
           }
         }
 
@@ -785,10 +825,31 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               lastFill = nextFill;
             }
             let spanCols = 0;
-            const spanContainsCursor =
-              cursorOnRow >= sp.c && cursorOnRow < sp.c + sp.t.length * 2;
-            if (/^[\x20-\x7e]*$/.test(sp.t) && !spanContainsCursor) {
-              ctx.fillText(sp.t, padX + sp.c * cellW, y);
+            if (/^[\x20-\x7e]*$/.test(sp.t)) {
+              const cursorIdx = cursorOnRow - sp.c;
+              if (cursorOnRow >= 0 && cursorIdx >= 0 && cursorIdx < sp.t.length) {
+                if (cursorIdx > 0) {
+                  ctx.fillText(sp.t.slice(0, cursorIdx), padX + sp.c * cellW, y);
+                }
+                if (lastFill !== bg) {
+                  ctx.fillStyle = bg;
+                  lastFill = bg;
+                }
+                ctx.fillText(sp.t[cursorIdx], padX + (sp.c + cursorIdx) * cellW, y);
+                if (lastFill !== nextFill) {
+                  ctx.fillStyle = nextFill;
+                  lastFill = nextFill;
+                }
+                if (cursorIdx + 1 < sp.t.length) {
+                  ctx.fillText(
+                    sp.t.slice(cursorIdx + 1),
+                    padX + (sp.c + cursorIdx + 1) * cellW,
+                    y,
+                  );
+                }
+              } else {
+                ctx.fillText(sp.t, padX + sp.c * cellW, y);
+              }
               spanCols = sp.t.length;
             } else {
               let col = sp.c;
@@ -837,32 +898,38 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
 
         // 6. Live IME composition preedit overlay (e.g. Pinyin "weism" before candidate commit)
-        const preedit = compositionTextRef.current;
+        //    plus brief pending-commit hold so committed CJK text doesn't flash blank during RTT.
+        const activePreedit = compositionTextRef.current;
+        const preedit = activePreedit || pendingCommitTextRef.current;
         if (preedit && frame.cursor) {
           const [cx, cy] = frame.cursor;
           ctx.font = `${fontSize}px ${fontFamily}`;
           const measuredW = Math.max(cellW, Math.ceil(ctx.measureText(preedit).width) + 4);
           const preX = Math.min(
             padX + cx * cellW,
-            Math.max(padX, rect.width - padX - measuredW),
+            Math.max(padX, rectW - padX - measuredW),
           );
           const preY = padY + cy * cellH;
           const textY = preY + Math.floor((cellH - fontSize) * 0.5);
           ctx.fillStyle = bg;
           ctx.fillRect(preX - 1, preY, measuredW + 2, cellH);
-          ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
-          ctx.fillRect(preX - 1, preY, measuredW + 2, cellH);
+          if (activePreedit) {
+            ctx.fillStyle = "rgba(255, 255, 255, 0.12)";
+            ctx.fillRect(preX - 1, preY, measuredW + 2, cellH);
+          }
           ctx.fillStyle = fg;
           ctx.textBaseline = "top";
           ctx.fillText(preedit, preX + 1, textY);
           // Underline preedit text (standard macOS / Ghostty / Alacritty IME indicator)
-          ctx.fillStyle = cursorCol;
-          ctx.fillRect(preX, preY + cellH - 2, measuredW, 1.5);
+          if (activePreedit) {
+            ctx.fillStyle = cursorCol;
+            ctx.fillRect(preX, preY + cellH - 2, measuredW, 1.5);
+          }
         }
 
         ctx.restore();
       },
-      [theme, fontSize, fontFamily, lineHeight, measureCellMetrics],
+      [theme, fontSize, fontFamily, lineHeight],
     );
 
     const schedulePaint = useCallback(() => {
@@ -873,7 +940,21 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       });
     }, [paintFrame]);
 
+    const syncVisibleHistorySize = useCallback(() => {
+      const frame = frameRef.current;
+      if (!frame) return;
+      const effectiveHistory =
+        typeof frame.history_size === "number"
+          ? frame.history_size
+          : maxObservedOffsetRef.current;
+      if (effectiveHistory !== committedHistorySizeRef.current) {
+        committedHistorySizeRef.current = effectiveHistory;
+        setHistorySize(effectiveHistory);
+      }
+    }, []);
+
     const pingScrollbar = useCallback(() => {
+      syncVisibleHistorySize();
       setScrollbarVisible(true);
       if (scrollbarFadeTimerRef.current !== null) {
         window.clearTimeout(scrollbarFadeTimerRef.current);
@@ -882,7 +963,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         scrollbarFadeTimerRef.current = null;
         setScrollbarVisible(false);
       }, 1200);
-    }, []);
+    }, [syncVisibleHistorySize]);
 
     useEffect(
       () => () => {
@@ -902,9 +983,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           window.clearTimeout(resizeHudTimerRef.current);
           resizeHudTimerRef.current = null;
         }
-        if (resizeSettleTimerRef.current !== null) {
-          window.clearTimeout(resizeSettleTimerRef.current);
-          resizeSettleTimerRef.current = null;
+        if (pendingCommitTimerRef.current !== null) {
+          window.clearTimeout(pendingCommitTimerRef.current);
+          pendingCommitTimerRef.current = null;
         }
         stopEdgeAutoScroll();
       },
@@ -920,6 +1001,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           return;
         }
         frameRef.current = frame;
+        lastHoverCellRef.current = null;
+        if (pendingCommitTextRef.current) {
+          pendingCommitTextRef.current = "";
+          if (pendingCommitTimerRef.current !== null) {
+            window.clearTimeout(pendingCommitTimerRef.current);
+            pendingCommitTimerRef.current = null;
+          }
+        }
         rememberFrame(terminalId, frame);
         if (frame.display_offset > maxObservedOffsetRef.current) {
           maxObservedOffsetRef.current = frame.display_offset;
@@ -974,6 +1063,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           typeof frame.history_size === "number"
             ? frame.history_size
             : maxObservedOffsetRef.current;
+        const remoteOwns = Boolean(frame.wants_mouse) || daemonBackedRef.current;
         const now = performance.now();
         if (
           frame.display_offset !== prevOffset ||
@@ -981,8 +1071,20 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           now - lastScrollBadgeUpdateRef.current > 80
         ) {
           lastScrollBadgeUpdateRef.current = now;
-          setScrollbackOffset(frame.display_offset);
-          setHistorySize(effectiveHistory);
+          if (frame.display_offset !== committedScrollbackOffsetRef.current) {
+            committedScrollbackOffsetRef.current = frame.display_offset;
+            setScrollbackOffset(frame.display_offset);
+          }
+          const needHistoryUpdate =
+            !remoteOwns &&
+            effectiveHistory !== committedHistorySizeRef.current &&
+            (frame.display_offset > 0 ||
+              scrollbarShownRef.current ||
+              (committedHistorySizeRef.current === 0 && effectiveHistory > 0));
+          if (needHistoryUpdate) {
+            committedHistorySizeRef.current = effectiveHistory;
+            setHistorySize(effectiveHistory);
+          }
         }
         if (frame.display_offset !== prevOffset) {
           pingScrollbar();
@@ -1003,8 +1105,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           callbacksRef.current.onReady?.();
         }
       },
-      [terminalId, paintFrame, schedulePaint, pingScrollbar],
+      [terminalId, enqueueTermOp, paintFrame, schedulePaint, pingScrollbar],
     );
+    const applyFrameRef = useRef(applyFrame);
+    applyFrameRef.current = applyFrame;
 
     const flushPendingScroll = useCallback(() => {
       scrollRafRef.current = null;
@@ -1023,12 +1127,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       }
       pendingScrollLinesRef.current = queued - deltaLines;
       scrollInFlightRef.current = true;
-      void invoke<NativeTermFrame>("native_term_scroll", {
-        id: terminalId,
-        deltaLines,
-      })
+      void enqueueTermOp(() =>
+        invoke<NativeTermFrame>("native_term_scroll", {
+          id: terminalId,
+          deltaLines,
+        }),
+      )
         .then((frame) => {
-          applyFrame(frame);
+          applyFrameRef.current(frame);
         })
         .catch(() => {})
         .finally(() => {
@@ -1037,7 +1143,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             scrollRafRef.current = window.requestAnimationFrame(flushPendingScroll);
           }
         });
-    }, [terminalId, applyFrame]);
+    }, [terminalId, enqueueTermOp]);
 
     const sendRawInput = useCallback(
       (data: string) => {
@@ -1051,8 +1157,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const ws = wsRef.current;
         if (ws && ws.readyState === WebSocket.OPEN) {
           if ((frameRef.current?.display_offset ?? 0) > 0) {
-            void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
-              .then(applyFrame)
+            void enqueueTermOp(() =>
+              invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+            )
+              .then((frame) => applyFrameRef.current(frame))
               .catch(() => {});
           }
           ws.send(JSON.stringify({ type: "input", data: transformed }));
@@ -1061,7 +1169,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           pendingInputRef.current = (pendingInputRef.current + transformed).slice(-4096);
         }
       },
-      [canType, inputTransformRef, terminalId, applyFrame, schedulePaint],
+      [canType, inputTransformRef, terminalId, enqueueTermOp, schedulePaint],
     );
 
     const resizeLocalEmulator = useCallback(
@@ -1076,10 +1184,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             rows: nextRows,
           }),
         )
-          .then(applyFrame)
+          .then((frame) => applyFrameRef.current(frame))
           .catch(() => {});
       },
-      [enqueueTermOp, terminalId, applyFrame],
+      [enqueueTermOp, terminalId],
     );
 
     const fitToContainer = useCallback(
@@ -1088,6 +1196,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (!container) return;
         const rect = container.getBoundingClientRect();
         if (rect.width < 40 || rect.height < 40) return;
+        containerSizeRef.current = { width: rect.width, height: rect.height };
 
         const { cellW, cellH } = measureCellMetrics();
         const cols = Math.max(20, Math.floor((rect.width - 20) / cellW));
@@ -1096,7 +1205,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         dimsRef.current = { cols, rows };
         if (hasInitialFitRef.current && !unchanged) {
           setResizeHud({ cols, rows, visible: true });
-          setIsResizingVisual(true);
           if (resizeHudTimerRef.current !== null) {
             window.clearTimeout(resizeHudTimerRef.current);
           }
@@ -1104,13 +1212,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             resizeHudTimerRef.current = null;
             setResizeHud((prev) => ({ ...prev, visible: false }));
           }, 550);
-          if (resizeSettleTimerRef.current !== null) {
-            window.clearTimeout(resizeSettleTimerRef.current);
-          }
-          resizeSettleTimerRef.current = window.setTimeout(() => {
-            resizeSettleTimerRef.current = null;
-            setIsResizingVisual(false);
-          }, 180);
         }
         hasInitialFitRef.current = true;
 
@@ -1182,7 +1283,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }),
       )
         .then((frame) => {
-          if (!cancelled) applyFrame(frame);
+          if (!cancelled) applyFrameRef.current(frame);
         })
         .catch(() => {});
       return () => {
@@ -1197,7 +1298,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
         void enqueueTermOp(() => invoke("native_term_close", { id: terminalId })).catch(() => {});
       };
-    }, [terminalId, applyFrame, enqueueTermOp]);
+    }, [terminalId, enqueueTermOp, stopEdgeAutoScroll]);
 
     // Single source of truth: whenever Hub reports the remote PTY's true size
     // (initial TerminalInfo or TerminalResized), lock local alacritty_terminal to it.
@@ -1217,6 +1318,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     // Wait for bundled/custom terminal webfonts to finish loading before locking cellW.
     useEffect(() => {
       let disposed = false;
+      measureCellMetrics();
       const loadFonts = async () => {
         try {
           await Promise.allSettled([
@@ -1230,13 +1332,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (disposed) return;
         measureCellMetrics();
         fitToContainer({ skipIfUnchanged: true, immediate: true });
-        paintFrame(frameRef.current);
+        schedulePaint();
       };
       void loadFonts();
       return () => {
         disposed = true;
       };
-    }, [fontSize, fontFamily, measureCellMetrics, fitToContainer, paintFrame]);
+    }, [fontSize, fontFamily, measureCellMetrics, fitToContainer, schedulePaint]);
 
     // Exact container ResizeObserver (zero setTimeout hacks!).
     // Always repaint on container resize so canvas backing-store dimensions stay
@@ -1244,7 +1346,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     useEffect(() => {
       const el = containerRef.current;
       if (!el) return;
+      const syncContainerSize = () => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width >= 10 && rect.height >= 10) {
+          containerSizeRef.current = { width: rect.width, height: rect.height };
+        }
+      };
       const handleResize = () => {
+        syncContainerSize();
         fitToContainer({ skipIfUnchanged: true });
         schedulePaint();
       };
@@ -1252,6 +1361,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       ro.observe(el);
       const vv = window.visualViewport;
       vv?.addEventListener("resize", handleResize);
+      syncContainerSize();
       fitToContainer({ skipIfUnchanged: false, immediate: true });
       schedulePaint();
       return () => {
@@ -1325,6 +1435,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       let inSyncUpdate = false;
       let syncTail: Uint8Array = new Uint8Array(0);
       let syncGuardTimer: number | null = null;
+      let syncStartAt = 0;
 
       const clearSyncGuard = () => {
         if (syncGuardTimer !== null) {
@@ -1340,7 +1451,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const batch = concatChunks(pendingChunks);
         pendingChunks = [];
         inFlight = true;
-        const isFirstLive = !hasLiveDataRef.current;
         void enqueueTermOp(() => {
           if (disposed) return Promise.resolve(null);
           return invoke<NativeTermFrame>("native_term_feed", {
@@ -1351,7 +1461,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           .then((frame) => {
             if (frame && !disposed) {
               hasLiveDataRef.current = true;
-              applyFrame(frame, isFirstLive ? { sync: true } : undefined);
+              applyFrameRef.current(frame, { sync: true });
             }
           })
           .catch(() => {})
@@ -1373,31 +1483,38 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         syncTail = scanned.nextTail;
         inSyncUpdate = scanned.inSync;
         if (inSyncUpdate) {
-          // Hold partial TUI redraw frames until ESU (\x1b[?2026l) arrives,
-          // with a 120ms safety timeout so a crashed app can never stall painting.
-          if (syncGuardTimer === null) {
-            syncGuardTimer = window.setTimeout(() => {
-              syncGuardTimer = null;
-              inSyncUpdate = false;
-              if (!disposed && !inFlight && pendingChunks.length > 0 && rafId === null) {
-                rafId = requestAnimationFrame(flushToRust);
+          // Hold partial TUI redraw frames until ESU (\x1b[?2026l) arrives.
+          // Extend on mid-sync chunks (120ms idle, 400ms max) so slow multi-frame
+          // TUI redraws don't tear mid-frame, while a crashed app can never stall painting.
+          const now = performance.now();
+          if (syncStartAt === 0) syncStartAt = now;
+          const remaining = Math.max(0, 400 - (now - syncStartAt));
+          const delay = Math.min(120, remaining);
+          clearSyncGuard();
+          syncGuardTimer = window.setTimeout(() => {
+            syncGuardTimer = null;
+            syncStartAt = 0;
+            inSyncUpdate = false;
+            if (!disposed && !inFlight && pendingChunks.length > 0) {
+              if (rafId !== null) {
+                cancelAnimationFrame(rafId);
+                rafId = null;
               }
-            }, 120);
-          }
+              flushToRust();
+            }
+          }, delay);
           return;
         }
         clearSyncGuard();
-        // First live snapshot bypasses rAF so initial screen paints immediately (~32ms faster).
-        if (!hasLiveDataRef.current && !inFlight) {
+        syncStartAt = 0;
+        // Flush immediately when idle so interactive echo & sparse output have 0-rAF
+        // local latency; bursts arriving while inFlight coalesce into 1 rAF in finally().
+        if (!inFlight) {
           if (rafId !== null) {
             cancelAnimationFrame(rafId);
             rafId = null;
           }
           flushToRust();
-          return;
-        }
-        if (rafId === null) {
-          rafId = requestAnimationFrame(flushToRust);
         }
       };
 
@@ -1470,7 +1587,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         ws.close();
         if (wsRef.current === ws) wsRef.current = null;
       };
-    }, [wsUrl, terminalId, sessionGen, applyFrame]);
+    }, [wsUrl, terminalId, sessionGen, enqueueTermOp]);
 
     const [copiedToast, setCopiedToast] = useState(false);
     const copiedToastTimerRef = useRef<number | null>(null);
@@ -1581,7 +1698,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           pointerToSelectionCellRef.current(e.clientX, e.clientY),
         );
         ensureEdgeAutoScroll(e.clientY);
-        paintFrame(frameRef.current);
+        schedulePaint();
       };
       const onWinMouseUp = () => {
         stopEdgeAutoScroll();
@@ -1610,7 +1727,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         window.removeEventListener("mouseup", onWinMouseUp);
         document.removeEventListener("copy", onDocCopy);
       };
-    }, [getSelectionText, copyToClipboard, paintFrame, stopEdgeAutoScroll]);
+    }, [getSelectionText, copyToClipboard, schedulePaint, stopEdgeAutoScroll]);
 
     useImperativeHandle(
       ref,
@@ -1630,8 +1747,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         },
         fitToContainer,
         scrollToBottom: () => {
-          void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
-            .then(applyFrame)
+          void enqueueTermOp(() =>
+            invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+          )
+            .then((frame) => applyFrameRef.current(frame))
             .catch(() => {});
         },
         focus: () => inputRef.current?.focus(),
@@ -2004,8 +2123,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           remoteWheelActiveRef.current = true;
         }
         if (off > 0) {
-          void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
-            .then(applyFrame)
+          void enqueueTermOp(() =>
+            invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+          )
+            .then((f) => applyFrameRef.current(f))
             .catch(() => {});
         }
         const btn = lines > 0 ? 64 : 65;
@@ -2088,6 +2209,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         : 100 - thumbHeightPct;
     const showScrollbar =
       hasScrollback && (scrollbarVisible || scrollbarHover || scrollbarDragRef.current || scrollbackOffset > 0);
+    scrollbarShownRef.current = showScrollbar;
 
     return (
       <div
@@ -2127,7 +2249,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               );
               draggingRef.current = false;
               lastPointerRef.current = null;
-              paintFrame(frame);
+              schedulePaint();
               void copyToClipboard(tok.token);
               return;
             }
@@ -2144,7 +2266,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             }
             draggingRef.current = false;
             lastPointerRef.current = null;
-            paintFrame(frame);
+            schedulePaint();
             if (lineText) void copyToClipboard(lineText);
             return;
           }
@@ -2155,13 +2277,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
           draggingRef.current = true;
           lastPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
-          paintFrame(frame);
+          schedulePaint();
         }}
         onMouseLeave={() => {
+          lastHoverCellRef.current = null;
           if (hoverLinkRef.current) {
             hoverLinkRef.current = null;
             setHoverPointer(false);
-            paintFrame(frameRef.current);
+            schedulePaint();
           }
         }}
         onMouseMove={(e) => {
@@ -2171,6 +2294,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             return;
           }
           const cell = pointerToCell(e.clientX, e.clientY);
+          const prevCell = lastHoverCellRef.current;
+          if (prevCell && prevCell.col === cell.col && prevCell.row === cell.row) {
+            return;
+          }
+          lastHoverCellRef.current = cell;
           const rowSpans = frameRef.current?.spans[cell.row] ?? [];
           let nextLink: { row: number; startCol: number; endCol: number } | null = null;
           for (const sp of rowSpans) {
@@ -2202,7 +2330,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           if (changed) {
             hoverLinkRef.current = nextLink;
             setHoverPointer(Boolean(nextLink));
-            paintFrame(frameRef.current);
+            schedulePaint();
           }
         }}
         onMouseUp={(e) => {
@@ -2367,8 +2495,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             display: "block",
             width: "100%",
             height: "100%",
-            opacity: isResizingVisual ? 0.92 : 1,
-            transition: "opacity 160ms ease-out",
           }}
         />
         <div
@@ -2387,9 +2513,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             padding: "5px 12px",
             borderRadius: 999,
             border: "1px solid rgba(255,255,255,0.14)",
-            background: "rgba(22, 23, 27, 0.84)",
-            backdropFilter: "blur(10px)",
-            WebkitBackdropFilter: "blur(10px)",
+            background: "rgba(22, 23, 27, 0.92)",
             color: "#e4e4e7",
             fontFamily: "var(--font-mono, monospace)",
             fontSize: 12,
@@ -2410,32 +2534,55 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           spellCheck={false}
           onFocus={() => {
             focusedRef.current = true;
-            paintFrame(frameRef.current);
+            schedulePaint();
           }}
           onBlur={(e) => {
             focusedRef.current = false;
             composingRef.current = false;
             compositionTextRef.current = "";
+            pendingCommitTextRef.current = "";
+            if (pendingCommitTimerRef.current !== null) {
+              window.clearTimeout(pendingCommitTimerRef.current);
+              pendingCommitTimerRef.current = null;
+            }
             e.currentTarget.value = "";
-            paintFrame(frameRef.current);
+            schedulePaint();
           }}
           onCompositionStart={() => {
             composingRef.current = true;
             compositionTextRef.current = "";
+            pendingCommitTextRef.current = "";
+            if (pendingCommitTimerRef.current !== null) {
+              window.clearTimeout(pendingCommitTimerRef.current);
+              pendingCommitTimerRef.current = null;
+            }
           }}
           onCompositionUpdate={(e) => {
             composingRef.current = true;
             compositionTextRef.current = e.data ?? e.currentTarget.value ?? "";
-            paintFrame(frameRef.current);
+            schedulePaint();
           }}
           onCompositionEnd={(e) => {
             composingRef.current = false;
             compositionEndAtRef.current = performance.now();
             compositionTextRef.current = "";
             const text = e.data || e.currentTarget.value;
-            if (text) sendRawInput(text);
+            if (text) {
+              sendRawInput(text);
+              pendingCommitTextRef.current = text;
+              if (pendingCommitTimerRef.current !== null) {
+                window.clearTimeout(pendingCommitTimerRef.current);
+              }
+              pendingCommitTimerRef.current = window.setTimeout(() => {
+                pendingCommitTimerRef.current = null;
+                if (pendingCommitTextRef.current) {
+                  pendingCommitTextRef.current = "";
+                  schedulePaint();
+                }
+              }, 120);
+            }
             e.currentTarget.value = "";
-            paintFrame(frameRef.current);
+            schedulePaint();
           }}
           onInput={(e) => {
             if (composingRef.current || (e.nativeEvent as InputEvent).isComposing) return;
@@ -2648,8 +2795,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
               {
                 label: "Jump to Bottom",
                 action: () => {
-                  void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
-                    .then(applyFrame)
+                  void enqueueTermOp(() =>
+                    invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+                  )
+                    .then((frame) => applyFrameRef.current(frame))
                     .catch(() => {});
                 },
               },
@@ -2700,7 +2849,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           <div
             ref={scrollbarTrackRef}
             data-testid="native-terminal-scrollbar"
-            onMouseEnter={() => setScrollbarHover(true)}
+            onMouseEnter={() => {
+              syncVisibleHistorySize();
+              setScrollbarHover(true);
+            }}
             onMouseLeave={() => setScrollbarHover(false)}
             onMouseDown={(e) => {
               e.stopPropagation();
@@ -2741,8 +2893,10 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              void invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId })
-                .then(applyFrame)
+              void enqueueTermOp(() =>
+                invoke<NativeTermFrame>("native_term_snap_bottom", { id: terminalId }),
+              )
+                .then((frame) => applyFrameRef.current(frame))
                 .catch(() => {});
             }}
             style={{

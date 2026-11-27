@@ -313,27 +313,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
       (container.clientHeight - rowRect.height) / 2;
   }, [sessionSwitcherOpen]);
 
-  // Ages read "5m" and "working" lasts a minute; refresh both while the
-  // switcher or foldable sidebar shows them.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!sessionSwitcherOpen && !(showFoldableRail && !railCollapsed)) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
-    return () => window.clearInterval(timer);
-  }, [sessionSwitcherOpen, showFoldableRail, railCollapsed]);
-
-  // Holding a switcher row opens its actions (iOS fires no contextmenu); the
-  // click that ends the hold must not also pick the row.
-  const pendingRowRef = useRef<MobileSessionPane | null>(null);
-  const suppressRowClickRef = useRef(false);
-  const rowLongPress = useLongPress(() => {
-    const pane = pendingRowRef.current;
-    if (!pane) return;
-    suppressRowClickRef.current = true;
-    setChipSheet(pane);
-  }, sessionSwitcherOpen);
-
   const activeMachine =
     machines.find((m) => m.id === activeMachineId) ?? machines[0] ?? null;
   const activeStats = activeMachine ? machineStats[activeMachine.id] : undefined;
@@ -388,42 +367,25 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
     () => sessionGroups.flatMap((sessionGroup) => sessionGroup.panes),
     [sessionGroups],
   );
-
-  const spaceWaitingCounts = useMemo(() => {
-    const counts = new Map<string | null, number>();
-    for (const { group, panes } of allSessionGroups) {
-      const sid = getGroupSpaceId(group);
-      let waiting = 0;
-      for (const { terminal } of panes) {
-        if (sessionState(terminal, now) === "waiting") waiting += 1;
-      }
-      if (waiting > 0) {
-        counts.set(sid, (counts.get(sid) ?? 0) + waiting);
-      }
-    }
-    return counts;
-  }, [allSessionGroups, now]);
+  const groupLabels = useMemo(
+    () => new Map(allChips.map(({ terminal, group }) => [terminal.id, group.label])),
+    [allChips],
+  );
 
   // The sheet's order: under each tab, or flat with the latest output first.
   // The same choice as the desktop sidebar's, kept per device.
   const [sessionOrder, setSessionOrder] = useState<SessionOrder>(readSessionOrder);
   const [sessionFilter, setSessionFilter] = useState<"all" | "waiting" | "working">("all");
-  const toggleSessionOrder = () => {
-    const next = sessionOrder === "recent" ? "tabs" : "recent";
-    setSessionOrder(next);
-    writeSessionOrder(next);
-  };
+  const toggleSessionOrder = useCallback(() => {
+    setSessionOrder((prev) => {
+      const next = prev === "recent" ? "tabs" : "recent";
+      writeSessionOrder(next);
+      return next;
+    });
+  }, []);
   const recentPanes = useMemo(
     () => (sessionOrder === "recent" ? recentMobileSessionPanes(sessionGroups) : []),
     [sessionOrder, sessionGroups],
-  );
-  const mobileWaitingTotal = useMemo(
-    () => chips.filter(({ terminal }) => sessionState(terminal, now) === "waiting").length,
-    [chips, now],
-  );
-  const mobileWorkingTotal = useMemo(
-    () => chips.filter(({ terminal }) => sessionState(terminal, now) === "working").length,
-    [chips, now],
   );
   const otherWaitingTerminal = useMemo(
     () =>
@@ -435,27 +397,6 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           machines.some((m) => m.id === t.machine_id),
       ) ?? null,
     [terminals, activeTerminalId, machines],
-  );
-  const matchesMobileFilter = useCallback(
-    (terminal: TerminalInfo) => {
-      if (sessionFilter === "all") return true;
-      return sessionState(terminal, now) === sessionFilter;
-    },
-    [sessionFilter, now],
-  );
-  const filteredRecentPanes = useMemo(
-    () => (sessionFilter === "all" ? recentPanes : recentPanes.filter(({ terminal }) => matchesMobileFilter(terminal))),
-    [sessionFilter, matchesMobileFilter, recentPanes],
-  );
-  const visibleSessionGroups = useMemo(
-    () =>
-      sessionGroups
-        .map(({ group, panes }) => ({
-          group,
-          panes: sessionFilter === "all" ? panes : panes.filter(({ terminal }) => matchesMobileFilter(terminal)),
-        }))
-        .filter(({ panes }) => sessionFilter === "all" || panes.length > 0),
-    [sessionFilter, matchesMobileFilter, sessionGroups],
   );
 
   // Resolve the active chip from allChips so switching Spaces in the sidebar/sheet
@@ -483,243 +424,13 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
   }, [activeSpaceId, activeSpace, activeGroup, spaceGroups, onNewTerminal]);
 
   const showSpaceStrip = Boolean(onSelectSpace || onOpenSpaceModal || sortedSpaces.length > 0);
-
-  const renderSpaceSwitcher = (testIdPrefix: string, compact: boolean) => {
-    if (!showSpaceStrip) return null;
-    const pillHeight = compact ? 24 : 30;
-    const pillFontSize = compact ? rem(11) : rem(12);
-    return (
-      <div
-        data-testid={`${testIdPrefix}-space-strip`}
-        role="tablist"
-        aria-label="Filter by space"
-        style={{
-          flexShrink: 0,
-          display: "flex",
-          flexWrap: "wrap",
-          alignItems: "center",
-          gap: compact ? 4 : 6,
-          padding: compact ? "6px 8px 5px" : "2px 0 8px",
-          borderBottom: compact ? `1px solid ${colors.lineSoft}` : undefined,
-        }}
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeSpaceId === null}
-          data-testid={`${testIdPrefix}-space-all`}
-          onClick={() => onSelectSpace?.(null)}
-          style={{
-            flexShrink: 0,
-            height: pillHeight,
-            padding: compact ? "0 8px" : "0 10px",
-            borderRadius: 999,
-            border: `1px solid ${activeSpaceId === null ? colors.accent : colors.lineSoft}`,
-            background: activeSpaceId === null ? colorAlpha.accentSoft : colors.bg2,
-            color: activeSpaceId === null ? colors.fg0 : colors.fg2,
-            fontFamily: fontDisplay,
-            fontSize: pillFontSize,
-            fontWeight: activeSpaceId === null ? 600 : 500,
-            cursor: "pointer",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 5,
-            whiteSpace: "nowrap",
-          }}
-        >
-          <span>Default</span>
-          {activeSpaceId !== null && (spaceWaitingCounts.get(null) ?? 0) > 0 && (
-            <span
-              data-testid={`${testIdPrefix}-space-all-waiting`}
-              style={{
-                minWidth: 15,
-                height: 15,
-                padding: "0 4px",
-                borderRadius: 999,
-                background: colors.accent,
-                color: colors.bg0,
-                fontSize: rem(10),
-                fontWeight: 700,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-                lineHeight: 1,
-              }}
-            >
-              {spaceWaitingCounts.get(null)}
-            </span>
-          )}
-        </button>
-        {sortedSpaces.map((space) => {
-          const selected = activeSpaceId === space.id;
-          const waitingCount = spaceWaitingCounts.get(space.id) ?? 0;
-          const dotColor = space.color || colors.accent;
-          return (
-            <button
-              key={space.id}
-              type="button"
-              role="tab"
-              aria-selected={selected}
-              data-testid={`${testIdPrefix}-space-${space.id}`}
-              title={space.default_cwd ? `${space.name} (${space.default_cwd})` : space.name}
-              onClick={() => onSelectSpace?.(space.id)}
-              onContextMenu={(event) => {
-                if (!onOpenSpaceModal) return;
-                event.preventDefault();
-                onOpenSpaceModal(space);
-              }}
-              style={{
-                flexShrink: 0,
-                height: pillHeight,
-                padding: compact ? "0 8px" : "0 10px",
-                borderRadius: 999,
-                border: `1px solid ${selected ? dotColor : colors.lineSoft}`,
-                background: selected ? colors.bg3 : colors.bg2,
-                color: selected ? colors.fg0 : colors.fg2,
-                fontFamily: fontDisplay,
-                fontSize: pillFontSize,
-                fontWeight: selected ? 600 : 500,
-                cursor: "pointer",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                maxWidth: compact ? 120 : 160,
-                whiteSpace: "nowrap",
-              }}
-            >
-              <span
-                aria-hidden="true"
-                style={{
-                  width: 7,
-                  height: 7,
-                  borderRadius: 999,
-                  background: dotColor,
-                  flexShrink: 0,
-                }}
-              />
-              {space.icon && <span aria-hidden="true">{space.icon}</span>}
-              <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
-                {space.name}
-              </span>
-              {waitingCount > 0 && (
-                <span
-                  data-testid={`${testIdPrefix}-space-waiting-${space.id}`}
-                  aria-label={`${waitingCount} waiting`}
-                  style={{
-                    flexShrink: 0,
-                    minWidth: 15,
-                    height: 15,
-                    padding: "0 4px",
-                    borderRadius: 999,
-                    background: "rgb(var(--color-err) / 0.18)",
-                    color: colors.err,
-                    fontSize: rem(10),
-                    fontWeight: 700,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    lineHeight: 1,
-                  }}
-                >
-                  {waitingCount}
-                </span>
-              )}
-            </button>
-          );
-        })}
-        {onOpenSpaceModal && (
-          <button
-            type="button"
-            data-testid={`${testIdPrefix}-space-add`}
-            aria-label="Manage or create space"
-            title="New space"
-            onClick={() => onOpenSpaceModal(null)}
-            style={{
-              flexShrink: 0,
-              width: pillHeight,
-              height: pillHeight,
-              padding: 0,
-              borderRadius: 999,
-              border: `1px dashed ${colors.line}`,
-              background: "transparent",
-              color: colors.fg2,
-              cursor: "pointer",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Plus size={compact ? 12 : 14} aria-hidden />
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const renderSessionRow = (
-    pane: MobileSessionPane,
-    showTab: boolean,
-    testIdPrefix = "mobile-session",
-  ) => {
-    const { terminal } = pane;
-    const state = sessionState(terminal, now);
-    const opener = terminalOpenerDescription(terminal);
-    const current = terminal.id === activeTerminalId;
-    return (
-      <div
-        key={terminal.id}
-        data-state={state}
-        data-current={current ? "true" : undefined}
-        className="odk-sessions-row"
-      >
-        <button
-          type="button"
-          data-testid={`${testIdPrefix}-row-${terminal.id}`}
-          aria-current={current ? "true" : undefined}
-          title={terminal.cwd}
-          className="odk-sessions-row-main"
-          onPointerDown={(event) => {
-            pendingRowRef.current = pane;
-            suppressRowClickRef.current = false;
-            rowLongPress.onPointerDown(event);
-          }}
-          onPointerMove={rowLongPress.onPointerMove}
-          onPointerUp={rowLongPress.onPointerUp}
-          onPointerCancel={rowLongPress.onPointerCancel}
-          onContextMenu={(event) => {
-            // Android's long-press, and a mouse's right click.
-            event.preventDefault();
-            setChipSheet(pane);
-          }}
-          onClick={() => {
-            if (suppressRowClickRef.current) {
-              suppressRowClickRef.current = false;
-              return;
-            }
-            onPickTerminal(terminal.id);
-            setSessionSwitcherOpen(false);
-          }}
-        >
-          <span className="odk-sessions-title">
-            {opener && (
-              <span
-                role="img"
-                aria-label={opener}
-                title={opener}
-                data-testid={`${testIdPrefix}-opener-${terminal.id}`}
-                className="odk-sessions-bot"
-              >
-                <Bot size={13} strokeWidth={2} aria-hidden style={{ display: "block" }} />
-              </span>
-            )}
-            <span className="odk-sessions-title-text">{displayTerminalTitle(terminal)}</span>
-            {showTab && <span className="odk-sessions-tab">{pane.group.label}</span>}
-          </span>
-          <SessionRowEnd state={state} age={activityAge(terminal.last_activity_ms, now)} />
-        </button>
-      </div>
-    );
-  };
+  const handlePickSessionRow = useCallback(
+    (terminalId: string) => {
+      onPickTerminal(terminalId);
+      setSessionSwitcherOpen(false);
+    },
+    [onPickTerminal],
+  );
 
   // Prev/next in strip order; no wraparound at either end.
   const switchTerminalByOffset = useCallback(
@@ -1179,7 +890,7 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
             : null
         }
         onPickBrowser={onOpenBrowser}
-        groupLabels={new Map(allChips.map(({ terminal, group }) => [terminal.id, group.label]))}
+        groupLabels={groupLabels}
         onPick={(id) => {
           const terminal = terminals.find(t => t.id === id);
           if (!terminal) return;
@@ -1279,81 +990,27 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
                   <PanelLeftClose size={15} aria-hidden />
                 </button>
               </div>
-              {renderSpaceSwitcher("mobile-rail", true)}
-              {chips.length > 0 && (
-                <div
-                  className="odk-sessions-filters"
-                  role="tablist"
-                  aria-label="Filter sidebar terminals"
-                  style={{ padding: "6px 8px 4px", gap: 4, flexShrink: 0 }}
-                >
-                  {(
-                    [
-                      { id: "all", label: "All", count: chips.length },
-                      { id: "waiting", label: "Wait", count: mobileWaitingTotal },
-                      { id: "working", label: "Work", count: mobileWorkingTotal },
-                    ] as const
-                  ).map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={sessionFilter === item.id}
-                      data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
-                      className="odk-sessions-filter-pill"
-                      style={{ height: 26, fontSize: rem(11), padding: "0 7px" }}
-                      onClick={() => setSessionFilter(item.id)}
-                    >
-                      <span>{item.label}</span>
-                      {item.count > 0 && item.id !== "all" && (
-                        <span className="odk-sessions-filter-count">{item.count}</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div
-                className="odk-sessions-touch"
-                style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 4px 8px" }}
-              >
-                {activeSpace && chips.length === 0 ? (
-                  <div className="odk-sessions-empty" style={{ padding: "16px 10px" }}>
-                    <span>No sessions in {activeSpace.name}.</span>
-                    <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
-                      switch to Default
-                    </Button>
-                  </div>
-                ) : sessionOrder === "recent" ? (
-                  <section aria-label="Latest output first" className="odk-sessions-section">
-                    {filteredRecentPanes.map((pane) => renderSessionRow(pane, true, "mobile-rail"))}
-                  </section>
-                ) : (
-                  visibleSessionGroups.map(({ group, panes }) => {
-                    const waiting = groupWaitingCount(group, scopedTerminalsById);
-                    return (
-                      <section key={group.id} aria-label={group.label} className="odk-sessions-section">
-                        <button
-                          type="button"
-                          onClick={() => setGroupSheet(group)}
-                          className="odk-sessions-touch-group"
-                          style={{
-                            minHeight: 30,
-                            padding: "2px 6px",
-                            opacity: panes.length === 0 ? 0.52 : 1,
-                          }}
-                        >
-                          <span className="odk-sessions-touch-group-label">{group.label}</span>
-                          <span className="odk-sessions-group-count">{panes.length}</span>
-                          <span className="odk-sessions-group-end">
-                            {waiting > 0 && <span className="odk-sessions-group-waiting">{waiting}</span>}
-                          </span>
-                        </button>
-                        {panes.map((pane) => renderSessionRow(pane, false, "mobile-rail"))}
-                      </section>
-                    );
-                  })
-                )}
-              </div>
+              <MobileSessionPanel
+                variant="rail"
+                showSpaceStrip={showSpaceStrip}
+                sortedSpaces={sortedSpaces}
+                activeSpaceId={activeSpaceId}
+                activeSpace={activeSpace}
+                allSessionGroups={allSessionGroups}
+                sessionGroups={sessionGroups}
+                chips={chips}
+                recentPanes={recentPanes}
+                scopedTerminalsById={scopedTerminalsById}
+                activeTerminalId={activeTerminalId}
+                sessionOrder={sessionOrder}
+                sessionFilter={sessionFilter}
+                onSelectSpace={onSelectSpace}
+                onOpenSpaceModal={onOpenSpaceModal}
+                onSetSessionFilter={setSessionFilter}
+                onPickTerminal={handlePickSessionRow}
+                onOpenChipSheet={setChipSheet}
+                onOpenGroupSheet={setGroupSheet}
+              />
               <div
                 style={{
                   flexShrink: 0,
@@ -1564,87 +1221,27 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
           scrollRef={sessionSwitcherScrollRef}
           onClose={() => setSessionSwitcherOpen(false)}
         >
-          <div className="odk-sessions-touch">
-            {renderSpaceSwitcher("mobile-switcher", false)}
-            {chips.length > 0 && (
-              <div
-                className="odk-sessions-filters"
-                role="tablist"
-                aria-label="Filter terminals"
-                data-testid="mobile-sessions-filter-bar"
-                style={{ margin: "2px 0 8px" }}
-              >
-                {(
-                  [
-                    { id: "all", label: "All", count: chips.length },
-                    { id: "waiting", label: "Waiting", count: mobileWaitingTotal },
-                    { id: "working", label: "Working", count: mobileWorkingTotal },
-                  ] as const
-                ).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={sessionFilter === item.id}
-                    data-testid={`mobile-sessions-filter-${item.id}`}
-                    data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
-                    className="odk-sessions-filter-pill"
-                    style={{ height: 30, fontSize: rem(12) }}
-                    onClick={() => setSessionFilter(item.id)}
-                  >
-                    <span>{item.label}</span>
-                    {item.count > 0 && item.id !== "all" && (
-                      <span className="odk-sessions-filter-count">{item.count}</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-            {activeSpace && chips.length === 0 ? (
-              <div className="odk-sessions-empty">
-                <span>No sessions in {activeSpace.name}.</span>
-                <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
-                  switch to Default
-                </Button>
-              </div>
-            ) : sessionFilter !== "all" &&
-            ((sessionOrder === "recent" && filteredRecentPanes.length === 0) ||
-              (sessionOrder !== "recent" && visibleSessionGroups.length === 0)) ? (
-              <div className="odk-sessions-empty">
-                <span>No {sessionFilter} terminals right now.</span>
-                <Button kind="secondary" size="xs" onClick={() => setSessionFilter("all")}>
-                  show all
-                </Button>
-              </div>
-            ) : sessionOrder === "recent" ? (
-              <section data-testid="mobile-session-recent" aria-label="Latest output first" className="odk-sessions-section">
-                {filteredRecentPanes.map((pane) => renderSessionRow(pane, true))}
-              </section>
-            ) : visibleSessionGroups.map(({ group, panes }) => {
-              const waiting = groupWaitingCount(group, scopedTerminalsById);
-              return (
-                <section key={group.id} aria-label={group.label} className="odk-sessions-section">
-                  <button
-                    type="button"
-                    data-testid={`mobile-session-group-${group.id}`}
-                    aria-haspopup="dialog"
-                    title="Tab actions"
-                    onClick={() => setGroupSheet(group)}
-                    className="odk-sessions-touch-group"
-                    style={panes.length === 0 ? { opacity: 0.52 } : undefined}
-                  >
-                    <span className="odk-sessions-touch-group-label">{group.label}</span>
-                    <span className="odk-sessions-group-count">{panes.length}</span>
-                    <span className="odk-sessions-group-end">
-                      {waiting > 0 && <span className="odk-sessions-group-waiting">{waiting} waiting</span>}
-                      <Ellipsis size={15} aria-hidden />
-                    </span>
-                  </button>
-                  {panes.map((pane) => renderSessionRow(pane, false))}
-                </section>
-              );
-            })}
-          </div>
+          <MobileSessionPanel
+            variant="sheet"
+            showSpaceStrip={showSpaceStrip}
+            sortedSpaces={sortedSpaces}
+            activeSpaceId={activeSpaceId}
+            activeSpace={activeSpace}
+            allSessionGroups={allSessionGroups}
+            sessionGroups={sessionGroups}
+            chips={chips}
+            recentPanes={recentPanes}
+            scopedTerminalsById={scopedTerminalsById}
+            activeTerminalId={activeTerminalId}
+            sessionOrder={sessionOrder}
+            sessionFilter={sessionFilter}
+            onSelectSpace={onSelectSpace}
+            onOpenSpaceModal={onOpenSpaceModal}
+            onSetSessionFilter={setSessionFilter}
+            onPickTerminal={handlePickSessionRow}
+            onOpenChipSheet={setChipSheet}
+            onOpenGroupSheet={setGroupSheet}
+          />
         </Sheet>
       )}
 
@@ -2180,6 +1777,515 @@ function MobileWorkbenchComponent(props: MobileWorkbenchProps) {
 }
 
 export const MobileWorkbench = memo(MobileWorkbenchComponent);
+
+interface MobileSessionPanelProps {
+  variant: "rail" | "sheet";
+  showSpaceStrip: boolean;
+  sortedSpaces: SpaceInfo[];
+  activeSpaceId: string | null;
+  activeSpace: SpaceInfo | null;
+  allSessionGroups: ReturnType<typeof buildMobileSessionGroups>;
+  sessionGroups: ReturnType<typeof buildMobileSessionGroups>;
+  chips: MobileSessionPane[];
+  recentPanes: MobileSessionPane[];
+  scopedTerminalsById: Map<string, TerminalInfo>;
+  activeTerminalId: string | null;
+  sessionOrder: SessionOrder;
+  sessionFilter: "all" | "waiting" | "working";
+  onSelectSpace?: (spaceId: string | null) => void;
+  onOpenSpaceModal?: (space?: SpaceInfo | null) => void;
+  onSetSessionFilter: (filter: "all" | "waiting" | "working") => void;
+  onPickTerminal: (id: string) => void;
+  onOpenChipSheet: (pane: MobileSessionPane) => void;
+  onOpenGroupSheet: (group: WorkspaceGroup) => void;
+}
+
+// Isolated from MobileWorkbench so the 15s relative-age/working ticker only
+// re-renders the visible session list (foldable rail or switcher sheet), never
+// the active terminal container or title bar.
+const MobileSessionPanel = memo(function MobileSessionPanel({
+  variant,
+  showSpaceStrip,
+  sortedSpaces,
+  activeSpaceId,
+  activeSpace,
+  allSessionGroups,
+  sessionGroups,
+  chips,
+  recentPanes,
+  scopedTerminalsById,
+  activeTerminalId,
+  sessionOrder,
+  sessionFilter,
+  onSelectSpace,
+  onOpenSpaceModal,
+  onSetSessionFilter,
+  onPickTerminal,
+  onOpenChipSheet,
+  onOpenGroupSheet,
+}: MobileSessionPanelProps) {
+  const compact = variant === "rail";
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // Holding a switcher row opens its actions (iOS fires no contextmenu); the
+  // click that ends the hold must not also pick the row.
+  const pendingRowRef = useRef<MobileSessionPane | null>(null);
+  const suppressRowClickRef = useRef(false);
+  const rowLongPress = useLongPress(() => {
+    const pane = pendingRowRef.current;
+    if (!pane) return;
+    suppressRowClickRef.current = true;
+    onOpenChipSheet(pane);
+  }, variant === "sheet");
+
+  const spaceWaitingCounts = useMemo(() => {
+    const counts = new Map<string | null, number>();
+    for (const { group, panes } of allSessionGroups) {
+      const sid = getGroupSpaceId(group);
+      let waiting = 0;
+      for (const { terminal } of panes) {
+        if (sessionState(terminal, now) === "waiting") waiting += 1;
+      }
+      if (waiting > 0) {
+        counts.set(sid, (counts.get(sid) ?? 0) + waiting);
+      }
+    }
+    return counts;
+  }, [allSessionGroups, now]);
+
+  const mobileWaitingTotal = useMemo(
+    () => chips.filter(({ terminal }) => sessionState(terminal, now) === "waiting").length,
+    [chips, now],
+  );
+  const mobileWorkingTotal = useMemo(
+    () => chips.filter(({ terminal }) => sessionState(terminal, now) === "working").length,
+    [chips, now],
+  );
+  const matchesMobileFilter = useCallback(
+    (terminal: TerminalInfo) => {
+      if (sessionFilter === "all") return true;
+      return sessionState(terminal, now) === sessionFilter;
+    },
+    [sessionFilter, now],
+  );
+  const filteredRecentPanes = useMemo(
+    () => (sessionFilter === "all" ? recentPanes : recentPanes.filter(({ terminal }) => matchesMobileFilter(terminal))),
+    [sessionFilter, matchesMobileFilter, recentPanes],
+  );
+  const visibleSessionGroups = useMemo(
+    () =>
+      sessionGroups
+        .map(({ group, panes }) => ({
+          group,
+          panes: sessionFilter === "all" ? panes : panes.filter(({ terminal }) => matchesMobileFilter(terminal)),
+        }))
+        .filter(({ panes }) => sessionFilter === "all" || panes.length > 0),
+    [sessionFilter, matchesMobileFilter, sessionGroups],
+  );
+
+  const spaceTestIdPrefix = compact ? "mobile-rail" : "mobile-switcher";
+  const rowTestIdPrefix = compact ? "mobile-rail" : "mobile-session";
+  const pillHeight = compact ? 24 : 30;
+  const pillFontSize = compact ? rem(11) : rem(12);
+
+  const spaceStrip = showSpaceStrip ? (
+    <div
+      data-testid={`${spaceTestIdPrefix}-space-strip`}
+      role="tablist"
+      aria-label="Filter by space"
+      style={{
+        flexShrink: 0,
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: compact ? 4 : 6,
+        padding: compact ? "6px 8px 5px" : "2px 0 8px",
+        borderBottom: compact ? `1px solid ${colors.lineSoft}` : undefined,
+      }}
+    >
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeSpaceId === null}
+        data-testid={`${spaceTestIdPrefix}-space-all`}
+        onClick={() => onSelectSpace?.(null)}
+        style={{
+          flexShrink: 0,
+          height: pillHeight,
+          padding: compact ? "0 8px" : "0 10px",
+          borderRadius: 999,
+          border: `1px solid ${activeSpaceId === null ? colors.accent : colors.lineSoft}`,
+          background: activeSpaceId === null ? colorAlpha.accentSoft : colors.bg2,
+          color: activeSpaceId === null ? colors.fg0 : colors.fg2,
+          fontFamily: fontDisplay,
+          fontSize: pillFontSize,
+          fontWeight: 500,
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 5,
+          whiteSpace: "nowrap",
+        }}
+      >
+        <span>Default</span>
+        {activeSpaceId !== null && (spaceWaitingCounts.get(null) ?? 0) > 0 && (
+          <span
+            data-testid={`${spaceTestIdPrefix}-space-all-waiting`}
+            style={{
+              minWidth: 15,
+              height: 15,
+              padding: "0 4px",
+              borderRadius: 999,
+              background: colors.accent,
+              color: colors.bg0,
+              fontSize: rem(10),
+              fontWeight: 700,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              lineHeight: 1,
+            }}
+          >
+            {spaceWaitingCounts.get(null)}
+          </span>
+        )}
+      </button>
+      {sortedSpaces.map((space) => {
+        const selected = activeSpaceId === space.id;
+        const waitingCount = spaceWaitingCounts.get(space.id) ?? 0;
+        const dotColor = space.color || colors.accent;
+        return (
+          <button
+            key={space.id}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            data-testid={`${spaceTestIdPrefix}-space-${space.id}`}
+            title={space.default_cwd ? `${space.name} (${space.default_cwd})` : space.name}
+            onClick={() => onSelectSpace?.(space.id)}
+            onContextMenu={(event) => {
+              if (!onOpenSpaceModal) return;
+              event.preventDefault();
+              onOpenSpaceModal(space);
+            }}
+            style={{
+              flexShrink: 0,
+              height: pillHeight,
+              padding: compact ? "0 8px" : "0 10px",
+              borderRadius: 999,
+              border: `1px solid ${selected ? dotColor : colors.lineSoft}`,
+              background: selected ? colors.bg3 : colors.bg2,
+              color: selected ? colors.fg0 : colors.fg2,
+              fontFamily: fontDisplay,
+              fontSize: pillFontSize,
+              fontWeight: 500,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              maxWidth: compact ? 120 : 160,
+              whiteSpace: "nowrap",
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 7,
+                height: 7,
+                borderRadius: 999,
+                background: dotColor,
+                flexShrink: 0,
+              }}
+            />
+            {space.icon && <span aria-hidden="true">{space.icon}</span>}
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}>
+              {space.name}
+            </span>
+            {waitingCount > 0 && (
+              <span
+                data-testid={`${spaceTestIdPrefix}-space-waiting-${space.id}`}
+                aria-label={`${waitingCount} waiting`}
+                style={{
+                  flexShrink: 0,
+                  minWidth: 15,
+                  height: 15,
+                  padding: "0 4px",
+                  borderRadius: 999,
+                  background: "rgb(var(--color-err) / 0.18)",
+                  color: colors.err,
+                  fontSize: rem(10),
+                  fontWeight: 700,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  lineHeight: 1,
+                }}
+              >
+                {waitingCount}
+              </span>
+            )}
+          </button>
+        );
+      })}
+      {onOpenSpaceModal && (
+        <button
+          type="button"
+          data-testid={`${spaceTestIdPrefix}-space-add`}
+          aria-label="Manage or create space"
+          title="New space"
+          onClick={() => onOpenSpaceModal(null)}
+          style={{
+            flexShrink: 0,
+            width: pillHeight,
+            height: pillHeight,
+            padding: 0,
+            borderRadius: 999,
+            border: `1px dashed ${colors.line}`,
+            background: "transparent",
+            color: colors.fg2,
+            cursor: "pointer",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Plus size={compact ? 12 : 14} aria-hidden />
+        </button>
+      )}
+    </div>
+  ) : null;
+
+  const renderSessionRow = (pane: MobileSessionPane, showTab: boolean) => {
+    const { terminal } = pane;
+    const state = sessionState(terminal, now);
+    const opener = terminalOpenerDescription(terminal);
+    const current = terminal.id === activeTerminalId;
+    return (
+      <div
+        key={terminal.id}
+        data-state={state}
+        data-current={current ? "true" : undefined}
+        className="odk-sessions-row"
+      >
+        <button
+          type="button"
+          data-testid={`${rowTestIdPrefix}-row-${terminal.id}`}
+          aria-current={current ? "true" : undefined}
+          title={terminal.cwd}
+          className="odk-sessions-row-main"
+          onPointerDown={(event) => {
+            pendingRowRef.current = pane;
+            suppressRowClickRef.current = false;
+            rowLongPress.onPointerDown(event);
+          }}
+          onPointerMove={rowLongPress.onPointerMove}
+          onPointerUp={rowLongPress.onPointerUp}
+          onPointerCancel={rowLongPress.onPointerCancel}
+          onContextMenu={(event) => {
+            // Android's long-press, and a mouse's right click.
+            event.preventDefault();
+            onOpenChipSheet(pane);
+          }}
+          onClick={() => {
+            if (suppressRowClickRef.current) {
+              suppressRowClickRef.current = false;
+              return;
+            }
+            onPickTerminal(terminal.id);
+          }}
+        >
+          <span className="odk-sessions-title">
+            {opener && (
+              <span
+                role="img"
+                aria-label={opener}
+                title={opener}
+                data-testid={`${rowTestIdPrefix}-opener-${terminal.id}`}
+                className="odk-sessions-bot"
+              >
+                <Bot size={13} strokeWidth={2} aria-hidden style={{ display: "block" }} />
+              </span>
+            )}
+            <span className="odk-sessions-title-text">{displayTerminalTitle(terminal)}</span>
+            {showTab && <span className="odk-sessions-tab">{pane.group.label}</span>}
+          </span>
+          <SessionRowEnd state={state} age={activityAge(terminal.last_activity_ms, now)} />
+        </button>
+      </div>
+    );
+  };
+
+  if (compact) {
+    return (
+      <>
+        {spaceStrip}
+        {chips.length > 0 && (
+          <div
+            className="odk-sessions-filters"
+            role="tablist"
+            aria-label="Filter sidebar terminals"
+            style={{ padding: "6px 8px 4px", gap: 4, flexShrink: 0 }}
+          >
+            {(
+              [
+                { id: "all", label: "All", count: chips.length },
+                { id: "waiting", label: "Wait", count: mobileWaitingTotal },
+                { id: "working", label: "Work", count: mobileWorkingTotal },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={sessionFilter === item.id}
+                data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
+                className="odk-sessions-filter-pill"
+                style={{ height: 26, fontSize: rem(11), padding: "0 7px" }}
+                onClick={() => onSetSessionFilter(item.id)}
+              >
+                <span>{item.label}</span>
+                {item.count > 0 && item.id !== "all" && (
+                  <span className="odk-sessions-filter-count">{item.count}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+        <div
+          className="odk-sessions-touch"
+          style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 4px 8px" }}
+        >
+          {activeSpace && chips.length === 0 ? (
+            <div className="odk-sessions-empty" style={{ padding: "16px 10px" }}>
+              <span>No sessions in {activeSpace.name}.</span>
+              <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
+                switch to Default
+              </Button>
+            </div>
+          ) : sessionOrder === "recent" ? (
+            <section aria-label="Latest output first" className="odk-sessions-section">
+              {filteredRecentPanes.map((pane) => renderSessionRow(pane, true))}
+            </section>
+          ) : (
+            visibleSessionGroups.map(({ group, panes }) => {
+              const waiting = groupWaitingCount(group, scopedTerminalsById);
+              return (
+                <section key={group.id} aria-label={group.label} className="odk-sessions-section">
+                  <button
+                    type="button"
+                    onClick={() => onOpenGroupSheet(group)}
+                    className="odk-sessions-touch-group"
+                    style={{
+                      minHeight: 30,
+                      padding: "2px 6px",
+                      opacity: panes.length === 0 ? 0.52 : 1,
+                    }}
+                  >
+                    <span className="odk-sessions-touch-group-label">{group.label}</span>
+                    <span className="odk-sessions-group-count">{panes.length}</span>
+                    <span className="odk-sessions-group-end">
+                      {waiting > 0 && <span className="odk-sessions-group-waiting">{waiting}</span>}
+                    </span>
+                  </button>
+                  {panes.map((pane) => renderSessionRow(pane, false))}
+                </section>
+              );
+            })
+          )}
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <div className="odk-sessions-touch">
+      {spaceStrip}
+      {chips.length > 0 && (
+        <div
+          className="odk-sessions-filters"
+          role="tablist"
+          aria-label="Filter terminals"
+          data-testid="mobile-sessions-filter-bar"
+          style={{ margin: "2px 0 8px" }}
+        >
+          {(
+            [
+              { id: "all", label: "All", count: chips.length },
+              { id: "waiting", label: "Waiting", count: mobileWaitingTotal },
+              { id: "working", label: "Working", count: mobileWorkingTotal },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={sessionFilter === item.id}
+              data-testid={`mobile-sessions-filter-${item.id}`}
+              data-alert={item.id === "waiting" && item.count > 0 ? "true" : undefined}
+              className="odk-sessions-filter-pill"
+              style={{ height: 30, fontSize: rem(12) }}
+              onClick={() => onSetSessionFilter(item.id)}
+            >
+              <span>{item.label}</span>
+              {item.count > 0 && item.id !== "all" && (
+                <span className="odk-sessions-filter-count">{item.count}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+      {activeSpace && chips.length === 0 ? (
+        <div className="odk-sessions-empty">
+          <span>No sessions in {activeSpace.name}.</span>
+          <Button kind="secondary" size="xs" onClick={() => onSelectSpace?.(null)}>
+            switch to Default
+          </Button>
+        </div>
+      ) : sessionFilter !== "all" &&
+      ((sessionOrder === "recent" && filteredRecentPanes.length === 0) ||
+        (sessionOrder !== "recent" && visibleSessionGroups.length === 0)) ? (
+        <div className="odk-sessions-empty">
+          <span>No {sessionFilter} terminals right now.</span>
+          <Button kind="secondary" size="xs" onClick={() => onSetSessionFilter("all")}>
+            show all
+          </Button>
+        </div>
+      ) : sessionOrder === "recent" ? (
+        <section data-testid="mobile-session-recent" aria-label="Latest output first" className="odk-sessions-section">
+          {filteredRecentPanes.map((pane) => renderSessionRow(pane, true))}
+        </section>
+      ) : visibleSessionGroups.map(({ group, panes }) => {
+        const waiting = groupWaitingCount(group, scopedTerminalsById);
+        return (
+          <section key={group.id} aria-label={group.label} className="odk-sessions-section">
+            <button
+              type="button"
+              data-testid={`mobile-session-group-${group.id}`}
+              aria-haspopup="dialog"
+              title="Tab actions"
+              onClick={() => onOpenGroupSheet(group)}
+              className="odk-sessions-touch-group"
+              style={panes.length === 0 ? { opacity: 0.52 } : undefined}
+            >
+              <span className="odk-sessions-touch-group-label">{group.label}</span>
+              <span className="odk-sessions-group-count">{panes.length}</span>
+              <span className="odk-sessions-group-end">
+                {waiting > 0 && <span className="odk-sessions-group-waiting">{waiting} waiting</span>}
+                <Ellipsis size={15} aria-hidden />
+              </span>
+            </button>
+            {panes.map((pane) => renderSessionRow(pane, false))}
+          </section>
+        );
+      })}
+    </div>
+  );
+});
 
 /* ---------- sheets ---------- */
 

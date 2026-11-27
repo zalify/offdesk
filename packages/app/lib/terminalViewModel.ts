@@ -186,7 +186,7 @@ export function getTerminalFitResizeDecision({
   if (skipIfUnchanged && unchanged) {
     return {
       sendResizeFrame: false,
-      refreshLocalSurface: true,
+      refreshLocalSurface: false,
     };
   }
 

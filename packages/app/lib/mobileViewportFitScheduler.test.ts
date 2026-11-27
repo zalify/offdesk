@@ -37,4 +37,34 @@ describe('mobile container fitting',()=>{
     scheduler.observe({width:390,height:700});scheduler.observe({width:390,height:420});scheduler.dispose();
     vi.advanceTimersByTime(200);scheduler.observe({width:390,height:300});vi.advanceTimersByTime(200);expect(fit).not.toHaveBeenCalled();
   });
+  it('coalesces rapid keyboard-animation bursts via settleDebounceMs while keeping discrete resizes on the next frame',()=>{
+    vi.useFakeTimers();
+    const fit=vi.fn();
+    const scheduler=createMobileViewportFitScheduler({
+      canFit:()=>true,
+      fit,
+      schedule:callback=>setTimeout(callback,16),
+      cancel:clearTimeout,
+      settleDebounceMs:90,
+      burstWindowMs:60,
+      now:()=>Date.now(),
+      scheduleSettle:(callback,delayMs)=>setTimeout(callback,delayMs),
+      cancelSettle:clearTimeout,
+    });
+    scheduler.observe({width:390,height:700});
+    // Discrete resize fires on next frame (16ms).
+    scheduler.observe({width:390,height:500});
+    vi.advanceTimersByTime(16);
+    expect(fit).toHaveBeenCalledTimes(1);
+    // Rapid multi-frame burst (every 16ms) coalesces into a single trailing fit.
+    scheduler.observe({width:390,height:460});
+    vi.advanceTimersByTime(16);
+    scheduler.observe({width:390,height:420});
+    vi.advanceTimersByTime(16);
+    scheduler.observe({width:390,height:380});
+    vi.advanceTimersByTime(89);
+    expect(fit).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(1);
+    expect(fit).toHaveBeenCalledTimes(2);
+  });
 });

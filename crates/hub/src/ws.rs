@@ -28,7 +28,7 @@ use crate::auth;
 use crate::db;
 use crate::AppState;
 
-const DEVICE_DISCONNECT_GRACE_PERIOD: Duration = Duration::from_secs(10);
+const DEVICE_DISCONNECT_GRACE_PERIOD: Duration = Duration::from_secs(45);
 
 fn schedule_device_disconnect_cleanup(
     state: &AppState,

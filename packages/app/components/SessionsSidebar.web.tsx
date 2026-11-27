@@ -18,6 +18,7 @@ import type { MachineInfo, ResourceStats, SpaceInfo, TerminalInfo } from "@offde
 import { MAX_PANES_PER_TAB } from "@offdesk/shared";
 
 import { displayTerminalTitle } from "@/lib/displayTerminalTitle";
+import { useLiveMachineStats, useLiveRttMs } from "@/lib/liveMetricsStore";
 import { terminalOpenerDescription } from "@/lib/terminalOpener";
 import { collectPaneTerminalIds, type WorkspaceGroup } from "@/lib/terminalWorkspaceLayout";
 import { countWaitingBySpace, DEFAULT_SPACE_COLOR, filterGroupsBySpace } from "@/lib/spaces";
@@ -48,10 +49,10 @@ export interface SessionsSidebarMachine {
   activeMachineId: string | null;
   controlLeases: Record<string, string>;
   deviceId: string | null;
-  machineStats: Record<string, ResourceStats>;
+  machineStats?: Record<string, ResourceStats>;
   terminals: TerminalInfo[];
-  stats: ResourceStats | undefined;
-  rttMs: number | null;
+  stats?: ResourceStats | undefined;
+  rttMs?: number | null;
   onSelectMachine: (id: string) => void;
   onAddMachine: () => void;
   onRemoveHost: (machineId: string) => void;
@@ -389,7 +390,12 @@ function SessionsSidebarComponent({
         active = true;
         setDrag(source);
       }
-      setDropTarget(targetAt(source, moveEvent.clientX, moveEvent.clientY));
+      const nextTarget = targetAt(source, moveEvent.clientX, moveEvent.clientY);
+      setDropTarget((prev) =>
+        prev?.groupId === nextTarget?.groupId && prev?.placement === nextTarget?.placement
+          ? prev
+          : nextTarget,
+      );
     };
     const handleUp = (upEvent: MouseEvent) => {
       finish();
@@ -950,30 +956,9 @@ function SessionsSidebarComponent({
         </div>
       )}
 
-      {machine && (
-        <div className="odk-sessions-machine">
-          <HostSwitcher
-            compact
-            machines={machine.machines}
-            activeMachineId={machine.activeMachineId}
-            controlLeases={machine.controlLeases}
-            deviceId={machine.deviceId}
-            machineStats={machine.machineStats}
-            terminals={machine.terminals}
-            onSelectMachine={machine.onSelectMachine}
-            onAddMachine={machine.onAddMachine}
-            onRemoveHost={machine.onRemoveHost}
-            trailing={<LoadGlyph stats={machine.stats} />}
-            trailingLabel={loadLabel(machine.stats)}
-            menuAlign="left"
-          />
-          <span data-testid="sessions-sidebar-rtt" className="odk-sessions-rtt" title="Round trip to the hub">
-            {machine.rttMs === null ? "—" : `${Math.round(machine.rttMs)}ms`}
-          </span>
-        </div>
-      )}
+      {machine && <SessionsSidebarMachineRow machine={machine} />}
 
-      {hasTerminals && (
+      {(hasTerminals || groups.length > 0) && (
         <div
           className="odk-sessions-filters"
           role="tablist"
@@ -1085,6 +1070,43 @@ function SessionsSidebarComponent({
 }
 
 export const SessionsSidebar = memo(SessionsSidebarComponent);
+
+const SessionsSidebarMachineRow = memo(function SessionsSidebarMachineRow({
+  machine,
+}: {
+  machine: SessionsSidebarMachine;
+}) {
+  const liveStats = useLiveMachineStats();
+  const liveRttMs = useLiveRttMs(machine.rttMs === undefined);
+  const machineStats = machine.machineStats ?? liveStats;
+  const activeStats =
+    machine.stats ??
+    (machine.activeMachineId ? machineStats[machine.activeMachineId] : undefined);
+  const rttMs = machine.rttMs !== undefined ? machine.rttMs : liveRttMs;
+
+  return (
+    <div className="odk-sessions-machine">
+      <HostSwitcher
+        compact
+        machines={machine.machines}
+        activeMachineId={machine.activeMachineId}
+        controlLeases={machine.controlLeases}
+        deviceId={machine.deviceId}
+        machineStats={machineStats}
+        terminals={machine.terminals}
+        onSelectMachine={machine.onSelectMachine}
+        onAddMachine={machine.onAddMachine}
+        onRemoveHost={machine.onRemoveHost}
+        trailing={<LoadGlyph stats={activeStats} />}
+        trailingLabel={loadLabel(activeStats)}
+        menuAlign="left"
+      />
+      <span data-testid="sessions-sidebar-rtt" className="odk-sessions-rtt" title="Round trip to the hub">
+        {rttMs === null ? "—" : `${Math.round(rttMs)}ms`}
+      </span>
+    </div>
+  );
+});
 
 /** A row's right end: `waiting`, `offline` or the age, then its mark. The
  *  phone's sessions sheet (MobileWorkbench) draws its rows with it too. */
