@@ -239,7 +239,10 @@ fn startup_command_in(
         words.push(session.clone());
     }
     if let Some(mode) = start.permission_mode {
-        words.extend(mode.args(start.agent)?.iter().map(|arg| arg.to_string()));
+        // Quoted: Antigravity's Ask is a JSON setting
+        for arg in mode.args(start.agent)? {
+            words.push(quote(arg)?);
+        }
     }
     if let Some(cli) = hooks.cli.map(|cli| cli.to_string_lossy().into_owned()) {
         match start.agent {
@@ -667,10 +670,13 @@ mod tests {
 
         let mut ask = start(RunAgent::Antigravity, None);
         ask.permission_mode = Some(AgentPermissionMode::Ask);
+        let command = startup_command_in(&dir, TERMINAL, &ask, &no_hooks()).unwrap();
         assert_eq!(
-            startup_command_in(&dir, TERMINAL, &ask, &no_hooks()).unwrap(),
-            format!("env OFFDESK_RUN_ID={RUN} agy")
+            command,
+            format!(r#"env OFFDESK_RUN_ID={RUN} agy --settings '{{"agentMode":""}}'"#)
         );
+        // Its Default mode, which asks: agy starts in Auto without it
+        assert_eq!(run_fake(&command).0, ["--settings", r#"{"agentMode":""}"#]);
     }
 
     #[test]
