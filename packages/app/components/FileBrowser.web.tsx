@@ -507,6 +507,10 @@ export function FileBrowser({
   useEffect(() => {
     if (!backHandlerRef) return;
     backHandlerRef.current = () => {
+      if (editingPath) {
+        setEditingPath(false);
+        return true;
+      }
       if (sheet !== null) {
         setSheet(null);
         return true;
@@ -520,7 +524,7 @@ export function FileBrowser({
     return () => {
       backHandlerRef.current = null;
     };
-  }, [backHandlerRef, sheet, selecting, exitSelecting]);
+  }, [backHandlerRef, editingPath, sheet, selecting, exitSelecting]);
 
   // The renamed row unmounts with its input; keep keys flowing to the root.
   const renamingNow = actions.renaming !== null;
@@ -745,6 +749,7 @@ export function FileBrowser({
         editingPath={editingPath}
         onEditingPathChange={setEditingPath}
         currentPath={path}
+        homeDir={homeDir}
         pinned={pinned.includes(path)}
         onTogglePin={() => (pinned.includes(path) ? unpin(path) : pin(path))}
         view={effective.view}

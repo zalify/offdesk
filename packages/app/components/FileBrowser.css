@@ -8,3 +8,8 @@
 .odk-fb-row[data-drop=true],.odk-fb-tile[data-drop=true]{outline:2px solid rgb(var(--color-primary));outline-offset:-2px;background:rgb(var(--color-bg-3))}
 .odk-fb-place[data-drop=true]>button{outline:2px solid rgb(var(--color-primary));outline-offset:-2px}
 .odk-fb-list[data-drop=true]{box-shadow:inset 0 0 0 2px rgb(var(--color-primary))}
+/* Address / breadcrumb bar: clear editable affordance. */
+.odk-fb-pathbar{transition:border-color 120ms ease}
+.odk-fb-pathbar:hover{border-color:rgb(var(--color-fg-3)) !important}
+.odk-fb-crumb:hover{background:rgb(var(--color-bg-2)) !important;color:rgb(var(--color-fg-0)) !important}
+.odk-fb-path-btn:hover{background:rgb(var(--color-bg-2)) !important;color:rgb(var(--color-fg-0)) !important}

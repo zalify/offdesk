@@ -163,3 +163,70 @@ export function resolveStartPath(opts: {
     opts.givenPath || opts.cwd || rememberedDirectory(opts.machineId) || "~"
   );
 }
+
+/**
+ * Normalizes a user-typed or pasted path in the file browser address bar.
+ * Strips whitespace and matching quotes, resolves `.` / `..`, and resolves
+ * relative paths against `currentPath`.
+ */
+export function resolveInputPath(
+  raw: string,
+  currentPath: string,
+  homeDir?: string,
+): string | null {
+  let value = raw.trim();
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+  if (!value) return null;
+
+  const isHome = value === "~" || value.startsWith("~/");
+  const isAbs = value.startsWith("/");
+  const cleanHome = homeDir ? trimTrailingSlash(homeDir) : undefined;
+
+  let base: string;
+  if (isAbs) {
+    base = value;
+  } else if (isHome) {
+    base = value;
+  } else {
+    const cur = trimTrailingSlash(currentPath || "~");
+    base = cur === "/" ? `/${value}` : `${cur}/${value}`;
+  }
+
+  // Normalize "." and ".." segments while preserving "~" prefix if present.
+  if (base === "~" || base.startsWith("~/")) {
+    const rest = base.slice(2).split("/").filter(Boolean);
+    const stack: string[] = [];
+    let upAboveHome = 0;
+    for (const seg of rest) {
+      if (seg === ".") continue;
+      if (seg === "..") {
+        if (stack.length > 0) stack.pop();
+        else upAboveHome++;
+      } else {
+        stack.push(seg);
+      }
+    }
+    if (upAboveHome > 0 && cleanHome && cleanHome.startsWith("/")) {
+      const homeParts = cleanHome.split("/").filter(Boolean);
+      const remainingHome = homeParts.slice(0, Math.max(0, homeParts.length - upAboveHome));
+      const all = [...remainingHome, ...stack];
+      return all.length === 0 ? "/" : `/${all.join("/")}`;
+    }
+    return stack.length === 0 ? "~" : `~/${stack.join("/")}`;
+  }
+
+  const parts = base.split("/").filter(Boolean);
+  const stack: string[] = [];
+  for (const seg of parts) {
+    if (seg === ".") continue;
+    if (seg === "..") stack.pop();
+    else stack.push(seg);
+  }
+  return stack.length === 0 ? "/" : `/${stack.join("/")}`;
+}

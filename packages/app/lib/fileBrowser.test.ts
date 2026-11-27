@@ -8,6 +8,7 @@ import {
   isTooLarge,
   parentPath,
   rememberDirectory,
+  resolveInputPath,
   resolveStartPath,
   sortEntries,
   splitBreadcrumb,
@@ -119,5 +120,29 @@ describe("resolveStartPath", () => {
     expect(resolveStartPath({ machineId: "m1", cwd: "/c" })).toBe("/c");
     expect(resolveStartPath({ machineId: "m1" })).toBe("/last");
     expect(resolveStartPath({ machineId: "m2" })).toBe("~");
+  });
+});
+
+describe("resolveInputPath", () => {
+  it("returns null for empty input", () => {
+    expect(resolveInputPath("   ", "/tmp")).toBeNull();
+    expect(resolveInputPath('""', "/tmp")).toBeNull();
+  });
+  it("trims quotes and normalizes absolute paths", () => {
+    expect(resolveInputPath(' "/var/log//nginx/../app/" ', "/tmp")).toBe("/var/log/app");
+    expect(resolveInputPath("'/home/u/My Docs'", "/tmp")).toBe("/home/u/My Docs");
+    expect(resolveInputPath("/", "/tmp")).toBe("/");
+  });
+  it("preserves ~ paths and resolves .. above home when homeDir is known", () => {
+    expect(resolveInputPath("~", "/tmp")).toBe("~");
+    expect(resolveInputPath("~/projects/./webmux/", "/tmp")).toBe("~/projects/webmux");
+    expect(resolveInputPath("~/projects/..", "/tmp")).toBe("~");
+    expect(resolveInputPath("~/..", "/tmp", "/home/chareice")).toBe("/home");
+  });
+  it("resolves relative paths against currentPath", () => {
+    expect(resolveInputPath("webmux", "/home/chareice/projects")).toBe("/home/chareice/projects/webmux");
+    expect(resolveInputPath("./sub/../other", "/tmp/a")).toBe("/tmp/a/other");
+    expect(resolveInputPath("../b", "~/projects/a")).toBe("~/projects/b");
+    expect(resolveInputPath("..", "~/projects")).toBe("~");
   });
 });
