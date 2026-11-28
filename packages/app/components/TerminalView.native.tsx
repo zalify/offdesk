@@ -443,12 +443,21 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       cols: Math.max(20, initialCols || 80),
       rows: Math.max(6, initialRows || 24),
     });
+    // Authoritative remote PTY dimensions from Hub props (TerminalInfo / TerminalResized).
+    // Never mutated optimistically on local resize requests.
+    const remotePtyDimsRef = useRef<{ cols: number; rows: number }>({
+      cols: Math.max(20, initialCols || 80),
+      rows: Math.max(6, initialRows || 24),
+    });
+    remotePtyDimsRef.current = {
+      cols: Math.max(20, initialCols || 80),
+      rows: Math.max(6, initialRows || 24),
+    };
     const dimsRef = useRef<{ cols: number; rows: number }>({
       cols: Math.max(20, initialCols || 80),
       rows: Math.max(6, initialRows || 24),
     });
     const lastSentResizeRef = useRef<{ cols: number; rows: number } | null>(null);
-    const resizeConfirmTimerRef = useRef<number | null>(null);
     const resizeDebounceTimerRef = useRef<number | null>(null);
     const resizeHudTimerRef = useRef<number | null>(null);
     const hasInitialFitRef = useRef(false);
@@ -1219,10 +1228,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           if (!callbacksRef.current.canResizeTerminal) return;
           const ws = wsRef.current;
           if (!ws || ws.readyState !== WebSocket.OPEN) return;
-          // Never send a no-op resize when the remote PTY is already at (cols, rows):
-          // Linux ioctl(TIOCSWINSZ) delivers SIGWINCH even on same-size resizes, which
-          // causes Ink/Claude/agy TUIs to duplicate lines and tear mid-stream.
-          if (ptyDimsRef.current.cols === cols && ptyDimsRef.current.rows === rows) {
+          // Never send a no-op resize when the Hub-reported remote PTY is already at
+          // (cols, rows): Linux ioctl(TIOCSWINSZ) delivers SIGWINCH even on same-size
+          // resizes, which causes Ink/Claude/agy TUIs to duplicate lines mid-stream.
+          if (
+            remotePtyDimsRef.current.cols === cols &&
+            remotePtyDimsRef.current.rows === rows
+          ) {
             lastSentResizeRef.current = { cols, rows };
             return;
           }
@@ -1232,17 +1244,12 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
           lastSentResizeRef.current = { cols, rows };
           ws.send(JSON.stringify({ type: "resize", cols, rows }));
-          // Fallback local resize if remote PTY was already at (cols, rows) and Hub
-          // does not emit a new TerminalResized event.
-          if (resizeConfirmTimerRef.current !== null) {
-            window.clearTimeout(resizeConfirmTimerRef.current);
-          }
-          resizeConfirmTimerRef.current = window.setTimeout(() => {
-            resizeConfirmTimerRef.current = null;
-            if (ptyDimsRef.current.cols !== cols || ptyDimsRef.current.rows !== rows) {
-              resizeLocalEmulator(cols, rows);
-            }
-          }, 120);
+          // Do NOT optimistically resize local alacritty_terminal here!
+          // If the Hub rejects/drops this resize (e.g. non-controller, reconnect,
+          // or Hub restart), resizing local alacritty_terminal ahead of the remote
+          // PTY desyncs cols/rows and causes Ink/agy CSI <N> A redraws to wrap
+          // differently and duplicate every line until a full snapshot arrives.
+          // Local alacritty_terminal ONLY resizes when Hub confirms TerminalResized.
         };
 
         if (canResizeTerminal) {
@@ -1280,8 +1287,9 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       lastRemoteScrollDirRef.current = 0;
       stopEdgeAutoScroll();
       let cancelled = false;
-      const openCols = ptyDimsRef.current.cols;
-      const openRows = ptyDimsRef.current.rows;
+      const openCols = remotePtyDimsRef.current.cols;
+      const openRows = remotePtyDimsRef.current.rows;
+      ptyDimsRef.current = { cols: openCols, rows: openRows };
       void enqueueTermOp(() =>
         invoke<NativeTermFrame>("native_term_open", {
           id: terminalId,
@@ -1295,10 +1303,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         .catch(() => {});
       return () => {
         cancelled = true;
-        if (resizeConfirmTimerRef.current !== null) {
-          window.clearTimeout(resizeConfirmTimerRef.current);
-          resizeConfirmTimerRef.current = null;
-        }
         if (resizeDebounceTimerRef.current !== null) {
           window.clearTimeout(resizeDebounceTimerRef.current);
           resizeDebounceTimerRef.current = null;
@@ -1314,10 +1318,6 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
       const nextRows = Math.max(6, initialRows || 24);
       if (ptyDimsRef.current.cols === nextCols && ptyDimsRef.current.rows === nextRows) {
         return;
-      }
-      if (resizeConfirmTimerRef.current !== null) {
-        window.clearTimeout(resizeConfirmTimerRef.current);
-        resizeConfirmTimerRef.current = null;
       }
       resizeLocalEmulator(nextCols, nextRows);
     }, [initialCols, initialRows, resizeLocalEmulator]);
@@ -1593,6 +1593,17 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         if (disposed) return;
         reconnect.handleSocketOpen();
         callbacksRef.current.onReconnectingChange?.(false);
+        // Ensure local alacritty_terminal matches the Hub's authoritative PTY size
+        // before the initial attach snapshot streams in.
+        const remote = remotePtyDimsRef.current;
+        const curFrame = frameRef.current;
+        if (
+          ptyDimsRef.current.cols !== remote.cols ||
+          ptyDimsRef.current.rows !== remote.rows ||
+          (curFrame && (curFrame.cols !== remote.cols || curFrame.rows !== remote.rows))
+        ) {
+          resizeLocalEmulator(remote.cols, remote.rows);
+        }
         lastSentResizeRef.current = null;
         fitToContainerRef.current({ skipIfUnchanged: false, immediate: true });
         if (pendingInputRef.current) {
