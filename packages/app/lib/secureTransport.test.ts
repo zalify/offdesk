@@ -212,6 +212,55 @@ describe("route checks", () => {
     expect(received).toHaveLength(1);
     expect(received[0]).toBe(raw);
   });
+
+  // Android (OFF-151): frames of 1 KB or more come back over postMessage as a plain
+  // number[], not an ArrayBuffer. Dropping them left a terminal blank forever.
+  it("delivers Android's large binary frames, which arrive as a number array", async () => {
+    mock.invoke.mockImplementation(async command => command === "secure_status" ? paired : undefined);
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    const socket = transport.openSocket("wss://paired.example/ws/terminal/m1/t1");
+    socket.binaryType = "arraybuffer";
+    const received: ArrayBuffer[] = [];
+    socket.onmessage = (event) => received.push(event.data);
+    await tick();
+    const frame = Array.from({ length: 4096 }, (_, i) => i % 256);
+    mock.channels.at(-1)!.onmessage(frame);
+    mock.channels.at(-1)!.onmessage(new Uint8Array([0x1b, 0x5b, 0x48]));
+    expect(received).toHaveLength(2);
+    expect([...new Uint8Array(received[0])]).toEqual(frame);
+    expect([...new Uint8Array(received[1])]).toEqual([0x1b, 0x5b, 0x48]);
+  });
+
+  it("still hands JSON messages to the socket after a number-array frame", async () => {
+    mock.invoke.mockImplementation(async command => command === "secure_status" ? paired : undefined);
+    const transport = await import("./secureTransport");
+    await transport.restoreSecureConnection();
+    const socket = transport.openSocket("wss://paired.example/ws/terminal/m1/t1");
+    const closed = vi.fn(); socket.onclose = closed;
+    await tick();
+    const id = mock.invoke.mock.calls.find(([c]) => c === "secure_socket_open")![1].id;
+    mock.channels.at(-1)!.onmessage([1, 2, 3]);
+    mock.channels.at(-1)!.onmessage({ type: "closed", id });
+    expect(closed).toHaveBeenCalledOnce();
+  });
+});
+
+describe("channelBytes", () => {
+  it("reads every form Tauri delivers a raw channel body in, and nothing else", async () => {
+    const { channelBytes } = await import("./secureTransport");
+    const buffer = new Uint8Array([7, 8, 9]).buffer;
+    expect(channelBytes(buffer)).toBe(buffer);
+    expect([...new Uint8Array(channelBytes([7, 8, 9])!)]).toEqual([7, 8, 9]);
+    // A view over part of a larger buffer yields only its own bytes
+    const view = new Uint8Array([0, 7, 8, 9, 0]).subarray(1, 4);
+    expect([...new Uint8Array(channelBytes(view)!)]).toEqual([7, 8, 9]);
+    expect([...new Uint8Array(channelBytes(new DataView(buffer))!)]).toEqual([7, 8, 9]);
+    expect(channelBytes([])!.byteLength).toBe(0);
+    expect(channelBytes({ type: "opened", id: "x" })).toBeNull();
+    expect(channelBytes("text")).toBeNull();
+    expect(channelBytes(null)).toBeNull();
+  });
 });
 
 describe("routeLatencyLabel", () => {
