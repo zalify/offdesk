@@ -394,8 +394,7 @@ const TerminalCardComponent = forwardRef<TerminalCardRef, TerminalCardProps>(fun
         </div>
       )}
 
-      {reconnectIndicatorActive &&
-        (eventsReconnecting || terminalReconnecting) && (
+      {((reconnectIndicatorActive && eventsReconnecting) || terminalReconnecting) && (
           <>
             <div
               data-testid="reconnect-indicator-bar"

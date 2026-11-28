@@ -745,6 +745,7 @@ function TerminalCanvasInner() {
       ReturnType<typeof setTimeout>
     >({
       delayMs: 1000,
+      resumeDelayMs: 0,
       openReadyState: WebSocket.OPEN,
       onReconnect: reconnect,
       schedule: (callback, delayMs) => window.setTimeout(callback, delayMs),

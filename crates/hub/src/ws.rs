@@ -346,10 +346,22 @@ async fn handle_terminal_ws(
     // Chunks that queued up while the socket was busy are merged into one
     // message: a single WS write (and a single onmessage on the browser)
     // instead of one per PTY read. A lone chunk is forwarded zero-copy.
+    // A 25s server-side Ping keeps idle terminal sockets alive across
+    // intermediate proxies / NATs with 60s idle timeouts (e.g. Nginx/CLB)
+    // and reaps genuinely dead peers promptly.
     let mut send_task = tokio::spawn(async move {
         let mut chunks: Vec<Bytes> = Vec::with_capacity(32);
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(25));
+        ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ping_interval.tick().await;
         loop {
             let received = tokio::select! {
+                _ = ping_interval.tick() => {
+                    if sender.send(Message::Ping(Bytes::new())).await.is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 Some(receipt) = receipt_rx.recv() => {
                     if sender.send(Message::Text(receipt.into())).await.is_err() { break; }
                     continue;
@@ -668,9 +680,22 @@ async fn handle_terminal_previews_ws(socket: WebSocket, user_id: Option<String>,
     let (out_tx, mut out_rx) = mpsc::channel::<Vec<u8>>(128);
 
     let mut send_task = tokio::spawn(async move {
-        while let Some(frame) = out_rx.recv().await {
-            if sender.send(Message::Binary(frame.into())).await.is_err() {
-                break;
+        let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(25));
+        ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ping_interval.tick().await;
+        loop {
+            tokio::select! {
+                _ = ping_interval.tick() => {
+                    if sender.send(Message::Ping(Bytes::new())).await.is_err() {
+                        break;
+                    }
+                }
+                maybe_frame = out_rx.recv() => {
+                    let Some(frame) = maybe_frame else { break; };
+                    if sender.send(Message::Binary(frame.into())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });

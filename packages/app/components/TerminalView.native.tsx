@@ -1576,6 +1576,19 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         cancel: (id) => window.clearTimeout(id),
       });
 
+      const handleVisibilityChange = () => {
+        reconnect.handleVisibilityChange(document.visibilityState, ws.readyState);
+        const pending = reconnect.hasPendingReconnect();
+        if (pending) callbacksRef.current.onReconnectingChange?.(true);
+      };
+      const handlePageShow = () => {
+        reconnect.handleVisibilityChange("visible", ws.readyState);
+        const pending = reconnect.hasPendingReconnect();
+        if (pending) callbacksRef.current.onReconnectingChange?.(true);
+      };
+      document.addEventListener("visibilitychange", handleVisibilityChange);
+      window.addEventListener("pageshow", handlePageShow);
+
       ws.onopen = () => {
         if (disposed) return;
         reconnect.handleSocketOpen();
@@ -1630,6 +1643,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         clearSyncGuard();
         if (rafId !== null) cancelAnimationFrame(rafId);
         reconnect.cancelReconnect();
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        window.removeEventListener("pageshow", handlePageShow);
         ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
         ws.close();
         if (wsRef.current === ws) wsRef.current = null;
