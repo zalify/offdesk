@@ -771,7 +771,7 @@ mod unix_impl {
                 .unwrap_or_default()
         }
 
-        fn resize(&self, cols: u16, rows: u16) -> Result<(), String> {
+        fn resize(&self, cols: u16, rows: u16) -> Result<bool, String> {
             let cols = cols.max(1);
             let rows = rows.max(1);
             // Never call ioctl(TIOCSWINSZ) when dimensions are unchanged — on Linux
@@ -780,7 +780,7 @@ mod unix_impl {
             if self.cols.load(Ordering::Relaxed) == cols
                 && self.rows.load(Ordering::Relaxed) == rows
             {
-                return Ok(());
+                return Ok(false);
             }
             if let Ok(master) = self.master.lock() {
                 master
@@ -797,7 +797,7 @@ mod unix_impl {
             }
             self.cols.store(cols, Ordering::Relaxed);
             self.rows.store(rows, Ordering::Relaxed);
-            Ok(())
+            Ok(true)
         }
 
         fn write_all(&self, data: &[u8]) -> Result<(), String> {
@@ -1089,7 +1089,7 @@ mod unix_impl {
                     .and_then(|map| map.get(&id).cloned());
                 let resp = match session {
                     Some(s) => match s.resize(cols, rows) {
-                        Ok(()) => DaemonResponse::Ok,
+                        Ok(_) => DaemonResponse::Ok,
                         Err(message) => DaemonResponse::Err { message },
                     },
                     None => DaemonResponse::Err {
@@ -1256,7 +1256,19 @@ mod unix_impl {
                             CMD_RESIZE if payload.len() >= 4 => {
                                 let c = u16::from_be_bytes([payload[0], payload[1]]);
                                 let r = u16::from_be_bytes([payload[2], payload[3]]);
-                                let _ = session_for_in.resize(c, r);
+                                if matches!(session_for_in.resize(c, r), Ok(true)) {
+                                    // Emit an in-band formatted screen snapshot at the new
+                                    // dimensions so attached clients stay synchronized even
+                                    // if pre-resize bytes were in flight across the WS.
+                                    let snap = session_for_in.state_formatted();
+                                    if !snap.is_empty() {
+                                        if let Ok(mut ws) = ws_for_in.lock() {
+                                            if write_bin_frame(&mut *ws, TAG_OUTPUT, &snap).is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             CMD_REFRESH => {
                                 let cur = sb_for_in.load(Ordering::Relaxed);

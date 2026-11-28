@@ -389,6 +389,26 @@ function scanSyncUpdateMarkers(
 const LAST_FRAME_CACHE_LIMIT = 64;
 const lastFrameCache = new Map<string, NativeTermFrame>();
 
+// Serialize Tauri native_term_* IPC calls per terminalId across mount/unmount
+// boundaries so a departing instance's native_term_close can never race with or
+// delete a newly mounted instance's native_term_open / native_term_feed.
+const moduleTermOpChains = new Map<string, Promise<void>>();
+function enqueueTerminalIpc<T>(terminalId: string, op: () => Promise<T>): Promise<T> {
+  const prev = moduleTermOpChains.get(terminalId) ?? Promise.resolve();
+  const next = prev.then(op, op);
+  const tail = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  moduleTermOpChains.set(terminalId, tail);
+  void tail.finally(() => {
+    if (moduleTermOpChains.get(terminalId) === tail) {
+      moduleTermOpChains.delete(terminalId);
+    }
+  });
+  return next;
+}
+
 function frameHasContent(frame: NativeTermFrame | null | undefined): boolean {
   if (!frame) return false;
   for (const row of frame.spans) {
@@ -507,15 +527,11 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     const scrollRafRef = useRef<number | null>(null);
     const paintRafRef = useRef<number | null>(null);
     const lastScrollBadgeUpdateRef = useRef(0);
-    const termOpChainRef = useRef<Promise<void>>(Promise.resolve());
-    const enqueueTermOp = useCallback(<T,>(op: () => Promise<T>): Promise<T> => {
-      const next = termOpChainRef.current.then(op, op);
-      termOpChainRef.current = next.then(
-        () => undefined,
-        () => undefined,
-      );
-      return next;
-    }, []);
+    const fitAwaitingOpenRef = useRef<{ skipIfUnchanged?: boolean; immediate?: boolean } | null>(null);
+    const enqueueTermOp = useCallback(
+      <T,>(op: () => Promise<T>): Promise<T> => enqueueTerminalIpc(terminalId, op),
+      [terminalId],
+    );
     const controlListenersRef = useRef(new Set<(text: string) => void>());
     const subscribeControl = useCallback((listener: (text: string) => void) => {
       controlListenersRef.current.add(listener);
@@ -948,6 +964,8 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         paintFrame(frameRef.current);
       });
     }, [paintFrame]);
+    const schedulePaintRef = useRef(schedulePaint);
+    schedulePaintRef.current = schedulePaint;
 
     const syncVisibleHistorySize = useCallback(() => {
       const frame = frameRef.current;
@@ -1008,6 +1026,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         // before the first live WebSocket snapshot arrives.
         if (!hasLiveDataRef.current && !frameHasContent(frame) && frameHasContent(frameRef.current)) {
           return;
+        }
+        // Self-heal if local Rust emulator dimensions ever drift from Hub's
+        // authoritative PTY size (e.g. across an OTA reload on an older desktop binary).
+        const remoteDims = remotePtyDimsRef.current;
+        if (
+          (frame.cols !== remoteDims.cols || frame.rows !== remoteDims.rows) &&
+          (ptyDimsRef.current.cols !== remoteDims.cols || ptyDimsRef.current.rows !== remoteDims.rows)
+        ) {
+          ptyDimsRef.current = { cols: remoteDims.cols, rows: remoteDims.rows };
+          void enqueueTermOp(() =>
+            invoke<NativeTermFrame>("native_term_resize", {
+              id: terminalId,
+              cols: remoteDims.cols,
+              rows: remoteDims.rows,
+            }),
+          )
+            .then((resized) => applyFrameRef.current(resized))
+            .catch(() => {});
         }
         frameRef.current = frame;
         lastHoverCellRef.current = null;
@@ -1227,7 +1263,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         const sendResizeNow = () => {
           if (!callbacksRef.current.canResizeTerminal) return;
           const ws = wsRef.current;
-          if (!ws || ws.readyState !== WebSocket.OPEN) return;
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            fitAwaitingOpenRef.current = {
+              skipIfUnchanged: opts?.skipIfUnchanged,
+              immediate: true,
+            };
+            return;
+          }
+          fitAwaitingOpenRef.current = null;
           // Never send a no-op resize when the Hub-reported remote PTY is already at
           // (cols, rows): Linux ioctl(TIOCSWINSZ) delivers SIGWINCH even on same-size
           // resizes, which causes Ink/Claude/agy TUIs to duplicate lines mid-stream.
@@ -1252,7 +1295,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           // Local alacritty_terminal ONLY resizes when Hub confirms TerminalResized.
         };
 
-        if (canResizeTerminal) {
+        if (callbacksRef.current.canResizeTerminal) {
           if (opts?.immediate || !unchanged) {
             if (resizeDebounceTimerRef.current !== null) {
               window.clearTimeout(resizeDebounceTimerRef.current);
@@ -1269,7 +1312,7 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           }
         }
       },
-      [measureCellMetrics, canResizeTerminal, resizeLocalEmulator],
+      [measureCellMetrics],
     );
     const fitToContainerRef = useRef(fitToContainer);
     fitToContainerRef.current = fitToContainer;
@@ -1323,8 +1366,13 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
     }, [initialCols, initialRows, resizeLocalEmulator]);
 
     // Wait for bundled/custom terminal webfonts to finish loading before locking cellW.
+    // Match TerminalView.xterm.tsx: opening/reconnecting preserves the remote PTY's
+    // existing size; only an actual font preference change triggers a new fit.
+    const fontPrefsInitializedRef = useRef(false);
     useEffect(() => {
       let disposed = false;
+      const isPreferenceChange = fontPrefsInitializedRef.current;
+      fontPrefsInitializedRef.current = true;
       measureCellMetrics();
       const loadFonts = async () => {
         try {
@@ -1338,22 +1386,25 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
         }
         if (disposed) return;
         measureCellMetrics();
-        fitToContainer({ skipIfUnchanged: true, immediate: true });
-        schedulePaint();
+        if (isPreferenceChange) {
+          fitToContainerRef.current({ skipIfUnchanged: true, immediate: true });
+        }
+        schedulePaintRef.current();
       };
       void loadFonts();
       return () => {
         disposed = true;
       };
-    }, [fontSize, fontFamily, measureCellMetrics, fitToContainer, schedulePaint]);
+    }, [fontSize, fontFamily, measureCellMetrics]);
 
     // Exact container ResizeObserver (zero setTimeout hacks!).
     // Always repaint on container resize so canvas backing-store dimensions stay
     // 1:1 with CSS size even while watching (e.g. mobile keyboard open/close).
-    // On touch/mobile devices, NEVER send a remote PTY resize when only height
-    // changes while the soft keyboard is open or dismissing: paintFrame already
-    // anchors the active bottom & cursor above the keyboard via yOffset, avoiding
-    // SIGWINCH redraws that make Ink/agy TUIs scroll from way up in history.
+    // Match TerminalView.xterm.tsx's desktop resize discipline: do NOT auto-resize
+    // the remote PTY on desktop mount/open/reconnect (which races with the initial
+    // attach snapshot and causes Ink/agy CSI <N> A line duplication). Desktop fits
+    // come from explicit workspace actions (split, sidebar toggle, window resize,
+    // Fit menu); mobile touch still refits on non-keyboard width changes.
     useEffect(() => {
       const el = containerRef.current;
       if (!el) return;
@@ -1397,25 +1448,24 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           (nativeKeyboardOpen ||
             (isMobileTouch && focusedRef.current) ||
             performance.now() < keyboardDismissGraceUntil);
-        if (!softKeyboardTransition) {
-          fitToContainer({ skipIfUnchanged: true });
+        if (isMobileTouch && !softKeyboardTransition) {
+          fitToContainerRef.current({ skipIfUnchanged: true });
         }
-        schedulePaint();
+        schedulePaintRef.current();
       };
       const ro = new ResizeObserver(handleResize);
       ro.observe(el);
       const vv = window.visualViewport;
       vv?.addEventListener("resize", handleResize);
       syncContainerSize();
-      fitToContainer({ skipIfUnchanged: false, immediate: true });
-      schedulePaint();
+      schedulePaintRef.current();
       return () => {
         ro.disconnect();
         vv?.removeEventListener("resize", handleResize);
         window.removeEventListener("offdesk:keyboard-visibility", onNativeKeyboard);
         el.removeEventListener("focusout", onFocusOut);
       };
-    }, [fitToContainer, schedulePaint]);
+    }, []);
 
     // Repaint when theme, font, or search highlight changes.
     useEffect(() => {
@@ -1605,7 +1655,14 @@ export const TerminalView = forwardRef<TerminalViewRef, TerminalViewProps>(
           resizeLocalEmulator(remote.cols, remote.rows);
         }
         lastSentResizeRef.current = null;
-        fitToContainerRef.current({ skipIfUnchanged: false, immediate: true });
+        // Match TerminalView.xterm.tsx: do NOT auto-resize on open/reconnect
+        // (avoids racing with the initial attach snapshot). Only flush an
+        // explicit fit that was queued while the socket was disconnected.
+        const awaitingFit = fitAwaitingOpenRef.current;
+        if (awaitingFit) {
+          fitAwaitingOpenRef.current = null;
+          fitToContainerRef.current(awaitingFit);
+        }
         if (pendingInputRef.current) {
           const queued = pendingInputRef.current;
           pendingInputRef.current = "";

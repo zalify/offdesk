@@ -503,6 +503,18 @@ pub struct NativeTermState {
 }
 
 impl NativeTermState {
+    fn create_fresh(
+        &self,
+        id: String,
+        cols: u16,
+        rows: u16,
+    ) -> Result<Arc<Mutex<TermInstance>>, String> {
+        let mut map = self.instances.lock().map_err(|e| e.to_string())?;
+        let inst = Arc::new(Mutex::new(TermInstance::new(cols, rows)));
+        map.insert(id, Arc::clone(&inst));
+        Ok(inst)
+    }
+
     fn get_or_create(
         &self,
         id: String,
@@ -531,9 +543,10 @@ pub fn native_term_open(
     cols: u16,
     rows: u16,
 ) -> Result<NativeTermFrame, String> {
-    let inst_arc = state.get_or_create(id, cols, rows)?;
-    let mut inst = inst_arc.lock().map_err(|e| e.to_string())?;
-    inst.resize(cols, rows);
+    // Always create a fresh TermInstance so OTA/webview reloads never inherit
+    // stale dimensions, modes, or scrollback from a previous JS lifecycle.
+    let inst_arc = state.create_fresh(id, cols, rows)?;
+    let inst = inst_arc.lock().map_err(|e| e.to_string())?;
     Ok(inst.snapshot())
 }
 
@@ -546,7 +559,7 @@ pub fn native_term_feed(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data_b64.as_bytes())
         .map_err(|e| format!("base64 decode: {e}"))?;
-    let inst_arc = state.get_or_create(id, 120, 36)?;
+    let inst_arc = state.get(&id)?;
     let mut inst = inst_arc.lock().map_err(|e| e.to_string())?;
     inst.feed(&bytes);
     Ok(inst.snapshot())
