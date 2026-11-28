@@ -76,10 +76,23 @@ Pushing the tag starts the `Release` workflow (`.github/workflows/release.yml`):
 6. **mirror** copies `app-vX.Y.Z` to the mirror as well and writes its
    release listing again.
 
-The iOS build reaches TestFlight during step 2, before publishing. Offering it
-to external testers is a separate step: dispatch `TestFlight Release
-Distribution` with `release_tag` `vX.Y.Z` and the build number from the iOS
-job.
+7. **testflight** offers the iOS build to the external `Testers` group and
+   submits it for Beta App Review (`testflight-release.yml`). It waits up to
+   an hour for Apple to finish processing the upload, reuses the encryption
+   classification of earlier builds, and writes the "What to Test" text from
+   the release's notes doc: its title (or first paragraph) and a link to it.
+   It runs only when this run built iOS, so it is skipped when a dispatch
+   rebuilt another component.
+
+The iOS build reaches TestFlight (internal testers) during step 2, before
+publishing; external testers get it once Apple approves the beta review that
+step 7 submits. To offer a build by hand, for a run where step 7 was skipped
+or failed, dispatch `TestFlight Release Distribution` with `release_tag`
+`vX.Y.Z` and the build number from the iOS job (`GITHUB_RUN_NUMBER.ATTEMPT`
+of the Release run, shown in its build log as the `CFBundleVersion`). It only
+previews unless `apply_distribution` is set; give `wait_minutes` if the upload
+is still processing. Running it again for a build that is already submitted
+changes nothing.
 
 ## When a build fails
 

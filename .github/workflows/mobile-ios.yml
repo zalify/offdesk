@@ -25,6 +25,10 @@ on:
         description: "The vX.Y.Z release tag to build and upload into (its draft release must exist)"
         required: true
         type: string
+    outputs:
+      build_number:
+        description: "The CFBundleVersion uploaded to TestFlight, for testflight-release.yml"
+        value: ${{ jobs.build-ipa.outputs.build_number }}
   workflow_dispatch:
     inputs:
       prebuilt_release:
@@ -49,6 +53,8 @@ jobs:
     runs-on: macos-26
     permissions:
       contents: write
+    outputs:
+      build_number: ${{ steps.version.outputs.build_number }}
     env:
       # Baked in at compile time so the app only loads Web UI bundles signed
       # with this key (docs/web-ui-updates.md). Releases follow the stable
